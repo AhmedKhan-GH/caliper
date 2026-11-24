@@ -2979,12 +2979,26 @@ DecodeResult decode(const uint8_t* buf, size_t n, Message* out) {
 }
 
 bool encode(const Message& m, std::vector<uint8_t>* out, std::string* err, uint16_t minor) {
+    const auto refuse = [&](const char* reason) {
+        if (err) *err = reason;
+        out->clear();
+        return false;
+    };
+    if (const auto* c = std::get_if<Control>(&m);
+        c && c->op != CALIPER_NET_OP_INTERPRET && !c->interpretation.is_null())
+        return refuse("interpretation requires op interpret");
     if (const auto* c = std::get_if<Control>(&m);
         c && c->op == CALIPER_NET_OP_INTERPRET && !interpretation_request(c->interpretation)) {
         if (err) *err = "Use a version 1 interpretation request with valid parameters and UTF-8 text without NUL; "
                         "each string must fit " + std::to_string(CALIPER_NET_INTERPRET_STRING_MAX) + " bytes.";
         out->clear();
         return false;
+    }
+    if (const auto* r = std::get_if<ControlReply>(&m)) {
+        if (!r->result.is_null() && (r->op != CALIPER_NET_OP_INTERPRET || r->status != CALIPER_NET_STATUS_OK))
+            return refuse("result requires a successful interpretation reply");
+        if (r->op == CALIPER_NET_OP_INTERPRET && r->status == CALIPER_NET_STATUS_OK && !interpretation_object(r->result))
+            return refuse("invalid interpretation result");
     }
     Encoded e = to_meta(m);
     FrameError fe;

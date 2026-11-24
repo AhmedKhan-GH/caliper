@@ -242,15 +242,24 @@ void RunControls::reset() {
     *this = RunControls();
 }
 
-void RunControls::update(Source* src, uint64_t now_ns) {
+void RunControls::sync_interpretation_session(Source* src) {
+    // Source::label is the session token, including the hub's chosen ID.
+    const std::string session = src ? src->label() : std::string();
     const uint64_t start = src ? src->start_unix_ms() : 0;
     const int32_t pid = src ? src->producer_pid() : 0;
-    if (src != src_ || start != interpretation_start_ || pid != interpretation_pid_) {
+    if (src != src_ || session.empty() || session != interpretation_session_ ||
+        start != interpretation_start_ || pid != interpretation_pid_) {
         interpretations_.clear();
         text_edits_.clear();
+        ++text_epoch_;
     }
+    interpretation_session_ = session;
     interpretation_start_ = start;
     interpretation_pid_ = pid;
+}
+
+void RunControls::update(Source* src, uint64_t now_ns) {
+    sync_interpretation_session(src);
     src_ = src;
     now_ns_ = now_ns;
     if (!src) {
@@ -460,6 +469,7 @@ caliper_net::Json RunControls::interpret(const std::string& method, const Json& 
         e.set("code",code); e.set("message",message); out.set("error",e); return out;
     };
     if (!src_) return error("run.not_attached", "No stream is attached.");
+    sync_interpretation_session(src_);
     if (request && (!params.is_object() || params.size() != 0))
         return error("command.invalid_args", "A reply query accepts only request_id.");
     if (!request) {
@@ -578,6 +588,7 @@ Json RunControls::shown_value(const ControlParam& p) const {
 }
 
 void RunControls::draw_text_param(const ControlParam& p) {
+    ImGui::PushID(static_cast<int>(text_epoch_));
     const ImGuiID key = ImGui::GetID("##v");
     const Json shown = shown_value(p);
     auto it = text_edits_.find(key);
@@ -601,6 +612,7 @@ void RunControls::draw_text_param(const ControlParam& p) {
         if (value != shown) set(p.name, value);
     }
     if (!ImGui::IsItemActive()) text_edits_.erase(it);
+    ImGui::PopID();
 }
 
 bool RunControls::param_waiting(const ControlParam& p) const {

@@ -209,7 +209,10 @@ def test_exhausted_resume_refuses_model_load(tmp_path, monkeypatch):
         train_transcoders.main(["--output", str(tmp_path), "--resume"])
 
 
-@pytest.mark.parametrize("delay,stop_reason", [(1, None), (270, None), (1, "synthetic resource stop")])
+@pytest.mark.parametrize("delay,stop_reason", [
+    (1, None), (270, None), (1, "synthetic resource stop"),
+    (1, "synthetic\0stop\ud800" + "é" * 5000),
+])
 def test_checkpoint_deadline_starts_after_complete_save(tmp_path, monkeypatch, capsys, delay, stop_reason):
     from caliper._interpret_protocol import bounded
     from tools.interp import train_transcoders as training
@@ -260,7 +263,8 @@ def test_checkpoint_deadline_starts_after_complete_save(tmp_path, monkeypatch, c
     assert all(event["save_seconds"] == 300 for event in events if event["stage"] == "checkpoint")
     if delay == 270 or stop_reason:
         assert code == 2 and result["status"] == "interrupted"
-        assert result["reason"] == (stop_reason or "checkpoint deadline") and result["tokens"] == 0
+        assert result["reason"] == training.stop_reason(stop_reason or "checkpoint deadline")
+        assert result["tokens"] == 0
         assert saved["progress"]["pending_ids"] == [1] * 8
         assert saved["progress"]["next_layer"] == 0
     else:

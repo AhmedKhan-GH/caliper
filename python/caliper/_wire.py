@@ -1174,6 +1174,11 @@ class Control(_Msg):
     interpretation: dict | None = None
 
     def to_meta(self):
+        from ._interpret_protocol import request
+        if self.op == OP_INTERPRET and not request(self.interpretation):
+            _bad("invalid interpretation request")
+        if self.op != OP_INTERPRET and self.interpretation is not None:
+            _bad("interpretation requires op interpret")
         return _drop_none({"request_id": self.request_id, "op": self.op, "name": self.name,
                            "value": self.value, "count": self.count,
                            "intervene": self.intervene, "interpretation": self.interpretation})
@@ -1227,6 +1232,11 @@ class ControlReply(_Msg):
     result: dict | None = None
 
     def to_meta(self):
+        from ._interpret_protocol import bounded
+        if self.result is not None and (self.op != OP_INTERPRET or self.status != STATUS_OK):
+            _bad("result requires a successful interpretation reply")
+        if self.op == OP_INTERPRET and self.status == STATUS_OK and not bounded(self.result):
+            _bad("invalid interpretation result")
         return _drop_none({"request_id": self.request_id, "op": self.op, "status": self.status,
                            "name": self.name, "value": self.value, "message": self.message,
                            "error": self.error, "result": self.result})

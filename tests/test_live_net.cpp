@@ -2567,8 +2567,9 @@ public:
     uint64_t sel_version = 0;
     std::string send_failure;
     uint64_t started = 0;
+    std::string session = "scripted";
 
-    std::string label() const override { return "scripted"; }
+    std::string label() const override { return session; }
     std::string script() const override { return "train.py"; }
     uint64_t start_unix_ms() const override { return started; }
     int32_t producer_pid() const override { return 0; }
@@ -3580,6 +3581,24 @@ TEST_CASE("live/controls: text byte caps refuse oversized UTF-8 edits without tr
     CHECK(ui.source.ctl.params.front().value.as_string().empty());
 }
 
+TEST_CASE("live/controls: a session switch discards the active text draft") {
+    ControlsUi ui;
+    ui.focus();
+    ImGui::GetIO().AddInputCharactersUTF8("old draft"); ui.frame();
+    REQUIRE(ui.source.sent.empty());
+    ui.source.session = "other";
+    ++ui.source.ctl.version;
+    ui.source.ctl.params.front().value = Json("new prompt");
+    ui.frame();
+    ui.enter();
+    ui.click(30, 110);
+    CHECK(ui.source.sent.empty());
+    CHECK(ui.controls.shown_value(ui.controls.state().params.front()).as_string() == "new prompt");
+    ui.focus();
+    ui.enter();
+    CHECK(ui.source.sent.empty());
+}
+
 TEST_CASE("live/controls: full text values survive focus and commit unchanged") {
     std::string value;
     for (unsigned i = 0; i < 2048; ++i) value += "\xc3\xa9";
@@ -3606,9 +3625,31 @@ TEST_CASE("live/controls: reply queries stay within their admitted method and ru
     CHECK(source.sent.size() == 1);
     SUBCASE("different source") { controls.update(&other, 1); }
     SUBCASE("new run on the same source") { ++source.started; controls.update(&source, 1); }
+    SUBCASE("different session with the same start and process") { source.session = "other"; controls.update(&source, 1); }
     CHECK(code(controls.interpret("trace.run", Json::object(), id)) == "interpret.unknown_request");
     CHECK(source.sent.size() == 1);
     CHECK(other.sent.empty());
+}
+
+TEST_CASE("live/controls: completed replies require the same concrete session") {
+    ScriptedSource source;
+    caliper_live::RunControls controls;
+    controls.update(&source, 0);
+    const auto queued = controls.interpret("trace.status", Json::object(), 0);
+    const auto id = static_cast<uint32_t>(queued.find("request_id")->as_double());
+    source.reply(id, "ok");
+    source.replies.back().result = Json::object();
+    controls.update(&source, 1);
+    const auto final = controls.interpret("trace.status", Json::object(), id);
+    REQUIRE_FALSE(final.find("pending")->as_bool());
+    controls.update(&source, 2);
+    CHECK(controls.interpret("trace.status", Json::object(), id) == final);
+    SUBCASE("session switch before update") { source.session = "other"; }
+    SUBCASE("unknown session before update") { source.session.clear(); }
+    SUBCASE("session switch after update") { source.session = "other"; controls.update(&source, 3); }
+    const auto result = controls.interpret("trace.status", Json::object(), id);
+    CHECK(result.find("error")->find("code")->as_string() == "interpret.unknown_request");
+    CHECK(source.sent.size() == 1);
 }
 
 TEST_CASE("live/controls: unscoped protocol errors end only queued interpretation requests") {

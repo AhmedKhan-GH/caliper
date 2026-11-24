@@ -51,17 +51,17 @@ test('Shared Control Fixture Bytes', () => {
 });
 
 test('Native Interpretation Metadata Cases', () => {
-  // Read the native literals directly. Its frame_of helper canonicalizes them.
+  // Read the native literals without a JS parse that would erase token types.
   const source = readFileSync(join(fixtures, '../../test_net_wire.cpp'), 'utf8');
   const cases = [...source.matchAll(/CHECK\(status\(CALIPER_NET_MSG_(CONTROL(?:_REPLY)?), R"\(([^\n]+)\)"\) == (valid|bad)\);/g)];
   assert.equal(cases.length, 11);
   for (const [, kind, json, status] of cases) {
     const type = kind === 'CONTROL' ? MSG.control : MSG.control_reply;
-    const bytes = rawFrame(type, canonicalJson(JSON.parse(json)));
+    const bytes = rawFrame(type, json);
     if (status === 'valid') {
       const message = decode(bytes);
       assert.deepEqual(plain(message), { type: kind.toLowerCase(), ...JSON.parse(json) });
-      assert.deepEqual(encode(message as Message), bytes);
+      assert.deepEqual(plain(decode(encode(message as Message))), plain(message));
     } else assert.throws(() => decode(bytes), MessageError, json);
   }
 });
@@ -194,13 +194,33 @@ test('Interpretation Result Structure Bounds', () => {
   bytes.k0 += 'x';
   refuses(MSG.control_reply, reply(bytes));
   for (const value of [Number.MAX_SAFE_INTEGER, -Number.MAX_SAFE_INTEGER, 0.25, 1e100]) accepts(MSG.control_reply, reply({ value }));
-  for (const value of [2 ** 53, -(2 ** 53)]) refuses(MSG.control_reply, reply({ value }));
+  for (const token of ['9007199254740992', '-9007199254740992', '100000000000000000000'])
+    assert.throws(() => decode(rawFrame(MSG.control_reply, `{"request_id":1,"op":"interpret","status":"ok","result":{"value":${token}}}`)), MessageError);
   const floatReply = decode(rawFrame(MSG.control_reply, '{"request_id":1,"op":"interpret","status":"ok","result":{"value":9007199254740992.0}}'));
   assert.deepEqual(decode(encode(floatReply as Message)), floatReply);
   for (const value of ['1e309', '-1e309'])
     assert.throws(() => decode(rawFrame(MSG.control_reply, `{"request_id":1,"op":"interpret","status":"ok","result":{"value":${value}}}`)), MessageError);
-  for (const result of [{ value: Infinity }, { value: NaN }, { value: 2 ** 53 }, { value: '\0' }])
+  for (const result of [{ value: Infinity }, { value: NaN }, { value: '\0' }])
     assert.throws(() => encode({ type: 'control_reply', ...reply(result) } as Message), MessageError);
+});
+
+test('Finite JavaScript Values Without Numeric Tokens', () => {
+  for (const [value, expected] of [
+    [2 ** 53, '9007199254740992.0'], [-(2 ** 53), '-9007199254740992.0'],
+    [1.5e16, '1.5e+16'], [1e20, '1e+20'], [-1e20, '-1e+20'],
+  ] as const) {
+    assert.equal(canonicalJson(value), expected);
+    const message = { type: 'control_reply', ...reply({ value }) } as Message;
+    for (const candidate of [message, structuredClone(message)]) {
+      const frame = encode(candidate);
+      assert.deepEqual(plain(decode(frame)), candidate);
+      assert.ok(new TextDecoder().decode(frame.subarray(HEADER_BYTES)).includes(`"value":${expected}`));
+    }
+    const float = decode(rawFrame(MSG.control_reply, `{"request_id":1,"op":"interpret","status":"ok","result":{"value":${expected}}}`));
+    assert.deepEqual(plain(decode(encode(structuredClone(float) as Message))), plain(float));
+    const control: Message = { type: 'control', request_id: 2, op: 'set', name: 'activation_max', value };
+    assert.deepEqual(plain(decode(encode(control))), control);
+  }
 });
 
 test('Interpretation Canonical Numeric Bytes', () => {

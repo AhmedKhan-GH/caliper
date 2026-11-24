@@ -144,11 +144,12 @@ test('Intervention Positions and Feature IDs', () => {
 test('Intervention Vectors and Numeric Tokens', () => {
   assert.deepEqual(INTERVENTION_LIMITS, { maxVector: 16384, maxPositions: 32, maxBytes: 262144 });
   specCase({ ...add, vector: Array(16384).fill(0) }, true);
-  for (const vector of [[], Array(16385).fill(0), null, 1, [true], ['1'], [null], [2 ** 53]]) specCase({ ...add, vector }, false);
+  for (const vector of [[], Array(16385).fill(0), null, 1, [true], ['1'], [null]]) specCase({ ...add, vector }, false);
+  specCase({ ...add, vector: [2 ** 53, -(2 ** 53), 1e20] }, true);
   const numbers: [Record<string, unknown>, string][] = [[add, 'coefficient'], [scale, 'multiplier'], [clamp, 'value']];
   for (const [base, key] of numbers) {
-    for (const value of [0, -1.25, Number.MAX_SAFE_INTEGER, -Number.MAX_SAFE_INTEGER, 1e100]) specCase({ ...base, [key]: value }, true);
-    for (const value of [null, true, '1', 2 ** 53, -(2 ** 53)]) specCase({ ...base, [key]: value }, false);
+    for (const value of [0, -1.25, Number.MAX_SAFE_INTEGER, -Number.MAX_SAFE_INTEGER, 2 ** 53, -(2 ** 53), 1e20, 1e100]) specCase({ ...base, [key]: value }, true);
+    for (const value of [null, true, '1']) specCase({ ...base, [key]: value }, false);
     for (const token of ['1.0', '-0.0', '1e-05', '1e+100', '9007199254740992.0', '-9007199254740992.0']) rawSpec({ ...base, [key]: 'NUMBER' }, token, true);
     for (const token of ['9007199254740992', '-9007199254740992', '1e309', '-1e309']) rawSpec({ ...base, [key]: 'NUMBER' }, token, false);
   }

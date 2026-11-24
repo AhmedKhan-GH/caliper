@@ -2294,6 +2294,8 @@ TEST_CASE("net/hub: text parameters follow viewer capabilities on attach and upd
     controls.params.push(obj({{"name", "prompt"}, {"type", "text"}, {"value", "AB"}}));
     controls.params.push(obj({{"name", "retrace"}, {"type", "boolean"}, {"value", false}}));
     controls.actions.push(obj({{"name", "apply_clamp"}, {"running", false}, {"queued", false}}));
+    const int64_t stamp[] = {17, 23};
+    controls.stamp = wire::Section::make("stamp", CALIPER_NET_DTYPE_I64, {2}, stamp, sizeof(stamp));
     producer_link->send(controls);
     sync(world, *producer_link);
 
@@ -2313,6 +2315,13 @@ TEST_CASE("net/hub: text parameters follow viewer capabilities on attach and upd
         CHECK(full->run.dump() == expected.run.dump());
         CHECK(plain->actions.dump() == expected.actions.dump());
         CHECK(full->actions.dump() == expected.actions.dump());
+        for (const auto* value : {plain, full}) {
+            REQUIRE(value->stamp);
+            CHECK(value->stamp->dtype == expected.stamp->dtype);
+            CHECK(value->stamp->shape == expected.stamp->shape);
+            REQUIRE(value->stamp->size == expected.stamp->size);
+            CHECK(std::memcmp(value->stamp->data, expected.stamp->data, expected.stamp->size) == 0);
+        }
     };
     CHECK(legacy->first_index(CALIPER_NET_MSG_CONTROLS) > legacy->first_index(CALIPER_NET_MSG_VIEWS));
     CHECK(text_reader->first_index(CALIPER_NET_MSG_CONTROLS) > text_reader->first_index(CALIPER_NET_MSG_VIEWS));
@@ -2329,6 +2338,43 @@ TEST_CASE("net/hub: text parameters follow viewer capabilities on attach and upd
         return legacy->count<wire::Controls>() == 2 && text_reader->count<wire::Controls>() == 2;
     }));
     check_controls(controls);
+}
+
+TEST_CASE("net/hub: wide set text requires the producer text capability") {
+    HubOptions options;
+    options.allow_control = true;
+    HubRunner hub(options);
+    World world;
+    auto caps = kProducer31;
+    bool text = false;
+    SUBCASE("legacy producer") {}
+    SUBCASE("text producer") { caps.push_back(CALIPER_NET_CAP_TEXT_PARAMS); text = true; }
+    auto source = producer(world, hub, "text-admission", 1, 1, caps, true);
+    auto viewer_caps = kCaps31;
+    viewer_caps.push_back(CALIPER_NET_CAP_TEXT_PARAMS);
+    auto client = viewer(world, hub, viewer_caps);
+    REQUIRE(world.until([&] { return client->views() && client->views()->session; }));
+    uint32_t id = 0;
+    size_t forwarded = 0;
+    for (const auto& value : {std::string("mode"), std::string(63, 'x'), std::string(),
+                              std::string(64, 'x'), std::string(4096, 'x')}) {
+        client->control(++id, "set", "mode", Json(value));
+        REQUIRE(world.until([&] { return client->control_replies(id).size() == 1; }));
+        const bool admitted = text || (!value.empty() && value.size() <= 63);
+        if (admitted) {
+            ++forwarded;
+            REQUIRE(source->controls_in.size() == forwarded);
+            CHECK(source->controls_in.back().value.as_string() == value);
+            CHECK(client->control_replies(id)[0]->status == "ok");
+        } else {
+            CHECK(source->controls_in.size() == forwarded);
+            CHECK(client->control_replies(id)[0]->error.find("code")->as_string() == CALIPER_NET_ERR_UNSUPPORTED);
+        }
+    }
+    client->control(++id, "set", "lr", Json(0.01));
+    REQUIRE(world.until([&] { return client->control_replies(id).size() == 1; }));
+    CHECK(source->controls_in.size() == forwarded + 1);
+    CHECK(client->control_replies(id)[0]->status == "ok");
 }
 
 TEST_CASE("net/hub: interpretation reads preserve capability gates and write permissions") {

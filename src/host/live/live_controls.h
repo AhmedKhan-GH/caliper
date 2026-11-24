@@ -148,6 +148,7 @@ private:
     void send_set(const std::string& name, Local& l);
     void on_reply(const ControlReply& r);
     void on_controls(const Controls& before);
+    void sync_interpretation_session(Source* src);
     uint32_t send(const char* op, const std::string& name, const caliper_net::Json& value, uint32_t count);
     void refuse(const std::string& what, const std::string& why);
 
@@ -158,8 +159,10 @@ private:
     ControlAccess access_{false, "not attached to a session"};
     std::map<std::string, Local> locals_;
     std::map<ImGuiID, std::string> text_edits_;
+    uint32_t text_epoch_ = 0;
     std::map<uint32_t, std::string> runs_;     // run request -> action
     std::map<uint32_t, std::pair<std::string, ControlReply>> interpretations_;
+    std::string interpretation_session_;
     uint64_t interpretation_start_ = 0;
     int32_t interpretation_pid_ = 0;
     std::map<uint32_t, std::string> ops_;      // pause/resume/step request -> op

@@ -348,18 +348,162 @@ TEST_CASE("example pages retain eight row picks and two hundred dynamic token la
                 CHECK(labels.back().text=="word "+std::to_string(page*200+199));
                 const auto& rows=resource(data,"rows"); const auto& cells=resource(data,"cells");
                 REQUIRE(rows.count==8); REQUIRE(cells.count==200);
+                for (unsigned i=0;i<200;++i) {
+                    const unsigned source=page*200+i;
+                    CHECK(scalar<float>(cells,i,16,32)==activations[source]);
+                    CHECK(scalar<int>(cells,i,20,32)==tokens[source]);
+                    CHECK(scalar<unsigned>(cells,i,24,32)==i/25);
+                    CHECK(scalar<unsigned>(cells,i,28,32)==1);
+                    CHECK(labels[i].text=="word "+std::to_string(source));
+                }
                 Json picks=Json::array();
                 for (unsigned row=0;row<8;++row) {
                     CHECK(scalar<int>(rows,row,0,16)==int(700+page*8+row));
+                    CHECK(scalar<unsigned>(rows,row,4,16)==page*8+row);
+                    CHECK(scalar<unsigned>(rows,row,8,16)==row);
+                    CHECK(scalar<unsigned>(rows,row,12,16)==25);
                     seen.insert(scalar<int>(rows,row,0,16));
                     const float y=0.81f-float(row)*1.8f/8;
                     check_pick(draw,0,y,row); picks.push(pick_at(0,y,row));
+                    const auto picked=draw.rt.pick(row);
+                    REQUIRE(picked);
+                    const std::map<std::string,double> fields(picked->fields.begin(),picked->fields.end());
+                    CHECK(fields.at("example_id")==700+page*8+row);
+                    CHECK(fields.at("example")==page*8+row);
+                    CHECK(fields.at("visible_row")==row);
+                    CHECK(fields.at("token_count")==25);
                 }
                 output.add("examples_"+std::to_string(page),piece,data,draw,params,picks);
             }
         }
         CHECK(seen.size()==16);
         output.finish();
+    }
+}
+
+TEST_CASE("example pages clear invalid cells before any input read") {
+    @autoreleasepool {
+        mr::Metal metal;
+        if (!metal.backend) CALIPER_SKIP_NO_GPU(metal.why);
+        const auto piece=ip::load("token_strip");
+        std::vector<HostTensor> inputs={
+            HostTensor::of("tokens","i32",{16,25},std::vector<std::int32_t>(400,123)),
+            HostTensor::of("activations","f32",{16,25},std::vector<float>(400,0.75f)),
+            HostTensor::of("example_ids","i32",{16},std::vector<std::int32_t>(16,701)),
+            HostTensor::of("valid_tokens","i32",{16},std::vector<std::int32_t>(16,25)),text_tensor(400,"word ")};
+        unsigned input=0;
+        bool short_buffer=false;
+        SUBCASE("short token shape") { input=0; }
+        SUBCASE("short activation shape") { input=1; }
+        SUBCASE("short example ID shape") { input=2; }
+        SUBCASE("short token count shape") { input=3; }
+        SUBCASE("full token shape with a short buffer") { input=0; short_buffer=true; }
+        SUBCASE("full activation shape with a short buffer") { input=1; short_buffer=true; }
+        SUBCASE("full example ID shape with a short buffer") { input=2; short_buffer=true; }
+        SUBCASE("full token count shape with a short buffer") { input=3; short_buffer=true; }
+        auto& malformed=inputs[input];
+        if (short_buffer) malformed.bytes.resize(sizeof(std::uint32_t));
+        else for (auto& axis:malformed.shape) axis=1;
+        const auto data=mr::run_derive(metal.device,piece,inputs,{{"page",1}});
+        const auto& rows=resource(data,"rows");
+        const auto& cells=resource(data,"cells");
+        const auto& labels=resource(data,"labels");
+        const auto& strings=resource(data,"strings");
+        REQUIRE(rows.count==8); REQUIRE(cells.count==200); REQUIRE(labels.count==200); REQUIRE(strings.count==200);
+        for (unsigned row=0;row<8;++row) {
+            CHECK(scalar<int>(rows,row,0,16)==(input<2 ? 701 : -1));
+            CHECK(scalar<unsigned>(rows,row,4,16)==8+row);
+            CHECK(scalar<unsigned>(rows,row,8,16)==row);
+            CHECK(scalar<unsigned>(rows,row,12,16)==(input<2 ? 25u : 0u));
+        }
+        for (unsigned i=0;i<200;++i) {
+            CHECK(scalar<float>(cells,i,16,32)==0.0f);
+            CHECK(scalar<int>(cells,i,20,32)==-1);
+            CHECK(scalar<unsigned>(cells,i,24,32)==i/25);
+            CHECK(scalar<unsigned>(cells,i,28,32)==0);
+            CHECK(scalar<unsigned>(labels,i,16,32)==0xffffffffu);
+        }
+        CHECK(std::all_of(strings.bytes.begin(),strings.bytes.end(),[](std::uint8_t b){ return b==0; }));
+        mr::PieceDraw draw(*metal.backend,size);
+        set_resources(draw,piece,data);
+        REQUIRE(draw.draw(frame(piece)));
+        CHECK(draw.rt.labels().empty());
+        CHECK(std::all_of(draw.ids.begin(),draw.ids.end(),[](std::uint8_t id){ return id==0; }));
+    }
+}
+
+TEST_CASE("example labels reject incomplete packed text without changing row picks") {
+    @autoreleasepool {
+        mr::Metal metal;
+        if (!metal.backend) CALIPER_SKIP_NO_GPU(metal.why);
+        const auto piece=ip::load("token_strip");
+        auto text=text_tensor(400,"word ");
+        SUBCASE("short text shape") { text.shape={1,16}; }
+        SUBCASE("full text shape with a short buffer") { text.bytes.resize(64); }
+        std::vector<HostTensor> inputs={
+            HostTensor::of("tokens","i32",{16,25},std::vector<std::int32_t>(400,123)),
+            HostTensor::of("activations","f32",{16,25},std::vector<float>(400,0.75f)),
+            HostTensor::of("example_ids","i32",{16},std::vector<std::int32_t>(16,701)),
+            HostTensor::of("valid_tokens","i32",{16},std::vector<std::int32_t>(16,25)),text};
+        const auto data=mr::run_derive(metal.device,piece,inputs,{{"page",1}});
+        const auto& strings=resource(data,"strings");
+        CHECK(std::all_of(strings.bytes.begin(),strings.bytes.end(),[](std::uint8_t b){ return b==0; }));
+        mr::PieceDraw draw(*metal.backend,size);
+        set_resources(draw,piece,data);
+        REQUIRE(draw.draw(frame(piece)));
+        CHECK(draw.rt.labels().empty());
+        for (unsigned row=0;row<8;++row) check_pick(draw,0,0.81f-float(row)*1.8f/8,row);
+    }
+}
+
+TEST_CASE("example padding keeps valid token values and page-local row identities") {
+    @autoreleasepool {
+        mr::Metal metal;
+        if (!metal.backend) CALIPER_SKIP_NO_GPU(metal.why);
+        const auto piece=ip::load("token_strip");
+        std::vector<std::int32_t> counts(16,25), tokens(400,123), ids(16);
+        const std::array<int,8> page_counts={0,1,25,-3,26,2,25,1};
+        for (unsigned row=0;row<8;++row) counts[8+row]=page_counts[row];
+        for (unsigned row=0;row<16;++row) ids[row]=700+row;
+        tokens[225]=0;
+        const std::vector<HostTensor> inputs={HostTensor::of("tokens","i32",{16,25},tokens),
+            HostTensor::of("activations","f32",{16,25},std::vector<float>(400,0.75f)),
+            HostTensor::of("example_ids","i32",{16},ids),HostTensor::of("valid_tokens","i32",{16},counts),
+            text_tensor(400,"word ")};
+        const auto data=mr::run_derive(metal.device,piece,inputs,{{"page",1}});
+        const auto& rows=resource(data,"rows"); const auto& cells=resource(data,"cells");
+        const auto& labels=resource(data,"labels"); const auto& strings=resource(data,"strings");
+        REQUIRE(rows.count==8); REQUIRE(cells.count==200); REQUIRE(labels.count==200); REQUIRE(strings.count==200);
+        REQUIRE(strings.bytes.size()==200*64);
+        unsigned visible=0;
+        for (unsigned row=0;row<8;++row) {
+            const unsigned count=unsigned(std::clamp(page_counts[row],0,25));
+            visible+=count;
+            CHECK(scalar<unsigned>(rows,row,12,16)==count);
+            for (unsigned col=0;col<25;++col) {
+                const unsigned i=row*25+col;
+                const bool valid=col<count;
+                CHECK(scalar<float>(cells,i,16,32)==(valid ? 0.75f : 0.0f));
+                CHECK(scalar<int>(cells,i,20,32)==(valid ? tokens[200+i] : -1));
+                CHECK(scalar<unsigned>(cells,i,28,32)==unsigned(valid));
+                CHECK(scalar<unsigned>(labels,i,16,32)==(valid ? i : 0xffffffffu));
+                if (!valid) CHECK(std::all_of(strings.bytes.begin()+i*64,strings.bytes.begin()+(i+1)*64,
+                    [](std::uint8_t b){ return b==0; }));
+            }
+        }
+        CHECK(visible==79);
+        mr::PieceDraw draw(*metal.backend,size);
+        set_resources(draw,piece,data);
+        REQUIRE(draw.draw(frame(piece)));
+        CHECK(draw.rt.labels().size()==visible);
+        for (unsigned row=0;row<8;++row) {
+            const float y=0.81f-float(row)*1.8f/8;
+            if (page_counts[row]>0) check_pick(draw,-0.912f,y,row);
+            else {
+                const auto [x,py]=pixel(-0.912f,y);
+                CHECK(mr::identity_of(draw.ids,size,x,py)==0);
+            }
+        }
     }
 }
 

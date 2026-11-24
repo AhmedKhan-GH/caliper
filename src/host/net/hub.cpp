@@ -313,6 +313,7 @@ struct Session {
     bool controls_cap = false, selection_cap = false, events_cap = false;   // the producer's
     bool programs_cap = false;       // 3.2 draft: the producer announced "programs"
     bool interpretation_cap = false;
+    bool text_params_cap = false;
     bool interventions_cap = false;  // 3.2 draft: the producer announced "interventions"
     ConnId producer = 0;
     bool live = true;
@@ -1616,6 +1617,11 @@ struct Hub::Impl {
             refuse(CALIPER_NET_ERR_UNSUPPORTED, "the producer of session " + s->id + " does not take controls");
             return;
         }
+        if (ctl.op == CALIPER_NET_OP_SET && ctl.value.is_string() && !s->text_params_cap &&
+            (ctl.value.as_string().empty() || ctl.value.as_string().size() > CALIPER_NET_NAME_MAX)) {
+            refuse(CALIPER_NET_ERR_UNSUPPORTED, "the producer must announce text_params for this text value");
+            return;
+        }
         if (ctl.op == "intervene" && !(p.cap_interventions && s->interventions_cap)) {
             refuse(CALIPER_NET_ERR_UNSUPPORTED, p.cap_interventions
                        ? "the producer of session " + s->id + " does not take interventions"
@@ -1964,6 +1970,7 @@ struct Hub::Impl {
         s.programs_cap = has_cap(caps, CALIPER_NET_CAP_PROGRAMS);
         s.interventions_cap = has_cap(caps, CALIPER_NET_CAP_INTERVENTIONS);
         s.interpretation_cap = has_cap(caps, CALIPER_NET_CAP_INTERPRETATION);
+        s.text_params_cap = has_cap(caps, CALIPER_NET_CAP_TEXT_PARAMS);
         s.resources_cap = has_cap(caps, CALIPER_NET_CAP_RESOURCES);
         s.resource_parts = wire::SplitResources(false);   // a new producer connection starts no version
         s.resource_building.clear();

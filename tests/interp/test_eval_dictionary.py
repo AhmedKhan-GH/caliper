@@ -25,7 +25,7 @@ def test_evaluation_sync_precedes_binding_recheck_and_cursor(tmp_path, monkeypat
     _, metadata = write_fixture(tmp_path, model)
     dictionary = load_dictionary(tmp_path, model=model, device="cpu")
     identity = checkpoint_state.dictionary_fingerprint(tmp_path, metadata)
-    binding = EvaluationBinding(tmp_path, dictionary, identity)
+    binding = EvaluationBinding(tmp_path, dictionary, identity, model=model)
     stream = TextStream([], TinyTokenizer(), "quality")
     stats = evaluation.quality_stats(metadata)
     folder = tmp_path / "evaluation"
@@ -69,7 +69,7 @@ def test_evaluation_sync_precedes_binding_recheck_and_cursor(tmp_path, monkeypat
     if fail_sync:
         with pytest.raises(OSError, match="statistics sync failure"):
             evaluation.save_evaluation(folder, stats, stream, [1, 2], identity, {}, 1, binding)
-        assert events == ["write", "sync"]
+        assert events == ["verify", "write", "sync"]
         assert all((folder / name).read_bytes() == value for name, value in previous.items())
         restored = evaluation.quality_stats(metadata)
         assert evaluation.restore_evaluation(folder, restored, stream, identity, {}, binding) == (None, 0)
@@ -77,7 +77,7 @@ def test_evaluation_sync_precedes_binding_recheck_and_cursor(tmp_path, monkeypat
         fail_sync = False
         events.clear()
     evaluation.save_evaluation(folder, stats, stream, [1, 2], identity, {}, 1, binding)
-    assert events == ["write", "sync", "verify", "cursor"]
+    assert events == ["verify", "write", "sync", "verify", "cursor"]
     assert json.loads((folder / "state.json").read_text())["tensors"] == "stats-b.safetensors"
     restored = evaluation.quality_stats(metadata)
     assert evaluation.restore_evaluation(folder, restored, stream, identity, {}, binding) == ([1, 2], 1)
@@ -220,7 +220,7 @@ def test_stop_after_artifact_admission_records_partial_quality(tmp_path, monkeyp
 
     def batch(*args, **kwargs):
         if stop_at == "pending_batch":
-            raise CleanStop("synthetic pending stop")
+            raise CleanStop("synthetic pending\0stop\ud800" + "é" * 5000)
         result = evaluation.quality_stats(metadata)
         result.count = 1
         monkeypatch.setattr(stream, "next_tokens", lambda *a, **k: (_ for _ in ()).throw(CleanStop("one token")))
@@ -239,8 +239,18 @@ def test_stop_after_artifact_admission_records_partial_quality(tmp_path, monkeyp
             raise CleanStop("synthetic partial restore")
 
         monkeypatch.setattr(evaluation, "restore_evaluation", restore)
+    if stop_at == "restore":
+        prior_quality = (tmp_path / "dictionary.json").read_bytes()
+        with pytest.raises(CleanStop, match="partial restore"):
+            evaluation.evaluate(model, dictionary, stream, tmp_path, tokens=4, context=2,
+                                batch_tokens=2, stop=Stop(), resume=True)
+        assert (tmp_path / "dictionary.json").read_bytes() == prior_quality
+        assert state.read_bytes() == before
+        assert list(state.parent.iterdir()) == [state]
+        assert not capsys.readouterr().out
+        return
     result = evaluation.evaluate(model, dictionary, stream, tmp_path, tokens=4, context=2,
-                                 batch_tokens=2, stop=Stop(), resume=stop_at == "restore")
+                                 batch_tokens=2, stop=Stop())
     assert result["status"] == "partial"
     assert result["evaluated_tokens"] == (1 if stop_at == "one_token" else 0)
     assert result["fvu"] is result["dead_fraction"] is result["cross_entropy_delta"] is None
@@ -250,9 +260,6 @@ def test_stop_after_artifact_admission_records_partial_quality(tmp_path, monkeyp
     end = json.loads(capsys.readouterr().out.splitlines()[-1])
     assert end == {"stage": "quality_end", **result}
     assert bounded({"result": end})
-    if stop_at == "restore":
-        assert state.read_bytes() == before
-        assert list(state.parent.iterdir()) == [state]
-    elif stop_at == "pending_batch":
+    if stop_at == "pending_batch":
         state = json.loads((tmp_path / "evaluation" / "state.json").read_text())
         assert state["pending_ids"] == [1, 1] and state["count"] == 0
