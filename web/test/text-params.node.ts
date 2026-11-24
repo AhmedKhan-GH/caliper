@@ -5,6 +5,7 @@ import { MSG, PARAM_TEXT_MAX, LIMITS_31, type Message } from '../src/protocol/me
 import { isParamText } from '../src/protocol/param-text.js';
 import './interpretation.node.js';
 import './socket.node.js';
+import './controls-text.node.js';
 
 test('Free-text values preserve exact UTF-8 bytes through metadata and controls', () => {
   for (const value of ['', 'x'.repeat(1025), 'x'.repeat(4096), 'é'.repeat(2048), '😀'.repeat(1024), '\ufefftext\n']) {
