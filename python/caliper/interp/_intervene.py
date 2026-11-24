@@ -8,6 +8,8 @@ from copy import deepcopy
 import hashlib
 import json
 import math
+import threading
+import time
 import weakref
 
 import torch
@@ -71,11 +73,102 @@ def _content_identity(state, guard):
 
 def _dictionary_identifier(dictionary, guard):
     """Bind default restore compatibility to content, metadata, and actual TopK values."""
-    identity = {"version": 1, "content": _content_identity(dictionary.state_dict(), guard),
+    return _dictionary_digest(dictionary, _content_identity(dictionary.state_dict(), guard))
+
+
+def _dictionary_digest(dictionary, content):
+    identity = {"version": 1, "content": content,
                 "metadata": {key: value for key, value in dictionary.metadata.items() if key != "quality"},
                 "topk": [layer.k for layer in dictionary.layers]}
     encoded = json.dumps(identity, sort_keys=True, allow_nan=False, separators=(",", ":")).encode("utf-8")
     return "sha256:" + hashlib.sha256(encoded).hexdigest()
+
+
+class _DictionarySnapshot:
+    """Prove unchanged content with private bytes, without version-counter assumptions.
+
+    Every lookup compares all bytes on the original device. Data aliases, NumPy
+    writes, and inference tensors need no mutation notification. The snapshot
+    never supplies model weights, and a mismatch requires reconfiguration.
+    """
+
+    def __init__(self, state, content):
+        self.state, self.content = state, content
+
+    @staticmethod
+    def _memory(state, guard):
+        from ._dictionary import _canonical_device
+        memory = _IdentityMemory(guard) if guard is not None else None
+        for tensor in state.values():
+            if tensor.device.type != "cpu":
+                if memory is None or not math.isfinite(memory.limit):
+                    raise ValueError("device content identity requires a bounded process memory guard")
+                if _canonical_device(tensor.device) != _canonical_device(memory.device):
+                    raise ValueError("dictionary identity requires a guard for its device")
+        return memory
+
+    @staticmethod
+    def _admit(memory, reserve, *, force=False, floor=0):
+        from ._memory import CleanStop
+        if memory is not None:
+            memory.check("dictionary identity", force=force)
+            if max(memory.peak, floor) + reserve > memory.limit:
+                raise CleanStop("dictionary identity allocation exceeds the process memory limit")
+
+    @classmethod
+    def create(cls, dictionary, identifier, guard):
+        from ._dictionary import _dense_state, _HASH_CHUNK_BYTES, _UNVERIFIED_CPU_BYTES
+        from ._memory import autorelease_scope
+        state = _dense_state(dictionary.state_dict())
+        sizes = [tensor.numel() * tensor.element_size() for tensor in state.values()]
+        total, largest = sum(sizes), max(sizes, default=0)
+        memory = cls._memory(state, guard)
+        # Account for the retained copy, hash chunks, and comparison workspace.
+        scratch = max(4 * largest, 4 * _HASH_CHUNK_BYTES)
+        if memory is None:
+            if any(t.device.type != "cpu" for t in state.values()) or total + scratch > _UNVERIFIED_CPU_BYTES:
+                return None
+            initial = 0
+        else:
+            memory.check("dictionary identity", force=True)
+            initial = memory.peak
+            if not math.isfinite(memory.limit) or initial + total + scratch > memory.limit:
+                return None
+        snapshot, copied = {}, 0
+        for name, tensor in state.items():
+            cls._admit(memory, total - copied + scratch, floor=initial + copied)
+            with autorelease_scope(tensor.device):
+                snapshot[name] = tensor.detach().clone()
+            copied += tensor.numel() * tensor.element_size()
+        content = _content_identity(snapshot, guard)
+        result = cls(snapshot, content)
+        cls._admit(memory, scratch, force=True, floor=initial + copied)
+        # The copied bytes must reproduce the configured full-content identity.
+        if _dictionary_digest(dictionary, content) != identifier or not result.matches(dictionary, identifier, guard):
+            raise InterventionError("dictionary content changed. Reconfigure before use",
+                                    "intervene.unknown_dictionary")
+        return result
+
+    def matches(self, dictionary, identifier, guard):
+        from ._dictionary import _dense_state
+        from ._memory import autorelease_scope
+        state = _dense_state(dictionary.state_dict())
+        if state.keys() != self.state.keys() or _dictionary_digest(dictionary, self.content) != identifier:
+            return False
+        memory = self._memory(state, guard)
+        self._admit(memory, 0, force=True)
+        for name, tensor in state.items():
+            saved = self.state[name]
+            if (tensor.shape != saved.shape or tensor.dtype != saved.dtype or tensor.device != saved.device):
+                return False
+            self._admit(memory, 4 * tensor.numel() * tensor.element_size())
+            with autorelease_scope(tensor.device):
+                # Byte views also distinguish signed zero and preserve NaN bits.
+                current = tensor.detach().reshape(-1).view(torch.uint8)
+                original = saved.reshape(-1).view(torch.uint8)
+                if not torch.equal(current, original):
+                    return False
+        return True
 
 
 def _indices(value, name, *, limit=None):
@@ -196,6 +289,10 @@ class InterventionService:
         self.dictionary = None
         self.dictionary_id = None
         self._default_dictionary_id = False
+        self._dictionary_snapshot = None
+        self._identity_lock = threading.Lock()
+        self._identity_checks = 0
+        self._identity_seconds = 0.
         self.tokenizer = None
         self.resource_guard = None
         self._cache = OrderedDict()
@@ -262,10 +359,39 @@ class InterventionService:
         self._cache.clear()
         self._cache_identity = None
 
+    def _prepare_dictionary_identity(self):
+        """Admit an optional exact-byte snapshot for repeated hosted validation."""
+        self._dictionary_snapshot = None
+        if self._default_dictionary_id:
+            self._dictionary_snapshot = _DictionarySnapshot.create(
+                self.dictionary, self.dictionary_id, self.resource_guard)
+
+    def _dictionary_matches(self):
+        started = time.perf_counter()
+        try:
+            if self._dictionary_snapshot is not None:
+                return self._dictionary_snapshot.matches(self.dictionary, self.dictionary_id, self.resource_guard)
+            return _dictionary_identifier(self.dictionary, self.resource_guard) == self.dictionary_id
+        finally:
+            seconds = time.perf_counter() - started
+            with self._identity_lock:
+                self._identity_checks += 1
+                self._identity_seconds += seconds
+
+    def _dictionary_status(self):
+        """Return cumulative validation costs, separate from request completion."""
+        snapshot = self._dictionary_snapshot
+        mode = "snapshot" if snapshot is not None else "hash" if self._default_dictionary_id else "caller"
+        size = sum(t.numel() * t.element_size() for t in snapshot.state.values()) if snapshot is not None else 0
+        with self._identity_lock:
+            return {"mode": mode, "snapshot_bytes": size,
+                    "checks": self._identity_checks, "seconds": self._identity_seconds}
+
     def close(self):
         for hook in list(self._hooks):
             hook()
         self.invalidate_cache()
+        self._dictionary_snapshot = None
 
     def _target(self, point):
         from .._ablate import _find, _shapes
@@ -353,8 +479,7 @@ class InterventionService:
         elif kind in ("scale", "clamp"):
             if self.dictionary is None or spec.get("dictionary", self.dictionary_id) != self.dictionary_id:
                 raise InterventionError("unknown or absent dictionary", "intervene.unknown_dictionary")
-            if (self._default_dictionary_id
-                    and _dictionary_identifier(self.dictionary, self.resource_guard) != self.dictionary_id):
+            if self._default_dictionary_id and not self._dictionary_matches():
                 raise InterventionError("dictionary content changed. Reconfigure before use",
                                         "intervene.unknown_dictionary")
             if probe is None or not point.endswith(".mlp_out"):
@@ -529,6 +654,7 @@ class _InterventionReplay:
         self.executor.dictionary = executor.dictionary
         self.executor.dictionary_id = executor.dictionary_id
         self.executor._default_dictionary_id = executor._default_dictionary_id
+        self.executor._dictionary_snapshot = executor._dictionary_snapshot
         self.executor.tokenizer = executor.tokenizer
         self.executor.resource_guard = executor.resource_guard
         self._effects = []

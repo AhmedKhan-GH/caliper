@@ -10,6 +10,7 @@ import math
 import os
 from pathlib import Path
 import threading
+import time
 from types import SimpleNamespace
 
 import torch
@@ -614,8 +615,10 @@ class HostedInference:
 
     def inference_status(self):
         binding = self._input_hashes(self._input_state())
+        identity = self.interventions.executor._dictionary_status()
         with self._inference_lock:
-            return dict(binding, comparison=deepcopy(self._comparison), generation=deepcopy(self._generation))
+            return dict(binding, comparison=deepcopy(self._comparison), generation=deepcopy(self._generation),
+                        dictionary_validation=identity)
 
     def _owned_record(self):
         """Resolve the exact slider request while the Controls lock is held."""
@@ -663,6 +666,7 @@ class HostedInference:
             self.interventions = self.controls.intervention_service
             self.interventions.configure(dictionary=self.dictionary, tokenizer=self.tokenizer,
                                          resource_guard=self.guard)
+            self.interventions.executor._prepare_dictionary_identity()
             self.output = Output(self.model, self.tokenizer, self.interventions, guard=self.guard)
             def param(name, value, **kwargs):
                 result = caliper.param(name, value, **kwargs)
@@ -821,12 +825,14 @@ class HostedInference:
             with self.controls.lock:
                 # A later request must not reuse a comparison that already began.
                 action_id = self.controls.actions["apply_clamp"].run_id
+            started = time.perf_counter()
             comparison = self.output.compare(key[0])
+            seconds = time.perf_counter() - started
             if self._input_state() != key:
                 raise ValueError("inference state changed during the output comparison")
             with self._inference_lock:
                 self._comparison = dict(self._input_hashes(key), argmax_token_ids=comparison["argmax_token_ids"],
-                                        completed_step=self.controls.n)
+                                        completed_step=self.controls.n, compute_publish_seconds=seconds)
             self._output_key = deepcopy(key)
             self._output_action_id = action_id
             self.status.set("ready")

@@ -90,19 +90,20 @@ def test_interval_admission_observes_a_lower_limit_before_each_copy(monkeypatch)
     assert copies == [32] and samples == [0.]
 
 
-def test_new_clamp_hashes_resources_at_admission_and_installation(hosted_run, monkeypatch):
-    from caliper.interp import _intervene
+def test_new_clamp_checks_bytes_at_admission_and_installation(hosted_run, monkeypatch):
     from .test_hosted import _trace_at_boundary
     run, _ = hosted_run
     graph = _trace_at_boundary(run, prompt="AB", max_targets=32)
     run.selected.set(next(i for i, node in enumerate(graph.nodes) if node["kind"] == "feature"))
     run.boundary()
-    original = _intervene._dictionary_identifier
+    snapshot = run.interventions.executor._dictionary_snapshot
+    assert snapshot is not None
+    original = snapshot.matches
     checks = []
     def identity(*args):
         checks.append(1)
         return original(*args)
-    monkeypatch.setattr(_intervene, "_dictionary_identifier", identity)
+    monkeypatch.setattr(snapshot, "matches", identity)
     run.apply_clamp()
     assert checks == [1, 1]
     owned = run._owned_clamp
@@ -114,3 +115,30 @@ def test_new_clamp_hashes_resources_at_admission_and_installation(hosted_run, mo
     with pytest.raises(ValueError, match="dictionary content changed"):
         run.apply_clamp()
     assert run._owned_clamp is owned
+
+
+def test_clamp_diagnostics_retain_completion_and_do_not_validate_on_status(hosted_run):
+    from caliper import _wire
+    from .test_hosted import _trace_at_boundary
+    run, route = hosted_run
+    graph = _trace_at_boundary(run, prompt="AB", max_targets=32)
+    run.selected.set(next(i for i, node in enumerate(graph.nodes) if node["kind"] == "feature"))
+    run.boundary()
+    before = run.inference_status()
+    assert route.on_control(None, _wire.Control(1, "set", name="clamp", value=0.).to_meta())["status"] == "ok"
+    assert route.on_control(None, _wire.Control(2, "run", name="apply_clamp").to_meta())["status"] == "queued"
+    run.boundary()
+    after = run.inference_status()
+    identity = after["dictionary_validation"]
+    assert identity["mode"] == "snapshot"
+    assert identity["snapshot_bytes"] == sum(t.numel() * t.element_size() for t in run.dictionary.state_dict().values())
+    assert identity["checks"] - before["dictionary_validation"]["checks"] == 3
+    assert identity["seconds"] > before["dictionary_validation"]["seconds"]
+    comparison = after["comparison"]
+    assert comparison["compute_publish_seconds"] > 0
+    assert comparison["completed_step"] == run.controls.n > before["comparison"]["completed_step"]
+    assert comparison["interventions_hash"] == after["interventions_hash"]
+    assert comparison["prompt_hash"] == after["prompt_hash"]
+    assert run.inference_status() == after
+    identity["checks"] = -1
+    assert run.inference_status()["dictionary_validation"]["checks"] >= 3
