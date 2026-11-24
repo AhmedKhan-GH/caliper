@@ -1,4 +1,8 @@
 """CPU checks for service ownership and intervention-aware trace caches."""
+import sys
+import threading
+from types import SimpleNamespace
+
 import pytest
 import torch
 
@@ -119,3 +123,104 @@ def test_tracer_factory_refuses_mismatch_before_resource_binding(resources, monk
     finally:
         unregister_service(service, controls=owner)
         route.detach()
+
+
+def test_failed_replacement_preserves_live_queue_and_native_capability(resources, monkeypatch):
+    owner, transport = _controls.CONTROLS, Transport()
+    route = owner.attach(transport)
+    refreshed = []
+    native = SimpleNamespace(refresh_interpretation=lambda: refreshed.append(owner.interpretation_service))
+    monkeypatch.setitem(sys.modules, "caliper._net_native", native)
+    service = register_service(tracer=Tracer(*resources))
+    candidate = InterpretationService(tracer=Tracer(*resources, controls=_controls.Controls()))
+    try:
+        assert refreshed == [service]
+        assert call(route, "trace.run", {"prompt": "AB", "max_targets": 0})["status"] == "queued"
+        with pytest.raises(Refused) as caught:
+            register_service(candidate)
+        assert caught.value.code == "interpret.controls_mismatch"
+        assert owner.interpretation_service is service and not service.closed
+        assert service.pending and owner.busy and not transport.replies
+        assert not hasattr(candidate, "controls") and not candidate.closed
+        assert refreshed == [service]
+        owner.step()
+        assert transport.replies[-1].status == "ok", transport.replies[-1].error
+        assert service.graph is not None
+        assert register_service(service) is service
+        assert refreshed == [service, service]
+    finally:
+        unregister_service(service)
+        candidate.close()
+        route.detach()
+    assert refreshed == [service, service, None]
+
+
+@pytest.mark.parametrize("resolved", [False, True])
+def test_bound_service_refuses_owner_transfer_and_preserves_both_queues(resources, resolved):
+    first, second = _controls.Controls(), _controls.Controls()
+    calls, replies = [], []
+
+    def factory():
+        calls.append("factory")
+        return Tracer(*resources, controls=first)
+
+    service = register_service(controls=first, **({"tracer": factory()} if resolved else {"tracer_factory": factory}))
+    previous = register_service(controls=second, dictionary=resources[2])
+    request = {"version": 1, "method": "feature.dictionary", "params": {}}
+    service.submit(request, lambda *args: replies.append(args))
+    previous.submit(request, lambda *args: replies.append(args))
+    try:
+        assert register_service(service, controls=first) is service
+        with pytest.raises(Refused) as caught:
+            register_service(service, controls=second)
+        assert caught.value.code == "interpret.controls_mismatch"
+        assert first.interpretation_service is service and second.interpretation_service is previous
+        assert service.controls is first and previous.controls is second
+        assert not service.closed and not previous.closed
+        assert service.pending and previous.pending and not replies
+        assert calls == (["factory"] if resolved else [])
+        service.step()
+        previous.step()
+        assert [reply[0] for reply in replies] == ["ok", "ok"]
+        assert calls == ["factory"] and service.tracer.controls is first
+    finally:
+        unregister_service(service, controls=first)
+        unregister_service(previous, controls=second)
+
+
+def test_owner_claim_precedes_concurrent_replacement(monkeypatch):
+    first, second = _controls.Controls(), _controls.Controls()
+    previous = register_service(controls=first)
+    untouched = register_service(controls=second)
+    candidate = InterpretationService()
+    entered, release = threading.Event(), threading.Event()
+    failures = []
+    close = previous.close
+
+    def delayed_close():
+        entered.set()
+        assert release.wait(5)
+        close()
+
+    def replace():
+        try:
+            register_service(candidate, controls=first)
+        except BaseException as exc:
+            failures.append(exc)
+
+    monkeypatch.setattr(previous, "close", delayed_close)
+    worker = threading.Thread(target=replace)
+    worker.start()
+    try:
+        assert entered.wait(5)
+        with pytest.raises(Refused) as caught:
+            register_service(candidate, controls=second)
+        assert caught.value.code == "interpret.controls_mismatch"
+        assert second.interpretation_service is untouched and not untouched.closed
+    finally:
+        release.set()
+        worker.join(5)
+        unregister_service(candidate, controls=first)
+        unregister_service(untouched, controls=second)
+    assert not worker.is_alive() and not failures
+    assert previous.closed and candidate.controls is first
