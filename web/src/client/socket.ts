@@ -12,6 +12,9 @@ import {
 
 const VERSION = '0.1.0';
 type ControlRequest = Omit<ControlMsg, 'type' | 'request_id'>;
+const INTERPRETATION_READS = new Set<string>([
+  'feature.dictionary', 'feature.show', 'feature.examples', 'trace.status', 'trace.read',
+]);
 
 interface Sub {
   view: string;
@@ -143,7 +146,7 @@ export class SocketClient implements StreamClient {
   }
 
   control(req: ControlRequest, onReply?: (reply: ControlReplyMsg) => void): number | null {
-    if (!this.controlAccess().allowed) return null;
+    if (!this.canControl(req)) return null;
     if (req.op !== 'set' || !req.name) return this.sendControl(req, onReply);
     // At most 30 sets a second for one parameter, ending with the last value.
     const name = req.name;
@@ -170,10 +173,18 @@ export class SocketClient implements StreamClient {
     return 0;
   }
 
-  private sendControl(req: ControlRequest, onReply?: (reply: ControlReplyMsg) => void): number | null {
-    if (!this.controlAccess().allowed) return null;
+  private canControl(req: ControlRequest): boolean {
+    if (!this.ready || this.state !== 'open' || this.ended || this.session?.state === 'ended'
+      || this.ws?.readyState !== WebSocket.OPEN
+      || (this.hub && (!this.attached || this.session?.id !== this.attached))) return false;
     if (req.op === 'interpret' && (!this.capabilities.includes(CAP.interpretation)
-      || (this.hub && !this.session?.capabilities?.includes(CAP.interpretation)))) return null;
+      || (this.hub && !this.session?.capabilities?.includes(CAP.interpretation)))) return false;
+    if (req.op === 'interpret' && INTERPRETATION_READS.has(req.interpretation?.method ?? '')) return true;
+    return this.controlAccess().allowed;
+  }
+
+  private sendControl(req: ControlRequest, onReply?: (reply: ControlReplyMsg) => void): number | null {
+    if (!this.canControl(req)) return null;
     const id = this.nextRequest++;
     if (onReply) this.replies.set(id, onReply);
     try {
