@@ -11,6 +11,58 @@ from .test_intervention_replay import hook_objects
 from .test_service import Transport
 
 
+@pytest.mark.parametrize("request_kind", ["replacement", "activation", "scheduled"])
+def test_reinstallation_refusal_resolves_the_request_that_changes_the_final_set(monkeypatch, request_kind):
+    from caliper.interp import _intervene
+    from .test_source_admission import patch_capacity
+
+    with patch_capacity(2) as (model, tokenizer, controls, service, specs):
+        cache = service.executor._cache
+        sources, identity = list(cache.items()), service.executor._cache_identity
+        monkeypatch.setattr(_intervene, "MAX_SOURCE_BYTES",
+                            sum(t.numel() * t.element_size() for _, t in sources))
+        hooks = hook_objects(model)
+        before = model(**tokenizer("c")).logits
+        first = controls._ivs[(specs[0]["point"], "patch")]
+        if request_kind != "replacement":
+            saved = service.state_dict()
+            pending = saved["interventions"][0]
+            pending.update(state="pending", applied_specification=None, since_step=None)
+            pending["specification"]["source_prompt"] = "bb"
+            if request_kind == "scheduled":
+                pending["specification"]["from_step"] = controls.n + 2
+            service.load_state_dict(saved, restore_active=True)
+            first = controls._ivs[(specs[0]["point"], "patch")]
+            sources, identity = list(cache.items()), service.executor._cache_identity
+            hooks = hook_objects(model)
+            before = model(**tokenizer("c")).logits
+        else:
+            service.set(dict(specs[0], source_prompt="bb"))
+        old_hook, applied = first.hook, first.applied_spec
+        transport, observed = Transport(), []
+        route = controls.attach(transport)
+        controls.action("inspect", lambda: observed.append(model(**tokenizer("c")).logits))
+        route.on_control(None, _wire.Control(1, "run", name="inspect").to_meta())
+        try:
+            with pytest.warns(RuntimeWarning, match="bounded source cache"):
+                controls.step()
+            assert first.error_code == "intervene.hook_failed"
+            assert not first.replace
+            assert first.state == ("active" if request_kind == "replacement" else "ended")
+            assert first.hook is old_hook and first.applied_spec is applied
+            assert hook_objects(model) == hooks
+            assert service.executor._cache is cache and service.executor._cache_identity is identity
+            assert list(cache) == [key for key, _ in sources]
+            assert all(cache[key] is tensor for key, tensor in sources)
+            assert not transport.replies and not observed
+            controls.step()
+            assert [(reply.request_id, reply.status) for reply in transport.replies] == [(1, "ok")]
+            torch.testing.assert_close(observed[0], before, rtol=0, atol=0)
+            assert not controls.queue
+        finally:
+            route.detach()
+
+
 def test_terminal_replacement_refusal_preserves_effect_and_allows_recovery(controlled):
     model, tokenizer, controls, service = controlled
     transport = Transport()
@@ -69,6 +121,44 @@ def test_terminal_replacement_refusal_preserves_effect_and_allows_recovery(contr
         route.detach()
     # The source observer was the only additional model hook during refusal.
     assert all(not module._forward_pre_hooks and not module._forward_hooks for module in model.modules())
+
+
+def test_scheduled_reinstallation_conflict_preserves_the_newer_request(monkeypatch):
+    from caliper.interp import _intervene
+    from .test_source_admission import patch_capacity
+
+    with patch_capacity(2) as (model, tokenizer, controls, service, specs):
+        monkeypatch.setattr(_intervene, "MAX_SOURCE_BYTES", 128)
+        saved = service.state_dict()
+        pending = saved["interventions"][0]
+        pending.update(state="pending", applied_specification=None, since_step=None)
+        pending["specification"].update(source_prompt="bb", from_step=controls.n + 2)
+        service.load_state_dict(saved, restore_active=True)
+        hooks = hook_objects(model)
+        cache, identity = list(service.executor._cache.items()), service.executor._cache_identity
+        install, queued = service.executor.install, []
+
+        def installed(spec, **kwargs):
+            hook = install(spec, **kwargs)
+            if spec["point"] == specs[0]["point"] and not queued:
+                service.set(dict(specs[0], source_prompt="b"))
+                queued.append(service.state_dict())
+            return hook
+
+        with monkeypatch.context() as patch:
+            patch.setattr(service.executor, "install", installed)
+            with warnings.catch_warnings(record=True) as reports:
+                warnings.simplefilter("always")
+                controls.step()
+        assert len(queued) == 1 and not reports
+        assert service.state_dict() == queued[0]
+        assert hook_objects(model) == hooks
+        assert service.executor._cache_identity is identity
+        assert list(service.executor._cache) == [key for key, _ in cache]
+        assert all(service.executor._cache[key] is tensor for key, tensor in cache)
+        controls.step()
+        assert [spec["source_prompt"] for spec in service.specifications()] == ["b", "a"]
+        assert all(record.error is None for record in controls._ivs.values())
 
 
 def test_refusal_restores_all_hooks_and_preserves_other_pending_requests(controlled):

@@ -2212,16 +2212,7 @@ class Controls:
                 if prepared is None:
                     # Resolve the failed request against its unchanged revision.
                     # Keep the valid effect and publish the refusal through existing fields.
-                    retained = copy(previous[refused])
-                    retained.spec = retained.applied_spec
-                    retained.from_step = retained.spec.get("from_step")
-                    retained.until_step = retained.spec.get("until_step")
-                    retained.replace = False
-                    retained.error, retained.error_code = records[refused].error, records[refused].error_code
-                    self._check_metadata_budget(ivs={**self._ivs, refused: retained})
-                    for field in _Intervention.__slots__:
-                        setattr(originals[refused], field, getattr(retained, field))
-                    self._iv_revision += 1
+                    self._resolve_intervention_refusal(originals[refused], previous[refused], records[refused])
                     with self._outside_lock():
                         for message in reports:
                             warnings.warn(message, RuntimeWarning, stacklevel=2)
@@ -2246,10 +2237,13 @@ class Controls:
             finally:
                 with self._outside_lock():
                     if committed:
+                        effects_changed = False
                         for key, iv in previous.items():
                             if key not in records or iv.hook is not records[key].hook:
+                                effects_changed = True
                                 self._unhook(iv, retain_source=True)
-                        m.executor._discard_unused_sources()
+                        if changed or effects_changed:
+                            m.executor._discard_unused_sources()
                         if lingered:
                             self._report_linger(lingered)
                         for message in reports:
@@ -2261,6 +2255,29 @@ class Controls:
                         m.executor._cache.clear()
                         m.executor._cache.update(cache)
                         m.executor._cache_identity = identity
+
+    def _resolve_intervention_refusal(self, original, previous, failed):
+        """End one unchanged request and retain its applied effect and owner."""
+        from copy import copy, deepcopy
+
+        retained = copy(previous)
+        if retained.applied_spec is not None:
+            retained.spec = retained.applied_spec
+            retained.from_step = retained.spec.get("from_step")
+            retained.until_step = retained.spec.get("until_step")
+        else:
+            retained.state = IV_ENDED
+        retained.replace = False
+        retained.error, retained.error_code = failed.error, failed.error_code
+        self._check_metadata_budget(ivs={**self._ivs, (retained.point, retained.op): retained})
+        # Preserve request identity for owners such as the hosted slider.
+        restored_spec = deepcopy(retained.spec)
+        original.spec.clear()
+        original.spec.update(restored_spec)
+        retained.spec = original.spec
+        for field in _Intervention.__slots__:
+            setattr(original, field, getattr(retained, field))
+        self._iv_revision += 1
 
     def _complete_due_interventions(self, m, step):
         """Complete expirations, clears, and scheduled starts in one bounded pass.
@@ -2319,11 +2336,17 @@ class Controls:
         try:
             with (self._outside_lock(), m.executor._retire_sources(
                     self._boundary_retirements(records, step))):
-                prepared, reports, _ = self._prepare_interventions(m, records, originals, step)
+                prepared, reports, refused = self._prepare_interventions(m, records, originals, step)
             if self._iv_model is not m:
                 return changed, True
             if prepared is None:
-                raise InterventionError("scheduled intervention preparation failed", ERR_NOT_SUPPORTED)
+                if self._iv_revision == revision:
+                    self._resolve_intervention_refusal(originals[refused], previous[refused], records[refused])
+                    with self._outside_lock():
+                        for message in reports:
+                            warnings.warn(message, RuntimeWarning, stacklevel=2)
+                    changed = True
+                return changed, True
             prospective = {key: copy(iv) for key, iv in self._ivs.items()}
             for key, prepared in records.items():
                 current = prospective.get(key)
@@ -2381,14 +2404,16 @@ class Controls:
         return retired
 
     def _prepare_interventions(self, m, records, originals, s):
-        """Return the change flag, reports, and failed replacement key for speculative hooks."""
+        """Return the change flag, reports, and request that caused a failed hook set."""
         from .interp._memory import CleanStop
 
         changed = False
         reinstall = False
+        cause = None
         reports = []
         for key in list(records):
             iv = records[key]
+            requested = iv.hook is None or iv.replace
             if iv.report:
                 iv.report = False
                 changed = True
@@ -2416,6 +2441,8 @@ class Controls:
                 try:
                     self._install_intervention(m, iv, iv.spec, owner=originals[key])
                     reinstall = True
+                    if requested:
+                        cause = key
                 except Exception as e:
                     if isinstance(e, CleanStop) or self._resource_stop(e):
                         raise
@@ -2424,8 +2451,11 @@ class Controls:
                     ended, on = True, False
                     reports.append(f"caliper: the intervention at {iv.point!r} failed: {iv.error}")
                     if originals[key].hook is not None:
-                        # A replacement failure rolls back the complete hook sequence.
-                        return None, reports, key
+                        # An unchanged hook can fail after a prior request consumes capacity.
+                        # Resolve that request, then roll back the complete hook sequence.
+                        refused = key if requested else cause
+                        records[refused].error, records[refused].error_code = iv.error, iv.error_code
+                        return None, reports, refused
             if not on:
                 iv.hook, iv.applied_spec = None, None
             state = IV_ACTIVE if on else IV_ENDED if ended else IV_PENDING

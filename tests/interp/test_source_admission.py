@@ -289,13 +289,27 @@ def test_patch_registration_failure_restores_exact_cache_and_hooks(monkeypatch, 
             with pytest.raises(RuntimeError, match="registration refused"):
                 call()
         assert reached == [True]
-        assert service.state_dict() == state and list(ctl._ivs.items()) == records
+        expected = copy.deepcopy(state)
+        if operation == "boundary":
+            refused = expected["interventions"][0]
+            refused["specification"] = copy.deepcopy(refused["applied_specification"])
+            refused.update(error="RuntimeError: patch registration refused", error_code="intervene.hook_failed")
+            assert not records[0][1].replace
+        assert service.state_dict() == expected and list(ctl._ivs.items()) == records
         assert hook_objects(model) == hooks
         assert service.executor._cache is cache and service.executor._cache_identity is identity
         assert list(cache) == [key for key, _ in sources]
         assert all(cache[key] is tensor for key, tensor in sources)
         assert service.executor._retiring_sources == frozenset()
         torch.testing.assert_close(model(**tokenizer("c")).logits, before, rtol=0, atol=0)
+        if operation == "boundary":
+            ctl.step()
+            assert reached == [True] and service.state_dict() == expected
+            assert hook_objects(model) == hooks
+            assert service.executor._cache is cache and service.executor._cache_identity is identity
+            assert list(cache) == [key for key, _ in sources]
+            assert all(cache[key] is tensor for key, tensor in sources)
+            torch.testing.assert_close(model(**tokenizer("c")).logits, before, rtol=0, atol=0)
 
 
 def test_patch_replacement_conflict_restores_sources_and_preserves_queued_request(monkeypatch):
@@ -339,6 +353,7 @@ def test_patch_byte_limit_refuses_final_overflow_without_loss(monkeypatch):
 
     with patch_capacity(2) as (model, tokenizer, ctl, service, specs):
         cache = list(service.executor._cache.items())
+        identity = service.executor._cache_identity
         monkeypatch.setattr(_intervene, "MAX_SOURCE_BYTES",
                             sum(t.numel() * t.element_size() for _, t in cache))
         before, hooks = model(**tokenizer("c")).logits, hook_objects(model)
@@ -346,8 +361,20 @@ def test_patch_byte_limit_refuses_final_overflow_without_loss(monkeypatch):
         state = service.state_dict()
         with pytest.warns(RuntimeWarning, match="bounded source cache"):
             ctl.step()
-        assert service.state_dict() == state and hook_objects(model) == hooks
+        expected = copy.deepcopy(state)
+        refused = expected["interventions"][0]
+        refused["specification"] = copy.deepcopy(refused["applied_specification"])
+        refused.update(error="InterventionError: active patch sources exceed the bounded source cache",
+                       error_code="intervene.hook_failed")
+        assert service.state_dict() == expected and hook_objects(model) == hooks
+        assert not ctl._ivs[(specs[0]["point"], "patch")].replace
+        assert service.executor._cache_identity is identity
         assert list(service.executor._cache) == [key for key, _ in cache]
+        assert all(service.executor._cache[key] is tensor for key, tensor in cache)
+        torch.testing.assert_close(model(**tokenizer("c")).logits, before, rtol=0, atol=0)
+        ctl.step()
+        assert service.state_dict() == expected and hook_objects(model) == hooks
+        assert service.executor._cache_identity is identity
         assert all(service.executor._cache[key] is tensor for key, tensor in cache)
         torch.testing.assert_close(model(**tokenizer("c")).logits, before, rtol=0, atol=0)
         service.set(dict(specs[0], source_prompt="b"))

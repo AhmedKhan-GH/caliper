@@ -1,5 +1,7 @@
 """CPU checks for hosted clamp edits and explicit actions."""
 from copy import deepcopy
+import json
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -183,6 +185,101 @@ def _feature_rows(run):
 def _queue_action(route, name, request_id):
     reply = route.on_control(None, _wire.Control(request_id, "run", name=name).to_meta())
     assert reply["status"] == "queued"
+
+
+@pytest.mark.parametrize("continuation", ["reset", "restore", "fork"])
+def test_slider_registration_refusal_preserves_owner_and_reset(hosted_run, monkeypatch, tmp_path, continuation):
+    import caliper
+    from caliper import _controls, _managed
+    from caliper.interp import load_dictionary
+    from caliper.interp._hosted import HostedInference
+    from caliper.interp._index import FeatureIndex
+    from caliper.interp._intervene import Intervention
+    from .test_intervention_replay import hook_objects
+    from .test_service import Transport
+
+    run, route = hosted_run
+    run.selected.set(_feature_rows(run)[0])
+    run.clamp.set(0.)
+    run.boundary()
+    record = run._owned_record()
+    hook, applied = record.hook, record.applied_spec
+    before, hooks = _resolve("output.probs").clone(), hook_objects(run.model)
+    assert not torch.equal(before[0], before[1])
+    module = run.model.layers[run.selection["layer"]].mlp
+    register, attempts = module.register_forward_hook, []
+
+    def fail(callback, **kwargs):
+        if isinstance(getattr(callback, "__self__", None), Intervention):
+            attempts.append(1)
+            raise RuntimeError("slider hook registration refused")
+        return register(callback, **kwargs)
+
+    reply = route.on_control(None, _wire.Control(1, "set", name="clamp", value=1.).to_meta())
+    assert reply["status"] == "ok"
+    _queue_action(route, "reset", 2)
+    with monkeypatch.context() as patch:
+        patch.setattr(module, "register_forward_hook", fail)
+        with pytest.warns(RuntimeWarning, match="slider hook registration refused"):
+            run.boundary()
+    assert attempts == [1] and not route.transport.replies
+    assert record.hook is hook and record.applied_spec is applied and not hook.removed
+    assert hook_objects(run.model) == hooks
+    assert run._owned_record() is record and run._owned_clamp is record.spec
+    assert record.spec == applied and not record.replace
+    assert record.error == "RuntimeError: slider hook registration refused"
+    assert record.error_code == "intervene.hook_failed"
+    assert "Live slider clamp:" in run.clamp_status.value
+    torch.testing.assert_close(_resolve("output.probs"), before, rtol=0, atol=0)
+    checkpoint = run.managed.checkpoint(run.model, None)
+    saved = json.loads(Path(checkpoint).read_bytes())
+    assert saved["owned_clamp"] == applied
+    assert saved["interventions"] == run.interventions.state_dict()
+    child = None
+    child_route = None
+    try:
+        if continuation == "restore":
+            run.load_checkpoint(saved)
+            run.interventions.load_state_dict(saved["interventions"], restore_active=True)
+            run._restore_owned_clamp(run.restored["owned_clamp"])
+            assert run.interventions.state_dict() == saved["interventions"]
+            assert run._owned_record() is not None
+        elif continuation == "fork":
+            model = type(run.model)()
+            model.load_state_dict(run.model.state_dict())
+            tokenizer, folder = run.tokenizer, run.dictionary_path
+            run.close()
+            controls = _controls.Controls()
+            monkeypatch.setattr(caliper, "_CTL", controls)
+            monkeypatch.setattr(_controls, "CONTROLS", controls)
+            fork_folder = tmp_path / "refused-fork"
+            fork_folder.mkdir()
+            managed = _managed.ManagedRun("refused-fork", str(fork_folder),
+                                         str(fork_folder / "link"), resume=checkpoint)
+            monkeypatch.setattr(_managed, "current", lambda: managed)
+            dictionary = load_dictionary(folder, model=model)
+            index = FeatureIndex(folder, model=model, tokenizer=tokenizer, dictionary=dictionary)
+            child = HostedInference("tiny-lm", folder, "AB", resources=(model, tokenizer, dictionary, index, None))
+            child_route = controls.attach(Transport())
+            child.start()
+            run, route = child, child_route
+            assert run.interventions.state_dict() == saved["interventions"]
+            assert run.state_dict()["owned_clamp"] == applied
+            assert run._owned_record() is not None
+            torch.testing.assert_close(_resolve("output.probs"), before, rtol=0, atol=0)
+            _queue_action(route, "reset", 2)
+        run.boundary()
+        assert [(reply.request_id, reply.status) for reply in route.transport.replies] == [(2, "ok")]
+        assert not run.interventions.specifications() and run._owned_record() is None
+        assert run.clamp.value == 0. and "No slider clamp." in run.clamp_status.value
+        torch.testing.assert_close(_resolve("output.probs")[0], _resolve("output.probs")[1], rtol=0, atol=0)
+        run.boundary()
+        assert len(route.transport.replies) == 1 and not run.controls.queue
+    finally:
+        if child is not None:
+            child.close()
+        if child_route is not None:
+            child_route.detach()
 
 
 @pytest.mark.parametrize("draft", ["", "A" * 33])
