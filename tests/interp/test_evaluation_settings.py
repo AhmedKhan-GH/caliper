@@ -62,11 +62,11 @@ def test_epsilon_resume_refuses_mixed_forward_statistics(tmp_path, monkeypatch, 
         before_logits = model(ids).logits
         norm.eps = 1.0
         assert not torch.equal(before_logits, model(ids).logits)
-    assert model_identity(model) == model_hash
+    assert (model_identity(model) == model_hash) is (family == "tiny")
     assert dictionary_fingerprint(tmp_path, dictionary.metadata) == identity
     before = publications(tmp_path)
     monkeypatch.setattr(evaluation, "load_file", lambda *a, **k: pytest.fail("statistics restore ran"))
-    with pytest.raises(ValueError, match="cursor binding"):
+    with pytest.raises(ValueError, match="cursor binding" if family == "tiny" else "model identity mismatch"):
         run(tmp_path, model, dictionary, resume=True)
     assert publications(tmp_path) == before
 
@@ -139,10 +139,10 @@ def test_qwen_resume_refuses_changed_forward_configuration(tmp_path, monkeypatch
         model.config.layer_types[0] = "full_attention"
     else:
         model.model.layers[0].mlp.act_fn = torch.nn.Tanh()
-    assert model_identity(model) == model_hash
+    assert (model_identity(model) == model_hash) is (setting == "backend")
     before = publications(tmp_path)
     monkeypatch.setattr(evaluation, "load_file", lambda *a, **k: pytest.fail("statistics restore ran"))
-    with pytest.raises(ValueError, match="cursor binding"):
+    with pytest.raises(ValueError, match="cursor binding" if setting == "backend" else "model identity mismatch"):
         run(tmp_path, model, dictionary, resume=True)
     assert publications(tmp_path) == before
 
