@@ -1707,7 +1707,7 @@ class Controls:
                     del self._ivs[old]
                 self._ivs[key] = _Intervention(point, op, frm, until, spec)
             else:
-                iv.replace = iv.replace or spec != iv.spec
+                iv.replace = iv.applied_spec is not None and spec != iv.applied_spec
                 iv.spec = spec
                 iv.from_step, iv.until_step = frm, until
                 iv.clear, iv.error, iv.error_code = False, None, None
@@ -1811,6 +1811,7 @@ class Controls:
                 _log.debug("the shapes of the points failed", exc_info=True)
             changed = True
         s = self._next_step()
+        reinstall = False
         for key in list(self._ivs):
             iv = self._ivs[key]
             if iv.report:
@@ -1834,7 +1835,10 @@ class Controls:
                 iv.error = getattr(iv.hook, "error", None) or "the hook failed"
             ended = failed or (iv.until_step is not None and iv.until_step <= s)
             on = not ended and (iv.from_step is None or iv.from_step <= s)
-            if on and iv.hook is None:
+            if on and (iv.hook is None or reinstall):
+                # Keep registration order equal to record order, including a late
+                # activation or replacement before an existing overlapping effect.
+                self._unhook(iv)
                 try:
                     callback = lambda message, iv=iv: self._intervention_failed(iv, message)
                     if iv.op == "ablate":
@@ -1845,6 +1849,7 @@ class Controls:
                         iv.hook = m.executor.install(iv.spec, on_error=callback)
                     from copy import deepcopy
                     iv.applied_spec = deepcopy(iv.spec)
+                    reinstall = True
                 except Exception as e:
                     iv.error = f"{type(e).__name__}: {e}"[:TEXT_MAX]
                     iv.error_code = "intervene.hook_failed"

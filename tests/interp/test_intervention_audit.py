@@ -8,6 +8,7 @@ from caliper import _wire as wire
 from caliper._controls import Controls
 from caliper.interp._intervene import InterventionError
 from tests.interp.test_intervene import add_spec, controlled
+from tests.interp.fixture import make_fixture
 
 
 @pytest.mark.parametrize("spec", [
@@ -139,3 +140,58 @@ def test_ended_records_still_require_valid_structure(controlled, operation, chan
             with service.temporary_state(state):
                 pytest.fail("invalid ended record reached replay")
     assert service.state_dict() == before
+
+
+@pytest.mark.parametrize("late_start", [False, True])
+def test_overlap_order_matches_replay_restore_and_direct_oracle(controlled, late_start):
+    model, tokenizer, ctl, service = controlled
+    inputs = tokenizer("AB")
+    ablation = {"kind": "ablate", "point": "layers.0.mlp_out"}
+    service.set(dict(ablation, from_step=4) if late_start else ablation)
+    service.set(add_spec())
+    ctl.step()
+    if late_start:
+        ctl.step(3)
+    else:
+        service.set(dict(ablation, until_step=40))
+        ctl.step()
+    # Ablation precedes addition in the saved order. This independent hook replaces
+    # their combined MLP output with the expected constant tensor.
+    with service.suspend():
+        handle = model.layers[0].mlp.register_forward_hook(lambda m, a, y: torch.full_like(y, 0.1))
+        try:
+            expected = model(**inputs).logits
+        finally:
+            handle.remove()
+    actual = model(**inputs).logits
+    torch.testing.assert_close(actual, expected, rtol=0, atol=0)
+    with service.temporary_state(service.specifications()):
+        torch.testing.assert_close(model(**inputs).logits, actual, rtol=0, atol=0)
+    other, _ = make_fixture()
+    fork = Controls()
+    restored = fork.interventions_on(other)
+    try:
+        fork.n = ctl.n
+        restored.load_state_dict(service.state_dict())
+        fork.step()
+        torch.testing.assert_close(other(**inputs).logits, actual, rtol=0, atol=0)
+    finally:
+        restored.remove()
+
+
+def test_cancelled_replacement_preserves_hooks_output_and_cache_identity(controlled):
+    import json
+    model, tokenizer, ctl, service = controlled
+    ablation = {"kind": "ablate", "point": "layers.0.mlp_out"}
+    service.set(ablation)
+    service.set(add_spec())
+    ctl.step()
+    before = model(**tokenizer("AB")).logits
+    hooks = [iv.hook for iv in ctl._ivs.values()]
+    key = json.dumps(service.specifications(), sort_keys=True)
+    service.set(dict(ablation, until_step=40))
+    service.set(ablation)
+    ctl.step()
+    assert key == json.dumps(service.specifications(), sort_keys=True)
+    torch.testing.assert_close(model(**tokenizer("AB")).logits, before, rtol=0, atol=0)
+    assert hooks == [iv.hook for iv in ctl._ivs.values()]
