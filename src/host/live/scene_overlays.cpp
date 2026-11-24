@@ -73,6 +73,7 @@ void draw_scene_overlays(const SceneOverlayInput& in) {
     const LabelRect panel{clip0.x, clip0.y, clip1.x, clip1.y};
     const float pad = 2.0f;
     std::vector<LabelBox> boxes;
+    std::vector<std::string> texts;
     boxes.reserve(std::min(in.labels->size(), caliper_host::kMaxLabels));
     for (std::size_t i = 0; i < in.labels->size() && i < caliper_host::kMaxLabels; ++i) {
         const caliper_scene::LabelAnchor& a = (*in.labels)[i];
@@ -85,16 +86,30 @@ void draw_scene_overlays(const SceneOverlayInput& in) {
         // An annotation's text first, then the item labels, nearest first.
         const bool first = in.annotations && i < in.annotations->size() && (*in.annotations)[i];
         b.priority = in.priorities && i < in.priorities->size() ? (*in.priorities)[i] : (first ? 0 : 1000) + (int)i;
+        b.pinned = a.pin >= 1 && a.pin <= 3;
+        boxes.push_back(b);
+        texts.push_back(a.text);
+    }
+    const auto slots = caliper_host::pinned_label_slots(boxes, panel);
+    for (std::size_t i = 0; i < boxes.size(); ++i) {
+        auto& b = boxes[i];
+        const auto& a = (*in.labels)[i];
         // A label pinned at its anchor (a text table's align): the start, the end or the middle of
         // its text there, centered on it vertically; the placer moves it nowhere else.
         if (a.pin >= 1 && a.pin <= 3) {
-            b.pinned = true;
+            const auto& slot = slots[i];
+            const float available = a.pin == 1 ? slot.x1 - b.anchor_x
+                                  : a.pin == 2 ? b.anchor_x - slot.x0
+                                               : 2 * std::min(b.anchor_x - slot.x0, slot.x1 - b.anchor_x);
+            texts[i] = caliper_host::fit_with_ellipsis(a.text, std::max(0.0f, available - 2 * pad - 2),
+                [](std::string_view text) { return ImGui::CalcTextSize(text.data(), text.data() + text.size()).x; });
+            b.width = std::ceil(ImGui::CalcTextSize(texts[i].c_str()).x) + 2 * pad;
             b.anchor_y = std::round(b.anchor_y - 0.5f * b.height);
             b.anchor_x = a.pin == 1   ? b.anchor_x - pad
                          : a.pin == 2 ? b.anchor_x - b.width + pad
                                       : std::round(b.anchor_x - 0.5f * b.width);
+            if (b.anchor_y < panel.y0 || b.anchor_y + b.height > panel.y1 || available < b.width) texts[i].clear();
         }
-        boxes.push_back(b);
     }
     // The markers' rings: drawn at their anchors over the picture, and kept free of labels.
     const float ring = std::max(5.0f, std::round(0.45f * ImGui::GetFontSize()));
@@ -119,12 +134,14 @@ void draw_scene_overlays(const SceneOverlayInput& in) {
     for (std::size_t i = 0; i < boxes.size() && i < placed.size(); ++i) {
         const LabelBox& b = boxes[i];
         const PlacedLabel& p = placed[i];
-        const std::string& text = (*in.labels)[i].text;
+        const std::string& text = texts[i];
+        const std::string& full = (*in.labels)[i].text;
+        if (text.empty()) continue;
         if (!p.shown) {
             in.draw->AddCircleFilled(ImVec2(b.anchor_x, b.anchor_y), 2.0f, dot);
             if (std::fabs(mouse.x - b.anchor_x) <= 5.0f && std::fabs(mouse.y - b.anchor_y) <= 5.0f &&
                 mouse.x >= panel.x0 && mouse.x < panel.x1 && mouse.y >= panel.y0 && mouse.y < panel.y1)
-                ImGui::SetTooltip("%s", text.c_str());
+                ImGui::SetTooltip("%s", full.c_str());
             continue;
         }
         if (p.leader) {
@@ -134,6 +151,9 @@ void draw_scene_overlays(const SceneOverlayInput& in) {
         const ImVec2 at(p.x + pad, p.y + pad);
         in.draw->AddText(ImVec2(at.x + 1.0f, at.y + 1.0f), in.shade, text.c_str());
         in.draw->AddText(at, in.ink, text.c_str());
+        if (text != full && mouse.x >= p.x && mouse.x < p.x + b.width &&
+            mouse.y >= p.y && mouse.y < p.y + b.height)
+            ImGui::SetTooltip("%s", full.c_str());
         if (in.drawn) {
             const ImVec2 size = ImGui::CalcTextSize(text.c_str());
             in.drawn->push_back({text, at.x, at.y, at.x + size.x + 1.0f, at.y + size.y + 1.0f,

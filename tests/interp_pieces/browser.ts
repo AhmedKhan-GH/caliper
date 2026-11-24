@@ -137,6 +137,75 @@ export function registerInterpPieceTests(test: typeof import('../../web/node_mod
     } finally { site.close(); }
   });
 
+  for (const [id, count, rows] of [['graph', 4, 1], ['examples_0', 200, 8], ['logits', 10, 1]] as const) {
+    test(`the browser ${id} panel fits its orthographic layout and label bounds`, async ({ page }, info) => {
+      test.skip(info.project.name === 'canvas2d', 'Piece draws require WebGPU.');
+      const fixture = process.env.CALIPER_INTERP_PIECES_OUT ?? path.join(REPO, 'cmake-build-release/tests/interp_pieces/out');
+      const wasm = process.env.CALIPER_WASM_DIR ?? path.join(REPO, 'python/caliper/_web');
+      const available = fs.existsSync(path.join(fixture, `${id}.viewer.json`)) && VIEWS_FILES.every((f) => fs.existsSync(path.join(wasm, f)));
+      if (process.env.CALIPER_REQUIRE_INTERP_PIECES === '1') expect(available).toBe(true);
+      test.skip(!available, 'The native layout fixture or WebAssembly views are absent.');
+      test.setTimeout(120_000);
+      const program = JSON.parse(fs.readFileSync(path.join(fixture, `${id}.viewer.json`), 'utf8'));
+      for (const r of program.resources) { r.base64 = Buffer.from(r.bytes).toString('base64'); delete r.bytes; }
+      const spec = {
+        caliper_spec: 1, applet: { id: 'layout-test', title: 'Layout Test' },
+        panel: [{ id, primitive: 'scene', bind: {}, options: { labels: true, scale_bar: false } }],
+        program: [{ id, params: program.params }], layout: id,
+      };
+      const app: MockApp = { specs: { 'layout-test': spec }, data: { 'layout-test': {
+        [id]: ready(id, 'scene', { scene: null, programs: [program] }),
+      } }, requests: [] };
+      await mockApp(page, app, wasm);
+      await page.setViewportSize({ width: 1600, height: 800 });
+      await page.mouse.move(1, 1);
+      await openSpec(page, 'layout-test');
+      const layout = () => page.evaluate((id) => {
+        const mount = (window as any).caliperSpec?.programs.mounts.get(id);
+        const canvas = (window as any).caliperSpec?.programs.canvasOf(id) as HTMLCanvasElement | undefined;
+        const rect = canvas?.getBoundingClientRect();
+        const stats = mount?.handle?.stats;
+        return { width: rect?.width ?? 0, height: rect?.height ?? 0, orbit: stats?.pageOrbit,
+          labels: JSON.parse(stats?.pageLabels ?? '[]') as [string, number, number, number, number][] };
+      }, id);
+      await expect.poll(async () => (await layout()).labels.length, { timeout: 60_000 }).toBe(count);
+      const check = async () => {
+        const state = await layout();
+        expect(state.orbit).toBe('null');
+        expect(state.labels).toHaveLength(count);
+        const ys = new Set(state.labels.map((l) => l[2]));
+        expect(ys.size).toBe(rows);
+        let overlaps = 0;
+        for (let i = 0; i < count; ++i) {
+          const [text, x0, y0, x1, y1] = state.labels[i];
+          expect(text.length).toBeGreaterThan(0);
+          expect(x0).toBeGreaterThanOrEqual(0); expect(y0).toBeGreaterThanOrEqual(0);
+          expect(x1).toBeLessThanOrEqual(state.width); expect(y1).toBeLessThanOrEqual(state.height);
+          for (const [, a0, b0, a1, b1] of state.labels.slice(i + 1))
+            if (x0 < a1 && a0 < x1 && y0 < b1 && b0 < y1) ++overlaps;
+        }
+        expect(overlaps, `${id}: overlapping labels`).toBe(0);
+        for (const y of ys) {
+          const row = state.labels.filter((l) => l[2] === y);
+          expect(row).toHaveLength(count / rows);
+          const centers = row.map((l) => (l[1] + l[3]) / 2);
+          expect((Math.max(...centers) - Math.min(...centers)) / state.width).toBeGreaterThanOrEqual(0.7);
+        }
+        return state;
+      };
+      const before = await check();
+      await page.screenshot({ path: info.outputPath(`${id}-panel.png`) });
+      await page.setViewportSize({ width: 1000, height: 640 });
+      await expect.poll(async () => (await layout()).width).toBeLessThan(before.width);
+      await expect.poll(async () => {
+        const s = await layout();
+        return s.labels.length === count && s.labels.every((l) => l[3] <= s.width && l[4] <= s.height);
+      }).toBe(true);
+      await check();
+      await page.screenshot({ path: info.outputPath(`${id}-resized.png`) });
+    });
+  }
+
   test('the browser spec page shows pointer hover labels and preserves local picks', async ({ page }, info) => {
     test.skip(info.project.name === 'canvas2d', 'Piece draws require WebGPU.');
     const fixture = process.env.CALIPER_INTERP_PIECES_OUT ?? path.join(REPO, 'cmake-build-release/tests/interp_pieces/out');
@@ -173,35 +242,43 @@ export function registerInterpPieceTests(test: typeof import('../../web/node_mod
     await expect.poll(labels).toContain('label 36');
     // Feature discs have green pixels. Connected components give actual visible node centers.
     // The later click proves the hovered node's ID without a synthetic hover parameter.
-    const centers = await page.evaluate((id) => {
+    const centers = await page.evaluate(async (id) => {
       const canvas = (window as any).caliperSpec.programs.canvasOf(id) as HTMLCanvasElement;
       const probe = document.createElement('canvas'); probe.width = canvas.width; probe.height = canvas.height;
       const context = probe.getContext('2d', { willReadFrequently: true })!;
-      context.drawImage(canvas, 0, 0);
-      const pixels = context.getImageData(0, 0, probe.width, probe.height).data;
-      const mask = new Uint8Array(probe.width * probe.height);
-      for (let i = 0; i < mask.length; ++i) {
-        const r = pixels[4 * i], g = pixels[4 * i + 1], b = pixels[4 * i + 2];
-        if (g > r + 45 && g > b + 20 && g > 100) mask[i] = 1;
-      }
-      const bounds = canvas.getBoundingClientRect(), found: { x: number; y: number; count: number }[] = [];
-      for (let i = 0; i < mask.length; ++i) {
-        if (!mask[i]) continue;
-        const todo = [i]; mask[i] = 0;
-        let x = 0, y = 0, count = 0;
-        while (todo.length) {
-          const p = todo.pop()!, px = p % probe.width, py = Math.floor(p / probe.width);
-          x += px; y += py; ++count;
-          for (const [nx, ny] of [[px - 1, py], [px + 1, py], [px, py - 1], [px, py + 1]]) {
-            if (nx < 0 || ny < 0 || nx >= probe.width || ny >= probe.height) continue;
-            const next = ny * probe.width + nx;
-            if (mask[next]) { mask[next] = 0; todo.push(next); }
-          }
+      const sample = () => {
+        context.drawImage(canvas, 0, 0);
+        const pixels = context.getImageData(0, 0, probe.width, probe.height).data;
+        const mask = new Uint8Array(probe.width * probe.height);
+        for (let i = 0; i < mask.length; ++i) {
+          const r = pixels[4 * i], g = pixels[4 * i + 1], b = pixels[4 * i + 2];
+          if (g > r + 45 && g > b + 20 && g > 100) mask[i] = 1;
         }
-        if (count >= 4) found.push({ x: bounds.left + (x / count + 0.5) * bounds.width / probe.width,
-          y: bounds.top + (y / count + 0.5) * bounds.height / probe.height, count });
+        const bounds = canvas.getBoundingClientRect(), found: { x: number; y: number; count: number }[] = [];
+        for (let i = 0; i < mask.length; ++i) {
+          if (!mask[i]) continue;
+          const todo = [i]; mask[i] = 0;
+          let x = 0, y = 0, count = 0;
+          while (todo.length) {
+            const p = todo.pop()!, px = p % probe.width, py = Math.floor(p / probe.width);
+            x += px; y += py; ++count;
+            for (const [nx, ny] of [[px - 1, py], [px + 1, py], [px, py - 1], [px, py + 1]]) {
+              if (nx < 0 || ny < 0 || nx >= probe.width || ny >= probe.height) continue;
+              const next = ny * probe.width + nx;
+              if (mask[next]) { mask[next] = 0; todo.push(next); }
+            }
+          }
+          if (count >= 4) found.push({ x: bounds.left + (x / count + 0.5) * bounds.width / probe.width,
+            y: bounds.top + (y / count + 0.5) * bounds.height / probe.height, count });
+        }
+        return found.sort((a, b) => b.count - a.count);
+      };
+      for (let frame = 0; frame < 120; ++frame) {
+        await new Promise((resolve) => requestAnimationFrame(resolve));
+        const found = sample();
+        if (found.length >= 2) return found;
       }
-      return found.sort((a, b) => b.count - a.count);
+      return [];
     }, panel);
     expect(centers.length).toBeGreaterThanOrEqual(2);
     const hoverLabels = async () => (await labels()).filter((s) => /^label (3[2-9]|4[0-7])$/.test(s) && s !== 'label 36');

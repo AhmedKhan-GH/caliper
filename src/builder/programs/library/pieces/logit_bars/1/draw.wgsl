@@ -23,8 +23,8 @@ fn panel_fs(in: PanelOut) -> CaliperPicked {
     let ghost=in.uv.y<=c.baseline;
     if (!current && !ghost) { discard; }
     var color=vec3<f32>(0.52,0.64,0.8);
-    var alpha=0.22;
-    if (ghost && (in.uv.x<0.05 || in.uv.x>0.95 || c.baseline-in.uv.y<0.008)) { alpha=0.65; }
+    var alpha=0.3;
+    if (ghost && (in.uv.x<0.05 || in.uv.x>0.95 || c.baseline-in.uv.y<0.008)) { alpha=0.8; }
     if (current) { color=vec3<f32>(0.2,0.78,0.68); alpha=1.0; }
     if (pick::selected(in.item)) { color=mix(color,vec3<f32>(1.0),0.3); }
     var out: CaliperPicked;

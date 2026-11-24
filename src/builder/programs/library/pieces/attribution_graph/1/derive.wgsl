@@ -21,8 +21,9 @@ fn assign_cells(@builtin(global_invocation_id) id: vec3<u32>) {
     var l = clamp(node_i[4u*i+1u], 0, i32(layer_count())-1);
     if (k == 0u) { l = -1; }
     if (k == 3u) { l = i32(layer_count()); }
-    let width = 1.8 / f32(token_count());
-    let center = vec2<f32>(-0.9 + (f32(t)+0.5)*width, -0.72 + 1.44*f32(l+1)/f32(layer_count()+1u));
+    let width = min(0.2, 1.8 / f32(token_count()));
+    let x = select(0.0, -0.88 + 1.76*f32(t)/f32(max(token_count()-1u,1u)), token_count()>1u);
+    let center = vec2<f32>(x, -0.82 + 1.64*f32(l+1)/f32(layer_count()+1u));
     let influence = finite_value(node_f[4u*i+1u]);
     cells[i] = Cell(center, width, influence, u32(l+1)*32u+u32(t));
     nodes[i] = Node(vec4<f32>(center, 0.0, 0.0), i, k, l, t, node_i[4u*i+3u], influence);
@@ -58,7 +59,7 @@ fn order_influence(@builtin(global_invocation_id) id: vec3<u32>) {
     let n = node_count();
     if (i < 32u) {
         copy_text(i, i, 0x206b6f54u); // Tok
-        let x = -0.9 + (f32(i)+0.5)*1.8/f32(token_count());
+        let x = select(0.0, -0.88 + 1.76*f32(i)/f32(max(token_count()-1u,1u)), token_count()>1u);
         labels[i] = Label(vec4<f32>(x, -0.88, 0.0, 1.0), select(0xffffffffu, i, i<token_count() && n>0u), 1.0);
     }
     if (i == 0u) {
@@ -79,7 +80,7 @@ fn order_influence(@builtin(global_invocation_id) id: vec3<u32>) {
     let spacing = 0.8*c.width/f32(count);
     let x = c.center.x - 0.4*c.width + (f32(rank)+0.5)*spacing;
     // Fixed lanes preserve the influence order and leave a strict gap after all relaxations.
-    offset_a[i] = vec4<f32>(x, x, spacing, min(0.25*spacing, 0.24*1.44/f32(layer_count()+1u)));
+    offset_a[i] = vec4<f32>(x, x, spacing, min(0.25*spacing, 0.24*1.64/f32(layer_count()+1u)));
     var prefix = 0x20727446u; // Feature prefix.
     if (nodes[i].kind == 0u) { prefix = 0x206b6f54u; }
     if (nodes[i].kind == 1u) { prefix = 0x20727446u; } // Feature

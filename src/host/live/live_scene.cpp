@@ -520,6 +520,19 @@ bool SceneView::external_draws() const {
     return false;
 }
 
+bool SceneView::program_pan_zoom() const {
+#if defined(CALIPER_HAVE_DRAW)
+    for (const auto& d : draws_)
+        if (!d->shape && !d->marks && d->runtime)
+            return d->runtime->camera() == caliper_builder::spec::CameraMode::pan_zoom;
+#endif
+    return false;
+}
+
+bool SceneView::normalized_program_camera() const {
+    return program_pan_zoom() && !tree_.scene_bounds().valid;
+}
+
 void SceneView::sync_shapes() {
     piece_highlight_ = false;
 #if defined(CALIPER_SCENE_PIECES)
@@ -750,7 +763,9 @@ void SceneView::draw_programs() {
         cm.eye = caliper_scene::orbit_eye(*o);
         cm.perspective = true;
     } else if (const PanZoom* pz = std::get_if<PanZoom>(&cam)) {
-        cm.proj = caliper_scene::panzoom_projection(*pz, aspect);
+        // Standalone pieces use the panel's normalized square on both axes.
+        // Scene geometry retains its world-space aspect ratio.
+        cm.proj = caliper_scene::panzoom_projection(*pz, normalized_program_camera() ? 1.0 : aspect);
     } else {
         cm = caliper_scene::camera_matrices(cam, tree_, width_, height_);
     }
@@ -1180,7 +1195,8 @@ void SceneView::pan(float dx, float dy, float view_height) {
         o->target[2] += d.z;
     } else if (PanZoom* p = std::get_if<PanZoom>(&camera_)) {
         const double k = 2.0 * p->half_height / view_height;
-        p->center[0] -= double(dx) * k;
+        const double sx = normalized_program_camera() ? double(height_) / std::max<uint32_t>(width_, 1) : 1.0;
+        p->center[0] -= double(dx) * k * sx;
         p->center[1] += (p->y_down ? -1.0 : 1.0) * double(dy) * k;
     }
     moved_ = true;
@@ -1195,7 +1211,7 @@ void SceneView::zoom(float wheel, float mx, float my, float view_w, float view_h
     if (Orbit* o = std::get_if<Orbit>(&camera_)) {
         o->distance = std::clamp(o->distance * f, r * 1e-3, r * 1e3);
     } else if (PanZoom* p = std::get_if<PanZoom>(&camera_)) {
-        const double aspect = view_h > 0 ? double(view_w) / double(view_h) : 1.0;
+        const double aspect = !normalized_program_camera() && view_h > 0 ? double(view_w) / double(view_h) : 1.0;
         const double sy = p->y_down ? -1.0 : 1.0;
         const double wx = p->center[0] + mx * p->half_height * aspect, wy = p->center[1] + sy * my * p->half_height;
         p->half_height = std::clamp(p->half_height * f, r * 1e-5, r * 1e5);
@@ -1210,7 +1226,11 @@ void SceneView::fit() {
     look_through("", nullptr);   // a fit leaves a pinhole for the orbit of the fit
     tree_.update();
     const double aspect = (width_ && height_) ? double(width_) / double(height_) : 1.0;
-    if (box_fit_)
+    if (normalized_program_camera()) {
+        PanZoom p;
+        p.y_down = false;
+        camera_ = p;
+    } else if (box_fit_)
         caliper_scene::fit_box(camera_, tree_.scene_bounds(), aspect);
     else
         caliper_scene::fit(camera_, tree_.scene_bounds(), aspect);
@@ -1240,13 +1260,13 @@ std::vector<Axis> SceneView::up_choices() const {
 }
 
 void SceneView::reset() {
-    if (tree_.space() == Space::k3D) {
+    if (tree_.space() == Space::k3D && !program_pan_zoom()) {
         Orbit o;
         o.up = tree_.up();
         camera_ = o;
     } else {
         PanZoom p;
-        p.y_down = tree_.up() == Axis::NegY;
+        p.y_down = !program_pan_zoom() && tree_.up() == Axis::NegY;
         camera_ = p;
     }
     through_.clear();
@@ -1346,6 +1366,12 @@ bool SceneView::render(uint32_t width, uint32_t height, float pixel_scale, uint3
     // move. Scene pieces draw when the scene changes.
     reconcile_programs();
     if (external_draws()) changed();
+    // The piece selects the host camera even when the empty scene defaults to 3-D.
+    const bool pan_zoom = program_pan_zoom();
+    if (pan_zoom != program_camera_active_ || (pan_zoom && !std::holds_alternative<PanZoom>(camera_))) {
+        program_camera_active_ = pan_zoom;
+        reset();
+    }
     // Back on the orbit after looking through a pinhole (the view's own camera, or a camera entity
     // looked through): the mode chosen meanwhile applies.
     const bool through_now = std::holds_alternative<ThroughPinhole>(effective_camera());
@@ -1379,7 +1405,12 @@ bool SceneView::render(uint32_t width, uint32_t height, float pixel_scale, uint3
         const bool stale = !fitted_ || !caliper_scene::aabb_contains(fitted_bounds_, bounds, 0.01) ||
                            std::fabs(aspect - fitted_aspect_) > 0.01 * fitted_aspect_;
         if (!moved_ && can && stale) {
-            if (box) {
+            if (box && pan_zoom) {
+                // The piece already reserves its margins inside [-1, 1].
+                PanZoom p;
+                p.y_down = false;
+                camera_ = p;
+            } else if (box) {
                 // The starting camera over the box of the programs, as apply_start() gives it over the
                 // scene's bounds: an orbit's angles, the fit at them, then its target and distance.
                 const bool orbit_form = start_.form == StartingCamera::Form::Orbit;
@@ -1403,6 +1434,8 @@ bool SceneView::render(uint32_t width, uint32_t height, float pixel_scale, uint3
                 } else {
                     caliper_scene::fit(camera_, bounds, aspect);
                 }
+            } else if (pan_zoom) {
+                caliper_scene::fit(camera_, bounds, aspect);
             } else {
                 apply_start(aspect);
             }
