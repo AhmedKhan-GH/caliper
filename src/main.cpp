@@ -375,7 +375,7 @@ public:
             chat_.frame(session_);   // the side chat polls its agent
             note_spec_applets();
             note_drops();
-            captures_.before_frame(*renderer_, [this](uint64_t t, int status, const std::string& why) {
+            const bool capture_started = captures_.before_frame(*renderer_, [this](uint64_t t, int status, const std::string& why) {
                 capture_error(t, status, why);
             });
 
@@ -547,6 +547,8 @@ public:
             popup_open_prev_ = ImGui::IsPopupOpen(
                 nullptr, ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel);
 
+            if (capture_started && hidden_)
+                spec_page_.circuit_capture_begin(std::getenv("CALIPER_TEST_CIRCUIT_CAPTURE_DIR"));
             renderer_->render(dw, dh);
 
             // The captures: a read-back that has finished on the GPU answers
@@ -554,11 +556,14 @@ public:
             captures_.after_frame(
                 *renderer_,
                 [this](uint64_t t, uint32_t w, uint32_t h, std::vector<uint8_t> rgba) {
+                    if (hidden_) spec_page_.circuit_capture_window(w, h, rgba);
                     if (t == caliper_host::AppSession::kCaptureTicket) session_.capture_ready(w, h, std::move(rgba));
                     else if (t == caliper_host::SpecUiDriver::kShotTicket) { if (spec_ui_) spec_ui_->write_shot(w, h, rgba); }
                     else api_.reply_capture(t, w, h, std::move(rgba));
                 },
                 [this](uint64_t t, int status, const std::string& why) { capture_error(t, status, why); });
+
+            if (hidden_) spec_page_.circuit_capture_poll();
 
             // Deferred Home and Detach (⌘D) of the live page, for the same
             // reason as the applet teardown below: the views' textures and

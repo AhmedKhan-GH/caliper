@@ -220,6 +220,10 @@ public:
     // For the same seam: whether the scene panel `panel_id` of the open spec has drawn its scene,
     // its entities' own scene or the live scene that it binds.
     bool scene_ready(const std::string& panel_id);
+    // Hidden capture diagnostics, ordered with the requested window frame.
+    void circuit_capture_begin(const char* folder);
+    void circuit_capture_window(uint32_t w, uint32_t h, const std::vector<uint8_t>& rgba);
+    void circuit_capture_poll();
     // For the same seam and the frame log (CALIPER_FRAME_LOG): what the scene panel `panel_id`
     // drew last. False before its first draw.
     struct ScenePanelProbe {

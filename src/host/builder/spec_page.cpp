@@ -17,6 +17,7 @@
 #include "spec_runtime/spec_offscreen.h"
 #include "spec_runtime/spec_runtime.h"
 #include "live/camera_drag.h"   // a right click on a camera's picture is a click as the camera decides it
+#include "circuit_capture.h"
 #include "live/live_scene.h"   // camera.get and camera.set read and move a panel's scene view
 #include "export_service.h"     // export_encode_png
 #if defined(__APPLE__)
@@ -194,6 +195,7 @@ std::string folder_name(const std::string& path) {
 }  // namespace
 
 struct SpecPage::Impl {
+    CircuitCapture circuit_capture;
     std::unique_ptr<SpecTextures> textures = std::make_unique<SpecTextures>();
     std::unique_ptr<SpecRuntime> runtime = std::make_unique<SpecRuntime>(*textures);
     std::unique_ptr<PageSource> source;
@@ -1173,6 +1175,16 @@ bool SpecPage::pick_scene(const std::string& panel_id, float u, float v) {
     return impl_->runtime->pick_scene(panel_id, u, v);
 }
 
+void SpecPage::circuit_capture_begin(const char* folder) {
+    if (impl_->hidden) impl_->circuit_capture.begin(*impl_->runtime, folder);
+}
+void SpecPage::circuit_capture_window(uint32_t w, uint32_t h, const std::vector<uint8_t>& rgba) {
+    if (impl_->hidden) impl_->circuit_capture.window(w, h, rgba);
+}
+void SpecPage::circuit_capture_poll() {
+    if (impl_->hidden) impl_->circuit_capture.poll(*impl_->runtime);
+}
+
 bool SpecPage::scene_ready(const std::string& panel_id) {
     const caliper_live_views::SceneView* v = impl_->runtime->scene_view_of(panel_id);
     return v && v->generation() > 0;
@@ -1385,6 +1397,9 @@ void SpecPage::set_open_in_browser(std::function<std::string(const std::string&)
 void SpecPage::set_dim_names(std::function<std::vector<std::string>(const std::string&)>) {}
 void SpecPage::set_live_core(std::function<CaliperCore*()>) {}
 bool SpecPage::pick_scene(const std::string&, float, float) { return false; }
+void SpecPage::circuit_capture_begin(const char*) {}
+void SpecPage::circuit_capture_window(uint32_t, uint32_t, const std::vector<uint8_t>&) {}
+void SpecPage::circuit_capture_poll() {}
 bool SpecPage::scene_ready(const std::string&) { return false; }
 bool SpecPage::scene_probe(const std::string&, ScenePanelProbe*) { return false; }
 std::string SpecPage::scene_panel_at(float, float) const { return {}; }

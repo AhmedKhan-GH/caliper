@@ -43,14 +43,15 @@ public:
     // Calls not answered yet.
     size_t pending() const { return waiting_.size() + serving_.size(); }
 
-    void before_frame(HostRenderer& r, const Fail& fail) {
-        if (waiting_.empty() || !serving_.empty()) return;
+    bool before_frame(HostRenderer& r, const Fail& fail) {
+        if (waiting_.empty() || !serving_.empty()) return false;
         if (!r.window_capture_request()) {
             for (uint64_t t : waiting_) fail(t, 501, unsupported(r.name()));
             waiting_.clear();
-            return;
+            return false;
         }
         serving_.swap(waiting_);
+        return true;
     }
 
     void after_frame(HostRenderer& r, const Done& done, const Fail& fail) {
