@@ -3,14 +3,15 @@
 
 import { decode, encode, MessageError, WireError } from '../protocol/codec.js';
 import {
-  CAP, CAP_SCENES, CLOSE, LIMITS, LIMITS_31, type ControlReplyMsg, type ControlsMsg, type DataView, type Message, type SelectionMsg,
+  CAP, CAP_SCENES, CLOSE, LIMITS, LIMITS_31, type ControlMsg, type ControlReplyMsg, type ControlsMsg, type DataView, type Message, type SelectionMsg,
   type SessionIdentity, type ViewEntry, type ViewerEvent,
 } from '../protocol/messages.js';
 import {
-  emit, type ConnectionState, type ControlAccess, type ControlRequest, type StreamClient, type StreamListener,
+  emit, type ConnectionState, type ControlAccess, type StreamClient, type StreamListener,
 } from './stream.js';
 
 const VERSION = '0.1.0';
+type ControlRequest = Omit<ControlMsg, 'type' | 'request_id'>;
 
 interface Sub {
   view: string;
@@ -171,9 +172,16 @@ export class SocketClient implements StreamClient {
 
   private sendControl(req: ControlRequest, onReply?: (reply: ControlReplyMsg) => void): number | null {
     if (!this.controlAccess().allowed) return null;
+    if (req.op === 'interpret' && (!this.capabilities.includes(CAP.interpretation)
+      || (this.hub && !this.session?.capabilities?.includes(CAP.interpretation)))) return null;
     const id = this.nextRequest++;
     if (onReply) this.replies.set(id, onReply);
-    this.send({ type: 'control', request_id: id, op: req.op, name: req.name, value: req.value, count: req.count });
+    try {
+      this.send({ ...req, type: 'control', request_id: id });
+    } catch (error) {
+      this.replies.delete(id);
+      throw error;
+    }
     return id;
   }
 
@@ -217,7 +225,7 @@ export class SocketClient implements StreamClient {
       this.lastInput = performance.now();
       // 3.1: this viewer shows controls and draws linked selections.
       // 3.2 draft: scenes, so that the producer lists its scene views; the WebAssembly views draw them.
-      this.send({ type: 'hello', role: 'viewer', capabilities: [CAP.controls, CAP.selection, CAP.textParams, CAP_SCENES], software: { name: 'caliper-view', version: VERSION } });
+      this.send({ type: 'hello', role: 'viewer', capabilities: [CAP.controls, CAP.selection, CAP.textParams, CAP.interpretation, CAP_SCENES], software: { name: 'caliper-view', version: VERSION } });
       this.startTimers();
     };
     ws.onmessage = (ev) => {
