@@ -654,6 +654,7 @@ class HostedInference:
         if iv is None:
             return
         iv.clear = True
+        self.controls._iv_revision += 1
         self.controls._iv_due = True
         self.controls.counters["interventions_in"] += 1
         self.controls._update_busy()
@@ -774,8 +775,24 @@ class HostedInference:
             owned = self._owned_record()
             if (owned is not None and owned.state == "active" and owned.hook is not None
                     and not owned.replace and owned.spec == owned.applied_spec == spec):
-                # An unchanged clamp still verifies the current dictionary content.
-                self.interventions.executor.validate(spec)
+                # Pin resources while the unchanged clamp verifies dictionary content.
+                service = self.interventions
+                if (self.controls._iv_model is not service or
+                        service._operation_owner is not None and
+                        service._operation_owner[0] in ("configure", "watch")):
+                    raise ValueError("intervention resources changed during clamp validation")
+                service._readers += 1
+                try:
+                    with self.controls._outside_lock():
+                        service.executor.validate(spec)
+                finally:
+                    service._readers -= 1
+                    self.controls._finish_retired(service)
+                self._check_stop()
+                if (self.controls._iv_model is not service or self._owned_record() is not owned
+                        or owned.state != "active" or owned.hook is None or owned.replace
+                        or owned.spec != spec or owned.applied_spec != spec):
+                    raise ValueError("intervention state changed during clamp validation")
                 return
             # Admission and installation each validate resources. Do not hash the
             # same dictionary a third time merely to construct the request.
