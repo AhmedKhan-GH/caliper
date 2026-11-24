@@ -1,12 +1,50 @@
 """Compare graph effects with centered logits after real feature ablations."""
 import math
+from contextlib import contextmanager
 
 import torch
 
-from ._memory import autorelease_scope
+from ._memory import MemoryGuard, autorelease_scope
 from ._output import forward_logits, prompt_inputs
 from ._points import _architecture, capture
-from ._intervene import InterventionService, selected_rows
+from ._intervene import InterventionError, InterventionService, selected_rows
+
+
+def _validation_guard(model, dictionary, interventions, guard):
+    if guard is not None:
+        return guard
+    owner = getattr(interventions, "executor", None)
+    if (owner is not None and owner.model is model and owner.dictionary is dictionary
+            and owner.resource_guard is not None):
+        return owner.resource_guard
+    device = next((t.device for t in dictionary.state_dict().values() if t.device.type != "cpu"),
+                  next(model.parameters()).device)
+    return MemoryGuard(12, device) if device.type != "cpu" else None
+
+
+@contextmanager
+def _validation_executor(model, tokenizer, dictionary, interventions, guard):
+    """Retain exact content evidence in a private executor for this call."""
+    owner = getattr(interventions, "executor", None)
+    shared = (owner is not None and owner.model is model and owner.dictionary is dictionary
+              and owner._default_dictionary_id)
+    temporary = InterventionService(model)
+    try:
+        temporary.configure(dictionary=dictionary, tokenizer=tokenizer, resource_guard=guard,
+                            dictionary_id=owner.dictionary_id if shared else None)
+        if shared:
+            # The identifier is valid only with full content checks. Borrow the
+            # owner's immutable evidence, never its hooks or patch source cache.
+            temporary._default_dictionary_id = True
+            temporary._dictionary_snapshot = owner._dictionary_snapshot
+        if temporary._dictionary_snapshot is None:
+            temporary._prepare_dictionary_identity()
+        if not temporary._dictionary_matches():
+            raise InterventionError("dictionary content changed. Reconfigure before use",
+                                    "intervene.unknown_dictionary")
+        yield temporary
+    finally:
+        temporary.close()
 
 
 def _ranks(values):
@@ -43,6 +81,7 @@ def validate_trace(model, tokenizer, dictionary, interventions, graph, *, prompt
     rows = selected_rows(model)
     if rows is not None and 0 not in rows:
         raise ValueError("validation requires interventions on row zero")
+    guard = _validation_guard(model, dictionary, interventions, guard)
     inputs = prompt_inputs(model, tokenizer, prompt)
     if inputs["input_ids"][0].tolist() != [t["token_id"] for t in graph.tokens]:
         raise ValueError("validation prompt does not match the trace")
@@ -80,7 +119,8 @@ def validate_trace(model, tokenizer, dictionary, interventions, graph, *, prompt
     read_points = {layer: probe.point.rsplit(".", 1)[0] + ".mlp_in" for layer, probe in probes.items()}
     captured = capture(model, list(read_points.values()))
     try:
-        with autorelease_scope(next(model.parameters()).device):
+        with _validation_executor(model, tokenizer, dictionary, interventions, guard) as temporary, \
+                autorelease_scope(next(model.parameters()).device):
             with captured:
                 baseline = centered(forward_logits(model, inputs, last_token=position == inputs["input_ids"].shape[1] - 1, guard=guard))
             measurements = []
@@ -109,17 +149,16 @@ def validate_trace(model, tokenizer, dictionary, interventions, graph, *, prompt
                     precision = max(torch.finfo(weights.W_enc.dtype).eps, torch.finfo(next(model.parameters()).dtype).eps)
                     if not math.isclose(float(node["activation"]), effective, rel_tol=64 * precision, abs_tol=64 * precision):
                         raise ValueError("validation feature differs from its current output contribution; retrace first")
-                    # A private executor preserves the live service hooks, cache, and lifecycle.
-                    temporary = InterventionService(model)
+                    hook = None
                     try:
-                        temporary.configure(dictionary=dictionary, tokenizer=tokenizer, resource_guard=guard)
                         hook = temporary.install({"kind": "clamp", "point": probe.point, "feature": feature,
                                                   "positions": [selected], "value": activation - effective})
                         measured = centered(forward_logits(model, inputs, last_token=position == inputs["input_ids"].shape[1] - 1, guard=guard)) - baseline
                         if hook.error is not None:
                             raise ValueError("validation clamp failed: " + hook.error)
                     finally:
-                        temporary.close()
+                        if hook is not None:
+                            hook()
                     predicted = -float(node["effect"])
                     if not math.isfinite(predicted) or not math.isfinite(measured):
                         raise ValueError("validation produced a nonfinite measurement")

@@ -513,6 +513,7 @@ class HostedInference:
         self._stop_checkpointed = False
         self._verified_bindings = None
         self._inference_lock = threading.Lock()
+        self._inference_ready = False
         self._comparison = None
         self._restore_generation(0)
         self.selection = None
@@ -616,10 +617,17 @@ class HostedInference:
                 "interventions_hash": hashlib.sha256(encoded).hexdigest()}
 
     def inference_status(self):
+        with self._inference_lock:
+            if not self._inference_ready:
+                # Transport requests can precede prompt and executor setup.
+                # Do not wait for dictionary copies or acquire the Controls lock.
+                return {"state": "starting", "prompt_hash": None, "interventions_hash": None,
+                        "comparison": None, "generation": deepcopy(self._generation),
+                        "dictionary_validation": None}
         binding = self._input_hashes(self._input_state())
         identity = self.interventions.executor._dictionary_status()
         with self._inference_lock:
-            return dict(binding, comparison=deepcopy(self._comparison), generation=deepcopy(self._generation),
+            return dict(binding, state="ready", comparison=deepcopy(self._comparison), generation=deepcopy(self._generation),
                         dictionary_validation=identity)
 
     def _owned_record(self):
@@ -693,6 +701,8 @@ class HostedInference:
             if self.managed is not None and self.managed.interventions:
                 self.managed._intervene()
             self._clamp_version, self._selected_version = self.clamp._version, self.selected._version
+            with self._inference_lock:
+                self._inference_ready = True
             self.boundary()
             return self
         except BaseException:
