@@ -162,6 +162,18 @@ def test_hosted_wrapper_does_not_retry_a_guard_type_error():
     assert calls == [("once", False)] and guard.failure is None
 
 
+def test_hosted_wrapper_does_not_pass_force_to_variadic_positional_parameter():
+    calls = []
+
+    def check(stage, *force):
+        calls.append((stage, force))
+        return 100
+
+    guard = _hosted._RunGuard(SimpleNamespace(check=check))
+    assert guard.check("forced") == guard.check("interval", force=False) == 100
+    assert calls == [("forced", ()), ("interval", ())]
+
+
 @pytest.mark.parametrize("extra", [False, True])
 def test_hosted_wrapper_propagates_supplied_stop_once(extra):
     failure = CleanStop("explicit stop")

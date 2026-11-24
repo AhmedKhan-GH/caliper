@@ -119,7 +119,8 @@ class _RunGuard:
                         except (TypeError, ValueError):
                             parameters = ()
                         keywords = any(p.kind == p.VAR_KEYWORD or (
-                            p.name == "force" and p.kind != p.POSITIONAL_ONLY) for p in parameters)
+                            p.name == "force" and p.kind in (p.POSITIONAL_OR_KEYWORD, p.KEYWORD_ONLY))
+                            for p in parameters)
                         reading = check(stage, force=method == "check") if keywords else check(stage)
                     if isinstance(reading, (int, float)):
                         self._readings[index] = reading
