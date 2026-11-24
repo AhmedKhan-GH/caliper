@@ -97,6 +97,18 @@ def peak_resident_bytes():
     return getattr(info, "peak_wset", info.rss)
 
 
+def allocation_bytes(memory, *, floor=0):
+    """Use live bytes for a new phase and retain the historical breach check.
+
+    Call the guard before this function. A floor covers admitted allocations
+    whose pages are not yet visible to the process reader. Older guard adapters
+    without a current reading retain their conservative peak estimate.
+    """
+    if memory.peak > memory.limit:
+        raise CleanStop("historical allocation exceeds the process memory limit")
+    return max(getattr(memory, "current", memory.peak), floor)
+
+
 class MemoryGuard:
     """Check total process memory and device allocation at bounded intervals."""
 

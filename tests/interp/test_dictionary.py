@@ -305,10 +305,11 @@ def test_qwen_header_envelopes_fit_without_materialization(
     admitted = []
     admission = _dictionary._admit
 
-    def record(memory, required, stage):
-        admission(memory, required, stage)
+    def record(memory, required, stage, **kwargs):
+        current = admission(memory, required, stage, **kwargs)
         if stage != "dictionary_metadata_admission":
             admitted.append(required)
+        return current
 
     monkeypatch.setattr(_dictionary, "_admit", record)
     # The header mock stops at the first tensor request after full admission.
@@ -316,7 +317,7 @@ def test_qwen_header_envelopes_fit_without_materialization(
         load_dictionary(tmp_path, model_hash=data["model_hash"], dtype=torch.float32)
     assert len(calls) == 25
     assert expected_bytes < admitted[0] < expected_bytes + 140_000_000
-    assert admitted == [admitted[0], admitted[0]]
+    assert admitted == [admitted[0]] * 3
     assert memory_readers["footprint"] + admitted[0] < 12_000_000_000
 
 
@@ -326,7 +327,7 @@ def test_dictionary_memory_limit_validation(limit):
         load_dictionary("unused", model_hash="unused", memory_limit_gb=limit)
 
 
-@pytest.mark.parametrize("reader", ["resident", "footprint", "peak", "driver"])
+@pytest.mark.parametrize("reader", ["resident", "footprint", "driver"])
 def test_admission_includes_existing_process_and_model_memory(tmp_path, monkeypatch, memory_readers, reader):
     data, _ = header_only_dictionary(tmp_path, monkeypatch, latents=8192, stored_dtype="F32")
     memory_readers[reader] = 11_000_000_000

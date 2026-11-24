@@ -15,7 +15,7 @@ import torch
 from torch import nn
 from torch.nn import functional as F
 
-from ._memory import CleanStop, MemoryGuard, autorelease_scope
+from ._memory import CleanStop, MemoryGuard, allocation_bytes, autorelease_scope
 from ._forward_identity import checkpoint_settings, forward_settings, nonpersistent_buffers
 
 
@@ -75,7 +75,7 @@ def _hash_admission(memory, limit_gb=None, *, force=False):
         return
     memory.check("model_identity", force=force)
     limit = memory.limit if limit_gb is None else min(memory.limit, int(limit_gb * 1e9))
-    if memory.peak + 4 * _HASH_CHUNK_BYTES > limit:
+    if memory.peak > limit or allocation_bytes(memory) + 4 * _HASH_CHUNK_BYTES > limit:
         raise CleanStop("model identity allocation exceeds the process memory limit")
 
 
@@ -291,7 +291,7 @@ def verify_hf_model(model, snapshot, *, key_mapping=None, checkpoint_subset=None
 
     def admit_buffers(size):
         memory.check("checkpoint_buffers", force=True)
-        if memory.peak + size > memory.limit:
+        if allocation_bytes(memory) + size > memory.limit:
             raise CleanStop("checkpoint buffer reconstruction exceeds the process memory limit")
 
     settings, buffers = checkpoint_settings(
@@ -652,10 +652,12 @@ def _positive(value):
     return True
 
 
-def _admit(memory, required, stage):
+def _admit(memory, required, stage, *, floor=0):
     memory.check(stage)
-    if memory.peak + required > memory.limit:
+    current = allocation_bytes(memory, floor=floor)
+    if current + required > memory.limit:
         raise CleanStop("dictionary allocation exceeds the process memory limit")
+    return current
 
 
 def load_dictionary(path, *, model=None, model_hash=None, device=None, dtype=None,
@@ -726,13 +728,14 @@ def load_dictionary(path, *, model=None, model_hash=None, device=None, dtype=Non
         budgets.append(_layer_bytes(stored, shapes, device, dtype))
     remaining = sum(budget[0] for budget in budgets)
     temporary = max(budget[1] for budget in budgets)
-    if metadata_memory.peak + metadata_bytes + remaining + temporary > int(memory_limit_gb * 1_000_000_000):
-        raise CleanStop("dictionary allocation exceeds the process memory limit")
+    _admit(metadata_memory, metadata_bytes + remaining + temporary, "dictionary_headers")
     memory = MemoryGuard(memory_limit_gb, device)
-    _admit(memory, metadata_bytes + remaining + temporary, "dictionary_admission")
+    initial = _admit(memory, metadata_bytes + remaining + temporary, "dictionary_admission")
+    total = remaining
     layers = []
     for index in range(data["layers"]):
-        _admit(memory, metadata_bytes + remaining + temporary, f"dictionary_layer_{index}")
+        _admit(memory, metadata_bytes + remaining + temporary, f"dictionary_layer_{index}",
+               floor=initial + total - remaining)
         tensors = {}
         with autorelease_scope(device), safe_open(
             folder / f"layer_{index:02d}.safetensors", framework="pt", device="cpu",
@@ -756,5 +759,5 @@ def load_dictionary(path, *, model=None, model_hash=None, device=None, dtype=Non
         layers.append(JumpReLUTranscoder(**tensors) if data["activation"] == "jumprelu"
                       else TopKTranscoder(**tensors, k=data["k"]))
         remaining -= budgets[index][0]
-    memory.check("dictionary_loaded")
+    _admit(memory, 0, "dictionary_loaded", floor=initial + total)
     return Dictionary(data, layers).eval()

@@ -18,7 +18,7 @@ import torch
 
 from .. import _intervention_protocol as metadata
 from ._frozen import _trace_features
-from ._memory import CleanStop
+from ._memory import CleanStop, allocation_bytes
 from ._points import _architecture, _input, capture
 
 MAX_POSITIONS = 32
@@ -49,7 +49,8 @@ class _IdentityMemory:
         self.guard = guard
         self.inner = getattr(guard, "_guard", guard)
         self.device = getattr(guard, "device", getattr(self.inner, "device", torch.device("cpu")))
-        self.current = 0
+        self._checked_current = None
+        self.floor = 0
 
     @property
     def limit(self):
@@ -57,14 +58,21 @@ class _IdentityMemory:
 
     @property
     def peak(self):
-        return max(self.current, getattr(self.guard, "peak", 0), getattr(self.inner, "peak", 0))
+        return max(self._checked_current or 0, getattr(self.guard, "peak", 0), getattr(self.inner, "peak", 0))
+
+    @property
+    def current(self):
+        values = [getattr(owner, "current", None) for owner in (self.guard, self.inner)]
+        values.append(self._checked_current)
+        readings = [value for value in values if value is not None]
+        return max(self.floor, max(readings) if readings else self.peak)
 
     def check(self, stage, *, force=True):
         # Some supplied guards accept only the stage. Do not bypass their latch.
         check = self.guard.check if force else getattr(self.guard, "_check_interval", self.guard.check)
         current = check(stage)
         if isinstance(current, (int, float)):
-            self.current = max(self.current, current)
+            self._checked_current = current
 
 
 def _content_identity(state, guard):
@@ -148,7 +156,7 @@ class _DictionarySnapshot:
         from ._memory import CleanStop
         if memory is not None:
             memory.check("dictionary identity", force=force)
-            if max(memory.peak, floor) + reserve > memory.limit:
+            if allocation_bytes(memory, floor=floor) + reserve > memory.limit:
                 raise CleanStop("dictionary identity allocation exceeds the process memory limit")
 
     @classmethod
@@ -171,7 +179,7 @@ class _DictionarySnapshot:
             initial = 0
         else:
             memory.check("dictionary identity", force=True)
-            initial = memory.peak
+            initial = allocation_bytes(memory)
             if not math.isfinite(memory.limit) or initial + total + scratch > memory.limit:
                 return None
         snapshot, copied = {}, 0
@@ -195,11 +203,13 @@ class _DictionarySnapshot:
             with autorelease_scope(tensor.device):
                 snapshot[name] = tensor.detach().clone()
             copied += tensor.numel() * tensor.element_size()
-        content = _content_identity(snapshot, guard)
+        if memory is not None:
+            memory.floor = initial + copied
+        content = _content_identity(snapshot, memory)
         result = cls(snapshot, content, source_devices)
         cls._admit(memory, scratch, force=True, floor=initial + copied)
         # The copied bytes must reproduce the configured full-content identity.
-        if _dictionary_digest(dictionary, content) != identifier or not result.matches(dictionary, identifier, guard):
+        if _dictionary_digest(dictionary, content) != identifier or not result.matches(dictionary, identifier, memory):
             raise InterventionError("dictionary content changed. Reconfigure before use",
                                     "intervene.unknown_dictionary")
         return result
