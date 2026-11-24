@@ -218,7 +218,7 @@ def test_graph_json_and_publication_share_decorated_labels(label_index, monkeypa
     assert [{k: v for k, v in n.items() if k != "label"} for n in labeled] == [
         {k: v for k, v in n.items() if k != "label"} for n in original]
     published = {}
-    monkeypatch.setattr("caliper.interp.publish", lambda name, tensor: published.update({name: tensor.clone()}))
+    monkeypatch.setattr("caliper.interp._publish._TENSORS", published)
     graph = Graph.build(nodes=labeled, edges=[{"source": 0, "target": 1, "weight": .25}],
                         tokens=[{"position": 0, "token_id": 65, "text": "A"}], layers=2,
                         completeness={}, omitted_influence=0., error_share=.1, feature_share=.9,
