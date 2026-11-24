@@ -50,6 +50,7 @@ struct NodeOut {
     @location(0) uv: vec2<f32>,
     @location(1) @interpolate(flat) item: u32,
     @location(2) @interpolate(flat) kind: u32,
+    @location(3) @interpolate(flat) density: u32,
 }
 @vertex
 fn node_vs(@builtin(instance_index) i: u32, @builtin(vertex_index) v: u32) -> NodeOut {
@@ -60,22 +61,35 @@ fn node_vs(@builtin(instance_index) i: u32, @builtin(vertex_index) v: u32) -> No
     let right = camera::clip(p.xyz+vec3<f32>(p.w,0.0,0.0));
     let up = camera::clip(p.xyz+vec3<f32>(0.0,p.w,0.0));
     let pixels = caliper_view.viewport.zw*0.5;
-    // Keep every silhouette rasterizable even when the graph panel shrinks.
-    let radius = max(2.0,min(length((right.xy/right.w-center.xy/center.w)*pixels),
-                            length((up.xy/up.w-center.xy/center.w)*pixels)));
+    let radius = min(length((right.xy/right.w-center.xy/center.w)*pixels),
+                     length((up.xy/up.w-center.xy/center.w)*pixels));
+    var origin = center;
+    var raster_radius = radius;
+    let density = radius < 2.0;
+    if (density) {
+        // Use the pixel that contains the derived center. Never enlarge the radius.
+        // A marker occupies one sample when the cell's centers have distinct pixels.
+        let screen = (center.xy/center.w*vec2<f32>(1.0,-1.0)+1.0)*pixels + caliper_view.viewport.xy;
+        let shift = (floor(screen)+0.5-screen)*vec2<f32>(1.0,-1.0);
+        origin = camera::offset_pixels(center,shift);
+        raster_radius = min(radius,0.5);
+    }
     var out: NodeOut;
-    out.position = camera::offset_pixels(center,corners[v]*radius);
+    out.position = camera::offset_pixels(origin,corners[v]*raster_radius);
     out.uv = corners[v];
     out.item = i;
     out.kind = nodes[i].kind;
+    out.density = u32(density);
     return out;
 }
 @fragment
 fn node_fs(in: NodeOut) -> CaliperPicked {
     // Token squares, feature discs, error diamonds, and logit triangles have distinct silhouettes.
-    if (in.kind == 1u && dot(in.uv,in.uv)>1.0) { discard; }
-    if (in.kind == 2u && abs(in.uv.x)+abs(in.uv.y)>1.0) { discard; }
-    if (in.kind == 3u && abs(in.uv.x)>(1.0-in.uv.y)*0.5) { discard; }
+    if (in.density == 0u) {
+        if (in.kind == 1u && dot(in.uv,in.uv)>1.0) { discard; }
+        if (in.kind == 2u && abs(in.uv.x)+abs(in.uv.y)>1.0) { discard; }
+        if (in.kind == 3u && abs(in.uv.x)>(1.0-in.uv.y)*0.5) { discard; }
+    }
     let palette = array<vec3<f32>,4>(vec3<f32>(0.65,0.72,0.8),vec3<f32>(0.25,0.82,0.65),
                                     vec3<f32>(0.98,0.65,0.2),vec3<f32>(0.72,0.52,0.96));
     var color = palette[in.kind];

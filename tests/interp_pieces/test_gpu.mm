@@ -67,10 +67,20 @@ std::vector<HostTensor> graph_tensors(bool dense = false) {
             HostTensor::of("node_f", "f32", {512,4}, nf), HostTensor::of("edge_i", "i32", {8192,2}, ei),
             HostTensor::of("edge_f", "f32", {8192,2}, ef), text_tensor(544,"label ")};
 }
-cd::FrameInputs frame(const cs::Piece& piece, const Json& params = Json::object()) {
+std::vector<HostTensor> narrow_graph_tensors() {
+    auto tensors=graph_tensors(true);
+    std::vector<std::int32_t> ni(512*4), counts{16,0,32,24};
+    for (unsigned i=0;i<16;++i) {
+        ni[4*i]=1; ni[4*i+1]=12; ni[4*i+2]=16; ni[4*i+3]=100+i;
+    }
+    tensors[0]=HostTensor::of("graph_counts","i32",{4},counts);
+    tensors[1]=HostTensor::of("node_i","i32",{512,4},ni);
+    return tensors;
+}
+cd::FrameInputs frame(const cs::Piece& piece, const Json& params = Json::object(), unsigned side = size) {
     cd::FrameInputs in;
     in.clip_from_world = in.world_from_clip = in.view_from_world = {1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1};
-    in.viewport = {0,0,float(size),float(size)};
+    in.viewport = {0,0,float(side),float(side)};
     in.pixel_ratio = 1;
     in.cursor_step = in.latest_step = 1;
     in.live = true;
@@ -91,21 +101,27 @@ void check_pick(const mr::PieceDraw& draw, float x, float y, unsigned item) {
     CHECK(pick->item == item);
 }
 void no_overlap(const Published& nodes) {
-    struct Placed { float x, radius, influence; unsigned index; };
+    struct Placed { float x, y, radius, influence; unsigned index; };
     std::map<std::pair<int,int>,std::vector<Placed>> cells;
     for (unsigned i=0;i<nodes.count;++i) {
         const float x=scalar<float>(nodes,i,0,48), y=scalar<float>(nodes,i,4,48), r=scalar<float>(nodes,i,12,48);
         REQUIRE(std::isfinite(x)); REQUIRE(std::isfinite(y)); REQUIRE(r>0);
         const auto key=std::make_pair(scalar<int>(nodes,i,24,48),scalar<int>(nodes,i,28,48));
-        cells[key].push_back({x,r,scalar<float>(nodes,i,36,48),i});
+        cells[key].push_back({x,y,r,scalar<float>(nodes,i,36,48),i});
     }
     for (auto& [key,placed]:cells) {
-        std::sort(placed.begin(),placed.end(),[](const Placed& a,const Placed& b){ return a.x<b.x; });
+        std::sort(placed.begin(),placed.end(),[](const Placed& a,const Placed& b){
+            return a.y == b.y ? a.x < b.x : a.y > b.y;
+        });
         for (unsigned i=1;i<placed.size();++i) {
             const auto& a=placed[i-1]; const auto& b=placed[i];
-            CHECK(b.x-a.x>a.radius+b.radius);
             CHECK(a.influence>=b.influence);
             if (a.influence==b.influence) CHECK(a.index<b.index);
+        }
+        for (unsigned i=0;i<placed.size();++i) for (unsigned j=0;j<i;++j) {
+            const auto& a=placed[i]; const auto& b=placed[j];
+            // Disjoint bounds also cover the square, diamond, and triangle silhouettes.
+            CHECK(std::max(std::abs(b.x-a.x),std::abs(b.y-a.y))>a.radius+b.radius);
         }
     }
 }
@@ -119,11 +135,12 @@ struct Export {
     std::vector<std::uint8_t> frames;
     Json expected = Json::object();
     std::filesystem::path out;
-    Export() {
+    explicit Export(unsigned side = size, const std::string& subfolder = "") {
         const char* folder = std::getenv("CALIPER_INTERP_PIECES_OUT");
         out = folder ? folder : CALIPER_INTERP_PIECES_DEFAULT_OUT;
+        if (!subfolder.empty()) out /= subfolder;
         std::filesystem::create_directories(out / "app");
-        plan.size = size; plan.frames = 1; plan.step = 1;
+        plan.size = side; plan.frames = 1; plan.step = 1;
     }
     void add_frame(const wire::Message& message) {
         std::vector<std::uint8_t> bytes;
@@ -178,12 +195,12 @@ struct Export {
             if (id == "graph_selected") write(out / "hover.json", json.data(), json.size());
         }
         dp::ProgramPlan pp;
-        pp.id = id; pp.pick_id = mr::kPiecePick; pp.inputs = frame(piece,values);
+        pp.id = id; pp.pick_id = mr::kPiecePick; pp.inputs = frame(piece,values,plan.size);
         plan.programs.push_back(pp);
         expected.set(id,picks);
         write(out / "app" / (id+".color"),draw.color.data(),draw.color.size());
         write(out / "app" / (id+".id"),draw.ids.data(),draw.ids.size());
-        REQUIRE(stbi_write_png((out / "app" / (id+".png")).string().c_str(),size,size,4,draw.color.data(),size*4));
+        REQUIRE(stbi_write_png((out / "app" / (id+".png")).string().c_str(),plan.size,plan.size,4,draw.color.data(),plan.size*4));
     }
     void finish() {
         const auto json = dp::plan_json(plan), picks = expected.dump();
@@ -199,7 +216,7 @@ Json pick_at(float x, float y, unsigned item) {
 }
 }
 
-TEST_CASE("small graph silhouettes retain a pixel at subpixel centers") {
+TEST_CASE("small graph density markers retain distinct center pixels for every kind") {
     @autoreleasepool {
         mr::Metal metal;
         if (!metal.backend) CALIPER_SKIP_NO_GPU(metal.why);
@@ -221,7 +238,65 @@ TEST_CASE("small graph silhouettes retain a pixel at subpixel centers") {
             if (item) visible.insert(item-1);
         }
         REQUIRE(visible.size()==nodes.count);
-        for (unsigned i=0;i<nodes.count;++i) CHECK(visible.count(i)==1);
+        for (unsigned i=0;i<nodes.count;++i) {
+            CHECK(visible.count(i)==1);
+            check_pick(draw,scalar<float>(nodes,i,0,48),scalar<float>(nodes,i,4,48),i);
+        }
+    }
+}
+
+TEST_CASE("dense graph raster retains every ID and center pick in square and narrow panels") {
+    @autoreleasepool {
+        mr::Metal metal;
+        if (!metal.backend) CALIPER_SKIP_NO_GPU(metal.why);
+        const auto piece=ip::load("attribution_graph");
+        const auto data=mr::run_derive(metal.device,piece,graph_tensors(true),{});
+        const auto narrow=mr::run_derive(metal.device,piece,narrow_graph_tensors(),{});
+        no_overlap(resource(data,"nodes"));
+        no_overlap(resource(narrow,"nodes"));
+        struct RasterCase {
+            const char* folder;
+            unsigned side, count;
+            const std::vector<Published>* data;
+        };
+        for (const auto& test : {RasterCase{"density",512,512,&data},
+                                 RasterCase{"density_narrow",256,512,&data},
+                                 RasterCase{"narrow_cells",256,16,&narrow}}) {
+            @autoreleasepool {
+                CAPTURE(test.folder);
+                const auto side=test.side;
+                const auto& nodes=resource(*test.data,"nodes");
+                REQUIRE(nodes.count==test.count);
+                mr::PieceDraw draw(*metal.backend,side);
+                set_resources(draw,piece,*test.data);
+                REQUIRE(draw.draw(frame(piece,Json::object(),side)));
+                std::map<unsigned,unsigned> visible;
+                for (unsigned y=0;y<side;++y) for (unsigned x=0;x<side;++x) {
+                    const auto item=mr::identity_of(draw.ids,side,x,y);
+                    if (item) ++visible[unsigned(item-1)];
+                }
+                REQUIRE(visible.size()==nodes.count);
+                std::set<std::pair<int,int>> centers;
+                Json picks=Json::array();
+                for (unsigned i=0;i<nodes.count;++i) {
+                    const float x=scalar<float>(nodes,i,0,48), y=scalar<float>(nodes,i,4,48);
+                    const int px=int((x+1)*side*0.5f), py=int((1-y)*side*0.5f);
+                    REQUIRE(px>=0); REQUIRE(py>=0); REQUIRE(px<int(side)); REQUIRE(py<int(side));
+                    CHECK(centers.emplace(px,py).second);
+                    CHECK(visible.count(i)==1);
+                    CHECK(visible[i]==1); // No sample lies outside the node's center pixel.
+                    CHECK(mr::identity_of(draw.ids,side,px,py)==i+1);
+                    const auto picked=draw.rt.pick(i);
+                    REQUIRE(picked);
+                    CHECK(picked->item==i);
+                    Json row=Json::array(); row.push(px); row.push(py); row.push(std::uint64_t(i));
+                    picks.push(row);
+                }
+                Export output(side,test.folder);
+                output.add("graph_dense",piece,*test.data,draw,Json::object(),picks);
+                output.finish();
+            }
+        }
     }
 }
 

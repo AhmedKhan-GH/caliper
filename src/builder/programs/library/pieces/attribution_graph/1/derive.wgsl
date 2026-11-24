@@ -77,10 +77,16 @@ fn order_influence(@builtin(global_invocation_id) id: vec3<u32>) {
             if (other.influence > c.influence || (other.influence == c.influence && j < i)) { rank++; }
         }
     }
-    let spacing = 0.8*c.width/f32(count);
-    let x = c.center.x - 0.4*c.width + (f32(rank)+0.5)*spacing;
-    // Fixed lanes preserve the influence order and leave a strict gap after all relaxations.
-    offset_a[i] = vec4<f32>(x, x, spacing, min(0.25*spacing, 0.24*1.64/f32(layer_count()+1u)));
+    let height = 1.64/f32(layer_count()+1u);
+    let columns = min(count, max(1u, u32(ceil(sqrt(f32(count)*c.width/height)))));
+    let rows = (count+columns-1u)/columns;
+    let spacing = vec2<f32>(0.8*c.width/f32(columns), 0.8*height/f32(rows));
+    let x = c.center.x + (f32(rank%columns)+0.5-0.5*f32(columns))*spacing.x;
+    let y = c.center.y - (f32(rank/columns)+0.5-0.5*f32(rows))*spacing.y;
+    // Influence order runs across each row, then down within the layer band.
+    // The radius stays below half the separation after horizontal relaxation.
+    offset_a[i] = vec4<f32>(x, x, spacing.x, 0.25*min(spacing.x,spacing.y));
+    nodes[i].position.y = y;
     var prefix = 0x20727446u; // Feature prefix.
     if (nodes[i].kind == 0u) { prefix = 0x206b6f54u; }
     if (nodes[i].kind == 1u) { prefix = 0x20727446u; } // Feature
@@ -123,7 +129,7 @@ fn relax_four(@builtin(global_invocation_id) id: vec3<u32>) {
     if (i >= node_count()) { return; }
     let result = relaxed(i, true);
     offset_a[i] = result;
-    nodes[i].position = vec4<f32>(result.x, cells[i].center.y, 0.0, result.w);
+    nodes[i].position = vec4<f32>(result.x, nodes[i].position.y, 0.0, result.w);
 }
 
 @compute @workgroup_size(64)
