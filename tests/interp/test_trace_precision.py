@@ -47,6 +47,7 @@ def test_storage_precision_preserves_forward_and_every_target(model_dtype, stora
         expected_logits = model(ids).logits[:, -1]
     path = FrozenPath(model, ids, dictionary)
     tolerance = 1e-9 if model_dtype == torch.float64 else 2e-5
+    assert all(torch.count_nonzero(offset) == 0 for offset in path.output_offsets)
     assert path.forward_residual < tolerance
     reads, final = path.replacement(path.embedding, dictionary)
     torch.testing.assert_close(F.linear(final[:, -1], model.lm_head.weight), expected_logits,
@@ -84,6 +85,7 @@ def test_storage_precision_preserves_forward_and_every_target(model_dtype, stora
         assert diagnostic["absolute_residual"] < tolerance
     assert any(abs(row["biases"]["encoder"]) > 0 for row in diagnostics)
     assert any(abs(row["biases"]["decoder"]) > 0 for row in diagnostics)
+    assert all(row["biases"]["intervention"] == 0 for row in diagnostics)
     assert any(error.count_nonzero() for error in path.errors)
 
     zero = path.replacement(torch.zeros_like(path.embedding), dictionary)[1]

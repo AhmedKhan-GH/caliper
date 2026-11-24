@@ -390,6 +390,14 @@ class FrozenFeatures:
         return preactivation * self.coefficients + self.constants
 
 
+def _validate_intervention_positions(tokens, interventions):
+    """Refuse invalid target positions before a forward or cache change."""
+    for spec in interventions:
+        for position in spec.get("positions", ()):
+            if type(position) is not int or not 0 <= position < tokens:
+                raise ValueError(f"intervention position {position!r} is outside the prompt of {tokens} tokens")
+
+
 def _validate_interventions(model, blocks, prefix, interventions):
     """Refuse module edits outside the explicit affine paths."""
     allowed = {}
@@ -426,6 +434,7 @@ class FrozenPath:
 
     def __init__(self, model, input_ids, dictionary, *, guard=None, interventions=()):
         _validate_ablation_points(model, interventions)
+        _validate_intervention_positions(input_ids.shape[1], interventions)
         probes = _validate_dictionary(model, dictionary)
         parameter = next(model.parameters())
         self.device, self.dtype = parameter.device, parameter.dtype
@@ -522,8 +531,10 @@ class FrozenPath:
                     layer = dictionary.layers[i]
                     a = _trace_features(layer, x, self.guard)
                     raw = recorded[f"{i}.mlp_raw"]
-                    output = FrozenFeatures(a, layer, [s for s in interventions
-                        if s["point"] in (f"{base}.mlp", f"{base}.mlp_out")])
+                    output_specs = [s for s in interventions
+                                    if s["point"] in (f"{base}.mlp", f"{base}.mlp_out")
+                                    and s.get("positions", (0,))]
+                    output = FrozenFeatures(a, layer, output_specs)
                     self.feature_outputs.append(output)
                     transformed = torch.zeros_like(a).scatter_add(
                         -1, output.indices[None], output.activations[None])
@@ -537,8 +548,8 @@ class FrozenPath:
                         self.guard.check("edited dictionary decoder rows")
                         rows = layer.W_dec.detach()[output.indices].to(self.dtype)
                         decoded = torch.einsum("tk,tkw->tw", output.activations, rows)[None]
-                    # Only known output constants enter this term. Errors describe the raw MLP.
-                    offset = y - decoded - decoder_bias - error
+                    # Untouched outputs must not label arithmetic roundoff as an intervention.
+                    offset = y - decoded - decoder_bias - error if output_specs else torch.zeros_like(y)
                     self.inputs.append(x)
                     self.outputs.append(y)
                     self.features.append(transformed)

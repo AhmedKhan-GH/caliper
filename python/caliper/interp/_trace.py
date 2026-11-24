@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from collections import OrderedDict, deque
+from copy import deepcopy
 from dataclasses import dataclass
 import hashlib
 import json
@@ -9,7 +10,8 @@ import json
 import torch
 
 from ._dictionary import weights_hash
-from ._frozen import FrozenPath, MemoryGuard, _validate_dictionary, _validate_ablation_points
+from ._frozen import (FrozenPath, MemoryGuard, _validate_dictionary, _validate_ablation_points,
+                      _validate_intervention_positions)
 from ._memory import autorelease_scope
 from ._graph import Graph, bounded_integer
 from ._influence import influence
@@ -309,6 +311,10 @@ class Tracer:
         self.guard = MemoryGuard(next(model.parameters()).device)
 
     def _service(self):
+        from ._intervene import _ACTIVE_REPLAYS
+        for replay in reversed(_ACTIVE_REPLAYS.get()):
+            if replay.model is self.model:
+                return replay
         service = getattr(self.controls, "intervention_service", None)
         if service is None:
             owner = getattr(self.controls, "_iv_model", None)
@@ -316,10 +322,19 @@ class Tracer:
         return service if service is not None and service.model is self.model else None
 
     def _intervention_state(self):
+        from ._intervene import _ACTIVE_REPLAYS, _MUTED_HOOKS, selected_rows
+        muted = _MUTED_HOOKS.get()
         service = self._service()
         if service is not None:
-            from ._intervene import selected_rows
-            specifications = service.specifications()
+            if service in _ACTIVE_REPLAYS.get():
+                specifications = [deepcopy(spec) for spec, hook in service._effects
+                                  if hook not in muted and not getattr(hook, "removed", False)]
+            else:
+                with self.controls.lock:
+                    specifications = [deepcopy(iv.applied_spec) for iv in self.controls._ivs.values()
+                                      if iv.state == "active" and iv.applied_spec is not None
+                                      and iv.hook is not None and iv.hook not in muted
+                                      and not getattr(iv.hook, "removed", False)]
             feature_effect = any(spec.get("op", spec.get("kind")) in ("scale", "clamp") for spec in specifications)
             patch_effect = any(spec.get("op", spec.get("kind")) == "patch" for spec in specifications)
             bound = service.dictionary if feature_effect else None
@@ -333,15 +348,16 @@ class Tracer:
             watched = self.controls._iv_model
             if watched is None or watched.model is not self.model:
                 return []
-            return [dict(iv.applied_spec) for iv in self.controls._ivs.values()
-                    if iv.state == "active" and iv.hook is not None and iv.applied_spec is not None]
+            return [deepcopy(iv.applied_spec) for iv in self.controls._ivs.values()
+                    if iv.state == "active" and iv.hook is not None and iv.applied_spec is not None
+                    and iv.hook not in muted and not getattr(iv.hook, "removed", False)]
 
     def _new_prompt(self, prompt):
         if prompt != self._prompt:
             self._forward_cache = None
             service = self._service()
             if service is not None:
-                service.invalidate_source_cache()
+                service.executor.invalidate_cache()
             self._prompt = prompt
 
     @torch.inference_mode(False)
@@ -349,6 +365,9 @@ class Tracer:
         """Publish and return one graph without truncation or model downloads."""
         state = self._intervention_state()
         specifications = state["specifications"] if isinstance(state, dict) else state
+        if (specifications and isinstance(state, dict) and state["rows"] is not None
+                and any(row != 0 for row in state["rows"])):
+            raise ValueError("trace intervention rows must fit its single prompt")
         if isinstance(state, dict) and state["rows"] is not None and 0 not in state["rows"]:
             specifications = []
         _validate_ablation_points(self.model, specifications)
@@ -373,6 +392,7 @@ class Tracer:
             bounded_integer(ids.shape[1], "prompt tokens including special tokens", 1, 32)
             if ids.min() < 0 or ids.max() >= self.model.config.vocab_size:
                 raise ValueError("tokenizer returned an out-of-range token")
+            _validate_intervention_positions(ids.shape[1], specifications)
             self._new_prompt(prompt)
             identity = {"model": id(self.model), "model_weights": _versions(self.model),
                         "dictionary": id(self.dictionary), "dictionary_weights": _versions(self.dictionary),
