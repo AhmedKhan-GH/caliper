@@ -65,14 +65,6 @@ min = -1
 max = 511
 title = "Selected Node"
 
-[[params]]
-name = "hovered_node"
-type = "i32"
-default = -1
-min = -1
-max = 511
-title = "Hovered Node"
-
 [[resources]]
 id = "nodes"
 kind = "buffer"
@@ -164,7 +156,7 @@ writes = ["offset_b"]
 [[derive.passes]]
 entry = "relax_four"
 workgroups = [8, 1, 1]
-writes = ["offset_a", "nodes", "labels"]
+writes = ["offset_a", "nodes"]
 
 [[derive.passes]]
 entry = "edge_curves"
@@ -176,7 +168,7 @@ camera = "pan_zoom"
 frame_ms = 4
 memory_mb = 64
 pick = { resource = "nodes", fields = ["index", "kind", "layer", "token_position", "feature", "influence"] }
-text = { anchors = "labels", position = "position", string = "string", priority = "priority", strings_from = "strings", align = "center", hover = { anchor = 33, string_offset = 32 } }
+text = { anchors = "labels", position = "position", string = "string", priority = "priority", strings_from = "strings", align = "center", hover = { anchor = 33, string_offset = 32 }, selected = { anchor = 32, param = "selected_node", string_offset = 32 } }
 
 [[draw.passes]]
 kind = "render"

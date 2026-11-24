@@ -156,10 +156,12 @@ Edges refer to displayed node rows.
 Bind its `graph_counts` input to `live:trace.counts` and its other structural inputs to the corresponding tensors above.
 Signed edges show direct effects, and node picks identify graph rows.
 The `selected_node` parameter reads shared state with the same name.
+The selected label follows this value on each draw frame, even when the run is idle.
+Prompt tokens and selected or hovered labels appear as host text.
 
-Prompt tokens appear as host text, and `selected_node` selects the persistent node label.
-Actual local pointer hits select hover labels in the app and browser.
-The `hovered_node` parameter remains compatibility metadata.
+The graph uses `draw.text.selected` for selection and `draw.text.hover` for the local pointer hit.
+Both labels use the shown node map and text resource without a new derive pass or model step.
+Pointer hover uses the ID readback and has no graph parameter.
 
 `token_strip@1` uses the five `live:examples.*` sources documented in the [example bindings](../agents/interpretation.md#example-panel-bindings).
 Its `page` parameter selects zero or one.

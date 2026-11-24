@@ -12714,6 +12714,34 @@
                         "pattern": "^[a-z_][a-z0-9_]{0,31}$",
                         "type": "string"
                       },
+                      "selected": {
+                        "additionalProperties": false,
+                        "description": "The current draw parameter selects this label from the shown item map.",
+                        "properties": {
+                          "anchor": {
+                            "description": "The anchor index for the selected label.",
+                            "maximum": 511,
+                            "minimum": 0,
+                            "type": "integer"
+                          },
+                          "param": {
+                            "description": "An i32 or u32 draw parameter with the selected item index.",
+                            "pattern": "^[a-z][a-z0-9_]{0,31}$",
+                            "type": "string"
+                          },
+                          "string_offset": {
+                            "description": "The string index offset for a selected item. Zero when absent.",
+                            "maximum": 4095,
+                            "minimum": 0,
+                            "type": "integer"
+                          }
+                        },
+                        "required": [
+                          "anchor",
+                          "param"
+                        ],
+                        "type": "object"
+                      },
                       "string": {
                         "description": "The u32 field that indexes strings; string when absent.",
                         "pattern": "^[a-z_][a-z0-9_]{0,31}$",
@@ -15099,6 +15127,34 @@
                         "pattern": "^[a-z_][a-z0-9_]{0,31}$",
                         "type": "string"
                       },
+                      "selected": {
+                        "additionalProperties": false,
+                        "description": "The current draw parameter selects this label from the shown item map.",
+                        "properties": {
+                          "anchor": {
+                            "description": "The anchor index for the selected label.",
+                            "maximum": 511,
+                            "minimum": 0,
+                            "type": "integer"
+                          },
+                          "param": {
+                            "description": "An i32 or u32 draw parameter with the selected item index.",
+                            "pattern": "^[a-z][a-z0-9_]{0,31}$",
+                            "type": "string"
+                          },
+                          "string_offset": {
+                            "description": "The string index offset for a selected item. Zero when absent.",
+                            "maximum": 4095,
+                            "minimum": 0,
+                            "type": "integer"
+                          }
+                        },
+                        "required": [
+                          "anchor",
+                          "param"
+                        ],
+                        "type": "object"
+                      },
                       "string": {
                         "description": "The u32 field that indexes strings; string when absent.",
                         "pattern": "^[a-z_][a-z0-9_]{0,31}$",
@@ -16241,6 +16297,34 @@
                         "pattern": "^[a-z_][a-z0-9_]{0,31}$",
                         "type": "string"
                       },
+                      "selected": {
+                        "additionalProperties": false,
+                        "description": "The current draw parameter selects this label from the shown item map.",
+                        "properties": {
+                          "anchor": {
+                            "description": "The anchor index for the selected label.",
+                            "maximum": 511,
+                            "minimum": 0,
+                            "type": "integer"
+                          },
+                          "param": {
+                            "description": "An i32 or u32 draw parameter with the selected item index.",
+                            "pattern": "^[a-z][a-z0-9_]{0,31}$",
+                            "type": "string"
+                          },
+                          "string_offset": {
+                            "description": "The string index offset for a selected item. Zero when absent.",
+                            "maximum": 4095,
+                            "minimum": 0,
+                            "type": "integer"
+                          }
+                        },
+                        "required": [
+                          "anchor",
+                          "param"
+                        ],
+                        "type": "object"
+                      },
                       "string": {
                         "description": "The u32 field that indexes strings; string when absent.",
                         "pattern": "^[a-z_][a-z0-9_]{0,31}$",
@@ -17256,6 +17340,34 @@
                         "description": "An f32 field; a label of a higher priority wins an overlap.",
                         "pattern": "^[a-z_][a-z0-9_]{0,31}$",
                         "type": "string"
+                      },
+                      "selected": {
+                        "additionalProperties": false,
+                        "description": "The current draw parameter selects this label from the shown item map.",
+                        "properties": {
+                          "anchor": {
+                            "description": "The anchor index for the selected label.",
+                            "maximum": 511,
+                            "minimum": 0,
+                            "type": "integer"
+                          },
+                          "param": {
+                            "description": "An i32 or u32 draw parameter with the selected item index.",
+                            "pattern": "^[a-z][a-z0-9_]{0,31}$",
+                            "type": "string"
+                          },
+                          "string_offset": {
+                            "description": "The string index offset for a selected item. Zero when absent.",
+                            "maximum": 4095,
+                            "minimum": 0,
+                            "type": "integer"
+                          }
+                        },
+                        "required": [
+                          "anchor",
+                          "param"
+                        ],
+                        "type": "object"
                       },
                       "string": {
                         "description": "The u32 field that indexes strings; string when absent.",

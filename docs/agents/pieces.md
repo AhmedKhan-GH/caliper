@@ -483,6 +483,22 @@ The text resources and item map must show the same step.
 The hover does not write selection state, send a command, or request a derive pass.
 All existing string and label limits apply, and a piece without `text.hover` retains its text behavior.
 
+### Selected Labels
+
+The optional `text.selected` table selects one label from the current draw parameter.
+For example, `selected = { anchor = 32, param = "selected_node", string_offset = 32 }` uses string `32 + selected_node`.
+The app and browser use the same parameter bytes as the draw frame.
+A selection change needs no new derive pass, resource version, or model step.
+The anchor retains its published position, priority, and alignment.
+Its stored string index does not control the selected label.
+
+The `anchor` and `param` fields are required, and `string_offset` defaults to zero.
+The parameter must have type `i32` or `u32` and name an item in the shown buffer item map.
+A negative value, an absent item, or an invalid string hides the label.
+The anchor, item map, and text resource must show the same step.
+The selected anchor must differ from the hover anchor.
+The anchor and string limits for hover labels also apply to selected labels.
+
 ## Camera
 
 The host owns the camera. A piece selects `orbit` for the 3-D orbit camera of the panel, `pan_zoom` for its 2-D camera, or `none`. The camera `none` gives identity matrices, for a piece that draws in clip space. The programs of one panel must agree. The first program of the panel sets the camera. `program.create` and `program.patch` refuse a program that selects another one with `program.camera_conflict`, and `spec.validate` names each later program of a spec that holds such a panel. The viewer also refuses the later program with the same code. The saved views of the panel and the commands `camera.get`, `camera.set` and `camera.save` work as they do for entities. A panel that holds programs alone frames their box, -1 to 1 on each axis, and opens at its `view_camera`: the angles of an orbit with the fit of the box at those angles, and its target and distance when it gives them.

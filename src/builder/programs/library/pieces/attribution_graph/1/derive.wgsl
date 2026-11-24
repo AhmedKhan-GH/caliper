@@ -123,7 +123,6 @@ fn relax_four(@builtin(global_invocation_id) id: vec3<u32>) {
     let result = relaxed(i, true);
     offset_a[i] = result;
     nodes[i].position = vec4<f32>(result.x, cells[i].center.y, 0.0, result.w);
-    if (i32(i) == params.selected_node) { labels[32] = Label(vec4<f32>(-0.4,0.9,0.0,1.0), 32u+i, 3.0); }
 }
 
 @compute @workgroup_size(64)

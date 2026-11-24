@@ -72,7 +72,7 @@ fn node_fs(in: NodeOut) -> CaliperPicked {
     let palette = array<vec3<f32>,4>(vec3<f32>(0.65,0.72,0.8),vec3<f32>(0.25,0.82,0.65),
                                     vec3<f32>(0.98,0.65,0.2),vec3<f32>(0.72,0.52,0.96));
     var color = palette[in.kind];
-    if (i32(in.item) == params.selected_node || i32(in.item) == params.hovered_node || pick::selected(in.item)) {
+    if (i32(in.item) == params.selected_node || pick::selected(in.item)) {
         color = mix(color,vec3<f32>(1.0),0.65);
     }
     var out: CaliperPicked;

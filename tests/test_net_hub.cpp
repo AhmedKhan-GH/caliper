@@ -2281,6 +2281,56 @@ TEST_CASE("app: the hidden app's run bar controls a script through a hub with --
 }
 #endif
 
+TEST_CASE("net/hub: text parameters follow viewer capabilities on attach and update") {
+    HubRunner hub;
+    World world;
+    auto caps = kProducer31;
+    caps.push_back(CALIPER_NET_CAP_TEXT_PARAMS);
+    auto producer_link = producer(world, hub, "text-params", 1, 1, caps);
+    wire::Controls controls;
+    controls.run = obj({{"state", "running"}, {"step", 1}});
+    controls.params.push(obj({{"name", "clamp"}, {"type", "number"}, {"value", 0.},
+                              {"min", -4.}, {"max", 4.}}));
+    controls.params.push(obj({{"name", "prompt"}, {"type", "text"}, {"value", "AB"}}));
+    controls.params.push(obj({{"name", "retrace"}, {"type", "boolean"}, {"value", false}}));
+    controls.actions.push(obj({{"name", "apply_clamp"}, {"running", false}, {"queued", false}}));
+    producer_link->send(controls);
+    sync(world, *producer_link);
+
+    auto legacy = viewer(world, hub, kCaps31);
+    auto text_reader = viewer(world, hub, caps);
+    REQUIRE(world.until([&] { return legacy->last<wire::Controls>() && text_reader->last<wire::Controls>(); }));
+    const auto check_controls = [&](const wire::Controls& expected) {
+        const auto* plain = legacy->last<wire::Controls>();
+        const auto* full = text_reader->last<wire::Controls>();
+        REQUIRE(plain);
+        REQUIRE(full);
+        REQUIRE(plain->params.size() == 2);
+        CHECK(plain->params.at(0).dump() == expected.params.at(0).dump());
+        CHECK(plain->params.at(1).dump() == expected.params.at(2).dump());
+        CHECK(full->params.dump() == expected.params.dump());
+        CHECK(plain->run.dump() == expected.run.dump());
+        CHECK(full->run.dump() == expected.run.dump());
+        CHECK(plain->actions.dump() == expected.actions.dump());
+        CHECK(full->actions.dump() == expected.actions.dump());
+    };
+    CHECK(legacy->first_index(CALIPER_NET_MSG_CONTROLS) > legacy->first_index(CALIPER_NET_MSG_VIEWS));
+    CHECK(text_reader->first_index(CALIPER_NET_MSG_CONTROLS) > text_reader->first_index(CALIPER_NET_MSG_VIEWS));
+    check_controls(controls);
+
+    controls.run = obj({{"state", "paused"}, {"step", 2}});
+    controls.params = Json::array();
+    controls.params.push(obj({{"name", "clamp"}, {"type", "number"}, {"value", 2.},
+                              {"min", -4.}, {"max", 4.}}));
+    controls.params.push(obj({{"name", "prompt"}, {"type", "text"}, {"value", "AC"}}));
+    controls.params.push(obj({{"name", "retrace"}, {"type", "boolean"}, {"value", true}}));
+    producer_link->send(controls);
+    REQUIRE(world.until([&] {
+        return legacy->count<wire::Controls>() == 2 && text_reader->count<wire::Controls>() == 2;
+    }));
+    check_controls(controls);
+}
+
 TEST_CASE("net/hub: interpretation reads preserve capability gates and write permissions") {
     HubRunner hub;
     World world;

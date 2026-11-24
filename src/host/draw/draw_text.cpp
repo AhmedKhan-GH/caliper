@@ -99,6 +99,7 @@ std::vector<Label> DrawRuntime::labels(const PickedItem* hovered) const {
     std::vector<std::string_view> table;
     std::vector<bool> usable;
     bool strings_current = true;
+    std::optional<std::int64_t> strings_step;
     if (t.strings_from) {
         const Impl::Slot* from = nullptr;
         for (const Impl::Slot& slot : m.slots)
@@ -107,6 +108,7 @@ std::vector<Label> DrawRuntime::labels(const PickedItem* hovered) const {
         const std::uint64_t width = from->layout.stride;
         if (width == 0 || width > pl::kStringBytes) return out;
         const Impl::Shown& sv = *from->shown;
+        strings_step = sv.step;
         strings_current = hovered && sv.step == hovered->step;
         const std::uint64_t count = std::min<std::uint64_t>({sv.count, sv.bytes.size() / width, pl::kStrings});
         for (std::uint64_t i = 0; i < count; ++i) {
@@ -129,6 +131,22 @@ std::vector<Label> DrawRuntime::labels(const PickedItem* hovered) const {
         node = pick(hovered->item);
     const bool hover_current = node && node->step == hovered->step && node->fields == hovered->fields &&
                                v.step == hovered->step && strings_current;
+    // Use the same parameter bytes as the draw frame. No new resource or derive pass is needed.
+    std::optional<std::uint32_t> selected_index;
+    if (t.selected) {
+        for (std::size_t k = 0; k < m.piece.params.size(); ++k) {
+            const auto& param = m.piece.params[k];
+            if (param.name != t.selected->param || 4 * (k + 1) > m.params_shown.size()) continue;
+            std::uint32_t item;
+            std::memcpy(&item, m.params_shown.data() + 4 * k, 4);
+            if (param.type == caliper_builder::spec::ParamType::i32 && item > 0x7fffffffu) break;
+            const auto selected = pick(item);
+            const std::uint64_t index = std::uint64_t(t.selected->string_offset) + item;
+            if (selected && selected->step == v.step && (!strings_step || *strings_step == selected->step) && index < strings)
+                selected_index = std::uint32_t(index);
+            break;
+        }
+    }
     for (std::uint64_t i = 0; i < n; ++i) {
         const std::uint8_t* e = v.bytes.data() + i * stride;
         std::uint32_t index;
@@ -138,6 +156,10 @@ std::vector<Label> DrawRuntime::labels(const PickedItem* hovered) const {
             const std::uint64_t hover_index = std::uint64_t(t.hover->string_offset) + hovered->item;
             if (hover_index >= strings) continue;
             index = std::uint32_t(hover_index);
+        }
+        if (t.selected && i == t.selected->anchor) {
+            if (!selected_index) continue;
+            index = *selected_index;
         }
         if (index >= strings || !usable[index] || table[index].empty()) continue;   // no text, no label, as the built-in
         Label l;
