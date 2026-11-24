@@ -557,13 +557,17 @@ def main(argv=None):
     if (not 0 < args.save_seconds <= 240 or not 0 < args.max_wall_seconds <= 36_000
             or args.tokens < 1 or (args.run_seconds is not None and not 0 < args.run_seconds <= 36_000)):
         raise ValueError("invalid token, checkpoint, or wall-time budget")
+    if (not 0 < args.learning_rate < 1 or not 0 <= args.auxiliary_weight <= 1
+            or args.dead_tokens < 1 or not 0 < args.memory_gb <= 24):
+        raise ValueError("invalid trainer settings or memory limit")
     if (args.upper_half_from is None) != (args.prior_wall_seconds is None):
         raise ValueError("--upper-half-from and --prior-wall-seconds are required together")
     fallback = args.upper_half_from is not None
     if fallback and (not math.isfinite(args.prior_wall_seconds) or args.prior_wall_seconds < 0):
         raise ValueError("prior wall seconds must be finite and nonnegative")
-    if args.output.exists() and (args.output / "checkpoints" / "latest.json").exists() and not args.resume:
-        raise ValueError("output has a checkpoint; use --resume or a new output folder")
+    if not args.resume and args.output.exists() and (
+            not args.output.is_dir() or any(args.output.iterdir())):
+        raise ValueError("output is not empty; use --resume or a new output folder")
     try:
         with StopControl() as stop, ExitStack() as resources:
             stop.check()
@@ -599,6 +603,9 @@ def _run(args, started, stop, resources):
             raise ValueError("wall time budget has no model-load and checkpoint reserve")
         if not fallback:
             _validate_token_budget(record["metadata"], args.tokens, resume=True)
+            requested = {**record["metadata"], "latents": args.latents, "k": args.k}
+            validate_checkpoint(record, trainer_settings(requested, **_trainer_arguments(args)),
+                                requested, record["stream"]["source_id"])
     random.seed(args.seed)
     np.random.seed(args.seed)
     torch.manual_seed(args.seed)

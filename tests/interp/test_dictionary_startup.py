@@ -108,7 +108,8 @@ def test_trainer_startup_stop_preserves_checkpoint(tmp_path, monkeypatch, capsys
     monkeypatch.setattr(training, "restore_checkpoint", restore)
     monkeypatch.setattr(training, "train_online", lambda *a, **k: pytest.fail("batch loop ran"))
     assert training.main(["--output", str(tmp_path), "--resume", "--device", "cpu",
-                          "--latents", "8", "--k", "2", "--tokens", "16"]) == 2
+                          "--latents", "8", "--k", "2", "--tokens", "16",
+                          "--context", "4", "--batch-tokens", "8", "--microbatch-tokens", "4"]) == 2
     assert snapshot(tmp_path) == before
     assert all(stream.closed for stream in streams)
     assert all(source.closed for source in sources)
@@ -178,7 +179,8 @@ def test_signal_flag_stops_before_next_costly_stage(tmp_path, monkeypatch, capsy
     if command is training:
         for name, attribute in (("manifest", "make_manifest"), ("trainer", "Trainer")):
             monkeypatch.setattr(command, attribute, wrap(name, getattr(command, attribute)))
-        argv = ["--output", str(tmp_path), "--resume", "--latents", "8", "--k", "2", "--tokens", "16"]
+        argv = ["--output", str(tmp_path), "--resume", "--latents", "8", "--k", "2", "--tokens", "16",
+                "--context", "4", "--batch-tokens", "8", "--microbatch-tokens", "4"]
     else:
         monkeypatch.setattr(command, "load_dictionary", wrap("dictionary", lambda *a, **k: None))
         argv = ["--dictionary", str(tmp_path)]
