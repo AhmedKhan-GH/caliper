@@ -303,6 +303,11 @@ Before Generate, the driver records the prior completion identity.
 A fresh completion must bind two rows of 24 token IDs and both text hashes to the current prompt and interventions.
 Both the semantic steering gate and the shorter-bar gate remain required for Qwen.
 
+The demo selects the feature with the largest absolute effect on the top logit before the last layer.
+The result also records the original influence-based selection and its measured zero-ablation effect from the validation table.
+The validation still uses the ten most influential active features and the same sign and rank thresholds.
+Positive zero-ablation effects raise the centered logit. The steering and shorter-bar checks retain their direction when such a feature is selected.
+
 Only the founder uses `--show`. Every automated run remains hidden.
 The demo states the per-layer dictionary, frozen routing, feature-label heuristic, prompt cap, and lack of global weight analysis.
 Fallbacks follow the outline, and every fallback records its effect on coverage and acceptance.

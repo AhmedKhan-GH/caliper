@@ -355,6 +355,11 @@ A completion must advance its identity and supply exactly two rows of 24 integer
 Prompt and intervention hashes must match the current state, and both output texts must match their completion hashes.
 The semantic steering check uses the actual comparison argmax IDs from this metadata.
 
+The demo selects the feature with the largest absolute effect on the top logit before the last layer.
+The result also records the original influence-based selection and its zero-ablation measurement from `trace.validate`.
+Validation retains the ten most influential active features and reports every prediction and measurement.
+A positive zero-ablation effect raises the centered logit. The probability-fall and shorter-bar checks still require a decrease.
+
 Each capture also saves actual `program.status` values and the declared piece limits after the resource barrier.
 Derive passes have limits of 50 ms and 64 MiB, while draw frames have limits of 4 ms and 64 MiB.
 The result checks these budgets before and after the clamp.
