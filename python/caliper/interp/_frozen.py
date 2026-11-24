@@ -531,8 +531,10 @@ class FrozenPath:
                     layer = dictionary.layers[i]
                     a = _trace_features(layer, x, self.guard)
                     raw = recorded[f"{i}.mlp_raw"]
-                    output = FrozenFeatures(a, layer, [s for s in interventions
-                        if s["point"] in (f"{base}.mlp", f"{base}.mlp_out")])
+                    output_specs = [s for s in interventions
+                                    if s["point"] in (f"{base}.mlp", f"{base}.mlp_out")
+                                    and s.get("positions", (0,))]
+                    output = FrozenFeatures(a, layer, output_specs)
                     self.feature_outputs.append(output)
                     transformed = torch.zeros_like(a).scatter_add(
                         -1, output.indices[None], output.activations[None])
@@ -546,8 +548,8 @@ class FrozenPath:
                         self.guard.check("edited dictionary decoder rows")
                         rows = layer.W_dec.detach()[output.indices].to(self.dtype)
                         decoded = torch.einsum("tk,tkw->tw", output.activations, rows)[None]
-                    # Only known output constants enter this term. Errors describe the raw MLP.
-                    offset = y - decoded - decoder_bias - error
+                    # Untouched outputs must not label arithmetic roundoff as an intervention.
+                    offset = y - decoded - decoder_bias - error if output_specs else torch.zeros_like(y)
                     self.inputs.append(x)
                     self.outputs.append(y)
                     self.features.append(transformed)
