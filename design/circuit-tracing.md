@@ -148,13 +148,17 @@ Quality and index records must retain `publisher_training_overlap="unknown"`.
 The evaluation and index tools implement this source contract for the explicit Gemma model selection.
 
 Gemma quality retains the original limits of 0.30 mean FVU, 0.15 dead fraction, and 0.5 nats cross-entropy rise on exactly 200,000 tokens.
+Its evidence binds the evaluated model, dictionary tensor bytes, forward settings, and evaluation device.
+A device change requires a new quality evaluation because kernel arithmetic can differ.
 The index requires exactly 2,000,000 tokens.
 Evaluation replaces the semantic residual write and uses the actual final softcap for cross-entropy.
 Gemma receives no Qwen quality override or upper-half fallback.
 No new dictionary training is authorized.
 
 The explicit Gemma process budget is at most 28 GB.
-Standalone verification, dictionary conversion, dictionary loads, and traces retain a 12 GB default.
+Standalone verification, dictionary loads, and traces retain a 12 GB default.
+The Gemma-only converter defaults to 28 GB because the model and complete dictionary exceed 12 GB.
+A supplied lower converter limit remains active.
 Only the pinned Gemma identity permits a larger verification or dictionary limit, and only the Gemma family permits a larger trace limit.
 Hosted Gemma inference and acceptance select 28 GB explicitly.
 Qwen and fixture limits remain 12 GB, and Qwen training retains 24 GB.
@@ -239,6 +243,9 @@ The detailed contract is in `docs/reference/upper-half-dictionaries.md`.
 
 The example index uses two million other held-out tokens and keeps the largest 16 activations per feature.
 Its memory-mapped table records document, token position, activation count, and maximum.
+Version 2 binds the `live_input_v1` encoder policy in its manifest hash.
+Version 1 remains readable only when model and encoder floating tensors use one dtype.
+Other legacy indexes require a rebuild because their encoder used storage precision.
 Window queries run at most 16 windows together and use an LRU cache of 256 features.
 
 ## Replacement Model

@@ -197,6 +197,8 @@ If one window cannot fit, the query refuses before its tensor allocation.
 The budget is a limit, not a measured memory result or a speed guarantee.
 
 Gemma quality requires exactly 200,000 tokens, mean FVU at most 0.30, dead fraction at most 0.15, and cross-entropy rise at most 0.5 nats.
+Quality evidence binds the evaluated model, dictionary tensor bytes, forward settings, and evaluation device.
+Use the acceptance device for evaluation. A device change requires a new evaluation because kernel arithmetic can differ.
 The index requires exactly 2,000,000 tokens.
 Graph validation still requires at least eight correct signs among ten features and Spearman correlation of at least 0.6.
 The existing feature-share, completeness, visual, parity, and directional steering checks also apply.

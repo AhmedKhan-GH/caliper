@@ -156,6 +156,9 @@ The Qwen mean unexplained variance limit is 0.40, and the dead-feature fraction 
 Replacement of all MLPs must increase cross-entropy by at most 0.5 nats.
 These thresholds describe acceptance criteria, not a claim that a local dictionary passed.
 The Qwen example index uses two million other tokens and a 12 GB process limit.
+Index version 2 records the `live_input_v1` encoder policy in its manifest hash.
+Version 1 remains readable when all model and encoder floating tensors use the same dtype.
+Rebuild other version 1 indexes because their stored activations use encoder storage precision.
 
 ## Gemma Resources
 
