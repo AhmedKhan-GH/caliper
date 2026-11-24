@@ -213,8 +213,23 @@ def test_pins_and_selection_are_exact():
     assert metadata["training"]["publisher_training_disjointness"] == "unknown"
     assert metadata["training"]["partitions"] == {}
     assert "source_id" not in metadata["training"]
-    assert metadata["provenance"]["license"] == "CC-BY-4.0"
-    assert metadata["provenance"]["output_conversion"] == "none"
+    assert metadata["import_source"]["license"] == "CC-BY-4.0"
+    assert metadata["import_source"]["output_conversion"] == "none"
+
+
+def test_evaluation_source_is_explicit_pinned_and_separate():
+    from tools.interp.text_stream import DATASET_ID, DATASET_CONFIG, DATASET_REVISION, partition_metadata
+    source = {"dataset_id": DATASET_ID, "dataset_config": DATASET_CONFIG,
+              "dataset_revision": DATASET_REVISION, "split": "train",
+              "source_id": "local-parquet:verified-source", "partitions": partition_metadata()}
+    metadata = conversion._metadata([], source)
+    assert metadata["evaluation_source"] == source
+    assert metadata["training"]["dataset_id"] == "unknown"
+    assert metadata["training"]["local_training"] is False
+    source["partitions"]["quality"][0] = 0
+    assert metadata["evaluation_source"]["partitions"]["quality"][0] == 9400
+    with pytest.raises(ValueError, match="pinned evaluation source"):
+        conversion._metadata([], source)
 
 
 @pytest.mark.parametrize("fail", [True, False])
@@ -258,7 +273,7 @@ def test_atomic_publication_and_layer_release(tmp_path, monkeypatch, fail):
         assert admissions == [True, True]
         assert calls == list(conversion.SOURCE_PATHS)
         assert json.loads((output / "dictionary.json").read_text()) == result
-        for row in result["provenance"]["layers"]:
+        for row in result["import_source"]["layers"]:
             assert row["sha256"] == hashlib.sha256((output / row["file"]).read_bytes()).hexdigest()
             assert row["input_gain_hash"].startswith("sha256:")
         before = (output / "dictionary.json").read_bytes()

@@ -21,7 +21,7 @@ from safetensors.torch import save_file
 
 from caliper.interp._dictionary import (
     _GEMMA_IDENTITY, _admit, _finite, _hf_identity, _manifest, _memory_limit,
-    _positive, _state_hash, model_identity, verify_hf_model,
+    _positive, _state_hash, model_identity,
 )
 from caliper.interp._memory import MemoryGuard
 
@@ -241,8 +241,26 @@ def _model_admission(model, memory_limit_gb):
     return blocks
 
 
-def _metadata(rows):
-    return _manifest({
+def _evaluation_source(record):
+    """Keep the local held-out corpus separate from publisher training data."""
+    if record is None:
+        return None
+    from .text_stream import DATASET_ID, DATASET_CONFIG, DATASET_REVISION, partition_metadata
+    expected = {"dataset_id": DATASET_ID, "dataset_config": DATASET_CONFIG,
+                "dataset_revision": DATASET_REVISION, "split": "train",
+                "partitions": partition_metadata()}
+    if (not isinstance(record, dict) or set(record) != {*expected, "source_id"}
+            or any(record.get(k) != value for k, value in expected.items())
+            or not isinstance(record.get("source_id"), str) or not record["source_id"]):
+        raise ValueError("conversion requires the pinned evaluation source and partitions")
+    encoded = json.dumps(record, allow_nan=False)
+    if len(encoded.encode("utf-8")) > 65_536:
+        raise ValueError("evaluation source exceeds the metadata byte limit")
+    return json.loads(encoded)
+
+
+def _metadata(rows, evaluation_source=None):
+    metadata = _manifest({
         "format_version": 1, "model_id": MODEL_ID, "model_hash": _GEMMA_IDENTITY,
         "revision": MODEL_REVISION, "layers": len(L0), "width": WIDTH, "latents": LATENTS,
         "activation": "jumprelu", "k": None,
@@ -253,7 +271,7 @@ def _metadata(rows):
                      "elapsed_seconds": 0, "peak_memory_bytes": 0, "publisher_tokens": None,
                      "local_training": False, "publisher_training_disjointness": "unknown"},
         "quality": {"fvu": None, "dead_fraction": None, "cross_entropy_delta": None, "evaluated_tokens": 0},
-        "provenance": {
+        "import_source": {
             "kind": "gemma_scope", "license": "CC-BY-4.0",
             "license_url": "https://creativecommons.org/licenses/by/4.0/",
             "source": {"repo": SOURCE_ID, "revision": SOURCE_REVISION},
@@ -266,9 +284,12 @@ def _metadata(rows):
             "layers": rows,
         },
     })
+    if evaluation_source is not None:
+        metadata["evaluation_source"] = _evaluation_source(evaluation_source)
+    return metadata
 
 
-def convert_gemma_scope(source, output, *, model, memory_limit_gb=12):
+def convert_gemma_scope(source, output, *, model, memory_limit_gb=12, evaluation_source=None):
     """Publish a complete dictionary from the selected local snapshot atomically.
 
     The model must pass the established HF verification before this call. Source
@@ -276,6 +297,7 @@ def convert_gemma_scope(source, output, *, model, memory_limit_gb=12):
     and do not authenticate those bytes against a remote service.
     """
     source, output = Path(source), Path(output)
+    evaluation_source = _evaluation_source(evaluation_source)
     if _snapshot_identity(source) != f"hf:{SOURCE_ID}@{SOURCE_REVISION}":
         raise ValueError("Gemma Scope source snapshot revision differs")
     blocks = _model_admission(model, memory_limit_gb)
@@ -310,7 +332,7 @@ def convert_gemma_scope(source, output, *, model, memory_limit_gb=12):
                          "input_gain_hash": _state_hash({"gain": gain}, memory=memory)})
             del gain
             memory.check("scope_layer_saved")
-        metadata = _metadata(rows)
+        metadata = _metadata(rows, evaluation_source)
         with (staging / "dictionary.json").open("w", encoding="utf-8") as target:
             json.dump(metadata, target, sort_keys=True, indent=2, allow_nan=False)
             target.write("\n")
@@ -334,29 +356,26 @@ def main(argv=None):
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--model-snapshot", required=True, type=Path)
     parser.add_argument("--memory-limit-gb", type=float, default=12)
+    parser.add_argument("--evaluation-source", type=Path,
+                        help="Pinned local evaluation and index source JSON, separate from publisher training")
     args = parser.parse_args(argv)
+    evaluation_source = None
+    if args.evaluation_source is not None:
+        if args.evaluation_source.stat().st_size > 65_536:
+            raise ValueError("evaluation source exceeds the metadata byte limit")
+        evaluation_source = _evaluation_source(json.loads(args.evaluation_source.read_text(encoding="utf-8")))
     # CPU conversion avoids a second device copy of the complete checkpoint.
     _memory_limit(args.memory_limit_gb, _GEMMA_IDENTITY, "conversion")
     if _snapshot_identity(args.model_snapshot) != _GEMMA_IDENTITY:
         raise ValueError("conversion requires the pinned local Gemma model snapshot")
     if _snapshot_identity(args.source) != f"hf:{SOURCE_ID}@{SOURCE_REVISION}":
         raise ValueError("Gemma Scope source snapshot revision differs")
-    from caliper.interp._admission import _admit_model_load
-    from transformers import Gemma2ForCausalLM
+    from caliper.interp._admission import _load_gemma_model
 
     memory = MemoryGuard(args.memory_limit_gb, "cpu")
-    _admit_model_load(args.model_snapshot, memory, "cpu")
-    model, info = Gemma2ForCausalLM.from_pretrained(
-        args.model_snapshot, local_files_only=True, dtype=torch.float32,
-        attn_implementation="eager", output_loading_info=True,
-    )
-    if any(info.get(key) for key in ("missing_keys", "unexpected_keys", "mismatched_keys", "error_msgs")):
-        raise ValueError("Gemma model checkpoint load is incomplete")
-    model.config._name_or_path = MODEL_ID
-    model.config._commit_hash = MODEL_REVISION
-    model.requires_grad_(False).eval()
-    verify_hf_model(model, args.model_snapshot, memory_limit_gb=args.memory_limit_gb)
-    convert_gemma_scope(args.source, args.output, model=model, memory_limit_gb=args.memory_limit_gb)
+    model = _load_gemma_model(args.model_snapshot, device="cpu", memory=memory)
+    convert_gemma_scope(args.source, args.output, model=model, memory_limit_gb=args.memory_limit_gb,
+                        evaluation_source=evaluation_source)
 
 
 if __name__ == "__main__":
