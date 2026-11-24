@@ -385,8 +385,8 @@ class FeatureIndex:
 
     def _token(self, token_id):
         # Tokenizer vocabulary spellings retain special tokens and whitespace markers.
-        from ._labels import display_text
-        return display_text(self.tokenizer.convert_ids_to_tokens(int(token_id)))
+        from ._labels import token_label
+        return token_label(self.tokenizer, token_id)
 
     def _windows(self, layer, feature):
         rows = []
