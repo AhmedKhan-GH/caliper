@@ -16,7 +16,7 @@ import time
 
 from _mcp import Events, Failure, MCP, attempt, stop, wait_file
 from _checks import (FIXTURE_HASH, FIXTURE_PROMPT, QWEN_PROMPT, bar_rows, capture_checks,
-                     check, finish, math_checks, program_budget_checks, selected_feature)
+                     check, finish, math_checks, program_budget_checks, secondary_selection, selected_feature)
 from _inference_evidence import (bound_completion, comparison_evidence, generation_baseline,
                                  generation_evidence, inference_state)
 from _qualification import dictionary_qualification, validate_quality_override
@@ -377,7 +377,7 @@ def instrument_layout(session, *, expanded):
     nodes = [{"id": "instrument", "split": "vertical", "ratio": ratio, "children": ["main", "methods"]},
              {"id": "main", "split": "vertical", "ratio": .055, "children": ["prompt", "status_body"]},
              {"id": "status_body", "split": "vertical", "ratio": .05, "children": ["clamp_status", "body"]},
-             {"id": "body", "split": "vertical", "ratio": .78, "children": ["plots", "examples"]},
+             {"id": "body", "split": "vertical", "ratio": .64 if expanded else .70, "children": ["plots", "examples"]},
              {"id": "plots", "split": "horizontal", "ratio": .67, "children": ["graph", "right"]},
              {"id": "right", "split": "vertical", "ratio": .55, "children": ["output", "controls"]}]
     control_ids = ["clamp", "apply_clamp", "reset", "retrace", "generate", "page", "baseline_text", "steered_text"]
@@ -517,6 +517,8 @@ def acceptance(session, args, result):
                                    status["counts"]["nodes"], len(graph["nodes"])))
     selected = selected_feature(graph)
     result["selected_feature"] = selected
+    result["selection_rule"] = "largest absolute top-logit effect before the last layer"
+    result["secondary_selection"] = secondary_selection(graph)
     programs(s)
     s.ready_programs(["attribution", "probabilities"])
     result["dictionary_evidence"] = s.events.complete("feature.dictionary")
@@ -593,6 +595,7 @@ def acceptance(session, args, result):
         validation = {"error": str(error), "passed": False}
     save(s.out / "validation.json", validation)
     result["validation"] = validation
+    result["secondary_selection"] = secondary_selection(graph, validation)
     result["checks"] += math_checks(graph, examples, before, after, validation, trace["seconds"], steering_seconds,
                                      fixture=args.model == "tiny-lm",
                                      argmax_token_ids=after_comparison["argmax_token_ids"])

@@ -27,6 +27,8 @@ def scene(name):
         for row in range(8):
             ids[10 + row * 10:18 + row * 10, 10:90] = [1, row]
     else:
+        panel["labels"] = [{"text": str(index), "box": [index * 9, 1, index * 9 + 5, 5]}
+                           for index in range(10)]
         for bar in range(10):
             ids[20:90, 5 + bar * 9:11 + bar * 9] = [1, bar]
     return panel, ids, metadata
@@ -70,3 +72,12 @@ def test_visual_gates_reject_large_disclosure_footer():
     metadata["height"] = 250
     gates = visual_checks("graph", panel, ids, metadata, node_count=3)
     assert not next(gate for gate in gates if gate["name"] == "compact_disclosures")["passed"]
+
+
+def test_visual_gates_reject_invisible_output_token():
+    panel, ids, metadata = scene("output")
+    panel["labels"][0]["text"] = "\n"
+    gates = visual_checks("output", panel, ids, metadata, node_count=3)
+    assert not next(gate for gate in gates if gate["name"] == "output_label_count")["passed"]
+    panel["labels"][0]["text"] = r"\n"
+    assert all(gate["passed"] for gate in visual_checks("output", panel, ids, metadata, node_count=3))

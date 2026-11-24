@@ -16,12 +16,29 @@ FIXTURE_PROMPT = "The red cube is beside a tree."
 QWEN_PROMPT = "Paris is the capital of"
 
 
-def selected_feature(graph):
+def selected_feature(graph, *, rule="effect"):
+    """Select by absolute top-logit effect, or retain the influence comparison."""
     candidates = [n for n in graph["nodes"] if n["kind"] == "feature"
                   and n["layer"] < graph["counts"]["layers"] - 1]
     if not candidates:
         raise Failure("The actual graph has no selectable feature before the last layer.")
-    return max(candidates, key=lambda n: (n["influence"], -n["index"]))
+    if rule == "effect":
+        return max(candidates, key=lambda n: (abs(n["effect"]), -n["index"]))
+    if rule == "influence":
+        return max(candidates, key=lambda n: (n["influence"], -n["index"]))
+    raise ValueError("Unknown feature selection rule.")
+
+
+def secondary_selection(graph, validation=None):
+    """Keep the original selection and its independently measured ablation."""
+    node = selected_feature(graph, rule="influence")
+    row = next((row for row in (validation or {}).get("measurements", [])
+                if all(row[key] == node[key] for key in ("layer", "position", "feature"))), None)
+    return {"rule": "largest influence before the last layer", "feature": node,
+            "predicted_ablation_effect": -node["effect"],
+            "measured_ablation_effect": None if row is None else row["measured"],
+            "measurement_source": "trace.validate" if row is not None else None,
+            "units": "centered top-token logits"}
 
 
 def token_path(graph):

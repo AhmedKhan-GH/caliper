@@ -60,6 +60,7 @@ def visual_checks(name, panel, ids, metadata, *, node_count):
         gates.append(check("example_row_layout", ordered and coverage[0] >= .70 and coverage[1] >= .60,
                            {"bounds": rows, "coverage": coverage}, "8 separated rows, >=70 percent width and >=60 percent height"))
     else:
+        gates.append(check("output_label_count", len(labels) == 10, len(labels), "10 visible token labels"))
         bars = [extent(mask & (ids[:, :, 1] == index)) for index in range(10)]
         ordered = all(bar is not None for bar in bars)
         if ordered:

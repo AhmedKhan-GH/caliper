@@ -15,7 +15,7 @@ DEMO = ROOT / "demos" / "circuit_trace"
 if str(DEMO) not in sys.path:
     sys.path.insert(0, str(DEMO))
 import run as driver
-from _checks import check, finish, math_checks, program_budget_checks, selected_feature, token_path, FIXTURE_PROMPT
+from _checks import check, finish, math_checks, program_budget_checks, secondary_selection, selected_feature, token_path, FIXTURE_PROMPT
 from _mcp import Failure
 from _qualification import dictionary_qualification, MODEL_ID, MODEL_REVISION, MODEL_HASH
 
@@ -74,7 +74,8 @@ def test_actual_fixture_selection_and_graph(measured):
     graph = measured["graph"]
     assert len(graph["nodes"]) == 52
     assert len(graph["edges"]) == 596
-    assert measured["selected"]["id"] == "feature:0:30:138"
+    assert measured["selected"]["id"] == "feature:0:30:216"
+    assert selected_feature(graph, rule="influence")["id"] == "feature:0:30:138"
     assert graph["completeness"]["max_absolute_residual"] <= 1e-9
     assert graph["feature_share"] >= .30
     assert token_path(graph)
@@ -102,6 +103,22 @@ def test_missing_feature_is_a_failure(measured):
     graph = dict(measured["graph"], nodes=[n for n in measured["graph"]["nodes"] if n["kind"] != "feature"])
     with pytest.raises(Failure, match="no selectable feature"):
         selected_feature(graph)
+
+
+def test_selection_uses_top_logit_effect_and_keeps_original_measurement():
+    nodes = [dict(kind="feature", layer=layer, position=0, feature=index, index=index,
+                  influence=influence, effect=effect)
+             for index, (layer, influence, effect) in enumerate([(0, .8, .3), (2, .2, -4.6), (3, .9, 9)])]
+    graph = {"nodes": nodes, "counts": {"layers": 4}}
+    assert selected_feature(graph) == nodes[1]
+    assert selected_feature(graph, rule="influence") == nodes[0]
+    validation = {"measurements": [dict(layer=0, position=0, feature=0, predicted=-.3, measured=.0035)]}
+    record = secondary_selection(graph, validation)
+    assert record["feature"] == nodes[0]
+    assert record["predicted_ablation_effect"] == -.3
+    assert record["measured_ablation_effect"] == .0035
+    assert record["measurement_source"] == "trace.validate"
+    assert secondary_selection(graph)["measured_ablation_effect"] is None
 
 
 def test_missing_top_bar_is_a_failure(measured):
@@ -933,7 +950,7 @@ def test_acceptance_uses_explicit_ablation_and_retains_selection_gate(tmp_path, 
     after = dict(prior, completed_step=14)
     status.update(state="done", counts={"nodes": 1})
     status["inference"]["comparison"] = prior
-    graph = {"nodes": [{"kind": "feature", "layer": 0, "influence": 1, "index": 0}], "counts": {"layers": 2}}
+    graph = {"nodes": [{"kind": "feature", "layer": 0, "influence": 1, "index": 0, "effect": 1}], "counts": {"layers": 2}}
     before_reply = {"step": 9, "elements": [
         [0, 0, 0, 0, .1, .2 if selection_changed else .1, token, token - 1] for token in range(1, 11)]}
     after_reply = dict(before_reply, step=14)
@@ -1145,6 +1162,7 @@ def test_instrument_uses_three_panels_and_confirmed_bindings(override):
     assert set(leaves) == set(panels) | (set(controls) - hidden)
     assert nodes["instrument"]["ratio"] == (.90 if override else .95)
     assert nodes["body"]["children"] == ["plots", "examples"]
+    assert nodes["body"]["ratio"] == .70
     assert nodes["plots"]["ratio"] == .67
     assert nodes["status_body"]["children"] == ["clamp_status", "body"]
     assert nodes["controls"]["children"][1:3] == ["apply_clamp", "reset"]
@@ -1161,6 +1179,7 @@ def test_instrument_uses_three_panels_and_confirmed_bindings(override):
     expanded = session.mcp.body.call_args.kwargs["layout"]
     groups = {node["id"]: node for node in expanded["nodes"]}
     assert groups["instrument"]["ratio"] == .74
+    assert groups["body"]["ratio"] == .64
     assert set(groups["methods"]["children"]) == {"method_details"} | (set(readouts) - {"clamp_status"})
 
 
