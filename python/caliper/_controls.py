@@ -909,17 +909,25 @@ class Controls:
         except Exception as error:
             if self._resource_stop(error):
                 self.interpretation_service.stop(error, self.n)
-                with self.lock:
-                    pending = []
-                    while self.queue:
-                        action = self.queue.popleft()
-                        pending.append((action, action.waiters))
-                        action.queued, action.waiters = False, []
-                    self._update_busy()
-                self._publish()
-                for action, waiters in pending:
-                    self._action_replies(action, waiters, False, _cut(str(error), TEXT_MAX))
+                self._terminate_actions(error)
             raise
+
+    @staticmethod
+    def _stop_message(error):
+        text = str(error).replace("\0", "").encode("utf-8", errors="replace").decode("utf-8")
+        return _cut(text, TEXT_MAX)
+
+    def _terminate_actions(self, error):
+        with self.lock:
+            pending = []
+            while self.queue:
+                action = self.queue.popleft()
+                pending.append((action, action.waiters))
+                action.queued, action.waiters = False, []
+            self._update_busy()
+        self._publish()
+        for action, waiters in pending:
+            self._action_replies(action, waiters, False, self._stop_message(error))
 
     def _service_work(self) -> None:
         """Set pending values and interventions, then run the queued actions in order."""
@@ -948,7 +956,7 @@ class Controls:
             except BaseException as error:
                 if self._resource_stop(error):
                     self.interpretation_service.stop(error, self.n)
-                    self._action_replies(a, waiters, False, _cut(str(error), TEXT_MAX))
+                    self._action_replies(a, waiters, False, self._stop_message(error))
                 raise
             finally:
                 with self.lock:

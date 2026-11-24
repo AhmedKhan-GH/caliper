@@ -476,7 +476,7 @@ def test_action_stop_replies_once_and_prevents_later_work(stops):
     controls, transport = _controls.Controls(), Transport()
     route = controls.attach(transport)
     service = register_service(controls=controls)
-    failure = CleanStop("action admission") if stops else ValueError("ordinary failure")
+    failure = CleanStop("action admission\0\ud800" + "😀" * 400) if stops else ValueError("ordinary failure")
     calls = []
 
     def first():
@@ -503,6 +503,9 @@ def test_action_stop_replies_once_and_prevents_later_work(stops):
         replies = transport.replies
         assert [reply.request_id for reply in replies] == [1, 2, 3]
         assert [reply.status for reply in replies] == ["error", "error", "error" if stops else "ok"]
+        if stops:
+            assert all("\0" not in reply.error["message"] and
+                       len(reply.error["message"].encode("utf-8")) <= 1024 for reply in replies)
         assert not first_action.running and not second_action.queued and not controls.queue
     finally:
         unregister_service(service, controls=controls)
