@@ -54,10 +54,10 @@ void record_spec_pick(const std::string& panel, const caliper_builder::Event& pi
 // height and the panels the rest.
 float spec_control_height(const caliper_builder::spec::Control& control, const SpecLook& look);
 
-// The label of a button. A button bound to an action shows its title and its
-// bind string, "Save (action:save)", so that a person sees what a click runs,
-// then "· queued" or "· running" while the action waits or runs. A button
-// bound to run:pause reads "Pause", or "Resume" while the run is paused.
+// An action button shows its title, or its id if no title exists, then
+// "· queued" or "· running" while the action waits or runs.
+// The action target appears only in the tooltip.
+// A button bound to run:pause reads "Pause", or "Resume" when the run is paused.
 std::string spec_button_label(const caliper_builder::spec::Control& control, const caliper_builder::RunState& state);
 
 // Draws one control into `rect` of the current window: its title and its

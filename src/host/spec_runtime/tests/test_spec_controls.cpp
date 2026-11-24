@@ -282,6 +282,7 @@ TEST_CASE("spec controls: a button queues its action, and run:pause pauses a run
     SpecInstrumentHost host{&rec, &run};
     const SpecLook look;
     spec::Control save = make("save", spec::ControlKind::button, "action:save");
+    save.title = "Save Snapshot";
     CHECK(ui.click(200, 15, [&] { return caliper_host::draw_spec_control(save, kRow, look, host); }) == 1);
     REQUIRE(run.sent.size() == 1);
     CHECK(run.sent[0].first == "run save");
@@ -307,19 +308,62 @@ TEST_CASE("spec controls: a button queues its action, and run:pause pauses a run
     CHECK(run.sent.size() == 3);
 }
 
-TEST_CASE("spec controls: a button bound to an action shows the action it runs") {
+TEST_CASE("spec controls: action buttons show plain labels and their current status") {
     cb::RunState st = training();
-    spec::Control wipe = make("wipe", spec::ControlKind::button, "action:save");
-    wipe.title = "Evaluate";
-    CHECK(caliper_host::spec_button_label(wipe, st) == "Evaluate (action:save)");
+    st.actions[0].name = "apply_clamp";
+    spec::Control clamp = make("clamp", spec::ControlKind::button, "action:apply_clamp");
+    clamp.title = "Apply Clamp";
+    CHECK(caliper_host::spec_button_label(clamp, st) == "Apply Clamp");
     st.actions[0].queued = true;
-    CHECK(caliper_host::spec_button_label(wipe, st) == "Evaluate (action:save)  \xC2\xB7 queued");
+    CHECK(caliper_host::spec_button_label(clamp, st) == "Apply Clamp  \xC2\xB7 queued");
+    st.actions[0].running = true;
+    CHECK(caliper_host::spec_button_label(clamp, st) == "Apply Clamp  \xC2\xB7 running");
+    st.actions[0].queued = false;
+    st.actions[0].running = false;
+    CHECK(caliper_host::spec_button_label(clamp, st) == "Apply Clamp");
+    st.actions.clear();
+    CHECK(caliper_host::spec_button_label(clamp, st) == "Apply Clamp");
+    CHECK(caliper_host::spec_button_label(clamp, cb::RunState{}) == "Apply Clamp");
     CHECK(caliper_host::spec_button_label(make("save", spec::ControlKind::button, "action:save"), cb::RunState{}) ==
-          "save (action:save)");
+          "save");
     spec::Control pause = make("pause", spec::ControlKind::button, "run:pause");
     CHECK(caliper_host::spec_button_label(pause, st) == "Pause");
     st.state = "paused";
     CHECK(caliper_host::spec_button_label(pause, st) == "Resume");
+}
+
+TEST_CASE("spec controls: drawn button text excludes binding identifiers") {
+    Ui ui;
+    FakeRun run;
+    run.run = training();
+    run.run.actions[0].name = "apply_clamp";
+    SpecInstrumentHost host{nullptr, &run};
+    const SpecLook look;
+    spec::Control clamp = make("clamp", spec::ControlKind::button, "action:apply_clamp");
+    clamp.title = "Apply Clamp";
+    const auto shown = [&] {
+        std::string text;
+        ui.frame([&] {
+            ImGui::LogToBuffer();
+            caliper_host::draw_spec_control(clamp, kRow, look, host);
+            text = ui.ctx->LogBuffer.c_str();
+            ImGui::LogFinish();
+        });
+        CHECK(text.find("Apply Clamp") != std::string::npos);
+        CHECK(text.find("action:") == std::string::npos);
+        CHECK(text.find("apply_clamp") == std::string::npos);
+        return text;
+    };
+    shown();
+    run.run.actions[0].queued = true;
+    CHECK(shown().find("queued") != std::string::npos);
+    run.run.actions[0].running = true;
+    CHECK(shown().find("running") != std::string::npos);
+    run.run.control = false;
+    shown();
+    run.run.attached = false;
+    CHECK(shown().find("running") == std::string::npos);
+    CHECK(run.sent.empty());
 }
 
 // ---- drawn on the offscreen canvas (suite "gpu": caliper_spec_runtime_gpu) ----------------
