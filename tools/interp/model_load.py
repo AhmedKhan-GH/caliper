@@ -78,5 +78,5 @@ def hidden_forward(model, input_ids, attention_mask=None):
         for layer in model.layers:
             x = layer(x)
         return model.norm(x)
-    return model.model(input_ids=input_ids, attention_mask=attention_mask,
-                       use_cache=False, return_dict=True).last_hidden_state
+    options = {"attention_mask": attention_mask} if attention_mask is not None else {}
+    return model.model(input_ids=input_ids, use_cache=False, return_dict=True, **options).last_hidden_state

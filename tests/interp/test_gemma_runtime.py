@@ -222,10 +222,10 @@ class SyntheticJumpReLU(_dictionary.TopKTranscoder):
     """Test the runtime contract without the dictionary worker's branch."""
     activation = "jumprelu"
 
-    def __init__(self, *args):
-        super().__init__(*args, k=1)
+    def __init__(self, W_enc, b_enc, W_dec, b_dec, threshold):
+        super().__init__(W_enc, b_enc, W_dec, b_dec, k=1)
         self.k = None
-        self.register_parameter("threshold", torch.nn.Parameter(torch.full_like(self.b_enc, .05), requires_grad=False))
+        self.register_parameter("threshold", torch.nn.Parameter(threshold, requires_grad=False))
 
     def activate(self, value):
         return value * (value > self.threshold)
@@ -239,8 +239,9 @@ def runtime_dictionary(model):
     with torch.random.fork_rng(devices=[]):
         torch.manual_seed(51)
         for _ in model.model.layers:
-            layers.append(SyntheticJumpReLU(torch.randn(20, 16) * .1, torch.ones(20) * .1,
-                                            torch.randn(20, 16) * .1, torch.randn(16) * .03))
+            constructor = getattr(_dictionary, "JumpReLUTranscoder", SyntheticJumpReLU)
+            layers.append(constructor(torch.randn(20, 16) * .1, torch.ones(20) * .1,
+                                       torch.randn(20, 16) * .1, torch.randn(16) * .03, torch.full((20,), .05)))
     count = len(layers)
     return _dictionary.Dictionary({
         "model_id": GEMMA_ID, "revision": GEMMA_REVISION, "model_hash": _dictionary.model_identity(model),
@@ -313,7 +314,8 @@ def test_gemma_feature_hook_reads_pre_mlp_and_writes_after_norm(gemma_semantics,
     assert not model.model.layers[0].post_feedforward_layernorm._forward_hooks
 
 
-def test_gemma_feature_hook_clears_live_read_after_forward_failure(gemma_semantics, monkeypatch):
+@pytest.mark.parametrize("decoder_only", [False, True])
+def test_gemma_feature_hook_clears_live_read_after_forward_failure(gemma_semantics, monkeypatch, decoder_only):
     from caliper.interp._intervene import InterventionService
     model = gemma_semantics
     service = InterventionService(model)
@@ -321,11 +323,11 @@ def test_gemma_feature_hook_clears_live_read_after_forward_failure(gemma_semanti
     hook = service.install({"op": "clamp", "point": "model.layers.0.mlp_out", "feature": 0, "value": 0})
     def failed(*args):
         raise RuntimeError("synthetic failure after semantic read")
-    monkeypatch.setattr(model.model.layers[0].mlp, "forward", failed)
+    monkeypatch.setattr(model.model.layers[0].post_feedforward_layernorm, "forward", failed)
     try:
         with pytest.raises(RuntimeError, match="synthetic failure"):
-            model(torch.tensor([[1, 4]]), use_cache=False)
-        assert hook.live_input is None
+            (model.model if decoder_only else model)(torch.tensor([[1, 4]]), use_cache=False)
+        assert hook.live_input is None and hook.read_stack == []
     finally:
         service.close()
 

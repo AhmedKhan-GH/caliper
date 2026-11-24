@@ -660,9 +660,11 @@ class InterventionService:
                         if read[1] != "input":
                             raise InterventionError("feature interventions require a semantic input probe")
                         hook.separate_read = True
+                        block = self.model.get_submodule(
+                            self.dictionary.metadata["read_points"][probe.layer].rsplit(".", 1)[0])
                         hook.handles.append(read[0].register_forward_hook(hook.read, with_kwargs=True))
-                        hook.handles.append(self.model.register_forward_pre_hook(hook.enter_read))
-                        hook.handles.append(self.model.register_forward_hook(hook.clear_read, always_call=True))
+                        hook.handles.append(block.register_forward_pre_hook(hook.enter_read))
+                        hook.handles.append(block.register_forward_hook(hook.clear_read, always_call=True))
                 if event == "input":
                     hook.handles.append(module.register_forward_pre_hook(hook.pre, with_kwargs=True))
                 else:
