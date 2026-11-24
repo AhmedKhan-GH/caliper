@@ -326,7 +326,8 @@ class _Program:
                  "last_pass_ms", "memory_bytes", "warm", "every", "t0", "bound", "pass_times",
                  "params", "builtin", "shape", "piece", "manifest", "bind", "panel", "segments",
                  "common", "draw", "types", "resources", "passes", "param_types", "written",
-                 "sent_static", "static_frames", "relayed", "skipped", "behind", "output_retry")
+                 "sent_static", "static_frames", "relayed", "skipped", "behind", "output_retry",
+                 "input_version", "params_dirty")
 
     def __init__(self, pid, decl, wgsl, scene, sha256):
         self.id = pid
@@ -350,6 +351,8 @@ class _Program:
         self.error = None
         self.runs = 0
         self.last_step = None
+        self.input_version = -1
+        self.params_dirty = True
         self.last_pass_ms = None
         self.memory_bytes = 0
         self.warm = WARMUP_STEPS
@@ -873,6 +876,8 @@ def set_params(program_id: str, params: dict) -> None:
                 p.params = old
                 p.error = _refusal(e).error
                 item = p.item()
+        if p.params != old:
+            p.params_dirty = True
     if item is not None:
         _notify([item])
 
@@ -1028,6 +1033,36 @@ def at_step(step: int) -> None:
         _warn_once(("step",), f"caliper: the GPU programs failed at step {step}: {e!r}")
 
 
+def inference_pending() -> bool:
+    """Keep hosted boundaries active until changed inputs reach a scheduled pass.
+
+    Missing inputs wait for publication. Warmup, cadence, and runtime limits still
+    apply in at_step. This query does not load or call the native runtime.
+    """
+    from .interp import _publish
+    with _LOCK:
+        links = [ln for ctl in _controls_ports() for ln in _resource_links(ctl)]
+        for p in _PROGS.values():
+            if p.state not in ("waiting", "compiled", "running"):
+                continue
+            delivery = p.output_retry or (p.kind == "piece" and any(
+                ln not in p.relayed or ln in p.behind for ln in links))
+            changed = delivery or p.params_dirty or any(
+                _publish._VERSIONS.get(src[len("live:"):], -1) > p.input_version
+                for _, src in p.inputs)
+            if not changed:
+                continue
+            try:
+                _resolve_inputs(p.inputs)
+            except _Waiting:
+                continue
+            except _Refused:
+                pass  # Let the scheduled pass publish the refusal.
+            return True
+    with _OUTBOX_LOCK:
+        return bool(_OUTBOX)
+
+
 def _marks():
     """The step marks of torch's queue, made at the first step that needs them; None off MPS."""
     m = _STATE["marks"]
@@ -1161,6 +1196,7 @@ def _at_step(step: int) -> None:
                                "column": None}
                     changed.append(p)
                 else:
+                    skipped = p.skipped
                     try:
                         outs = _outputs(rt, p)
                     except _Refused as r:            # versions that no viewer's queue takes
@@ -1175,6 +1211,10 @@ def _at_step(step: int) -> None:
                         p.state = "running"
                         changed.append(p)
                     published.append((p, outs))
+                    from .interp import _publish
+                    if p.skipped == skipped:
+                        p.input_version = _publish._VERSION
+                        p.params_dirty = False
     # The outputs go out while the pass's gate is still open, so that their snapshots join the
     # tick of the views' snapshots and its one event.
     _publish_pass(published)

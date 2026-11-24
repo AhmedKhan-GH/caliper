@@ -146,13 +146,16 @@ class MCP:
             return message["result"]
 
     def call(self, name, /, **args):
+        started = time.monotonic()
         result = self.request("tools/call", {"name": name.replace(".", "_"), "arguments": args})
+        seconds = time.monotonic() - started
         # Images remain separate artifacts. The command log contains no API token.
         logged = {k: v for k, v in result.items() if k != "content"}
         if "structuredContent" in logged:
             logged["structuredContent"] = {k: v for k, v in logged["structuredContent"].items()
                                             if k != "png_base64"}
-        self.journal.write(json.dumps({"command": name, "args": args, "reply": logged}) + "\n")
+        self.journal.write(json.dumps({"command": name, "args": args, "reply": logged,
+                                      "started_monotonic": started, "seconds": seconds}) + "\n")
         self.journal.flush()
         if result.get("isError"):
             raise Failure(f"{name}: {result.get('content')}")
@@ -208,7 +211,9 @@ class Events:
             left = deadline - time.monotonic()
             if left <= 0:
                 raise Failure(f"Timed out: {description}.")
-            self.wait(min(1, left))
+            # Resource and interpretation completion do not always emit an event.
+            # A short event timeout bounds the next authoritative state read.
+            self.wait(min(.05, left))
 
     def complete(self, name, /, **args):
         reply = self.mcp.body(name, **args)

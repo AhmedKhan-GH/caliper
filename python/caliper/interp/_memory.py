@@ -151,6 +151,10 @@ class MemoryGuard:
         if free < 15 or self.low >= 2:
             raise CleanStop("memory pressure requires a clean stop")
 
+    def _check_interval(self, stage):
+        """Retain interval checks through adapters with a stage-only guard API."""
+        return self.check(stage, force=False)
+
 
 class StopControl:
     """Signals set a flag. They cannot interrupt a partial optimizer update."""

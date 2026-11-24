@@ -211,6 +211,7 @@ def inference_reply(route):
 def test_generation_evidence_is_fresh_exact_and_follows_both_text_rows(hosted_run, monkeypatch):
     import hashlib
     from caliper import _wire
+    from caliper.interp._output import bounded_text
     run, route = hosted_run
     own_clamp(run)
     before = inference_reply(route)
@@ -236,7 +237,7 @@ def test_generation_evidence_is_fresh_exact_and_follows_both_text_rows(hosted_ru
         assert generation["interventions_hash"] == result["interventions_hash"]
         texts = [run.baseline_text.value, run.steered_text.value]
         assert generation["text_hashes"] == [hashlib.sha256(text.encode()).hexdigest() for text in texts]
-        assert texts == [run.tokenizer.decode(row) for row in generation["token_ids"]]
+        assert texts == [bounded_text(run.tokenizer.decode(row)) for row in generation["token_ids"]]
         assert (action_id - 1, *texts) in observations
         assert (action_id, *texts) in observations
     assert before["generation"]["id"] == 0

@@ -76,14 +76,19 @@ class _RunGuard:
         return getattr(guard, "device", torch.device("cpu"))
 
     def check(self, *args, **kwargs):
+        self._check("check", *args, **kwargs)
+
+    def _check_interval(self, stage):
+        self._check("_check_interval", stage)
+
+    def _check(self, method, *args, **kwargs):
         from ._memory import CleanStop
         if self.failure is not None:
             raise self.failure
         try:
-            if self.guard is not None:
-                self.guard.check(*args, **kwargs)
-            if self.extra is not None:
-                self.extra.check(*args, **kwargs)
+            for guard in (self.guard, self.extra):
+                if guard is not None:
+                    getattr(guard, method, guard.check)(*args, **kwargs)
         except CleanStop as exc:
             self.failure = exc
             if self.on_stop is not None:
@@ -748,11 +753,16 @@ class HostedInference:
         point = self.dictionary.metadata["write_points"][layer]
         with self.controls.lock:
             spec = self.interventions.executor.validate({"kind": "clamp", "point": point, "feature": feature,
-                "positions": [position], "value": self.clamp.value * maximum})
+                "positions": [position], "value": self.clamp.value * maximum,
+                "dictionary": self.interventions.executor.dictionary_id}, resources=False)
             owned = self._owned_record()
             if (owned is not None and owned.state == "active" and owned.hook is not None
                     and not owned.replace and owned.spec == owned.applied_spec == spec):
+                # An unchanged clamp still verifies the current dictionary content.
+                self.interventions.executor.validate(spec)
                 return
+            # Admission and installation each validate resources. Do not hash the
+            # same dictionary a third time merely to construct the request.
             refused = self.controls._intervene({"set": spec})
             if refused is not None:
                 raise ValueError(refused[1])
@@ -922,6 +932,7 @@ class HostedInference:
                 self.managed._keep(self.model, None)
 
     def run(self):
+        from .. import _programs
         from .._controls import RUN_PAUSING, RUN_STEPPING
         from ._memory import CleanStop
         while True:
@@ -932,12 +943,15 @@ class HostedInference:
                           for iv in self.controls._ivs.values())
                 return bool(self.controls._npending or self.controls.queue or self.service.pending or due
                             or self.controls.state in (RUN_PAUSING, RUN_STEPPING))
+            # Inspect program state outside Controls.lock to preserve lock order.
+            publication = _programs.inference_pending()
             with self.controls.cond:
-                self.controls.cond.wait_for(pending, timeout=1.)
+                if not publication:
+                    self.controls.cond.wait_for(pending, timeout=1.)
                 work = pending()
             try:
                 with self._stop_boundary():
-                    if work:
+                    if work or publication:
                         self.boundary()
                     else:
                         # Reports and intervention expiry need no new prompt step or forward.

@@ -196,20 +196,13 @@ class Session:
         return reply, evidence
 
     def read(self, program, resource, *, minimum_step=0, count=1024, first=0):
-        advances = 0
         def published():
-            nonlocal advances
             reply = self.mcp.body("program.read", id=program, resource=resource, first=first, count=count)
             if reply["step"] is not None and reply["step"] >= minimum_step:
                 return reply
-            # An idle hosted run has no automatic step stream. This existing
-            # metadata request advances a boundary without another model forward.
-            # Its real publication remains the completion condition.
-            advances += 1
-            if advances > 64:
-                raise Failure(f"No {program}/{resource} publication after 64 requested boundaries.")
+            # The hosted run advances pending publications through its scheduler.
+            # Read the real resource step and retain program failure checks.
             self.ready_programs([program])
-            self.events.complete("feature.dictionary")
             return False
         return self.events.until(f"published {program}/{resource}", published)
 

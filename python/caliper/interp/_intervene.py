@@ -52,9 +52,10 @@ class _IdentityMemory:
     def peak(self):
         return max(self.current, getattr(self.guard, "peak", 0), getattr(self.inner, "peak", 0))
 
-    def check(self, stage, **kwargs):
+    def check(self, stage, *, force=True):
         # Some supplied guards accept only the stage. Do not bypass their latch.
-        current = self.guard.check(stage)
+        check = self.guard.check if force else getattr(self.guard, "_check_interval", self.guard.check)
+        current = check(stage)
         if isinstance(current, (int, float)):
             self.current = max(self.current, current)
 

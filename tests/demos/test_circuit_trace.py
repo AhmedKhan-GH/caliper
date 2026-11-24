@@ -801,7 +801,7 @@ def test_publication_wait_rejects_a_stale_step():
         return read()
     session.events.until.side_effect = until
     assert session.read("probabilities", "cells", minimum_step=3) == {"step": 4}
-    session.events.complete.assert_called_once_with("feature.dictionary")
+    session.events.complete.assert_not_called()
     session.ready_programs.assert_called_once_with(["probabilities"])
 
 
@@ -1319,3 +1319,34 @@ def test_local_qwen_hidden(tmp_path):
     assert Path(model).is_dir() and Path(dictionary).is_dir()
     resources_and_device(fixture=False)
     assert hidden(tmp_path, model, dictionary)["qwen_acceptance"]
+
+
+def test_event_wait_bounds_completion_without_an_event(monkeypatch):
+    from unittest.mock import Mock
+    from demos.circuit_trace import _mcp
+    events = _mcp.Events(Mock())
+    clock = [0.]
+    monkeypatch.setattr(_mcp.time, "monotonic", lambda: clock[0])
+    waits = []
+    def wait(timeout):
+        waits.append(timeout)
+        clock[0] += timeout
+    monkeypatch.setattr(events, "wait", wait)
+    reads = iter([False, False, {"step": 4}])
+    assert events.until("resource", lambda: next(reads)) == {"step": 4}
+    assert waits == [.05, .05]
+
+
+def test_mcp_journal_records_request_duration(monkeypatch):
+    import io
+    from unittest.mock import Mock
+    from demos.circuit_trace import _mcp
+    client = _mcp.MCP.__new__(_mcp.MCP)
+    client.request = Mock(return_value={"structuredContent": {"step": 4}})
+    client.journal = io.StringIO()
+    clock = iter([10., 10.125])
+    monkeypatch.setattr(_mcp.time, "monotonic", lambda: next(clock))
+    assert client.body("program.read", id="bars") == {"step": 4}
+    record = json.loads(client.journal.getvalue())
+    assert record["command"] == "program.read"
+    assert record["started_monotonic"] == 10. and record["seconds"] == .125

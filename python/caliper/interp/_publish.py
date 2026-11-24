@@ -4,6 +4,8 @@ from __future__ import annotations
 import re
 
 _TENSORS = {}
+_VERSIONS = {}
+_VERSION = 0
 _NAME = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_.-]*\Z")
 # These documented inputs can await their first trace or example query.
 INTERPRETATION_TENSORS = frozenset({
@@ -23,6 +25,7 @@ def publish(name, tensor):
     Watch removal or replacement clears bindings and releases producer imports.
     This function returns ``None`` and does not load the native runtime.
     """
+    global _VERSION
     import torch
     from .. import _programs
 
@@ -36,6 +39,8 @@ def publish(name, tensor):
         if model is not None and _model_name(model, name):
             raise ValueError(f"publication {name!r} conflicts with a model tensor")
         _TENSORS[name] = tensor.detach()
+        _VERSION += 1
+        _VERSIONS[name] = _VERSION
 
 
 def _model_name(model, name):
@@ -52,3 +57,4 @@ def _resolve(name):
 
 def _clear():
     _TENSORS.clear()
+    _VERSIONS.clear()
