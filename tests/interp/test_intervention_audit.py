@@ -391,9 +391,9 @@ def test_source_guard_stages_scope_and_replay_inheritance(controlled, monkeypatc
     monkeypatch.setattr(_memory, "autorelease_scope", scope)
     service.set(patch_spec())
     ctl.step()
-    stages = ["patch source forward start", "patch source forward complete"]
+    stages = ["patch source forward start", "patch source forward complete", "patch source copy"]
     first = list(guard.stages)
-    assert first[-2:] == stages and first[:-2] and set(first[:-2]) == {"model_identity"}
+    assert first[-3:] == stages and first[:-3] and set(first[:-3]) == {"model_identity"}
     assert scopes == ["enter", "exit"]
     with service.temporary_state(service.specifications()) as replay:
         assert replay.executor.resource_guard is guard

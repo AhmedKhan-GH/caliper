@@ -755,6 +755,36 @@ class InterventionService:
             raise InterventionError("patch source refused: " + str(error)[:256],
                                     "intervene.not_supported") from error
 
+    def _copy_sources(self, sources):
+        """Admit all decoder copies while cache and capture tensors remain live."""
+        memory = _IdentityMemory(self.resource_guard) if self.resource_guard is not None else None
+        retained = {}
+        if memory is not None:
+            # Capture points can share storage. Old cache entries remain live
+            # until publication, even when the cache plan selects their eviction.
+            for value in (*self._cache.values(), *sources.values()):
+                storage = value.untyped_storage()
+                retained[value.device, storage.data_ptr()] = storage.nbytes()
+        pending = sum(value.numel() * value.element_size() for value in sources.values())
+        initial, copied, copies = None, 0, {}
+        try:
+            for key, value in sources.items():
+                if memory is not None:
+                    memory.check("patch source copy")
+                    if initial is None:
+                        initial = allocation_bytes(memory, floor=sum(retained.values()))
+                    # Live readings already include prior copies. The floor also
+                    # covers stale readings, and only pending copies need reserve.
+                    if allocation_bytes(memory, floor=initial + copied) + pending > memory.limit:
+                        raise CleanStop("patch source allocation exceeds the process memory limit")
+                copies[key] = value.detach().clone()
+                size = value.numel() * value.element_size()
+                copied, pending = copied + size, pending - size
+            return copies
+        except BaseException:
+            copies.clear()
+            raise
+
     def _prepare_source(self, spec):
         identity = self._identity()
         if self._cache_identity is None or identity != self._cache_identity[0]:
@@ -802,7 +832,7 @@ class InterventionService:
                         evict = self._source_space(sources)
                         # Admission precedes clones, and a failed capture retains no partial entries.
                         if not copied:
-                            sources = {item: value.detach().clone() for item, value in sources.items()}
+                            sources = self._copy_sources(sources)
             except BaseException:
                 sources.clear()
                 raise
