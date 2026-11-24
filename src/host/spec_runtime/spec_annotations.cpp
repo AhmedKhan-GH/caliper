@@ -49,6 +49,20 @@ using nlohmann::json;
 // The value that `r` reads now: the session's value, else its default, else
 // null.
 json spec_reference_value(const spec::Reference& r, const SpecInstrumentHost& host) {
+    if (r.kind == spec::Reference::Kind::control && host.spec) {
+        const spec::Control* control = host.spec->find_control(r.target);
+        const auto target = control ? spec::parse_control_target(control->bind) : std::nullopt;
+        if (target && target->kind == spec::ControlTarget::Kind::param) {
+            // Unplaced parameter controls still supply current readout values.
+            if (!host.run || r.field) return r.fallback;
+            const caliper_builder::RunState state = host.run->state();
+            if (!state.attached) return r.fallback;
+            for (const auto& param : state.params)
+                if (param.name == target->name)
+                    return param.pending.is_null() ? param.value : param.pending;
+            return r.fallback;
+        }
+    }
     if (host.values) {
         json v = host.values->value(r);
         if (!v.is_null()) return v;

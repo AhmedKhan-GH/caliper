@@ -13,6 +13,7 @@
 // state holds a boolean, a pick writes its state, and the app's single keys
 // are reserved shortcuts. The suite "gpu" draws one row of each new kind.
 #include "spec_runtime/spec_instruments.h"
+#include "spec_runtime/spec_annotations.h"
 #include "spec_runtime/spec_offscreen.h"
 #include "spec_runtime/spec_shortcuts.h"
 
@@ -363,6 +364,43 @@ TEST_CASE("spec controls: drawn button text excludes binding identifiers") {
     shown();
     run.run.attached = false;
     CHECK(shown().find("running") == std::string::npos);
+    CHECK(run.sent.empty());
+}
+
+TEST_CASE("spec controls: readouts use current unplaced script parameters") {
+    FakeRun run;
+    run.run = training();
+    cb::RunParam status;
+    status.name = "clamp.status";
+    status.type = "text";
+    status.value = "No slider clamp.";
+    run.run.params.push_back(status);
+    spec::Spec instrument;
+    instrument.controls.push_back(make("status_value", spec::ControlKind::text, "param:clamp.status"));
+    spec::Reference ref;
+    ref.kind = spec::Reference::Kind::control;
+    ref.target = "status_value";
+    ref.fallback = "Unavailable";
+    spec::BoundText text;
+    text.format = "{status:s}";
+    text.fields["status"] = ref;
+    SpecInstrumentHost host;
+    host.run = &run;
+    host.spec = &instrument;
+    const auto shown = [&] { return caliper_host::spec_bound_text_string(text, host); };
+    CHECK(shown() == "No slider clamp.");
+    run.run.params.back().value = "L2 F4. Clamp 0.";
+    CHECK(shown() == "L2 F4. Clamp 0.");
+    run.run.params.back().pending = "Pending clamp.";
+    CHECK(shown() == "Pending clamp.");
+    run.run.params.back().pending = nullptr;
+    run.run.attached = false;
+    CHECK(shown() == "Unavailable");
+    run.run.attached = true;
+    run.run.params.pop_back();
+    CHECK(shown() == "Unavailable");
+    host.run = nullptr;
+    CHECK(shown() == "Unavailable");
     CHECK(run.sent.empty());
 }
 
