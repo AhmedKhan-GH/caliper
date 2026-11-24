@@ -120,6 +120,14 @@ class Output:
         """Produce exactly 24 greedy tokens for both rows, including EOS tokens."""
         inputs = self._inputs(prompt)
         start = inputs["input_ids"].shape[1]
+        for spec in self.interventions.specifications():
+            if spec["op"] != "patch" or "source_position" in spec:
+                continue
+            source = prompt_inputs(self.model, self.tokenizer, spec["source_prompt"])
+            # The last forward sees the prompt and 23 generated tokens.
+            last_source = max(spec.get("positions", [start + 22]), default=-1)
+            if last_source >= source["input_ids"].shape[1]:
+                raise ValueError("generation requires patch positions within the clean source or a fixed source_position")
         with self.interventions.rows([1]):
             for _ in range(24):
                 with autorelease_scope(next(self.model.parameters()).device):

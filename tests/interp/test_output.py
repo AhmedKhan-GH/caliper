@@ -68,6 +68,30 @@ def test_generation_has_exactly_24_greedy_tokens_per_row(output_case):
     assert controls.n == 1
 
 
+@pytest.mark.parametrize("mapping", [{"positions": [1]}, {"source_position": 1}])
+def test_generation_preserves_patch_state_and_requires_a_defined_source(output_case, mapping):
+    model, tokenizer, controls, service, output = output_case
+    spec = {"kind": "patch", "point": "layers.1.resid_pre", "source_prompt": "AB"}
+    service.set(spec)
+    controls.step()
+    saved = service.state_dict()
+    calls = []
+    hook = model.register_forward_hook(lambda *args: calls.append(1))
+    try:
+        with pytest.raises(ValueError, match="patch positions"):
+            output.generate("AC")
+        assert not calls and service.state_dict() == saved
+        service.set(dict(spec, **mapping))
+        controls.step()
+        saved = service.state_dict()
+        result = output.generate("AC")
+        assert [len(row) for row in result["token_ids"]] == [24, 24]
+        assert service.state_dict() == saved
+        assert not service.suspended and controls.n == 2
+    finally:
+        hook.remove()
+
+
 def test_utf8_labels_end_on_character_boundaries():
     labels = packed_labels(["a" * 63 + "é", "😀" * 17, "A\0B"], "cpu")
     raw = [b"".join(int(i).to_bytes(4, "little") for i in row) for row in labels.tolist()]
