@@ -54,6 +54,14 @@ def _hash_admission(memory, limit_gb=None, *, force=False):
         raise CleanStop("model identity allocation exceeds the process memory limit")
 
 
+def _canonical_device(device):
+    """Resolve the two spellings of the sole MPS device without device access."""
+    device = torch.device(device)
+    if device.type == "mps" and device.index is None:
+        return torch.device("mps", 0)
+    return device
+
+
 def _state_hash(state, *, memory=None, limit_gb=None):
     _dense_state(state)
     _hash_admission(memory, limit_gb, force=True)
@@ -61,7 +69,8 @@ def _state_hash(state, *, memory=None, limit_gb=None):
     for name, tensor in sorted(state.items()):
         if tensor.device.type != "cpu" and memory is None:
             raise ValueError("device weight identity requires a process memory guard")
-        if tensor.device.type != "cpu" and tensor.device != memory.device:
+        if (tensor.device.type != "cpu"
+                and _canonical_device(tensor.device) != _canonical_device(memory.device)):
             raise ValueError("verify HF weights again after a model device change")
         header = json.dumps([name, str(tensor.dtype), list(tensor.shape)],
                             separators=(",", ":")).encode("utf-8")
@@ -181,7 +190,35 @@ def _checkpoint_slices(shape, maximum, prefix=()):
             yield from _checkpoint_slices(shape[1:], maximum, prefix + (index,))
 
 
-def verify_hf_model(model, snapshot, *, key_mapping=None, memory_limit_gb=12):
+def _checkpoint_subset(model, identity, subset, key_mapping):
+    """Declare exact non-text keys from the pinned Qwen3.5 checkpoint header."""
+    if subset is None:
+        return ({} if key_mapping is None else key_mapping), frozenset()
+    pinned = "hf:Qwen/Qwen3.5-0.8B@2fc06364715b967f1860aea9cf38778875588b17"
+    if (subset != "qwen3.5-0.8b-text" or identity != pinned
+            or getattr(model.config, "model_type", None) != "qwen3_5_text"):
+        raise ValueError("unsupported checkpoint subset or revision")
+    if key_mapping is not None:
+        raise ValueError("the declared text subset supplies its own key mapping")
+    visual = {f"model.visual.blocks.{i}.{module}.{field}"
+              for i in range(12)
+              for module in ("attn.proj", "attn.qkv", "mlp.linear_fc1", "mlp.linear_fc2", "norm1", "norm2")
+              for field in ("weight", "bias")}
+    visual.update(f"model.visual.{module}.{field}"
+                  for module in ("merger.linear_fc1", "merger.linear_fc2", "merger.norm", "patch_embed.proj")
+                  for field in ("weight", "bias"))
+    visual.add("model.visual.pos_embed.weight")
+    mtp = {f"mtp.{name}.weight" for name in (
+        "fc", "norm", "pre_fc_norm_embedding", "pre_fc_norm_hidden",
+        "layers.0.input_layernorm", "layers.0.post_attention_layernorm",
+        "layers.0.mlp.down_proj", "layers.0.mlp.gate_proj", "layers.0.mlp.up_proj",
+        "layers.0.self_attn.k_norm", "layers.0.self_attn.k_proj", "layers.0.self_attn.o_proj",
+        "layers.0.self_attn.q_norm", "layers.0.self_attn.q_proj", "layers.0.self_attn.v_proj",
+    )}
+    return {"model.language_model.": "model."}, frozenset(visual | mtp)
+
+
+def verify_hf_model(model, snapshot, *, key_mapping=None, checkpoint_subset=None, memory_limit_gb=12):
     """Verify an external model against a local HF safetensors snapshot.
 
     The snapshot path must identify the same repository and exact commit as the
@@ -189,6 +226,9 @@ def verify_hf_model(model, snapshot, *, key_mapping=None, memory_limit_gb=12):
     digest. It reads the local checkpoint as trusted source data. Each optional
     ``key_mapping`` entry maps a literal checkpoint prefix to a model prefix.
     Missing or extra tensors, ambiguous mappings, and changed weights are errors.
+    ``checkpoint_subset="qwen3.5-0.8b-text"`` declares the text weights of the
+    pinned Qwen3.5-0.8B revision. It supplies the prefix mapping and excludes
+    exactly 153 vision and 15 MTP keys. All other unexpected keys remain errors.
     Tied parameters can share one checkpoint entry. Nonpersistent buffers form
     part of the baseline for subsequent checks.
 
@@ -214,17 +254,22 @@ def verify_hf_model(model, snapshot, *, key_mapping=None, memory_limit_gb=12):
         raise ValueError("checkpoint verification requires one model device")
     memory = MemoryGuard(memory_limit_gb, next(iter(devices)))
     _hash_admission(memory)
-    mapping = {} if key_mapping is None else key_mapping
+    mapping, excluded = _checkpoint_subset(model, identity, checkpoint_subset, key_mapping)
     if (not isinstance(mapping, dict) or any(not isinstance(k, str) or not k
             or not isinstance(v, str) for k, v in mapping.items())):
         raise ValueError("checkpoint key mappings require nonempty literal prefixes")
     files = sorted(snapshot.glob("*.safetensors"))
     if not files:
         raise ValueError("local checkpoint has no safetensors files")
-    entries = {}
+    entries, source_keys = {}, set()
     for path in files:
         with safe_open(path, framework="pt", device="cpu") as source:
             for key in source.keys():
+                if key in source_keys:
+                    raise ValueError("checkpoint has duplicate source weights")
+                source_keys.add(key)
+                if key in excluded:
+                    continue
                 prefixes = [prefix for prefix in mapping if key.startswith(prefix)]
                 if len(prefixes) > 1:
                     raise ValueError("ambiguous checkpoint key mapping")
@@ -237,6 +282,8 @@ def verify_hf_model(model, snapshot, *, key_mapping=None, memory_limit_gb=12):
                     raise ValueError("checkpoint tensor shape or dtype differs from the model")
                 entries[name] = (path, key, stored)
                 del view
+    if not excluded <= source_keys:
+        raise ValueError("checkpoint is missing declared non-text weights")
     # Only an actual shared Parameter object can justify an omitted tied key.
     for name, value in state.items():
         if name not in entries:

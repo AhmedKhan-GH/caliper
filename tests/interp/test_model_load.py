@@ -126,6 +126,24 @@ def test_hash_preserves_fixture_bytes():
     assert dictionary.weights_hash(model) == "sha256:" + digest.hexdigest()
 
 
+@pytest.mark.parametrize("left,right,equal", [
+    ("mps", "mps:0", True), ("mps:0", "mps", True),
+    ("mps:0", "mps:0", True), ("mps", "mps:1", False),
+    ("mps", "cpu", False), ("mps", "cuda:0", False),
+    ("cuda", "cuda:0", False), ("cuda:0", "cuda:1", False),
+])
+def test_identity_device_normalization_without_device_access(left, right, equal, monkeypatch):
+    def refuse(*args, **kwargs):
+        pytest.fail("device normalization must not query or allocate on a device")
+
+    monkeypatch.setattr(torch.backends.mps, "is_available", refuse)
+    monkeypatch.setattr(torch.mps, "recommended_max_memory", refuse)
+    monkeypatch.setattr(torch.Tensor, "to", refuse)
+    assert torch.device("mps") != torch.device("mps:0")
+    assert (dictionary._canonical_device(torch.device(left)) ==
+            dictionary._canonical_device(torch.device(right))) is equal
+
+
 def test_digest_chunks_and_admission(memory, monkeypatch):
     model = torch.nn.Linear(1024, 513, bias=False)
     transfers = []
@@ -165,16 +183,112 @@ def local_snapshot(tmp_path, model, *, prefix=""):
 
 @pytest.mark.parametrize("prefix", ["", "source."])
 def test_external_snapshot_verification_and_subsequent_change(tmp_path, memory, prefix):
+    from caliper.interp import verify_hf_model
     model = hf_model()
     snapshot = local_snapshot(tmp_path, model, prefix=prefix)
     mapping = {prefix: ""} if prefix else None
     assert dictionary.model_identity(model).startswith("sha256:")
-    identity = dictionary.verify_hf_model(model, snapshot, key_mapping=mapping)
+    identity = verify_hf_model(model, snapshot, key_mapping=mapping)
     assert identity == f"hf:{model_load.MODEL_ID}@{model_load.MODEL_REVISION}"
     assert dictionary.model_identity(model) == identity
     model.weight.data.add_(1)
     with pytest.raises(ValueError, match="identity mismatch"):
         dictionary.model_identity(model)
+
+
+def text_subset_snapshot(tmp_path):
+    model = torch.nn.Module()
+    model.config = hf_model().config
+    model.model = torch.nn.Module()
+    model.model.embed_tokens = torch.nn.Embedding(4, 2, dtype=torch.bfloat16)
+    model.model.norm = torch.nn.Linear(2, 2, bias=False, dtype=torch.bfloat16)
+    model.lm_head = torch.nn.Linear(2, 4, bias=False, dtype=torch.bfloat16)
+    model.lm_head.weight = model.model.embed_tokens.weight
+    state = {"model.language_model." + name: value.detach().clone()
+             for name, value in model.model.state_dict().items()}
+    _, excluded = dictionary._checkpoint_subset(
+        model, dictionary._hf_identity(model.config), "qwen3.5-0.8b-text", None)
+    assert len(excluded) == 168
+    state.update({name: torch.zeros(1) for name in excluded})
+    snapshot = tmp_path / "models--Qwen--Qwen3.5-0.8B" / "snapshots" / model_load.MODEL_REVISION
+    snapshot.mkdir(parents=True)
+    save_file(state, snapshot / "model.safetensors")
+    return model.float(), snapshot, state
+
+
+def test_public_text_subset_verifies_tied_weights_without_source_changes(tmp_path, memory, monkeypatch):
+    import safetensors
+    from caliper.interp import verify_hf_model
+    model, snapshot, state = text_subset_snapshot(tmp_path)
+    checkpoint = snapshot / "model.safetensors"
+    before = checkpoint.read_bytes()
+    original = safetensors.safe_open
+
+    class TextOnly:
+        def __init__(self, *args, **kwargs):
+            self.source = original(*args, **kwargs)
+
+        def __enter__(self):
+            self.source.__enter__()
+            return self
+
+        def __exit__(self, *args):
+            return self.source.__exit__(*args)
+
+        def keys(self):
+            return self.source.keys()
+
+        def get_slice(self, key):
+            assert key.startswith("model.language_model.")
+            return self.source.get_slice(key)
+
+    monkeypatch.setattr(safetensors, "safe_open", TextOnly)
+    identity = verify_hf_model(model, snapshot, checkpoint_subset="qwen3.5-0.8b-text")
+    assert identity == f"hf:{model_load.MODEL_ID}@{model_load.MODEL_REVISION}"
+    assert dictionary.model_identity(model) == identity
+    assert checkpoint.read_bytes() == before
+    model.lm_head.weight.data[0, 0] += 1
+    with pytest.raises(ValueError, match="identity mismatch"):
+        dictionary.model_identity(model)
+
+
+@pytest.mark.parametrize("damage", ["strict", "text_extra", "vision_extra", "mtp_extra", "missing_text",
+                                  "missing_vision", "untied_head", "duplicate", "mapping", "subset", "weights"])
+def test_public_text_subset_refuses_incomplete_or_undeclared_weights(tmp_path, memory, damage):
+    from caliper.interp import verify_hf_model
+    model, snapshot, state = text_subset_snapshot(tmp_path)
+    options = {"checkpoint_subset": "qwen3.5-0.8b-text"}
+    if damage == "strict":
+        options = {"key_mapping": {"model.language_model.": "model."}}
+    elif damage in ("text_extra", "vision_extra", "mtp_extra"):
+        prefix = {"text_extra": "model.language_model.", "vision_extra": "model.visual.", "mtp_extra": "mtp."}[damage]
+        state[prefix + "undeclared.weight"] = torch.zeros(1)
+    elif damage == "missing_text":
+        del state["model.language_model.norm.weight"]
+    elif damage == "missing_vision":
+        del state["model.visual.pos_embed.weight"]
+    elif damage == "untied_head":
+        model.lm_head.weight = torch.nn.Parameter(model.lm_head.weight.detach().clone())
+    elif damage == "duplicate":
+        save_file({"model.visual.pos_embed.weight": torch.zeros(1)}, snapshot / "extra.safetensors")
+    elif damage == "mapping":
+        options["key_mapping"] = {"model.language_model.": "model."}
+    elif damage == "subset":
+        options["checkpoint_subset"] = "unknown"
+    elif damage == "weights":
+        model.model.norm.weight.data[0, 0] += 1
+    save_file(state, snapshot / "model.safetensors")
+    with pytest.raises(ValueError):
+        verify_hf_model(model, snapshot, **options)
+    assert model not in dictionary._VERIFIED_MODELS
+
+
+@pytest.mark.parametrize("field,value", [("_commit_hash", "b" * 40), ("model_type", "other")])
+def test_text_subset_requires_the_declared_revision_and_architecture(field, value):
+    model = hf_model()
+    setattr(model.config, field, value)
+    with pytest.raises(ValueError, match="unsupported checkpoint subset"):
+        dictionary._checkpoint_subset(model, dictionary._hf_identity(model.config), "qwen3.5-0.8b-text", None)
 
 
 @pytest.mark.parametrize("damage", ["random", "missing", "extra", "shape", "revision", "mapping"])
