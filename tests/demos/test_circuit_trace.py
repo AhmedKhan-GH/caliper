@@ -694,6 +694,19 @@ def test_visible_bridge_records_refusal_and_consumes_next_event(tmp_path):
     assert json.loads((tmp_path / "bridge-errors.jsonl").read_text())["error"] == "stale feature"
 
 
+@pytest.mark.parametrize("control,value", [("clamp", 2.), ("apply_clamp", None), ("reset", None)])
+def test_bridge_leaves_clamp_controls_to_their_bindings(control, value):
+    from unittest.mock import Mock
+    session = Mock()
+    session.events.pending = [{"kind": "control", "control": control, "value": value}]
+    bridge = driver.Bridge(session)
+    bridge.last_selection = 10
+    bridge.consume()
+    session.parameter.assert_not_called()
+    session.mcp.body.assert_not_called()
+    session.events.complete.assert_not_called()
+
+
 def test_publication_wait_rejects_a_stale_step():
     from unittest.mock import Mock
     session = driver.Session.__new__(driver.Session)
@@ -708,6 +721,155 @@ def test_publication_wait_rejects_a_stale_step():
     assert session.read("probabilities", "cells", minimum_step=3) == {"step": 4}
     session.events.complete.assert_called_once_with("feature.dictionary")
     session.ready_programs.assert_called_once_with(["probabilities"])
+
+
+@pytest.mark.parametrize("status", ["ok", "error"])
+def test_run_action_waits_for_its_fresh_completion(status):
+    from unittest.mock import Mock
+    session = driver.Session.__new__(driver.Session)
+    session.run_id = "circuit-trace"
+    session.mcp = Mock()
+    session.events = driver.Events(session.mcp)
+    stale = {"kind": "run", "change": "action", "name": "apply_clamp", "status": "ok"}
+    unrelated = dict(stale, name="reset")
+    completed = dict(stale, status=status, text="selected feature has no positive indexed maximum")
+    batches = iter([[stale], [unrelated], [completed]])
+    def body(method, **args):
+        if method == "run.action":
+            assert args == {"run": session.run_id, "name": "apply_clamp"}
+            return {"name": "apply_clamp", "queued": True}
+        assert method == "events.wait"
+        return {"cursor": args["cursor"] + 1, "lost": False, "events": next(batches)}
+    session.mcp.body.side_effect = body
+    if status == "ok":
+        assert session.action("apply_clamp") == completed
+    else:
+        with pytest.raises(Failure, match="no positive indexed maximum"):
+            session.action("apply_clamp")
+    assert session.events.pending == [stale, unrelated, completed]
+    requests = [call for call in session.mcp.body.call_args_list if call.args[0] == "run.action"]
+    assert len(requests) == 1
+
+
+@pytest.fixture
+def clamp_session():
+    from unittest.mock import Mock
+    prompt, _, status, _ = inference_fixture()
+    state = status["inference"]
+    binding = {key: state[key] for key in ("prompt_hash", "interventions_hash")}
+    state["comparison"] = dict(binding, argmax_token_ids=[1, 2], completed_step=9)
+    session = driver.Session.__new__(driver.Session)
+    session.parameter = Mock()
+    session.action = Mock()
+    session.events = Mock()
+    session.read = Mock(return_value={"step": 14, "elements": [
+        [0, 0, 0, 0, .1, .1, token, token - 1] for token in range(1, 11)]})
+    return session, prompt, status
+
+
+@pytest.mark.parametrize("minimum_step", [10, 20])
+def test_zero_clamp_waits_for_action_output_and_resource(clamp_session, minimum_step):
+    session, prompt, prior = clamp_session
+    completed = deepcopy(prior)
+    completed["inference"]["comparison"]["completed_step"] = 14
+    session.read.return_value["step"] = max(minimum_step, 14)
+    session.events.complete.side_effect = [prior, prior, completed, completed]
+    def until(description, read):
+        session.action.assert_called_once_with("apply_clamp")
+        assert read() is False
+        session.read.assert_not_called()
+        return read()
+    session.events.until.side_effect = until
+    reply, evidence = session.ablate_selected(prompt, minimum_step=minimum_step)
+    session.parameter.assert_called_once_with("clamp", 0.)
+    session.action.assert_called_once_with("apply_clamp")
+    session.read.assert_called_once_with("probabilities", "cells", minimum_step=max(minimum_step, 14))
+    assert reply == session.read.return_value
+    assert evidence == completed["inference"]["comparison"]
+
+
+def test_zero_clamp_refusal_stops_before_output_read(clamp_session):
+    session, prompt, prior = clamp_session
+    session.events.complete.return_value = prior
+    session.action.side_effect = Failure("clamp requires a selected feature")
+    with pytest.raises(Failure, match="requires a selected feature"):
+        session.ablate_selected(prompt, minimum_step=10)
+    session.parameter.assert_called_once_with("clamp", 0.)
+    session.action.assert_called_once_with("apply_clamp")
+    session.read.assert_not_called()
+
+
+@pytest.mark.parametrize("fault", ["missing", "old_state", "wrong_prompt", "missing_step"])
+def test_zero_clamp_rejects_unbound_completion(clamp_session, fault):
+    session, prompt, prior = clamp_session
+    completed = deepcopy(prior)
+    state = completed["inference"]
+    state["comparison"]["completed_step"] = 14
+    if fault == "missing": state.pop("comparison")
+    elif fault == "old_state": state["comparison"]["interventions_hash"] = "f" * 64
+    elif fault == "wrong_prompt": state["prompt_hash"] = "f" * 64
+    elif fault == "missing_step": state["comparison"].pop("completed_step")
+    session.events.complete.side_effect = [prior, completed]
+    session.events.until.side_effect = lambda description, read: read()
+    with pytest.raises(Failure):
+        session.ablate_selected(prompt, minimum_step=10)
+    session.read.assert_not_called()
+
+
+def test_zero_clamp_rejects_changed_comparison_after_publication(clamp_session):
+    session, prompt, prior = clamp_session
+    completed = deepcopy(prior)
+    completed["inference"]["comparison"]["completed_step"] = 14
+    changed = deepcopy(completed)
+    changed["inference"]["comparison"]["completed_step"] = 15
+    session.events.complete.side_effect = [prior, completed, changed]
+    session.events.until.side_effect = lambda description, read: read()
+    with pytest.raises(Failure, match="changed during resource publication"):
+        session.ablate_selected(prompt, minimum_step=10)
+
+
+@pytest.mark.parametrize("selection_changed", [False, True])
+def test_acceptance_uses_explicit_ablation_and_retains_selection_gate(tmp_path, monkeypatch, selection_changed):
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+    prompt, _, status, _ = inference_fixture()
+    binding = {key: status["inference"][key] for key in ("prompt_hash", "interventions_hash")}
+    prior = dict(binding, argmax_token_ids=[1, 2], completed_step=9)
+    after = dict(prior, completed_step=14)
+    status.update(state="done", counts={"nodes": 1})
+    status["inference"]["comparison"] = prior
+    graph = {"nodes": [{"kind": "feature", "layer": 0, "influence": 1, "index": 0}], "counts": {"layers": 2}}
+    before_reply = {"step": 9, "elements": [
+        [0, 0, 0, 0, .1, .2 if selection_changed else .1, token, token - 1] for token in range(1, 11)]}
+    after_reply = dict(before_reply, step=14)
+    session = Mock(out=tmp_path, run_id="circuit-trace", program_evidence={"before": {}})
+    session.read.return_value = before_reply
+    session.ablate_selected.return_value = after_reply, after
+    def complete(method, **args):
+        if method == "trace.run": return {"step": 1, "seconds": 0}
+        if method == "trace.status": return status
+        return {}
+    session.events.complete.side_effect = complete
+    def capture(name, steps):
+        if name == "before": session.ablate_selected.assert_not_called()
+        if name == "after":
+            assert steps["probabilities"] == 14
+            raise Failure("capture barrier reached")
+        return None, None
+    session.capture.side_effect = capture
+    monkeypatch.setattr(driver, "read_graph", lambda s: graph)
+    monkeypatch.setattr(driver.Bridge, "select", lambda bridge, row: {})
+    monkeypatch.setattr(driver, "program_budget_checks", lambda snapshot: [])
+    monkeypatch.setattr(driver, "time", SimpleNamespace(monotonic=lambda: 0))
+    import _checks
+    monkeypatch.setattr(_checks, "example_page_check", lambda *args: {})
+    result = {"checks": []}
+    with pytest.raises(Failure, match="capture barrier reached"):
+        driver.acceptance(session, SimpleNamespace(prompt=prompt, model="tiny-lm"), result)
+    session.ablate_selected.assert_called_once_with(prompt, minimum_step=10)
+    selection = next(gate for gate in result["checks"] if gate.get("name") == "selection_only")
+    assert selection["required"] is True and selection["passed"] is (not selection_changed)
+    assert result["comparison"] == {"before": prior, "after": after}
 
 
 @pytest.mark.parametrize("platform,text,expected", [
@@ -838,9 +1000,34 @@ def test_instrument_uses_three_panels_and_confirmed_bindings():
     description = next(call.kwargs["description"] for call in calls if call.args[0] == "spec.new")
     readouts = {call.kwargs["id"]: call.kwargs["options"]["format"] for call in calls
                 if call.args[0] == "control.create" and call.kwargs["kind"] == "readout"}
-    assert len(readouts) == 5
+    assert len(readouts) == 6
     for name, text in driver.METHOD_DISCLOSURES.items():
         assert text in description and readouts["method_" + name] == text
+    controls = {call.kwargs["id"]: call.kwargs for call in calls if call.args[0] == "control.create"}
+    assert controls["clamp"]["kind"] == "slider"
+    assert controls["clamp"]["bind"] == "param:clamp"
+    assert controls["clamp"]["options"] == {"min": -4, "max": 4}
+    assert controls["apply_clamp"]["kind"] == "button"
+    assert controls["apply_clamp"]["bind"] == "action:apply_clamp"
+    assert controls["reset"]["bind"] == "action:reset"
+    assert controls["clamp_status_value"]["bind"] == "param:clamp.status"
+    assert "bind" not in controls["clamp_status"]
+    assert controls["clamp_status"]["options"] == {
+        "format": "{status:s}", "fields": {"status": {"control": "clamp_status_value"}}}
+    layout = next(call.kwargs["layout"] for call in calls if call.args[0] == "layout.set")
+    nodes = {node["id"]: node for node in layout["nodes"]}
+    leaves = []
+    def visit(identifier):
+        if identifier in nodes:
+            for child in nodes[identifier]["children"]:
+                visit(child)
+        else:
+            leaves.append(identifier)
+    visit(layout["root"])
+    assert len(leaves) == len(set(leaves))
+    assert set(leaves) == set(panels) | (set(controls) - {"clamp_status_value"})
+    assert nodes["status_body"]["children"] == ["clamp_status", "body"]
+    assert nodes["clamp_actions"]["children"] == ["apply_clamp", "reset"]
     graph = next(call.kwargs for call in calls if call.args[0] == "program.create" and call.kwargs["id"] == "attribution")
     assert graph["bind"]["graph_counts"] == "live:trace.counts"
     bars = next(call.kwargs for call in calls if call.args[0] == "program.create" and call.kwargs["id"] == "probabilities")

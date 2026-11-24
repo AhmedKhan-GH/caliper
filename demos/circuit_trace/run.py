@@ -17,7 +17,8 @@ import time
 from _mcp import Events, Failure, MCP, attempt, stop, wait_file
 from _checks import (FIXTURE_HASH, FIXTURE_PROMPT, QWEN_PROMPT, bar_rows, capture_checks,
                      check, finish, math_checks, program_budget_checks, selected_feature)
-from _inference_evidence import comparison_evidence, generation_baseline, generation_evidence
+from _inference_evidence import (bound_completion, comparison_evidence, generation_baseline,
+                                 generation_evidence, inference_state)
 
 ROOT = Path(__file__).resolve().parents[2]
 METHOD_DISCLOSURES = {
@@ -152,6 +153,42 @@ class Session:
             param = next(p for p in state["params"] if p["name"] == name)
             return state if param.get("pending") is None and param["value"] == value else False
         return self.events.until(f"parameter {name}", applied)
+
+    def action(self, name):
+        self.events.wait(0)
+        first = len(self.events.pending)
+        self.mcp.body("run.action", run=self.run_id, name=name)
+        def completed():
+            for event in self.events.pending[first:]:
+                if (event.get("kind") == "run" and event.get("change") == "action"
+                        and event.get("name") == name):
+                    if event.get("status") != "ok":
+                        raise Failure(f"The {name} action failed: {event.get('text', '')}")
+                    return event
+            return False
+        return self.events.until(f"completed action {name}", completed)
+
+    def ablate_selected(self, prompt, *, minimum_step):
+        self.parameter("clamp", 0.)
+        def comparison():
+            status = self.events.complete("trace.status")
+            state = inference_state(status, prompt)
+            record = state.get("comparison")
+            if not bound_completion(record, state):
+                raise Failure("Output comparison evidence is stale or incomplete.")
+            return status, record["completed_step"]
+        # Snapshot after the slider boundary to exclude its immediate output update.
+        _, prior_step = comparison()
+        self.action("apply_clamp")
+        def updated():
+            status, step = comparison()
+            return (status, step) if step > prior_step else False
+        status, step = self.events.until("applied clamp output comparison", updated)
+        reply = self.read("probabilities", "cells", minimum_step=max(minimum_step, step))
+        evidence = comparison_evidence(self.events.complete("trace.status"), prompt, bar_rows(reply))
+        if evidence != status["inference"]["comparison"]:
+            raise Failure("The output comparison changed during resource publication.")
+        return reply, evidence
 
     def read(self, program, resource, *, minimum_step=0, count=1024, first=0):
         advances = 0
@@ -298,6 +335,7 @@ def instrument(session):
         m.body("panel.create", id=identifier, primitive="scene", title=title, options=options)
     controls = [("prompt", "text", "param:prompt", "Prompt", {}),
                 ("clamp", "slider", "param:clamp", "Feature Clamp", {"min": -4, "max": 4}),
+                ("apply_clamp", "button", "action:apply_clamp", "Apply Clamp", {}),
                 ("retrace", "toggle", "param:retrace", "Automatic Trace", {}),
                 ("reset", "button", "action:reset", "Feature Reset", {}),
                 ("generate", "button", "action:generate", "Token Generation", {}),
@@ -307,16 +345,22 @@ def instrument(session):
                 ("steered_text", "text", "param:output.steered", "Steered Tokens", {})]
     for identifier, kind, bind, title, options in controls:
         m.body("control.create", id=identifier, kind=kind, bind=bind, title=title, options=options)
+    # The unplaced text control supplies the parameter to the non-editable readout.
+    m.body("control.create", id="clamp_status_value", kind="text", bind="param:clamp.status", title="Clamp Status")
+    m.body("control.create", id="clamp_status", kind="readout", title="Clamp Status",
+           options={"format": "{status:s}", "fields": {"status": {"control": "clamp_status_value"}}})
     for name, text in METHOD_DISCLOSURES.items():
         m.body("control.create", id="method_" + name, kind="readout", title=name.replace("_", " ").title(),
                options={"format": text})
-    # Controls occupy one strip beside the three acceptance panels.
+    # The status spans the instrument width. Buttons share one control row.
     nodes = [{"id": "instrument", "split": "vertical", "ratio": .82, "children": ["main", "methods"]},
-             {"id": "main", "split": "vertical", "ratio": .10, "children": ["prompt", "body"]},
+             {"id": "main", "split": "vertical", "ratio": .08, "children": ["prompt", "status_body"]},
+             {"id": "status_body", "split": "vertical", "ratio": .06, "children": ["clamp_status", "body"]},
              {"id": "body", "split": "horizontal", "ratio": .66, "children": ["graph", "right"]},
              {"id": "right", "split": "vertical", "ratio": .37, "children": ["examples", "lower"]},
-             {"id": "lower", "split": "vertical", "ratio": .48, "children": ["output", "controls"]}]
-    control_ids = [row[0] for row in controls if row[0] != "prompt"]
+             {"id": "lower", "split": "vertical", "ratio": .48, "children": ["output", "controls"]},
+             {"id": "clamp_actions", "split": "horizontal", "ratio": .5, "children": ["apply_clamp", "reset"]}]
+    control_ids = ["clamp", "clamp_actions", "retrace", "generate", "page", "baseline_text", "steered_text"]
     for index in range(len(control_ids) - 1):
         nodes.append({"id": "controls" if index == 0 else f"controls-{index}", "split": "vertical",
                       "ratio": 1 / (len(control_ids) - index),
@@ -477,11 +521,9 @@ def acceptance(session, args, result):
     expected_steps["example_tokens"] = restored_page["step"]
     prior_output = s.read("probabilities", "cells")
     started = time.monotonic()
-    s.parameter("clamp", 0.)
-    after_reply = s.read("probabilities", "cells", minimum_step=prior_output["step"] + 1)
+    after_reply, after_comparison = s.ablate_selected(args.prompt, minimum_step=prior_output["step"] + 1)
     steering_seconds = time.monotonic() - started
     after = bar_rows(after_reply)
-    after_comparison = comparison_evidence(s.events.complete("trace.status"), args.prompt, after)
     if (after_comparison["completed_step"] <= before_comparison["completed_step"]
             or after_comparison["argmax_token_ids"][0] != before_comparison["argmax_token_ids"][0]):
         raise Failure("The steered comparison is stale or changed its baseline identity.")
