@@ -205,7 +205,7 @@ def main(argv=None):
             selection = {"model_id": args.model} if args.model != MODEL_ID else {}
             model, tokenizer = load_text_model(device=args.device, memory=memory, **selection)
             stop.check()
-            dictionary = load_dictionary(args.dictionary, model=model, memory_limit_gb=args.memory_gb)
+            dictionary = load_dictionary(args.dictionary, model=model, memory_limit_gb=args.memory_gb, memory=memory)
             check("dictionary")
             if args.query is not None:
                 with FeatureIndex(args.dictionary, model=model, tokenizer=tokenizer,

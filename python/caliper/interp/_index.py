@@ -79,8 +79,7 @@ def _hash_file(path):
 def _dictionary_hash(dictionary, *, memory=None, memory_limit_gb=None):
     device = next(dictionary.parameters()).device
     limit = (12 if memory is None else memory.limit / 1e9) if memory_limit_gb is None else memory_limit_gb
-    if memory is None or memory_limit_gb is not None:
-        _memory_limit(limit, dictionary.metadata.get("model_hash"), "index")
+    _memory_limit(limit, dictionary.metadata.get("model_hash"), "index")
     memory = MemoryGuard(limit, device) if memory is None else BudgetMemory(memory, limit)
     digest = hashlib.sha256(_json(dictionary.metadata).encode())
     with _device_scope(device):
@@ -112,9 +111,12 @@ def _positive_integer(value, name, maximum=None, minimum=1):
     return value
 
 
-def _compatible(model, dictionary, *, memory_limit_gb=None):
+def _compatible(model, dictionary, *, memory_limit_gb=None, memory=None):
     data = dictionary.metadata
-    if model_identity(model, memory_limit_gb=memory_limit_gb) != data["model_hash"]:
+    identity = model_identity(model, memory_limit_gb=memory_limit_gb, memory=memory)
+    if memory_limit_gb is not None:
+        _memory_limit(memory_limit_gb, identity, "index")
+    if identity != data["model_hash"]:
         raise ValueError("index model identity mismatch")
     if model.training:
         raise ValueError("index requires a model in eval mode")
@@ -256,7 +258,7 @@ def build_index(dictionary_path, documents, *, model, tokenizer, provenance,
     root = Path(dictionary_path)
     dictionary = dictionary if dictionary is not None else load_dictionary(
         root, model=model, memory_limit_gb=limit, memory=memory)
-    data = _compatible(model, dictionary, memory_limit_gb=limit)
+    data = _compatible(model, dictionary, memory_limit_gb=limit, memory=memory)
     check("dictionary")
     identity = _dictionary_hash(dictionary, memory=memory)
     source_hash = _source_hash(root, data["layers"])
@@ -357,7 +359,7 @@ class FeatureIndex:
         self.memory.check("index admission")
         self.dictionary = dictionary if dictionary is not None else load_dictionary(
             self.root, model=model, memory_limit_gb=limit, memory=self.memory)
-        data = _compatible(model, self.dictionary, memory_limit_gb=limit)
+        data = _compatible(model, self.dictionary, memory_limit_gb=limit, memory=self.memory)
         folder = self.root / "index"
         try:
             manifest = json.loads((folder / "index.json").read_text(encoding="utf-8"))

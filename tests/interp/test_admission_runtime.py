@@ -38,6 +38,7 @@ def hosted_loader(tmp_path, monkeypatch, *, info=None, near_limit=False, transfe
 
     def dictionary(*args, **kwargs):
         calls.append("dictionary")
+        assert kwargs["memory"] is memory
         assert _dictionary.model_identity(kwargs["model"]) == f"hf:{model_load.MODEL_ID}@{model_load.MODEL_REVISION}"
         return object()
 
@@ -48,7 +49,10 @@ def hosted_loader(tmp_path, monkeypatch, *, info=None, near_limit=False, transfe
     monkeypatch.setattr(torch.backends.mps, "is_available", lambda: False)
     monkeypatch.setattr(model, "to", transfer)
     monkeypatch.setattr(_dictionary, "load_dictionary", dictionary)
-    monkeypatch.setattr(_index, "FeatureIndex", lambda *a, **k: object())
+    def index(*args, **kwargs):
+        assert kwargs["memory"] is memory
+        return object()
+    monkeypatch.setattr(_index, "FeatureIndex", index)
     from caliper.interp import _memory
     monkeypatch.setattr(_memory, "MemoryGuard", lambda *a, **k: memory)
     return model, snapshot, calls, memory

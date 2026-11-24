@@ -173,7 +173,7 @@ def _record_verified_hf_load(model, *, memory):
     _VERIFIED_MODELS[model] = _VerifiedWeights(identity, digest, settings, memory)
 
 
-def model_identity(model, *, memory_limit_gb=None):
+def model_identity(model, *, memory_limit_gb=None, memory=None):
     """Return a verified checkpoint identity or a bounded CPU content identity.
 
     Configuration fields never prove weights. A trusted local load supplies the
@@ -181,20 +181,25 @@ def model_identity(model, *, memory_limit_gb=None):
     in fixed-size chunks, including changes through ``.data`` aliases. A device or
     large external model requires ``verify_hf_model`` before it can use a pinned HF dictionary.
     """
+    if memory is not None:
+        memory = BudgetMemory(memory, memory.limit / 1e9 if memory_limit_gb is None else memory_limit_gb)
     config = getattr(model, "config", None)
     if getattr(config, "model_type", None) == "caliper_tiny" or config is None:
-        return weights_hash(model)
+        return weights_hash(model, memory=memory)
     identity = _hf_identity(config)
     if not isinstance(model, nn.Module):
         raise ValueError("HF configuration does not verify model weights")
     verified = _VERIFIED_MODELS.get(model)
     if verified is not None:
+        # Keep the original admission budget and its historical stops.
+        memory = (verified.memory if memory is None else
+                  BudgetMemory(verified.memory, memory.limit / 1e9, extra=memory))
         settings = forward_settings(model, tensor_hash=lambda state: _state_hash(
-            state, memory=verified.memory, limit_gb=memory_limit_gb))
+            state, memory=memory, limit_gb=memory_limit_gb))
         if settings != verified.settings:
             raise ValueError("dictionary model identity mismatch: verified checkpoint forward settings changed")
         if (identity != verified.identity
-                or _hf_digest(model, memory=verified.memory, limit_gb=memory_limit_gb) != verified.digest):
+                or _hf_digest(model, memory=memory, limit_gb=memory_limit_gb) != verified.digest):
             raise ValueError("dictionary model identity mismatch: verified checkpoint weights changed")
         return identity
     state = _dense_state(model.state_dict())
@@ -203,8 +208,9 @@ def model_identity(model, *, memory_limit_gb=None):
     if (any(value.device.type != "cpu" for value in tensors)
             or sum(value.numel() * value.element_size() for value in tensors) > _UNVERIFIED_CPU_BYTES):
         raise ValueError("unverified HF weights: call verify_hf_model with the local checkpoint first")
-    content = _hf_digest(model)
-    settings = json.dumps(forward_settings(model, tensor_hash=_state_hash), sort_keys=True)
+    content = _hf_digest(model, memory=memory, limit_gb=memory_limit_gb)
+    settings = json.dumps(forward_settings(model, tensor_hash=lambda state: _state_hash(
+        state, memory=memory, limit_gb=memory_limit_gb)), sort_keys=True)
     return "sha256:" + hashlib.sha256((identity + content + settings).encode("utf-8")).hexdigest()
 
 
@@ -687,7 +693,7 @@ def load_dictionary(path, *, model=None, model_hash=None, device=None, dtype=Non
         model = _programs._STATE.get("model")
     if model is None and model_hash is None:
         raise ValueError("supply a model or expected model_hash, or watch a model first")
-    actual = model_identity(model, memory_limit_gb=memory_limit_gb) if model is not None else model_hash
+    actual = model_identity(model, memory_limit_gb=memory_limit_gb, memory=supplied) if model is not None else model_hash
     _memory_limit(memory_limit_gb, actual, "dictionary")
     if model_hash is not None and actual != model_hash:
         raise ValueError("supplied model and expected model_hash differ")

@@ -154,7 +154,7 @@ def test_explicit_gemma_loader_uses_only_pinned_local_snapshot(tmp_path, monkeyp
     loaded, _ = model_load.load_text_model(model_id=GEMMA_ID, device="cpu", memory=guard)
     assert loaded is model and calls == ["snapshot", "weights", "tokenizer"]
     assert _dictionary.model_identity(model) == f"hf:{GEMMA_ID}@{GEMMA_REVISION}"
-    assert _dictionary._VERIFIED_MODELS[model].memory is guard
+    assert guard in _dictionary._VERIFIED_MODELS[model].memory.guards
 
 
 def test_gemma_incomplete_load_never_records_identity(tmp_path, monkeypatch):
@@ -179,7 +179,7 @@ def test_gemma_hosted_load_passes_budget_to_dictionary_and_index(tmp_path, monke
         return verify(model, folder, memory_limit_gb=12)
 
     def dictionary(*a, **kwargs):
-        assert kwargs["memory_limit_gb"] == 28 and kwargs["model"] is model
+        assert kwargs["memory_limit_gb"] == 28 and kwargs["model"] is model and kwargs["memory"] is guard
         calls.append("dictionary")
         return object()
 
@@ -432,6 +432,7 @@ def test_gemma_small_index_build_and_examples_use_decoder_only(tmp_path, gemma_s
     from safetensors.torch import save_file
     from caliper.interp._points import capture
     model = gemma_semantics
+    _dictionary.verify_hf_model(model, local_gemma(tmp_path, model), memory_limit_gb=28)
     dictionary = runtime_dictionary(model)
     (tmp_path / "dictionary.json").write_text(json.dumps(dictionary.metadata))
     for i, layer in enumerate(dictionary.layers):
@@ -474,10 +475,11 @@ def test_gemma_transfer_cannot_rebaseline_changed_weights(tmp_path, monkeypatch)
 def test_hosted_gemma_tracer_receives_explicit_budget(monkeypatch):
     import caliper.interp as interp
     owner = SimpleNamespace(model=gemma_model(), tokenizer=object(), dictionary=object(), index=None,
-                            sweep=lambda **kw: None, validate=lambda **kw: None)
+                            guard=memory(28), sweep=lambda **kw: None, validate=lambda **kw: None)
     service = _hosted.HostedService(owner)
     calls = []
     sentinel = object()
     monkeypatch.setattr(interp, "Tracer", lambda *a, **kw: calls.append((a, kw)) or sentinel)
     assert service._gemma_tracer() is sentinel
     assert calls[0][1]["memory_limit_gb"] == 28
+    assert calls[0][1]["memory"] is owner.guard

@@ -430,7 +430,7 @@ def main(argv=None):
             model, tokenizer = load_text_model(device=args.device, memory=memory, **selection)
             stop.check()
             dictionary = load_dictionary(args.dictionary, model=model, device=args.device, dtype=torch.float32,
-                                         memory_limit_gb=args.memory_gb)
+                                         memory_limit_gb=args.memory_gb, memory=memory)
             stop.check()
             memory.check("after_dictionary_load")
             stop.check()

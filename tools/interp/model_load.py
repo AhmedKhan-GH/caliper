@@ -7,8 +7,8 @@ from pathlib import Path
 
 import torch
 
-from caliper.interp._dictionary import _record_verified_hf_load
-from caliper.interp._memory import MemoryGuard
+from caliper.interp._dictionary import _canonical_device, _record_verified_hf_load
+from caliper.interp._memory import BudgetMemory, MemoryGuard
 from caliper.interp._admission import (GEMMA_ID, GEMMA_REVISION, _admit_model_load,
                                        _admit_model_transfer, _load_gemma_model)
 
@@ -25,11 +25,15 @@ def load_text_model(*, device="mps", memory=None, model_id=MODEL_ID):
     """
     if model_id not in (MODEL_ID, GEMMA_ID):
         raise ValueError("unsupported text model selection")
+    ceiling = 28 if model_id == GEMMA_ID else 12
+    memory = MemoryGuard(ceiling, device) if memory is None else BudgetMemory(memory, ceiling)
+    if _canonical_device(memory.device) != _canonical_device(device):
+        raise ValueError("text model requires a memory guard for its device")
+    memory.check("text model admission")
     from huggingface_hub import snapshot_download
     from transformers import AutoTokenizer
 
     if model_id == GEMMA_ID:
-        memory = memory if memory is not None else MemoryGuard(28, device)
         snapshot = Path(snapshot_download(GEMMA_ID, revision=GEMMA_REVISION, local_files_only=True))
         model = _load_gemma_model(snapshot, device=device, memory=memory)
         tokenizer = AutoTokenizer.from_pretrained(snapshot, local_files_only=True, trust_remote_code=False)
@@ -39,8 +43,6 @@ def load_text_model(*, device="mps", memory=None, model_id=MODEL_ID):
 
     from transformers import Qwen3_5ForCausalLM, Qwen3_5TextConfig
 
-    if memory is None:
-        memory = MemoryGuard(12, device)
     snapshot = Path(snapshot_download(MODEL_ID, revision=MODEL_REVISION, local_files_only=True))
     config = Qwen3_5TextConfig(**json.loads((snapshot / "config.json").read_text())["text_config"])
     if (config.num_hidden_layers, config.hidden_size) != (24, 1024):

@@ -5,6 +5,7 @@ from contextlib import contextmanager
 import torch
 
 from ._frozen import _trace_features
+from ._dictionary import _canonical_device
 from ._memory import BudgetMemory, MemoryGuard, autorelease_scope, family_memory_limit
 from ._output import forward_logits, prompt_inputs
 from ._points import _architecture, capture
@@ -16,15 +17,18 @@ def _validation_guard(model, dictionary, interventions, guard, memory_limit_gb=N
     if (guard is None and owner is not None and owner.model is model and owner.dictionary is dictionary
             and owner.resource_guard is not None):
         guard = owner.resource_guard
+    limit = family_memory_limit(model, memory_limit_gb, guard)
+    device = next(model.parameters()).device
+    if any(_canonical_device(value.device) != _canonical_device(device)
+           for value in dictionary.state_dict().values()):
+        raise ValueError("validation dictionary and model must share one device")
     if guard is not None:
-        if memory_limit_gb is None:
-            return guard
-        return BudgetMemory(guard, family_memory_limit(model, memory_limit_gb, guard))
-    device = next((t.device for t in dictionary.state_dict().values() if t.device.type != "cpu"),
-                  next(model.parameters()).device)
-    if memory_limit_gb is None:
-        return MemoryGuard(12, device) if device.type != "cpu" else None
-    return MemoryGuard(family_memory_limit(model, memory_limit_gb), device)
+        if _canonical_device(guard.device) != _canonical_device(device):
+            raise ValueError("validation requires a memory guard for its model device")
+        return BudgetMemory(guard, limit)
+    if memory_limit_gb is None and device.type == "cpu":
+        return None
+    return MemoryGuard(limit, device)
 
 
 @contextmanager

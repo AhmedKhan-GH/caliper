@@ -456,11 +456,11 @@ def load_resources(model_name, dictionary_path):
         tokenizer = AutoTokenizer.from_pretrained(snapshot, local_files_only=True, trust_remote_code=False)
     options = {"memory_limit_gb": 28} if getattr(model.config, "model_type", None) == "gemma2" else {}
     dictionary = load_dictionary(folder, model=model, device=next(model.parameters()).device,
-                                 dtype=next(model.parameters()).dtype, **options)
+                                 dtype=next(model.parameters()).dtype, memory=guard, **options)
     if guard is not None:
         guard.check("inference dictionary load")
     index = FeatureIndex(folder, model=model, tokenizer=tokenizer, dictionary=dictionary,
-                         **({"memory": guard} if options else {}))
+                         memory=guard, **options)
     return model, tokenizer, dictionary, index, guard
 
 
@@ -478,7 +478,7 @@ class HostedService(InterpretationService):
     def _gemma_tracer(self):
         from . import Tracer
         return Tracer(self.model, self.tokenizer, self._resource("dictionary"),
-                      controls=getattr(self, "controls", None), memory_limit_gb=28)
+                      controls=getattr(self, "controls", None), memory_limit_gb=28, memory=self.owner.guard)
 
     def submit(self, metadata, reply, *, acknowledge=None):
         status, result = super().submit(metadata, reply, acknowledge=acknowledge)
