@@ -9,14 +9,15 @@ import torch
 from safetensors import safe_open
 
 from caliper.interp._dictionary import (
-    _canonical_device, _checkpoint_slices, _dense_state, _WEIGHTS,
-    dictionary_fingerprint,
+    _canonical_device, _checkpoint_slices, _dense_state, _hf_digest, _WEIGHTS,
+    dictionary_fingerprint, model_identity,
 )
 from .memory_limits import CleanStop, autorelease_scope
 
 
 _CHUNK_BYTES = 1024 * 1024
 _CHANGED = "evaluation dictionary or settings changed: artifact binding differs"
+_MODEL_CHANGED = "evaluation model identity mismatch: runtime binding differs"
 
 
 def _metadata_bytes(metadata):
@@ -27,9 +28,18 @@ def _metadata_bytes(metadata):
 class EvaluationBinding:
     """Bind converted tensors to disk without a second dictionary allocation."""
 
-    def __init__(self, folder, dictionary, identity, *, memory=None):
+    def __init__(self, folder, dictionary, identity, *, model, memory=None):
         self.folder, self.dictionary = Path(folder), dictionary
         self.identity, self.memory = identity, memory
+        self.model = model
+        self.model_hash = dictionary.metadata["model_hash"]
+        self._check_model_identity()
+        # Keep original modules and tensors alive through temporary MLP replacements.
+        self.model_modules = tuple(model.modules())
+        self.model_tensors = tuple(self._model_tensors().values())
+        self.model_stamps = self._model_stamps()
+        self.model_evidence = {"version": 1, "model_hash": self.model_hash,
+                               "tensor_hash": _hf_digest(model, memory=memory)}
         self.metadata = _metadata_bytes(dictionary.metadata)
         self.layers = tuple(dictionary.layers)
         # Retain references so a replacement cannot reuse an old tensor identity.
@@ -40,6 +50,21 @@ class EvaluationBinding:
         self.evidence = {"version": 1, "tensor_hash": self._digest(compare=True)}
         self._check_files()
         self.check()
+
+    def _check_model_identity(self):
+        limit = self.memory.limit / 1e9 if self.memory else None
+        if model_identity(self.model, memory_limit_gb=limit) != self.model_hash:
+            raise ValueError(_MODEL_CHANGED)
+
+    def _model_tensors(self):
+        return {**dict(self.model.named_parameters(remove_duplicate=False)),
+                **dict(self.model.named_buffers(remove_duplicate=False))}
+
+    def _model_stamps(self):
+        tensors = _dense_state(self._model_tensors())
+        return (tuple((name, id(module)) for name, module in self.model.named_modules()), tuple(
+            (name, id(t), t.data_ptr(), t._version, t.dtype, t.device, tuple(t.shape), t.stride())
+            for name, t in tensors.items()))
 
     def _tensor_stamps(self):
         layers = self.dictionary.layers
@@ -62,6 +87,8 @@ class EvaluationBinding:
 
     def check(self):
         """Refuse metadata, file, tensor replacement, or tensor version changes."""
+        if self._model_stamps() != self.model_stamps:
+            raise ValueError(_MODEL_CHANGED)
         disk = json.loads((self.folder / "dictionary.json").read_text(encoding="utf-8"))
         if (_metadata_bytes(self.dictionary.metadata) != self.metadata
                 or _metadata_bytes(disk) != self.metadata
@@ -119,6 +146,9 @@ class EvaluationBinding:
     def verify(self):
         """Recheck bytes before publication, including aliases without version updates."""
         self.check()
+        self._check_model_identity()
+        if _hf_digest(self.model, memory=self.memory) != self.model_evidence["tensor_hash"]:
+            raise ValueError(_MODEL_CHANGED)
         self._check_files()
         if self._digest() != self.evidence["tensor_hash"]:
             raise ValueError(_CHANGED)

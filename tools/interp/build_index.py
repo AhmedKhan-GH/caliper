@@ -6,6 +6,7 @@ shared heavy-job wrapper. Model and tokenizer loads use the local cache only.
 from __future__ import annotations
 
 import argparse
+from contextlib import ExitStack
 import json
 import math
 from pathlib import Path
@@ -16,6 +17,7 @@ from caliper.interp import load_dictionary
 from caliper.interp._index import FeatureIndex, MAX_TOKENS, _hash_file, build_index
 from .memory_limits import CleanStop, MemoryGuard, StopControl
 from .model_load import load_text_model
+from .stop_records import clean_stop_record
 from .text_stream import (DATASET_CONFIG, DATASET_ID, DATASET_REVISION, TextStream,
                           fineweb_documents, partition_metadata)
 
@@ -129,10 +131,12 @@ def main(argv=None):
     if args.query is not None and not (0 <= args.query[0] < metadata["layers"] and
                                       0 <= args.query[1] < metadata["latents"]):
         raise ValueError("query layer or feature is outside the dictionary")
-    memory = MemoryGuard(args.memory_gb, args.device)
     try:
-        memory.check("start")
-        with StopControl() as stop:
+        with StopControl() as stop, ExitStack() as resources:
+            stop.check()
+            memory = MemoryGuard(args.memory_gb, args.device)
+            memory.check("start")
+            stop.check()
             def check(stage):
                 stop.check()
                 # Resource checks occur before and after each bounded model batch.
@@ -141,7 +145,7 @@ def main(argv=None):
             model, tokenizer = load_text_model(device=args.device, memory=memory)
             stop.check()
             dictionary = load_dictionary(args.dictionary, model=model, memory_limit_gb=args.memory_gb)
-            memory.check("dictionary")
+            check("dictionary")
             if args.query is not None:
                 with FeatureIndex(args.dictionary, model=model, tokenizer=tokenizer,
                                   dictionary=dictionary, memory=memory) as index:
@@ -160,28 +164,37 @@ def main(argv=None):
                 provenance.update(source_kind="staged_jsonl", source_hash=source_hash)
             elif args.local_dataset_manifest is not None:
                 source = fineweb_documents(local_manifest=args.local_dataset_manifest)
-                source_id = source.source_id
-                provenance.update(source_kind="pinned_local_parquet", source_id=source_id)
+                source_id = None
+                provenance["source_kind"] = "pinned_local_parquet"
             else:
                 source = fineweb_documents(cache_dir=args.dataset_cache)
                 source_id = None
                 provenance["source_kind"] = "pinned_dataset"
-            with TextStream(source, tokenizer, args.partition, source_id=source_id) as stream:
-                trained_source = metadata["training"].get("source_id")
-                if trained_source is not None and stream.source_id != trained_source:
-                    raise ValueError("index source differs from the training source")
-                manifest = build_index(
-                    args.dictionary, stream_documents(stream, check=check), model=model, tokenizer=tokenizer,
-                    dictionary=dictionary, provenance=provenance, max_tokens=args.tokens,
-                    context_length=args.context, memory_guard=check, memory=memory,
-                )
+            if hasattr(source, "close"):
+                resources.callback(source.close)
+            stop.check()
+            if args.local_dataset_manifest is not None:
+                source_id = source.source_id
+                provenance["source_id"] = source_id
+            stream = resources.enter_context(TextStream(source, tokenizer, args.partition, source_id=source_id))
+            stop.check()
+            trained_source = metadata["training"].get("source_id")
+            if trained_source is not None and stream.source_id != trained_source:
+                raise ValueError("index source differs from the training source")
+            documents = stream_documents(stream, check=check)
+            resources.callback(documents.close)
+            manifest = build_index(
+                args.dictionary, documents, model=model, tokenizer=tokenizer,
+                dictionary=dictionary, provenance=provenance, max_tokens=args.tokens,
+                context_length=args.context, memory_guard=check, memory=memory,
+            )
             memory.check("complete")
             print(json.dumps({"stage": "index_ready", "tokens": manifest["tokens"],
                               "documents": manifest["documents"], "index_hash": manifest["index_hash"],
                               "peak_memory_bytes": memory.peak}), flush=True)
             return 0
     except CleanStop as error:
-        print(json.dumps({"stage": "stopped", "reason": str(error)}), flush=True)
+        print(json.dumps(clean_stop_record(error)), flush=True)
         return 2
 
 

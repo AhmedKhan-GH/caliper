@@ -30,6 +30,7 @@ from .checkpoint_state import (
 )
 from .memory_limits import CleanStop, MemoryGuard, StopControl, autorelease_scope
 from .model_load import MODEL_ID, MODEL_REVISION, hidden_forward, load_text_model
+from .stop_records import clean_stop_record, stop_reason
 from .text_stream import DATASET_CONFIG, DATASET_ID, DATASET_REVISION, TextStream, fineweb_documents, partition_metadata
 
 
@@ -204,6 +205,15 @@ def _save_reserve(progress):
     return max(60.0, 2 * sum(costs))
 
 
+def _validate_token_budget(metadata, token_budget, *, resume=False):
+    """Keep the all-layer learning-rate schedule fixed across resume."""
+    saved = metadata["training"].get("token_budget")
+    if saved is None and not resume:
+        return
+    if type(saved) is not int or saved != token_budget:
+        raise ValueError("resume token budget differs from the saved learning-rate schedule")
+
+
 def train_online(model, trainer, stream, output, *, token_budget, progress=None, memory=None,
                  stop=None, save_seconds=240, max_wall_seconds=36_000, run_seconds=None,
                  started=None, clock=time.monotonic):
@@ -223,6 +233,8 @@ def train_online(model, trainer, stream, output, *, token_budget, progress=None,
         if not all(trainer.initialized[i] for i in trainer.active_layers):
             raise ValueError("fallback requires warm upper weights or a restored checkpoint")
         prior_wall = fallback["prior_wall_seconds"]
+    else:
+        _validate_token_budget(trainer.metadata, token_budget, resume=progress is not None)
     output = Path(output)
     progress = initial_progress() if progress is None else progress
     start = clock() if started is None else started
@@ -246,7 +258,7 @@ def train_online(model, trainer, stream, output, *, token_budget, progress=None,
             try:
                 memory.check(stage, force=force)
             except CleanStop as error:
-                export_stop = str(error)[:1024].encode("utf-8")[:1024].decode("utf-8", errors="ignore")
+                export_stop = stop_reason(error)
                 raise
 
     def health():
@@ -329,7 +341,7 @@ def train_online(model, trainer, stream, output, *, token_budget, progress=None,
                               "elapsed_seconds": elapsed(), "tokens_per_second": rate,
                               "projected_seconds": token_budget / max(rate, 1e-9), "layers": last_metrics}), flush=True)
     except CleanStop as error:
-        reason = str(error)[:1024].encode("utf-8")[:1024].decode("utf-8", errors="ignore")
+        reason = stop_reason(error)
     finally:
         if captured is not None:
             captured.close(clear=True)
@@ -379,7 +391,8 @@ def parser():
     result.add_argument("--device", choices=("mps", "cpu"), default="mps")
     result.add_argument("--latents", type=int, default=16_384)
     result.add_argument("--k", type=int, default=32)
-    result.add_argument("--tokens", type=int, default=40_000_000)
+    result.add_argument("--tokens", type=int, default=40_000_000,
+                        help="Total tokens for the learning-rate schedule. Resume requires the saved value.")
     result.add_argument("--context", type=int, default=256)
     result.add_argument("--batch-tokens", type=int, default=4096)
     result.add_argument("--microbatch-tokens", type=int, default=256)
@@ -556,8 +569,7 @@ def main(argv=None):
             stop.check()
             return _run(args, started, stop, resources)
     except CleanStop as error:
-        reason = str(error)[:1024].encode("utf-8")[:1024].decode("utf-8", errors="ignore")
-        print(json.dumps({"stage": "clean_stop", "status": "interrupted", "reason": reason}), flush=True)
+        print(json.dumps(clean_stop_record(error)), flush=True)
         return 2
 
 
@@ -585,6 +597,8 @@ def _run(args, started, stop, resources):
                         args.run_seconds or args.max_wall_seconds) - (time.monotonic() - started)
         if remaining <= _save_reserve(prior):
             raise ValueError("wall time budget has no model-load and checkpoint reserve")
+        if not fallback:
+            _validate_token_budget(record["metadata"], args.tokens, resume=True)
     random.seed(args.seed)
     np.random.seed(args.seed)
     torch.manual_seed(args.seed)

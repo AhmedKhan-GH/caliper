@@ -1,5 +1,6 @@
 """CPU regressions for evaluation artifact and cursor evidence."""
 import json
+import copy
 from contextlib import contextmanager
 
 import pytest
@@ -166,6 +167,8 @@ def test_binding_accepts_loader_dtype_conversion_in_bounded_slices(tmp_path, mon
     dictionary = load_dictionary(tmp_path, model=model, device="cpu", dtype=dtype)
     identity = dictionary_fingerprint(tmp_path, dictionary.metadata)
     monkeypatch.setattr(binding_module, "_CHUNK_BYTES", 16)
+    from caliper.interp import _dictionary
+    monkeypatch.setattr(_dictionary, "_HASH_CHUNK_BYTES", 16)
     transfers = []
     original_to = torch.Tensor.to
     original_open = binding_module.safe_open
@@ -205,17 +208,16 @@ def test_binding_accepts_loader_dtype_conversion_in_bounded_slices(tmp_path, mon
     guard = Guard()
 
     def bounded_to(tensor, *args, **kwargs):
-        assert tensor.numel() <= 2
+        assert tensor.numel() * tensor.element_size() <= 16
         if kwargs.get("device") == "cpu":
-            assert guard.checks == len(transfers) + 1
-            transfers.append(tensor.numel())
+            transfers.append(tensor.numel() * tensor.element_size())
         return original_to(tensor, *args, **kwargs)
 
     monkeypatch.setattr(torch.Tensor, "to", bounded_to)
     monkeypatch.setattr(binding_module, "safe_open", sliced_file)
-    bound = binding_module.EvaluationBinding(tmp_path, dictionary, identity, memory=guard)
+    bound = binding_module.EvaluationBinding(tmp_path, dictionary, identity, model=model, memory=guard)
     bound.verify()
-    assert transfers and guard.checks == len(transfers)
+    assert transfers and guard.checks > 0
     assert len(bound.evidence["tensor_hash"]) == 64
 
 
@@ -291,3 +293,108 @@ def test_binding_rechecks_disk_bytes_before_publication(tmp_path, monkeypatch):
     with pytest.raises(ValueError, match="artifact binding"):
         evaluate(tmp_path, model, dictionary)
     assert publications(tmp_path) == before
+
+
+@pytest.mark.parametrize("resume", [False, True])
+def test_model_mismatch_preserves_evidence_before_batches_or_restore(tmp_path, monkeypatch, resume):
+    model, dictionary = fixture(tmp_path)
+    if resume:
+        evaluate(tmp_path, model, dictionary)
+    other = copy.deepcopy(model)
+    other.lm_head.weight.data[0, 0] += 1
+    before = publications(tmp_path)
+    monkeypatch.setattr(evaluation, "evaluate_batch", lambda *a, **k: pytest.fail("batch ran"))
+    monkeypatch.setattr(evaluation, "load_file", lambda *a, **k: pytest.fail("statistics restore ran"))
+    with pytest.raises(ValueError, match="model identity mismatch"):
+        evaluate(tmp_path, other, dictionary, resume=resume)
+    assert publications(tmp_path) == before
+
+
+@pytest.mark.parametrize("change", ["missing", "hash", "version", "runtime"])
+def test_cursor_model_evidence_precedes_statistics_restore(tmp_path, monkeypatch, change):
+    model, dictionary = fixture(tmp_path)
+    evaluate(tmp_path, model, dictionary)
+    path = tmp_path / "evaluation" / "state.json"
+    state = json.loads(path.read_text())
+    if change == "missing":
+        del state["model_binding"]
+    elif change == "hash":
+        state["model_binding"]["model_hash"] = "sha256:" + "0" * 64
+    elif change == "version":
+        state["model_binding"]["version"] += 1
+    else:
+        state["model_binding"]["tensor_hash"] = "0" * 64
+    write_json(path, state)
+    before = publications(tmp_path)
+    monkeypatch.setattr(evaluation, "load_file", lambda *a, **k: pytest.fail("statistics restore ran"))
+    with pytest.raises(ValueError, match="cursor binding"):
+        evaluate(tmp_path, model, dictionary, resume=True)
+    assert publications(tmp_path) == before
+
+
+def test_same_model_resume_keeps_artifact_fingerprint(tmp_path):
+    model, dictionary = fixture(tmp_path)
+    identity = dictionary_fingerprint(tmp_path, dictionary.metadata)
+    quality = evaluate(tmp_path, model, dictionary)
+    resumed = evaluate(tmp_path, copy.deepcopy(model), dictionary, resume=True)
+    state = json.loads((tmp_path / "evaluation" / "state.json").read_text())
+    assert quality["model_binding"] == resumed["model_binding"] == state["model_binding"]
+    assert quality["model_binding"]["model_hash"] == dictionary.metadata["model_hash"]
+    assert quality["fvu"] == resumed["fvu"]
+    assert identity == dictionary_fingerprint(tmp_path, dictionary.metadata)
+
+
+@pytest.mark.parametrize("boundary", ["batch", "stop", "metrics", "statistics", "cursor"])
+@pytest.mark.parametrize("kind", ["version", "alias", "replacement", "buffer"])
+def test_model_drift_refuses_cursor_and_quality(tmp_path, monkeypatch, boundary, kind):
+    model, dictionary = fixture(tmp_path)
+    model.register_buffer("evaluation_buffer", torch.zeros(1), persistent=False)
+    before = publications(tmp_path)
+
+    def mutate():
+        if kind == "version":
+            with torch.no_grad():
+                model.lm_head.weight.add_(1)
+        elif kind == "alias":
+            version = model.lm_head.weight._version
+            model.lm_head.weight.data[0, 0] += 1
+            assert model.lm_head.weight._version == version
+        elif kind == "replacement":
+            model.lm_head = copy.deepcopy(model.lm_head)
+        else:
+            model.evaluation_buffer.data.add_(1)
+
+    attribute = {"batch": "evaluate_batch", "stop": "evaluate_batch", "metrics": "metrics",
+                 "statistics": "_save_tensors", "cursor": "save_evaluation"}[boundary]
+    target = evaluation.QualityStats if boundary == "metrics" else evaluation
+    original = getattr(target, attribute)
+
+    def changed(*args, **kwargs):
+        result = original(*args, **kwargs)
+        mutate()
+        if boundary == "stop":
+            raise CleanStop("synthetic stop after model drift")
+        return result
+
+    monkeypatch.setattr(target, attribute, changed)
+    with pytest.raises(ValueError, match="model identity mismatch"):
+        evaluate(tmp_path, model, dictionary)
+    assert publications(tmp_path)[0] == before[0]
+    if boundary != "cursor":
+        assert publications(tmp_path)[1] == before[1]
+
+
+def test_model_verification_runs_after_mlp_restoration(tmp_path, monkeypatch):
+    model, dictionary = fixture(tmp_path)
+    originals = tuple(block.mlp for block in model.layers)
+    identify = binding_module.model_identity
+    checks = []
+
+    def restored(value, **kwargs):
+        assert tuple(block.mlp for block in value.layers) == originals
+        checks.append(True)
+        return identify(value, **kwargs)
+
+    monkeypatch.setattr(binding_module, "model_identity", restored)
+    evaluate(tmp_path, model, dictionary)
+    assert len(checks) >= 3

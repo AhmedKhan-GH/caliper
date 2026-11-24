@@ -18,6 +18,7 @@ from .checkpoint_state import _save_tensors, dictionary_fingerprint, write_json
 from .evaluation_binding import EvaluationBinding
 from .memory_limits import CleanStop, MemoryGuard, StopControl, autorelease_scope
 from .model_load import hidden_forward, load_text_model
+from .stop_records import clean_stop_record, stop_reason
 from .text_stream import TextStream, fineweb_documents, partition_metadata
 
 
@@ -187,7 +188,7 @@ def _evaluate_batch(model, dictionary, ids, count, *, chunk_tokens, health):
 def save_evaluation(folder, stats, stream, pending, identity, settings, elapsed, binding):
     """Atomically publish small statistics and an exact quality cursor."""
     stream_state = stream.state_dict()
-    binding.check()
+    binding.verify()
     folder = Path(folder)
     folder.mkdir(exist_ok=True, parents=True)
     # Two alternating files prevent a partial update from corrupting the old state.
@@ -197,7 +198,7 @@ def save_evaluation(folder, stats, stream, pending, identity, settings, elapsed,
                    "error_sum": stats.error_sum, "hits": stats.hits}, folder / name)
     binding.verify()
     write_json(folder / "state.json", {"version": 1, "identity": identity, "settings": settings,
-               "tensor_binding": binding.evidence,
+               "tensor_binding": binding.evidence, "model_binding": binding.model_evidence,
                "tensors": name, "stream": stream_state, "pending_ids": pending,
                "count": stats.count, "original_ce": stats.original_ce,
                "replaced_ce": stats.replaced_ce, "ce_tokens": stats.ce_tokens, "elapsed_seconds": elapsed})
@@ -209,6 +210,9 @@ def restore_evaluation(folder, stats, stream, identity, settings, binding):
     if (state.get("version") != 1 or state["identity"] != identity or state["settings"] != settings
             or state.get("tensor_binding") != binding.evidence):
         raise ValueError("evaluation dictionary or settings changed across resume")
+    if state.get("model_binding") != binding.model_evidence:
+        raise ValueError("evaluation model identity mismatch: cursor binding differs")
+    binding.verify()
     if state["tensors"] not in ("stats-a.safetensors", "stats-b.safetensors"):
         raise ValueError("invalid evaluation tensor path")
     tensors = load_file(folder / state["tensors"])
@@ -235,7 +239,7 @@ def evaluate(model, dictionary, stream, folder, *, tokens=200_000, context=256,
         raise ValueError("dictionary text partitions differ from this evaluator")
     folder = Path(folder)
     identity = dictionary_fingerprint(folder, metadata, memory=memory)
-    binding = EvaluationBinding(folder, dictionary, identity, memory=memory)
+    binding = EvaluationBinding(folder, dictionary, identity, model=model, memory=memory)
     state_folder = folder / "evaluation"
     stats = quality_stats(metadata)
     settings = {"tokens": tokens, "context": context, "batch_tokens": batch_tokens, "chunk_tokens": chunk_tokens}
@@ -256,12 +260,14 @@ def evaluate(model, dictionary, stream, folder, *, tokens=200_000, context=256,
 
     reason = "complete"
     ready = False
+    # A rejected or interrupted restore must preserve the existing quality report.
+    if resume:
+        health()
+        pending, elapsed_before = restore_evaluation(state_folder, stats, stream, identity, settings, binding)
     # Admission ends after artifact binding. Earlier startup stops preserve quality.
     # A stop in this block records partial quality for the admitted artifact.
     try:
         health()
-        if resume:
-            pending, elapsed_before = restore_evaluation(state_folder, stats, stream, identity, settings, binding)
         ready = True
         while stats.count < tokens:
             health()
@@ -285,7 +291,7 @@ def evaluate(model, dictionary, stream, folder, *, tokens=200_000, context=256,
                 last_save = time.monotonic()
             print(json.dumps({"stage": "quality_batch", "tokens": stats.count, "target": tokens}), flush=True)
     except CleanStop as error:
-        reason = str(error)[:1024].encode("utf-8")[:1024].decode("utf-8", errors="ignore")
+        reason = stop_reason(error)
         if not ready:
             # A partial restore must not replace the last complete evaluation cursor.
             stats = quality_stats(metadata)
@@ -299,7 +305,7 @@ def evaluate(model, dictionary, stream, folder, *, tokens=200_000, context=256,
                    "per_layer_dead_fraction": [None] * len(dictionary.layers),
                    **stats.scope_fields()}
     quality.update(elapsed_seconds=elapsed_before + time.monotonic() - started, stop_reason=reason,
-                   dictionary_hash=identity, partition="quality")
+                   dictionary_hash=identity, model_binding=binding.model_evidence, partition="quality")
     if stats.scope == "upper_half":
         quality.update(replaced_mlps=len(stats.active_layers))
     else:
@@ -356,8 +362,7 @@ def main(argv=None):
                               context=args.context, batch_tokens=args.batch_tokens, chunk_tokens=args.chunk_tokens,
                               memory=memory, stop=stop, resume=args.resume)
     except CleanStop as error:
-        reason = str(error)[:1024].encode("utf-8")[:1024].decode("utf-8", errors="ignore")
-        print(json.dumps({"stage": "clean_stop", "status": "interrupted", "reason": reason}), flush=True)
+        print(json.dumps(clean_stop_record(error)), flush=True)
         return 2
     return 0 if result["status"] in ("passed", "fallback_passed") else 2
 
