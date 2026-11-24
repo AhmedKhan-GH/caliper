@@ -132,7 +132,7 @@ class FrozenNorm:
 
 
 class FrozenAttentionOutput:
-    """An output projection with the active module and head ablation masks."""
+    """An output projection with head masks and ordered output transforms."""
 
     def __init__(self, module, *, ablated=False, heads=()):
         self.weight = module.weight.detach()
@@ -141,14 +141,18 @@ class FrozenAttentionOutput:
         for head, width in heads:
             self.head_mask[head * width:(head + 1) * width] = True
         self.output_mask = torch.tensor(ablated, device=self.weight.device)
+        self.transforms = []
 
-    def __call__(self, x, biases):
+    def __call__(self, x, biases, intervention=False):
         x = x.masked_fill(self.head_mask, 0)
         result = F.linear(x, self.weight, self.bias if biases else None)
-        return result.masked_fill(self.output_mask, 0)
+        result = result.masked_fill(self.output_mask, 0)
+        for transform in self.transforms:
+            result = transform(result, intervention)
+        return result
 
 
-def _attention_output(model, name, projection_name, interventions):
+def _attention_output(model, name, projection_name, interventions, recorded=None):
     from .._ablate import _find
     module = model.get_submodule(name)
     projection = getattr(module, projection_name)
@@ -165,7 +169,14 @@ def _attention_output(model, name, projection_name, interventions):
             if target is not projection or head is None:
                 raise ValueError("attention head does not target its output projection")
             heads.append(head)
-    return FrozenAttentionOutput(projection, ablated=ablated, heads=heads)
+    result = FrozenAttentionOutput(projection, ablated=ablated if recorded is None else False, heads=heads)
+    if recorded is not None:
+        # Child output hooks run before parent output hooks, even if installed later.
+        for point in (f"{name}.{projection_name}", name):
+            specifications = [s for s in interventions if s["point"] == point]
+            result.transforms.append(FrozenInput(recorded[point + ".before"],
+                                                  recorded[point + ".after"], specifications))
+    return result
 
 
 class FrozenAttention:
@@ -184,8 +195,9 @@ class FrozenAttention:
             self.gate = projected.chunk(2, dim=-1)[1].reshape(1, x.shape[1], -1).sigmoid().detach()
         with torch.no_grad():
             self.offset = self._apply(torch.zeros_like(x), True).detach()
+            self.intervention_offset = self._apply(torch.zeros_like(x), False, True).detach()
 
-    def _apply(self, x, biases):
+    def _apply(self, x, biases, intervention=False):
         batch, length, _ = x.shape
         values = F.linear(x, self.v_weight, self.v_bias if biases else None)
         values = values.reshape(batch, length, -1, self.head_dim).transpose(1, 2)
@@ -193,10 +205,10 @@ class FrozenAttention:
         result = (self.pattern @ values).transpose(1, 2).reshape(batch, length, -1)
         if self.gate is not None:
             result = result * self.gate
-        return self.output(result, biases)
+        return self.output(result, biases, intervention)
 
-    def __call__(self, x, bias=1.):
-        return self._apply(x, False) + bias * self.offset
+    def __call__(self, x, bias=1., intervention=1.):
+        return self._apply(x, False) + bias * self.offset + intervention * self.intervention_offset
 
 
 class FrozenDeltaNet:
@@ -234,8 +246,9 @@ class FrozenDeltaNet:
             self.norm_weight = module.norm.weight.detach()
             self.output_gate = F.silu(output_gate.float()).reshape(1, length, self.heads, self.head_dim).detach()
             self.offset = self._apply(torch.zeros_like(x), True).detach()
+            self.intervention_offset = self._apply(torch.zeros_like(x), False, True).detach()
 
-    def _apply(self, x, biases):
+    def _apply(self, x, biases, intervention=False):
         batch, length, _ = x.shape
         values = F.linear(x, self.v_weight, self.v_bias if biases else None).transpose(1, 2)
         values = F.conv1d(values.to(self.conv_weight.dtype), self.conv_weight,
@@ -246,10 +259,10 @@ class FrozenDeltaNet:
         core = (self.pattern @ values.float()).transpose(1, 2).to(x.dtype)
         normalized = (core.float() * self.norm_scale).to(x.dtype) * self.norm_weight
         result = (normalized * self.output_gate).to(x.dtype).reshape(batch, length, self.value_dim)
-        return self.output(result, biases)
+        return self.output(result, biases, intervention)
 
-    def __call__(self, x, bias=1.):
-        return self._apply(x, False) + bias * self.offset
+    def __call__(self, x, bias=1., intervention=1.):
+        return self._apply(x, False) + bias * self.offset + intervention * self.intervention_offset
 
 
 class FrozenInput:
@@ -265,6 +278,75 @@ class FrozenInput:
 
     def __call__(self, value, bias=1.):
         return value * self.scale + bias * self.offset
+
+
+class FrozenFeatures:
+    """Compact affine feature writes within the original TopK region."""
+
+    def __init__(self, original, layer, specifications):
+        indices = original[0].topk(layer.k, dim=-1).indices
+        edited = sorted({s["feature"] for s in specifications if s["op"] in ("scale", "clamp")})
+        if edited:
+            extra = indices.new_tensor(edited).expand(indices.shape[0], -1)
+            indices = torch.cat((indices, extra), dim=-1)
+        self.indices = indices.sort(dim=-1).values
+        unique = torch.ones_like(self.indices, dtype=torch.bool)
+        unique[:, 1:] = self.indices[:, 1:] != self.indices[:, :-1]
+        self.original = original[0].gather(-1, self.indices) * unique
+        self.region = (self.original > 0).detach()
+        self.coefficients = self.region.to(original.dtype)
+        self.constants = torch.zeros_like(self.original)
+        self.scale = original.new_ones((1, original.shape[1], 1))
+        for spec in specifications:
+            positions = list(spec.get("positions", range(original.shape[1])))
+            kind = spec["op"]
+            if kind in ("ablate", "patch"):
+                self.coefficients[positions] = 0
+                self.constants[positions] = 0
+                self.scale[:, positions] = 0
+            elif kind in ("scale", "clamp"):
+                selected = (self.indices == spec["feature"]) & unique
+                rows = torch.zeros_like(selected)
+                rows[positions] = True
+                selected &= rows
+                amount = spec["multiplier"] - 1 if kind == "scale" else -1
+                self.coefficients += amount * (selected & self.region)
+                if kind == "clamp":
+                    self.constants += spec["value"] * selected
+        self.activations = self.coefficients * self.original + self.constants
+
+    def evaluate(self, read, layer):
+        encoder = layer.W_enc.detach()[self.indices].to(read.dtype)
+        preactivation = (torch.einsum("btw,tkw->btk", read, encoder) +
+                         layer.b_enc.detach()[self.indices].to(read.dtype))
+        return preactivation * self.coefficients + self.constants
+
+
+def _validate_interventions(model, blocks, prefix, interventions):
+    """Refuse module edits outside the explicit affine paths."""
+    allowed = {}
+    for i, block in enumerate(blocks):
+        base = f"{prefix}.{i}"
+        for suffix in ("resid_pre", "mlp_in", "mlp", "mlp_out"):
+            allowed[f"{base}.{suffix}"] = {"ablate", "add", "patch"}
+        allowed[f"{base}.mlp_out"] |= {"scale", "clamp"}
+        delta = getattr(block, "block_type", None) == "linear_attention"
+        name = f"{base}.{'linear_attn' if delta else 'self_attn'}"
+        projection = "out_proj" if delta else "o_proj"
+        allowed[name] = {"ablate", "add", "patch"}
+        if model.config.model_type == "qwen3_5_text" and not delta:
+            # The live add and patch hooks require a tensor, but this module returns a tuple.
+            allowed[name] = {"ablate"}
+        allowed[f"{name}.{projection}"] = {"ablate", "add", "patch"}
+    from .._ablate import _find
+    for spec in interventions:
+        point, kind = spec["point"], spec["op"]
+        if kind in allowed.get(point, ()):
+            continue
+        if kind == "ablate" and "#" in point and point.rsplit("#", 1)[0] in allowed:
+            _find(model, point)
+            continue
+        raise NotImplementedError(f"trace has no exact affine intervention path for {kind} at {point}")
 
 
 class FrozenPath:
@@ -289,6 +371,8 @@ class FrozenPath:
         modules = dict(model.named_modules())
         prefix = next(iter(probes)).rsplit(".", 2)[0]
         self.blocks = modules[prefix]
+        interventions = [dict(s, op=s.get("op", s.get("kind"))) for s in interventions]
+        _validate_interventions(model, self.blocks, prefix, interventions)
         root = model.model if self.qwen else model
         self.layers = len(self.blocks)
         self.tokens = input_ids.shape[1]
@@ -308,7 +392,7 @@ class FrozenPath:
                 return hook
             def out(name):
                 def hook(mod, args, result):
-                    recorded[name] = result.detach()
+                    recorded[name] = (result[0] if isinstance(result, tuple) else result).detach()
                 return hook
             def install(handle):
                 stack.callback(handle.remove)
@@ -335,6 +419,13 @@ class FrozenPath:
             for i, block in enumerate(self.blocks):
                 install(block.register_forward_pre_hook(pre(f"{i}.residual_source"), with_kwargs=True, prepend=True))
                 install(block.mlp.register_forward_pre_hook(pre(f"{i}.mlp_source"), with_kwargs=True, prepend=True))
+                install(block.mlp.register_forward_hook(out(f"{i}.mlp_raw"), prepend=True))
+                delta = self.qwen and block.block_type == "linear_attention"
+                attention_name = f"{prefix}.{i}.{'linear_attn' if delta else 'self_attn'}"
+                projection_name = "out_proj" if delta else "o_proj"
+                for name in (f"{attention_name}.{projection_name}", attention_name):
+                    install(modules[name].register_forward_hook(out(name + ".before"), prepend=True))
+                    install(modules[name].register_forward_hook(out(name + ".after")))
                 install(block.input_layernorm.register_forward_pre_hook(pre(f"{i}.input_norm"), with_kwargs=True))
                 install(block.post_attention_layernorm.register_forward_pre_hook(pre(f"{i}.post_norm"), with_kwargs=True))
                 if self.qwen and block.block_type == "linear_attention":
@@ -351,8 +442,8 @@ class FrozenPath:
         self.guard.check("record complete")
         self.embedding = recorded["embedding"]
         self.inputs, self.outputs, self.features, self.errors, self.decoder_biases = [], [], [], [], []
+        self.feature_outputs, self.output_offsets = [], []
         self.residual_inputs, self.mlp_inputs = [], []
-        ablated = {s["point"] for s in interventions if s.get("op", s.get("kind")) == "ablate"}
         with torch.no_grad():
             for i, block in enumerate(self.blocks):
                 with autorelease_scope(self.device):
@@ -360,16 +451,25 @@ class FrozenPath:
                     x = values[f"{base}.mlp_in"]
                     y = values[f"{base}.mlp_out"]
                     layer = dictionary.layers[i]
-                    output_mask = torch.tensor(bool({f"{base}.mlp", f"{base}.mlp_out"} & ablated),
-                                               device=self.device)
                     a = dictionary.encode(i, x.to(layer.W_enc.dtype)).detach()
-                    a = a.masked_fill(output_mask, 0)
-                    reconstruction = dictionary.decode(i, a).to(self.dtype).masked_fill(output_mask, 0)
+                    raw = recorded[f"{i}.mlp_raw"]
+                    output = FrozenFeatures(a.to(self.dtype), layer, [s for s in interventions
+                        if s["point"] in (f"{base}.mlp", f"{base}.mlp_out")])
+                    self.feature_outputs.append(output)
+                    transformed = torch.zeros_like(a, dtype=self.dtype).scatter_add(
+                        -1, output.indices[None], output.activations[None])
+                    reconstruction = dictionary.decode(i, a).to(self.dtype)
+                    error = output.scale * (raw - reconstruction)
+                    decoder_bias = output.scale * layer.b_dec.detach().to(self.dtype)
+                    # Only known output constants enter this term. Errors describe the raw MLP.
+                    decoded = transformed.to(layer.W_dec.dtype) @ layer.W_dec.detach()
+                    offset = y - decoded.to(self.dtype) - decoder_bias - error
                     self.inputs.append(x)
                     self.outputs.append(y)
-                    self.features.append(a.to(self.dtype))
-                    self.errors.append((y - reconstruction).detach())
-                    self.decoder_biases.append(layer.b_dec.detach().to(self.dtype).masked_fill(output_mask, 0))
+                    self.features.append(transformed)
+                    self.errors.append(error.detach())
+                    self.decoder_biases.append(decoder_bias)
+                    self.output_offsets.append(offset.detach())
                     self.norms.append(FrozenNorm(block.input_layernorm, recorded[f"{i}.input_norm"], qwen=self.qwen))
                     self.post_norms.append(FrozenNorm(block.post_attention_layernorm, recorded[f"{i}.post_norm"], qwen=self.qwen))
                     self.residual_inputs.append(FrozenInput(recorded[f"{i}.residual_source"],
@@ -381,11 +481,11 @@ class FrozenPath:
                         mixer = FrozenDeltaNet(block.linear_attn, recorded[f"{i}.input_norm"], pattern,
                                                recorded[f"{i}.qkv"], recorded[f"{i}.delta_norm"],
                                                recorded[f"{i}.delta_norm.gate"], output=_attention_output(
-                                                   model, f"{base}.linear_attn", "out_proj", interventions))
+                                                   model, f"{base}.linear_attn", "out_proj", interventions, recorded))
                     else:
                         mixer = FrozenAttention(block.self_attn, recorded[f"{i}.input_norm"], pattern,
                                                 gate_projection=recorded.get(f"{i}.q_gate"), output=_attention_output(
-                                                    model, f"{base}.self_attn", "o_proj", interventions))
+                                                    model, f"{base}.self_attn", "o_proj", interventions, recorded))
                     self.mixers.append(mixer)
                     self.guard.check(f"freeze layer {i}")
             with autorelease_scope(self.device):
@@ -394,7 +494,8 @@ class FrozenPath:
                 self.unembedding = head.weight.detach()
                 self.unembedding_mean = self.unembedding.mean(0)
                 self.unembedding_bias = _bias(head)
-                self.writes = [(y - b).detach() for y, b in zip(self.outputs, self.decoder_biases)]
+                self.writes = [(y - b - c).detach() for y, b, c in
+                               zip(self.outputs, self.decoder_biases, self.output_offsets)]
                 reads, final = self.run(self.embedding, self.writes)
                 # Compare every read and all next-token logits, before any edge calculation.
                 self.forward_residual = max([float((a - b).abs().max()) for a, b in zip(reads, self.inputs)] +
@@ -430,9 +531,9 @@ class FrozenPath:
         for i, (input_norm, post_norm, mixer, write) in enumerate(zip(self.norms, self.post_norms, self.mixers, writes)):
             with autorelease_scope(self.device):
                 x = self.residual_inputs[i](x, intervention)
-                x = x + mixer(input_norm(x, norm), attention)
+                x = x + mixer(input_norm(x, norm), attention, intervention)
                 reads.append(self.mlp_inputs[i](post_norm(x, norm), intervention))
-                x = x + write + decoder * self.decoder_biases[i]
+                x = x + write + decoder * self.decoder_biases[i] + intervention * self.output_offsets[i]
                 self.guard.check(f"frozen layer {i}")
         return reads, self.final_norm(x, norm)
 
@@ -452,12 +553,10 @@ class FrozenPath:
                 read = self.mlp_inputs[i](post_norm(x))
                 reads.append(read)
                 layer = dictionary.layers[i]
-                indices = self.features[i][0].topk(layer.k, dim=-1).indices
-                mask = self.features[i][0].gather(-1, indices) > 0
-                encoder = layer.W_enc.detach()[indices].to(self.dtype)
-                decoder = layer.W_dec.detach()[indices].to(self.dtype)
-                activation = (torch.einsum("btw,tkw->btk", read, encoder) +
-                              layer.b_enc.detach()[indices].to(self.dtype)) * mask
-                x = x + torch.einsum("btk,tkw->btw", activation, decoder) + self.decoder_biases[i] + self.errors[i]
+                output = self.feature_outputs[i]
+                decoder = layer.W_dec.detach()[output.indices].to(self.dtype)
+                activation = output.evaluate(read, layer)
+                x = (x + torch.einsum("btk,tkw->btw", activation, decoder) +
+                     self.decoder_biases[i] + self.errors[i] + self.output_offsets[i])
                 self.guard.check(f"replacement layer {i}")
         return reads, self.final_norm(x)

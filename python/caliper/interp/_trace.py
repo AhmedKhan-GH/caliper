@@ -24,6 +24,7 @@ class _Target:
     expected: torch.Tensor
     encoder_bias: torch.Tensor
     unembedding_bias: torch.Tensor
+    intervention_bias: torch.Tensor
 
 
 class _DirectEffects:
@@ -32,23 +33,27 @@ class _DirectEffects:
     def __init__(self, path, dictionary, token_ids, tokenizer):
         self.path, self.dictionary = path, dictionary
         self.nodes, self.source_layers = [], []
+        self.feature_columns = {}
         self.tokens = [{"position": p, "token_id": token, "text": display_text(tokenizer.decode([token]))}
                        for p, token in enumerate(token_ids)]
         for token in self.tokens:
             self.nodes.append({"id": f"token:{token['position']}:{token['token_id']}", "kind": "token",
                                "layer": -1, **token, "activation": 1., "label": token["text"]})
-        for layer, a in enumerate(path.features):
+        for layer, output in enumerate(path.feature_outputs):
             with autorelease_scope(path.device):
                 weights = dictionary.layers[layer]
-                # Fixed k columns permit a batched decoder product without B by N by width expansion.
-                indices = a[0].topk(weights.k, dim=-1).indices.sort(dim=-1).values
-                activations = a[0].gather(-1, indices)
-                active = activations > 0
+                # Original TopK columns and explicit edits retain signed and constant writes.
+                indices = output.indices
+                activations = output.activations
+                active = activations != 0
                 decoders = weights.W_dec.detach()[indices].to(path.dtype)
                 positions = torch.arange(path.tokens, device=path.device)[:, None].expand_as(indices)
                 start = len(self.nodes)
-                for position, feature, activation in zip(positions[active].tolist(), indices[active].tolist(),
-                                                          activations[active].tolist()):
+                columns = torch.arange(indices.shape[1], device=path.device)[None].expand_as(indices)
+                for position, feature, activation, column in zip(
+                        positions[active].tolist(), indices[active].tolist(),
+                        activations[active].tolist(), columns[active].tolist()):
+                    self.feature_columns[len(self.nodes)] = column
                     self.nodes.append({"id": f"feature:{layer}:{position}:{feature}", "kind": "feature",
                                        "layer": layer, "position": position, "feature": feature,
                                        "activation": activation, "label": f"L{layer} F{feature}"})
@@ -81,15 +86,19 @@ class _DirectEffects:
             return _Target(index, path.layers, path.tokens - 1,
                            path.unembedding[token] - path.unembedding_mean,
                            path.logits[0, token] - path.logits[0].mean(), zero,
-                           zero if bias is None else bias[token] - bias.mean())
+                           zero if bias is None else bias[token] - bias.mean(), zero)
         if node["kind"] != "feature":
             raise ValueError("only features and logits are trace targets")
         layer, position, feature = node["layer"], node["position"], node["feature"]
         weights = self.dictionary.layers[layer]
-        direction = weights.W_enc[feature].detach().to(path.dtype)
-        bias = weights.b_enc[feature].detach().to(path.dtype)
-        expected = path.inputs[layer][0, position] @ direction + bias
-        return _Target(index, layer, position, direction, expected, bias, zero)
+        output = path.feature_outputs[layer]
+        column = self.feature_columns[index]
+        coefficient = output.coefficients[position, column]
+        direction = coefficient * weights.W_enc[feature].detach().to(path.dtype)
+        bias = coefficient * weights.b_enc[feature].detach().to(path.dtype)
+        constant = output.constants[position, column]
+        expected = output.activations[position, column]
+        return _Target(index, layer, position, direction, expected, bias, zero, constant)
 
     def backward(self, indices):
         """Return all direct incoming edges and explicit bias accounting.
@@ -127,6 +136,7 @@ class _DirectEffects:
         expected = torch.stack([target.expected for target in targets])
         affine = torch.stack([(path.bias_final if target.layer == path.layers else path.bias_reads[target.layer])
                               [:, target.position] @ target.direction for target in targets])
+        affine[:, 3] += torch.stack([target.intervention_bias for target in targets])
         encoder = torch.stack([target.encoder_bias for target in targets])
         unembedding = torch.stack([target.unembedding_bias for target in targets])
         incoming = weights.sum(0)
@@ -291,7 +301,8 @@ class Tracer:
             watched = self.controls._iv_model
             if watched is None or watched.model is not self.model:
                 return []
-            return [dict(iv.entry(), error=iv.error, clear=iv.clear) for iv in self.controls._ivs.values()]
+            return [dict(iv.applied_spec) for iv in self.controls._ivs.values()
+                    if iv.state == "active" and iv.hook is not None and iv.applied_spec is not None]
 
     def _new_prompt(self, prompt):
         if prompt != self._prompt:
@@ -343,8 +354,7 @@ class Tracer:
             else:
                 self._forward_cache = None
                 state = identity["interventions"]
-                specifications = state["specifications"] if isinstance(state, dict) else [
-                    spec for spec in state if spec.get("state") == "active"]
+                specifications = state["specifications"] if isinstance(state, dict) else state
                 if isinstance(state, dict) and state["rows"] is not None and 0 not in state["rows"]:
                     specifications = []
                 path = FrozenPath(self.model, ids.to(self.guard.device), self.dictionary,
