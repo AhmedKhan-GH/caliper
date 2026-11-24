@@ -160,13 +160,13 @@ def test_validation_refuses_effective_output_aliases_after_a_real_trace(alias, k
             expected = torch.zeros_like(clean) if kind == "ablate" else clean
             torch.testing.assert_close(observed[semantic], expected, rtol=0, atol=0)
         before = service.state_dict()
-        with pytest.raises(ValueError, match="output patch or ablation"):
+        with pytest.raises(ValueError, match="current output contribution"):
             validate_trace(model, tokenizer, dictionary, service, graph, prompt="AB")
-        # The real graph retains features at this overwritten output point.
+        # A new trace has no feature contribution at the overwritten output point.
         changed = tracer.trace("AB", max_targets=32)
-        assert any(node["kind"] == "feature" and node["layer"] == layer for node in changed.nodes)
-        with pytest.raises(ValueError, match="output patch or ablation"):
-            validate_trace(model, tokenizer, dictionary, service, changed, prompt="AB")
+        assert not any(node["kind"] == "feature" and node["layer"] == layer for node in changed.nodes)
+        result = validate_trace(model, tokenizer, dictionary, service, changed, prompt="AB")
+        assert not any(row["layer"] == layer for row in result["measurements"])
         assert service.state_dict() == before
     finally:
         service.remove()

@@ -38,7 +38,7 @@ def validate_trace(model, tokenizer, dictionary, interventions, graph, *, prompt
     """Zero-clamp up to ten influential features at their traced positions.
 
     Temporary output hooks leave the intervention lifecycle and caches intact.
-    Existing scale and clamp effects on the same feature enter its live value.
+    Ordered output resets, scale effects, and clamp effects define the live value.
     """
     inputs = prompt_inputs(model, tokenizer, prompt)
     if inputs["input_ids"][0].tolist() != [t["token_id"] for t in graph.tokens]:
@@ -48,7 +48,7 @@ def validate_trace(model, tokenizer, dictionary, interventions, graph, *, prompt
         raise ValueError("validation requires a traced logit target")
     top = max(targets, key=lambda n: (n["probability"], -n["token_id"]))
     position, token_id = top["position"], top["token_id"]
-    features = sorted((n for n in graph.nodes if n["kind"] == "feature" and n["activation"] > 0),
+    features = sorted((n for n in graph.nodes if n["kind"] == "feature" and n["activation"] != 0),
                       key=lambda n: (-n["influence"], n["layer"], n["position"], n["feature"]))[:10]
     architecture = _architecture(model)
     probes = {p.layer: p for p in architecture.values() if p.point.endswith(".mlp_out")}
@@ -84,26 +84,31 @@ def validate_trace(model, tokenizer, dictionary, interventions, graph, *, prompt
                     probe = probes[layer]
                     related = [s for s, module in effective_points if module is modules[probe.module]
                                and selected in s.get("positions", range(inputs["input_ids"].shape[1]))]
-                    if any(s["op"] in ("patch", "ablate") for s in related):
-                        raise ValueError("validation cannot separate a feature from an output patch or ablation at its point")
                     weights = dictionary.layers[layer]
 
                     x = captured[read_points[layer]][0, selected].to(device=weights.W_enc.device, dtype=weights.W_enc.dtype)
                     with torch.no_grad():
                         activation = float(dictionary.encode(layer, x)[feature])
-                    prior_delta = 0.
+                    coefficient, constant = 1., 0.
                     for spec in related:
-                        if spec.get("feature") == feature:
+                        if spec["op"] in ("patch", "ablate"):
+                            coefficient, constant = 0., 0.
+                        elif spec.get("feature") == feature:
                             if spec["op"] == "clamp":
-                                prior_delta += spec["value"] - activation
+                                coefficient -= 1
+                                constant += spec["value"]
                             elif spec["op"] == "scale":
-                                prior_delta += (spec["multiplier"] - 1) * activation
+                                coefficient += spec["multiplier"] - 1
+                    effective = coefficient * activation + constant
+                    precision = max(torch.finfo(weights.W_enc.dtype).eps, torch.finfo(next(model.parameters()).dtype).eps)
+                    if not math.isclose(float(node["activation"]), effective, rel_tol=64 * precision, abs_tol=64 * precision):
+                        raise ValueError("validation feature differs from its current output contribution; retrace first")
                     # A private executor preserves the live service hooks, cache, and lifecycle.
                     temporary = InterventionService(model)
                     try:
                         temporary.configure(dictionary=dictionary, tokenizer=tokenizer)
                         hook = temporary.install({"kind": "clamp", "point": probe.point, "feature": feature,
-                                                  "positions": [selected], "value": -prior_delta})
+                                                  "positions": [selected], "value": activation - effective})
                         measured = centered(forward_logits(model, inputs, last_token=position == inputs["input_ids"].shape[1] - 1, guard=guard)) - baseline
                         if hook.error is not None:
                             raise ValueError("validation clamp failed: " + hook.error)
