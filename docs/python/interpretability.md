@@ -169,6 +169,13 @@ Each MLP becomes its transcoder output plus a constant error vector.
 Qwen gates and DeltaNet routing factors also remain fixed.
 The graph describes effects through these fixed paths, not the causes of attention choices.
 
+The hosted trace and validation paths use inference forwards without autograd or autocast.
+Mixed dictionary storage uses the model input precision for feature arithmetic.
+Encoder conversion uses bounded blocks during these inference forwards.
+This temporary conversion bound does not cover retained autograd tensors in an external training forward.
+Exact feature identity at a numerical tie can depend on the device kernel and tensor shape.
+The completeness and stale-feature checks retain their existing tolerances.
+
 Edges represent direct effects between token, feature, error, and logit nodes.
 The tracer accounts for biases separately and measures completeness before display pruning.
 It reports feature share, error share, and omitted influence.
