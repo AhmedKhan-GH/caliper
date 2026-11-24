@@ -47,6 +47,7 @@ def actual(tmp_path):
     service = InterpretationService(model=model, tokenizer=tokenizer, dictionary=dictionary, index=index)
     yield service
     service.close()
+    index.close()
 
 
 def test_real_service_all_m7_operations(actual, monkeypatch):
@@ -74,7 +75,15 @@ def test_real_service_all_m7_operations(actual, monkeypatch):
     assert result["counts"]["nodes"] > 1
     assert set(published) == {"trace.counts", "trace.node_i", "trace.node_f", "trace.edge_i", "trace.edge_f",
                                "examples.tokens", "examples.activations", "examples.example_ids",
-                               "examples.valid_tokens", "examples.label_text"}
+                               "examples.valid_tokens", "examples.label_text", "trace.label_text",
+                               "trace.probs", "trace.logit_tokens", "trace.logit_label_text"}
+    assert published["trace.label_text"].shape == (544, 16)
+    assert published["trace.logit_label_text"].shape == (10, 16)
+    logits = [node for node in actual.graph.nodes if node["kind"] == "logit"][:10]
+    assert published["trace.logit_tokens"][:len(logits)].tolist() == [n["token_id"] for n in logits]
+    assert published["trace.probs"][0].tolist() == published["trace.probs"][1].tolist()
+    assert published["trace.probs"][0, :len(logits)].tolist() == pytest.approx([n["probability"] for n in logits])
+    assert len(actual.graph.tensors) == 5
     assert published["examples.tokens"].shape == (16, 25)
     assert published["examples.label_text"].shape == (400, 16)
     assert published["examples.example_ids"].tolist() == list(range(16))
