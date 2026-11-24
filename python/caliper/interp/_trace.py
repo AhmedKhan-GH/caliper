@@ -104,7 +104,7 @@ class _DirectEffects:
         with torch.enable_grad():
             zero = path.embedding.new_zeros(batch, path.tokens, path.width)
             leaves = [zero.detach().requires_grad_(True) for _ in range(path.layers + 1)]
-            reads, final = path.run(leaves[0], leaves[1:], bias_masks=(0., 0., 0.))
+            reads, final = path.run(leaves[0], leaves[1:], bias_masks=(0., 0., 0., 0.))
             objective = torch.stack([((final if target.layer == path.layers else reads[target.layer])
                                       [row, target.position] * target.direction).sum()
                                      for row, target in enumerate(targets)]).sum()
@@ -135,10 +135,10 @@ class _DirectEffects:
                                 unembedding[:, None], residual[:, None]), dim=1).tolist()
         diagnostics = []
         for target, row in zip(targets, accounting):
-            biases = dict(zip(("decoder", "normalization", "attention", "encoder", "unembedding"), row[2:7]))
+            biases = dict(zip(("decoder", "normalization", "attention", "intervention", "encoder", "unembedding"), row[2:8]))
             diagnostics.append({"id": self.nodes[target.node]["id"], "expected": row[0],
-                                "incoming": row[1], "biases": biases, "absolute_residual": row[7],
-                                "relative_residual": row[7] / max(1., abs(row[0]))})
+                                "incoming": row[1], "biases": biases, "absolute_residual": row[8],
+                                "relative_residual": row[8] / max(1., abs(row[0]))})
         path.guard.check("direct edge products")
         return weights, diagnostics
 
@@ -331,7 +331,13 @@ class Tracer:
                 path = self._forward_cache[1]
             else:
                 self._forward_cache = None
-                path = FrozenPath(self.model, ids.to(self.guard.device), self.dictionary, guard=self.guard)
+                state = identity["interventions"]
+                specifications = state["specifications"] if isinstance(state, dict) else [
+                    spec for spec in state if spec.get("state") == "active"]
+                if isinstance(state, dict) and state["rows"] is not None and 0 not in state["rows"]:
+                    specifications = []
+                path = FrozenPath(self.model, ids.to(self.guard.device), self.dictionary,
+                                  guard=self.guard, interventions=specifications)
                 if self._intervention_state() != identity["interventions"]:
                     raise RuntimeError("intervention state changed during the trace forward")
                 self._forward_cache = (state_key, path)

@@ -217,6 +217,21 @@ class FrozenDeltaNet:
         return self._apply(x, False) + bias * self.offset
 
 
+class FrozenInput:
+    """An affine input intervention with an explicit constant contribution."""
+
+    def __init__(self, before, after, specifications):
+        self.scale = before.new_ones((1, before.shape[1], 1))
+        for spec in specifications:
+            if spec["op"] in ("patch", "ablate"):
+                positions = spec.get("positions", range(before.shape[1]))
+                self.scale[:, positions] = 0
+        self.offset = (after - before * self.scale).detach() if specifications else torch.zeros_like(before)
+
+    def __call__(self, value, bias=1.):
+        return value * self.scale + bias * self.offset
+
+
 class FrozenPath:
     """Prompt-local affine residual path with independent MLP output writes.
 
@@ -224,7 +239,7 @@ class FrozenPath:
     recorded MLP inputs. Its write arguments are independent source leaves.
     """
 
-    def __init__(self, model, input_ids, dictionary, *, guard=None):
+    def __init__(self, model, input_ids, dictionary, *, guard=None, interventions=()):
         probes = _validate_dictionary(model, dictionary)
         parameter = next(model.parameters())
         self.device, self.dtype = parameter.device, parameter.dtype
@@ -283,6 +298,8 @@ class FrozenPath:
             install(root.norm.register_forward_pre_hook(pre("final_norm"), with_kwargs=True))
             install(root.embed_tokens.register_forward_hook(out("embedding")))
             for i, block in enumerate(self.blocks):
+                install(block.register_forward_pre_hook(pre(f"{i}.residual_source"), with_kwargs=True, prepend=True))
+                install(block.mlp.register_forward_pre_hook(pre(f"{i}.mlp_source"), with_kwargs=True, prepend=True))
                 install(block.input_layernorm.register_forward_pre_hook(pre(f"{i}.input_norm"), with_kwargs=True))
                 install(block.post_attention_layernorm.register_forward_pre_hook(pre(f"{i}.post_norm"), with_kwargs=True))
                 if self.qwen and block.block_type == "linear_attention":
@@ -299,6 +316,7 @@ class FrozenPath:
         self.guard.check("record complete")
         self.embedding = recorded["embedding"]
         self.inputs, self.outputs, self.features, self.errors, self.decoder_biases = [], [], [], [], []
+        self.residual_inputs, self.mlp_inputs = [], []
         with torch.no_grad():
             for i, block in enumerate(self.blocks):
                 with autorelease_scope(self.device):
@@ -315,6 +333,10 @@ class FrozenPath:
                     self.decoder_biases.append(layer.b_dec.detach().to(self.dtype))
                     self.norms.append(FrozenNorm(block.input_layernorm, recorded[f"{i}.input_norm"], qwen=self.qwen))
                     self.post_norms.append(FrozenNorm(block.post_attention_layernorm, recorded[f"{i}.post_norm"], qwen=self.qwen))
+                    self.residual_inputs.append(FrozenInput(recorded[f"{i}.residual_source"],
+                        recorded[f"{i}.input_norm"], [s for s in interventions if s["point"] == f"{base}.resid_pre"]))
+                    self.mlp_inputs.append(FrozenInput(recorded[f"{i}.mlp_source"], x,
+                        [s for s in interventions if s["point"] == f"{base}.mlp_in"]))
                     pattern = values[f"{base}.attn_pattern"]
                     if self.qwen and block.block_type == "linear_attention":
                         mixer = FrozenDeltaNet(block.linear_attn, recorded[f"{i}.input_norm"], pattern,
@@ -348,24 +370,27 @@ class FrozenPath:
                 if not self.forward_residual <= tolerance:
                     raise ValueError(f"frozen replacement forward mismatch: {self.forward_residual:.6g}")
                 self.guard.check("forward agreement")
-                # Three independent bias families. Encoder and unembedding biases are target-local.
-                zero = torch.zeros_like(self.embedding).expand(3, -1, -1)
-                masks = torch.eye(3, device=self.device, dtype=self.dtype).reshape(3, 3, 1, 1)
+                # Encoder and unembedding biases are target-local. Input edits have their own constant term.
+                zero = torch.zeros_like(self.embedding).expand(4, -1, -1)
+                masks = torch.eye(4, device=self.device, dtype=self.dtype).reshape(4, 4, 1, 1)
                 self.bias_reads, self.bias_final = self.run(zero, [zero] * self.layers, bias_masks=masks)
 
     def run(self, embedding, writes, *, bias_masks=None):
         """Return MLP reads and final normalized residual for independent writes.
 
-        Bias mask rows are decoder, normalization, and attention contributions.
+        Bias mask rows are decoder, normalization, attention, and intervention contributions.
         A zero mask gives the strictly linear residual path.
         """
-        decoder, norm, attention = (1., 1., 1.) if bias_masks is None else bias_masks
+        masks = (1., 1., 1., 1.) if bias_masks is None else bias_masks
+        decoder, norm, attention = masks[:3]
+        intervention = masks[3] if len(masks) == 4 else 0.
         x = embedding
         reads = []
         for i, (input_norm, post_norm, mixer, write) in enumerate(zip(self.norms, self.post_norms, self.mixers, writes)):
             with autorelease_scope(self.device):
+                x = self.residual_inputs[i](x, intervention)
                 x = x + mixer(input_norm(x, norm), attention)
-                reads.append(post_norm(x, norm))
+                reads.append(self.mlp_inputs[i](post_norm(x, norm), intervention))
                 x = x + write + decoder * self.decoder_biases[i]
                 self.guard.check(f"frozen layer {i}")
         return reads, self.final_norm(x, norm)
@@ -381,8 +406,9 @@ class FrozenPath:
         reads = []
         for i, (input_norm, post_norm, mixer) in enumerate(zip(self.norms, self.post_norms, self.mixers)):
             with autorelease_scope(self.device):
+                x = self.residual_inputs[i](x)
                 x = x + mixer(input_norm(x))
-                read = post_norm(x)
+                read = self.mlp_inputs[i](post_norm(x))
                 reads.append(read)
                 layer = dictionary.layers[i]
                 indices = self.features[i][0].topk(layer.k, dim=-1).indices

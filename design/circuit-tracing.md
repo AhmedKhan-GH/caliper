@@ -149,6 +149,9 @@ This extends the same frozen-attention definition to the actual hybrid architect
 The replacement output must equal the recorded output before any edge calculation.
 A test must also prove linearity under source perturbations. Ordinary nonlinear-model gradients do not satisfy this contract.
 The tracer never constructs a dense residual Jacobian.
+Input interventions at `resid_pre` and `mlp_in` also form part of this affine path.
+An input patch or ablation removes the upstream derivative at its selected positions.
+An input addition retains that derivative. Recorded constant changes have an explicit intervention bias term.
 For each target, it injects its encoder direction at the read point and backpropagates through the frozen path.
 A source edge is its activation times the dot product of its decoder and the gradient at its write point.
 Token embeddings and error vectors act as direct vector sources.
