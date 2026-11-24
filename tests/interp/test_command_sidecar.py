@@ -165,6 +165,8 @@ def test_offline_command_sidecar(actual, tmp_path, monkeypatch):
             return reply["structuredContent"]
         session = SimpleNamespace(mcp=SimpleNamespace(body=body), quality_override=None)
         demo.instrument(session)
+        demo.instrument_layout(session, expanded=True)
+        demo.instrument_layout(session, expanded=False)
         demo.programs(session)
         demo.programs(session, examples=True)
         spec = body("spec.get")["json"]

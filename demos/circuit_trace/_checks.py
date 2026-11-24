@@ -218,6 +218,10 @@ def capture_checks(folder, metadata, png, graph, bars, *, selected):
             gates.append(check(name + "_resource_generation", target["generation"] > 0
                                and program["step"] is not None and program["step"] >= minimum,
                                {"generation": target["generation"], "step": program["step"]}, minimum))
+    from _visual import visual_checks
+    for name in ("graph", "examples", "output"):
+        target, target_ids, _ = raw_panel(root, metadata, name)
+        gates.extend(visual_checks(name, target, target_ids, metadata, node_count=len(graph["nodes"])))
     return gates, {"row_ids": row_ids, "height": measured, "expected_height": expected}
 
 

@@ -558,7 +558,10 @@ def synthetic_gates(tmp_path, **faults):
 
 def test_composition_oracle_handles_dpi_clip_scaled_targets_and_glyphs(tmp_path):
     gates, measured = synthetic_gates(tmp_path)
-    assert all(gate["passed"] for gate in gates.values()), gates
+    # This small composition fixture does not claim a full instrument layout.
+    names = {"capture_generation", "rendered_nodes", "host_labels", "example_page", "bar_height"}
+    names.update(name for name in gates if name.endswith(("_composition", "_resource_generation")))
+    assert all(gates[name]["passed"] for name in names), gates
     assert measured["height"] == 32 and measured["expected_height"] == pytest.approx(32)
     for name in ("graph", "examples", "output"):
         evidence = gates[name + "_composition"]["measured"]
@@ -1138,7 +1141,11 @@ def test_instrument_uses_three_panels_and_confirmed_bindings(override):
             leaves.append(identifier)
     visit(layout["root"])
     assert len(leaves) == len(set(leaves))
-    assert set(leaves) == set(panels) | (set(controls) - {"clamp_status_value"})
+    hidden = {"clamp_status_value", *("method_" + name for name in driver.METHOD_DISCLOSURES)}
+    assert set(leaves) == set(panels) | (set(controls) - hidden)
+    assert nodes["instrument"]["ratio"] == (.90 if override else .95)
+    assert nodes["body"]["children"] == ["plots", "examples"]
+    assert nodes["plots"]["ratio"] == .67
     assert nodes["status_body"]["children"] == ["clamp_status", "body"]
     assert nodes["controls"]["children"][1:3] == ["apply_clamp", "reset"]
     graph = next(program for program in spec["program"] if program["id"] == "attribution")
@@ -1150,6 +1157,22 @@ def test_instrument_uses_three_panels_and_confirmed_bindings(override):
     driver.scene_programs(session, [], remove_examples=True)
     assert next(panel for panel in spec["panel"] if panel["id"] == "examples")["primitive"] == "text"
     assert {program["id"] for program in spec["program"]} == {"attribution", "probabilities"}
+    driver.instrument_layout(session, expanded=True)
+    expanded = session.mcp.body.call_args.kwargs["layout"]
+    groups = {node["id"]: node for node in expanded["nodes"]}
+    assert groups["instrument"]["ratio"] == .74
+    assert set(groups["methods"]["children"]) == {"method_details"} | (set(readouts) - {"clamp_status"})
+
+
+def test_bridge_expands_and_collapses_method_details():
+    from unittest.mock import Mock, patch
+    session = Mock(quality_override=None)
+    bridge = driver.Bridge(session)
+    with patch.object(driver, "instrument_layout") as layout:
+        for value in (True, False):
+            bridge.handle({"kind": "control", "control": "method_details", "value": value})
+            layout.assert_called_with(session, expanded=value)
+    assert layout.call_count == 2
 
 
 @pytest.mark.parametrize("method,arguments", [("piece.show", {"name": "attribution_graph", "version": 1}),

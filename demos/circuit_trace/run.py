@@ -85,7 +85,7 @@ class Session:
             env.pop(name, None)
         env.update(CALIPER_AGENT_OFFLINE="1", HF_HUB_OFFLINE="1", TRANSFORMERS_OFFLINE="1",
                    CALIPER_DATA_DIR=str(out / "data"), CALIPER_WORKSPACE=str(out / "workspace"),
-                   CALIPER_USER_APPLETS_DIR=str(out / "user-applets"), CALIPER_WINDOW_SIZE="1600x1000",
+                   CALIPER_USER_APPLETS_DIR=str(out / "user-applets"), CALIPER_WINDOW_SIZE="2048x1000",
                    CALIPER_HIDDEN="0" if show else "1", TMPDIR=str(out / "temp"),
                    PYTHONPYCACHEPREFIX=str(out / "pycache"))
         if args.model == "tiny-lm":
@@ -237,6 +237,8 @@ class Session:
                     raise Failure(f"The {identifier} program reports an error: {program}")
                 if draw.get("resource_step") is None or draw["resource_step"] < minimum:
                     return False
+                if draw.get("frame_ms") is None:
+                    return False
             return status
         status = self.events.until("rendered resource steps", rendered)
         pieces = {}
@@ -363,18 +365,33 @@ def instrument(session):
     for name, text in disclosures.items():
         m.body("control.create", id="method_" + name, kind="readout", title=name.replace("_", " ").title(),
                options={"format": text})
+    m.body("state.create", id="method_details", type="boolean", default=False)
+    m.body("control.create", id="method_details", kind="toggle", bind="state:method_details", title="Method Details")
+    instrument_layout(session, expanded=False)
+
+
+def instrument_layout(session, *, expanded):
+    override = getattr(session, "quality_override", None)
     # Flat control groups stay within the spec's eight-level layout limit.
-    nodes = [{"id": "instrument", "split": "vertical", "ratio": .74 if override else .82, "children": ["main", "methods"]},
-             {"id": "main", "split": "vertical", "ratio": .08, "children": ["prompt", "status_body"]},
-             {"id": "status_body", "split": "vertical", "ratio": .06, "children": ["clamp_status", "body"]},
-             {"id": "body", "split": "horizontal", "ratio": .66, "children": ["graph", "right"]},
-             {"id": "right", "split": "vertical", "ratio": .37, "children": ["examples", "lower"]},
-             {"id": "lower", "split": "vertical", "ratio": .48, "children": ["output", "controls"]}]
+    ratio = .74 if expanded else (.90 if override else .95)
+    nodes = [{"id": "instrument", "split": "vertical", "ratio": ratio, "children": ["main", "methods"]},
+             {"id": "main", "split": "vertical", "ratio": .055, "children": ["prompt", "status_body"]},
+             {"id": "status_body", "split": "vertical", "ratio": .05, "children": ["clamp_status", "body"]},
+             {"id": "body", "split": "vertical", "ratio": .78, "children": ["plots", "examples"]},
+             {"id": "plots", "split": "horizontal", "ratio": .67, "children": ["graph", "right"]},
+             {"id": "right", "split": "vertical", "ratio": .55, "children": ["output", "controls"]}]
     control_ids = ["clamp", "apply_clamp", "reset", "retrace", "generate", "page", "baseline_text", "steered_text"]
     nodes.append({"id": "controls", "split": "vertical", "children": control_ids})
-    method_ids = ["method_" + name for name in disclosures]
-    nodes.append({"id": "methods", "split": "vertical", "children": method_ids})
-    m.body("layout.set", layout={"root": "instrument", "nodes": nodes})
+    method_ids = ["method_details"]
+    if expanded:
+        method_ids.extend("method_" + name for name in METHOD_DISCLOSURES)
+    if override is not None:
+        method_ids.extend(["method_dictionary_quality_override", "method_dictionary_identity"])
+    if len(method_ids) == 1:
+        nodes[0]["children"][1] = method_ids[0]
+    else:
+        nodes.append({"id": "methods", "split": "vertical", "children": method_ids})
+    session.mcp.body("layout.set", layout={"root": "instrument", "nodes": nodes})
 
 
 def programs(session, *, examples=False):
@@ -439,6 +456,8 @@ class Bridge:
                     self.fill_examples(index)
         elif event["kind"] == "control" and event.get("control") == "page" and self.last_selection is not None:
             s.events.complete("feature.examples", node=self.last_selection, limit=16)
+        elif event["kind"] == "control" and event.get("control") == "method_details":
+            instrument_layout(s, expanded=bool(event["value"]))
 
     def consume(self, *, tolerate_refusals=False):
         s = self.session
@@ -539,12 +558,7 @@ def acceptance(session, args, result):
     after_png, after_meta = s.capture("after", dict(expected_steps))
     result["checks"].extend(dict(gate, name="after." + gate["name"])
                             for gate in program_budget_checks(s.program_evidence["after"]))
-    validation = s.events.complete("trace.validate")
-    save(s.out / "validation.json", validation)
-    result["checks"] += math_checks(graph, examples, before, after, validation, trace["seconds"], steering_seconds,
-                                     fixture=args.model == "tiny-lm",
-                                     argmax_token_ids=after_comparison["argmax_token_ids"])
-    result.update(before=before, after=after, validation=validation)
+    result.update(before=before, after=after, steering_seconds=steering_seconds)
     result["pixel_evidence_collected"] = before_meta is not None
     if before_meta is not None:
         reports = []
@@ -564,6 +578,16 @@ def acceptance(session, args, result):
     else:
         result["checks"].append(check("hidden_capture_evidence", False, "not collected in the visible invocation",
                                        "required for hidden acceptance", required=not s.show))
+    try:
+        validation = s.events.complete("trace.validate")
+    except Failure as error:
+        validation = {"error": str(error), "passed": False}
+    save(s.out / "validation.json", validation)
+    result["validation"] = validation
+    result["checks"] += math_checks(graph, examples, before, after, validation, trace["seconds"], steering_seconds,
+                                     fixture=args.model == "tiny-lm",
+                                     argmax_token_ids=after_comparison["argmax_token_ids"])
+    save(s.out.parent / "result.json", result)
     # Generate while the selected feature clamp remains active.
     prior_generation = generation_baseline(s.events.complete("trace.status"), args.prompt)
     s.mcp.body("run.action", run=s.run_id, name="generate")
