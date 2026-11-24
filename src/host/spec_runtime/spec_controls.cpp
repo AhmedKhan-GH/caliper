@@ -741,10 +741,28 @@ bool draw_picker(const spec::Control& c, const Row& row, SpecInstrumentHost& hos
     return changed;
 }
 
-// The text a field shows while the person edits it, by window and control.
-std::map<std::string, std::string>& text_edits() {
-    static std::map<std::string, std::string> m;
-    return m;
+struct TextEdit {
+    std::string text;
+    std::optional<std::string> submitted;
+    std::string refusal;
+    cb::RunControl* run = nullptr;
+    cb::ValueStore* values = nullptr;
+    std::string session;
+    unsigned epoch = 0;
+    bool retained = false;
+};
+
+// A context owns its drafts. Context shutdown is a deliberate teardown.
+std::map<std::string, TextEdit>& text_edits() {
+    static std::map<ImGuiContext*, std::map<std::string, TextEdit>> contexts;
+    auto [it, added] = contexts.try_emplace(ImGui::GetCurrentContext());
+    if (added) {
+        ImGuiContextHook hook;
+        hook.Type = ImGuiContextHookType_Shutdown;
+        hook.Callback = [](ImGuiContext* context, ImGuiContextHook*) { contexts.erase(context); };
+        ImGui::AddContextHook(ImGui::GetCurrentContext(), &hook);
+    }
+    return it->second;
 }
 
 // A text field: the person's edit applies on Return or when the field loses
@@ -758,12 +776,21 @@ bool draw_text_field(const spec::Control& c, const Row& row, SpecInstrumentHost&
     std::string why = script ? why_disabled(host, state) : std::string();
     if (script && why.empty() && (!param || param->type != "text")) why = "The script has no text parameter with this name.";
     const json now = param ? (param->pending.is_null() ? param->value : param->pending) : current(host, c);
-    const std::size_t limit = c.options.max_length
+    const std::size_t requested_limit = c.options.max_length
                                   ? static_cast<std::size_t>(std::max<std::int64_t>(*c.options.max_length, 0))
                                   : (script ? spec::limits::kParamTextBytes : spec::limits::kStateTextBytes);
+    const std::size_t limit = script ? std::min(requested_limit, spec::limits::kParamTextBytes) : requested_limit;
     // Keep the full parameter draft. Fixed value and state buffers retain their limits.
     auto& edits = text_edits();
     auto it = edits.find(key);
+    const std::string session = script && host.run ? host.run->control_session() : std::string();
+    unsigned epoch = 0;
+    if (it != edits.end() && script && (!state.attached || it->second.run != host.run ||
+        it->second.values != host.values || it->second.session != session)) {
+        epoch = it->second.epoch + 1;
+        edits.erase(it);
+        it = edits.end();
+    }
     if (it == edits.end()) {
         std::string start = now.is_string() ? now.get<std::string>() : std::string();
         if (!script && start.size() > limit) {
@@ -772,16 +799,27 @@ bool draw_text_field(const spec::Control& c, const Row& row, SpecInstrumentHost&
             start.resize(end);
         }
         if (!script) start.resize(limit + 1, '\0');
-        it = edits.emplace(key, std::move(start)).first;
+        it = edits.emplace(key, TextEdit{std::move(start), {}, {}, host.run, host.values, session, epoch}).first;
     }
-    std::string& buf = it->second;
+    TextEdit& edit = it->second;
+    if (script && !edit.retained) edit.text = now.is_string() ? now.get<std::string>() : std::string();
+    if (script && host.run) {
+        const auto error = host.run->param_error(target->name);
+        if (!error.empty()) {
+            edit.refusal = error;
+            edit.submitted.reset();
+        }
+    }
+    std::string& buf = edit.text;
     const bool invalid = script && buf.size() > limit;
-    const std::string refusal = "Text exceeds " + std::to_string(limit) + " bytes. The draft was retained.";
-    const float notice_width = invalid ? std::min(row.widget.GetWidth() * 0.6f,
+    const std::string refusal = invalid ? "Text exceeds " + std::to_string(limit) + " bytes. The draft was retained."
+                                        : edit.refusal;
+    const float notice_width = !refusal.empty() ? std::min(row.widget.GetWidth() * 0.6f,
         ImGui::CalcTextSize(refusal.c_str()).x + ImGui::GetStyle().ItemSpacing.x) : 0.0f;
     ImGui::SetCursorScreenPos(row.widget.Min);
     ImGui::SetNextItemWidth(row.widget.GetWidth() - notice_width);
     const std::string hint = c.options.placeholder.value_or("");
+    ImGui::PushID(static_cast<int>(edit.epoch));
     ImGui::BeginDisabled(!why.empty());
     auto resize = [](ImGuiInputTextCallbackData* data) {
         auto* text = static_cast<std::string*>(data->UserData);
@@ -803,16 +841,28 @@ bool draw_text_field(const spec::Control& c, const Row& row, SpecInstrumentHost&
     if (done && why.empty()) {
         const std::string value(buf.c_str());
         if (script) {
-            changed = value.size() <= limit && value != now && host.run->set_param(target->name, value).ok();
-            if (changed) push_control_event(host, c, value);
+            if (value.size() <= limit && (value != now || !edit.refusal.empty()) && edit.submitted != value) {
+                const cb::Error error = host.run->set_param(target->name, value);
+                edit.refusal = error ? (error.message.empty() ? error.code : error.message) : std::string();
+                if (!error) {
+                    edit.submitted = value;
+                    changed = true;
+                    push_control_event(host, c, value);
+                }
+            }
         } else changed = write(host, c, value, true);
     }
-    if (invalid) {
+    ImGui::PopID();
+    if (!refusal.empty()) {
         const auto shown = fit_row_text(refusal, notice_width - ImGui::GetStyle().ItemSpacing.x);
         ImGui::GetWindowDrawList()->AddText(ImVec2(row.widget.Max.x - notice_width,
             row.widget.Min.y + ImGui::GetStyle().FramePadding.y), ImGui::GetColorU32(ImGuiCol_Text), shown.c_str());
+        cut_text_tooltip(refusal, shown, ImRect(ImVec2(row.widget.Max.x - notice_width, row.widget.Min.y), row.widget.Max));
     }
-    if (!editing && (!script || buf.size() <= limit)) edits.erase(key);
+    if (script) {
+        edit.retained = editing || buf.size() > limit || !edit.refusal.empty() || buf != now;
+        if (!edit.retained) edit.submitted.reset();
+    } else if (!editing) edits.erase(key);
     return changed;
 }
 

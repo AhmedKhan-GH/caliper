@@ -75,6 +75,8 @@ public:
     }
     // The last result of the action `name`.
     virtual ActionResult action_result(const std::string& name) const = 0;
+    virtual std::string param_error(const std::string&) const { return {}; }
+    virtual std::string control_session() const { return {}; }
 };
 
 // The state column of a session row: "running", "starting", "closing",

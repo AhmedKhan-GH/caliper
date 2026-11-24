@@ -45,12 +45,19 @@ namespace {
 
 struct FakeRun final : cb::RunControl {
     cb::RunState run;
+    cb::Error set_error;
+    std::string producer_error;
+    std::string session = "first";
     std::vector<std::pair<std::string, json>> sent;   // (op or param, value)
     cb::RunState state() override { return run; }
     cb::Error set_param(const std::string& name, const json& value) override {
         sent.push_back({"set " + name, value});
+        if (set_error) return set_error;
+        producer_error.clear();
         return {};
     }
+    std::string param_error(const std::string&) const override { return producer_error; }
+    std::string control_session() const override { return session; }
     cb::Error run_action(const std::string& name) override {
         sent.push_back({"run " + name, json()});
         return {};
@@ -873,6 +880,10 @@ TEST_CASE("spec controls: a text parameter preserves a long current value") {
     auto control = make("long_prompt", spec::ControlKind::text, "param:prompt");
     SUBCASE("default bound") {}
     SUBCASE("explicit smaller bound") { control.options.max_length = 1024; }
+    SUBCASE("existing multiline value") {
+        text = "first line\nsecond line";
+        run.run.params.back().value = text;
+    }
     const auto sp = instrument_spec({control});
     cb::ValueStore values;
     values.reset(sp);
@@ -897,6 +908,7 @@ TEST_CASE("spec controls: an oversized parameter edit is refused without a trunc
     auto control = make("oversized_prompt", spec::ControlKind::text, "param:prompt");
     std::size_t limit = 4096;
     SUBCASE("protocol limit on Return") {}
+    SUBCASE("protocol limit with a larger option") { control.options.max_length = 8192; }
     SUBCASE("smaller limit on focus loss") { limit = 32; control.options.max_length = limit; }
     const auto sp = instrument_spec({control});
     cb::ValueStore values;
@@ -922,4 +934,99 @@ TEST_CASE("spec controls: an oversized parameter edit is refused without a trunc
     REQUIRE(run.sent.size() == 1);
     CHECK(run.sent.back().second == std::string(limit, 'a'));
     CHECK(rec.events.size() == 1);
+}
+
+TEST_CASE("spec controls: text drafts survive refusals and wait for producer confirmation") {
+    Ui ui;
+    Recorder rec;
+    FakeRun run;
+    run.run = training();
+    cb::RunParam prompt;
+    prompt.name = "prompt"; prompt.type = "text"; prompt.value = "";
+    run.run.params.push_back(prompt);
+    auto control = make("refused_prompt", spec::ControlKind::text, "param:prompt");
+    SpecInstrumentHost host{&rec, &run};
+    const SpecLook look;
+    auto draw = [&] { return caliper_host::draw_spec_control(control, kRow, look, host); };
+    bool asynchronous = false;
+    SUBCASE("local refusal on Return") {}
+    SUBCASE("producer refusal after focus loss") { asynchronous = true; }
+    if (!asynchronous) run.set_error = cb::Error("run.refused", "The request queue is full.");
+    ui.click(180, 15, draw);
+    ImGui::GetIO().AddInputCharactersUTF8("A caf\xc3\xa9");
+    ui.frame([&] { draw(); });
+    if (asynchronous) ui.click(500, 100, draw);
+    else press(ui, ImGuiKey_Enter, [&] { draw(); });
+    REQUIRE(run.sent.size() == 1);
+    if (asynchronous) run.producer_error = "The producer refused the prompt.";
+    ui.click(500, 100, draw);
+    ImGui::GetIO().AddMousePosEvent(380, 15);
+    ui.frame([&] { draw(); });
+    ui.frame([&] {
+        draw();
+        const auto* tooltip = ImGui::FindWindowByName("##Tooltip_00");
+        CHECK((tooltip && tooltip->Active));
+    });
+    run.run.params.back().value = "A caf\xc3\xa9";
+    ui.frame([&] { draw(); });
+    run.run.params.back().value = "background";
+    ui.frame([&] { draw(); });
+    ui.click(180, 15, draw);
+    REQUIRE(ImGui::GetCurrentContext()->InputTextState.TextA.Data);
+    CHECK(std::string(ImGui::GetCurrentContext()->InputTextState.TextA.Data) == "A caf\xc3\xa9");
+    CHECK(rec.events.size() == (asynchronous ? 1 : 0));
+    run.set_error = {};
+    press(ui, ImGuiKey_Enter, [&] { draw(); });
+    REQUIRE(run.sent.size() == 2);
+    CHECK(run.sent.back().second == "A caf\xc3\xa9");
+    ui.click(500, 100, draw);
+    ui.click(180, 15, draw);
+    press(ui, ImGuiKey_Enter, [&] { draw(); });
+    CHECK(run.sent.size() == 2);
+    CHECK(rec.events.size() == (asynchronous ? 2 : 1));
+    ui.click(500, 100, draw);
+    run.run.params.back().pending = "A caf\xc3\xa9";
+    ui.frame([&] { draw(); });
+    run.run.params.back().pending = nullptr;
+    run.run.params.back().value = "accepted then changed";
+    ui.frame([&] { draw(); });
+    ui.click(180, 15, draw);
+    REQUIRE(ImGui::GetCurrentContext()->InputTextState.TextA.Data);
+    CHECK(std::string(ImGui::GetCurrentContext()->InputTextState.TextA.Data) == "accepted then changed");
+    ImGui::GetCurrentContext()->InputTextState.SelectAll();
+    ImGui::GetIO().AddInputCharactersUTF8("A caf\xc3\xa9");
+    ui.frame([&] { draw(); });
+    press(ui, ImGuiKey_Enter, [&] { draw(); });
+    REQUIRE(run.sent.size() == 3);
+    CHECK(run.sent.back().second == "A caf\xc3\xa9");
+}
+
+TEST_CASE("spec controls: session teardown discards an active text draft") {
+    Ui ui;
+    FakeRun run;
+    run.run = training();
+    cb::RunParam prompt;
+    prompt.name = "prompt"; prompt.type = "text"; prompt.value = "";
+    run.run.params.push_back(prompt);
+    auto control = make("session_prompt", spec::ControlKind::text, "param:prompt");
+    SpecInstrumentHost host{nullptr, &run};
+    const SpecLook look;
+    auto draw = [&] { return caliper_host::draw_spec_control(control, kRow, look, host); };
+    ui.click(180, 15, draw);
+    ImGui::GetIO().AddInputCharactersUTF8("old draft");
+    ui.frame([&] { draw(); });
+    SUBCASE("source identity") { run.session = "second"; }
+    SUBCASE("detach") {
+        run.run.attached = false;
+        ui.frame([&] { draw(); });
+        run.run.attached = true;
+    }
+    run.run.params.back().value = "new prompt";
+    ui.frame([&] { draw(); });
+    press(ui, ImGuiKey_Enter, [&] { draw(); });
+    ui.click(500, 100, draw);
+    CHECK(run.sent.empty());
+    ui.click(180, 15, draw);
+    REQUIRE(ImGui::GetCurrentContext()->InputTextState.TextA.Data);
+    CHECK(std::string(ImGui::GetCurrentContext()->InputTextState.TextA.Data) == "new prompt");
 }
