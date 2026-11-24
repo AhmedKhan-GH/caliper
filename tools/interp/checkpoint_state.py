@@ -116,6 +116,8 @@ def validate_checkpoint(record, settings, metadata, source_id):
     saved_fallback = fallback_metadata(record["metadata"])
     if fallback != saved_fallback:
         raise ValueError("checkpoint fallback metadata differs")
+    if record["metadata"].get("fallback_source") != metadata.get("fallback_source"):
+        raise ValueError("checkpoint fallback source evidence differs")
     if fallback and (settings.get("fallback") != fallback
                      or record["stream"]["source_id"] != source_id
                      or source_id != fallback["source_id"]):
