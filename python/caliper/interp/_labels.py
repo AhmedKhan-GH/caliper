@@ -29,7 +29,8 @@ def token_label(tokenizer, token_id):
                if accepts_kwargs or (name in parameters and parameters[name].kind in
                                      (Parameter.POSITIONAL_OR_KEYWORD, Parameter.KEYWORD_ONLY))}
     # Select supported options before the call. Decoder errors must propagate.
-    return display_text(decode([token_id], **options))
+    decoded = display_text(decode([token_id], **options))
+    return decoded if decoded else f"#{token_id}"
 
 
 def pack_labels(values, count):
