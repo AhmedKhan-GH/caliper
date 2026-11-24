@@ -1292,6 +1292,16 @@
                 "anchor": {"type": "integer", "minimum": 0, "maximum": 511},
                 "string_offset": {"type": "integer", "minimum": 0, "maximum": 4095, "description": "Zero when absent."}
               }
+            },
+            "selected": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["anchor", "param"],
+              "properties": {
+                "anchor": {"type": "integer", "minimum": 0, "maximum": 511},
+                "param": {"type": "string", "pattern": "^[a-z][a-z0-9_]{0,31}$", "description": "An i32 or u32 draw parameter with the selected item index."},
+                "string_offset": {"type": "integer", "minimum": 0, "maximum": 4095, "description": "Zero when absent."}
+              }
             }
           }
         },

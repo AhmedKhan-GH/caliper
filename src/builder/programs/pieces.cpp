@@ -630,6 +630,9 @@ std::string canonical_manifest(const spec::Piece& piece) {
             if (d.text->hover)
                 t.set("hover", Object().uint("anchor", d.text->hover->anchor)
                                       .uint("string_offset", d.text->hover->string_offset).text());
+            if (d.text->selected)
+                t.set("selected", Object().uint("anchor", d.text->selected->anchor).str("param", d.text->selected->param)
+                                         .uint("string_offset", d.text->selected->string_offset).text());
             o.set("text", t.text());
         }
         if (d.frame_ms) o.num("frame_ms", *d.frame_ms);

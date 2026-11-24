@@ -850,7 +850,7 @@ public:
         if (auto it = o.find("text"); it != o.end()) {
             const std::string tp = key_path(path, "text");
             if (table(*it, tp, tp)) {
-                strict_keys(*it, tp, {"anchors", "position", "string", "priority", "strings", "strings_from", "align", "hover"},
+                strict_keys(*it, tp, {"anchors", "position", "string", "priority", "strings", "strings_from", "align", "hover", "selected"},
                             "the text table");
                 TextTable t;
                 t.anchors = required_string(*it, "anchors", tp, "The text table");
@@ -871,6 +871,18 @@ public:
                         else if (!h->contains("anchor")) missing(hp, "anchor", "The hover label");
                         if (auto n = count(*h, "string_offset", hp)) hover.string_offset = *n;
                         t.hover = hover;
+                    }
+                }
+                if (auto s = it->find("selected"); s != it->end()) {
+                    const std::string sp = key_path(tp, "selected");
+                    if (table(*s, sp, sp)) {
+                        strict_keys(*s, sp, {"anchor", "param", "string_offset"}, "the selected label");
+                        TextSelected selected;
+                        if (auto n = count(*s, "anchor", sp)) selected.anchor = *n;
+                        else if (!s->contains("anchor")) missing(sp, "anchor", "The selected label");
+                        selected.param = required_string(*s, "param", sp, "The selected label");
+                        if (auto n = count(*s, "string_offset", sp)) selected.string_offset = *n;
+                        t.selected = selected;
                     }
                 }
                 d.text = std::move(t);

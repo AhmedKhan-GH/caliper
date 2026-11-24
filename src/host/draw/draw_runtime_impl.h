@@ -106,6 +106,7 @@ struct DrawRuntime::Impl {
     caliper_gfx::Buffer view, selection, params, counts;
     std::uint32_t params_bytes = 0, counts_bytes = 0;
     std::vector<std::uint8_t> params_default;
+    std::vector<std::uint8_t> params_shown;  // the same packed parameters as the last encoded frame
     caliper_gfx::Sampler linear, nearest;
     caliper_gfx::Texture colormaps;                  // the fallback rows, grey ramps
     caliper_gfx::Texture bound_colormaps;            // the host's (HostTarget::colormaps) or the fallback

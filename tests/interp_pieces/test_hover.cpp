@@ -13,14 +13,17 @@ namespace gfx = caliper_gfx;
 namespace {
 struct Graph {
     gfx::RecordingBackend backend;
-    cd::DrawRuntime runtime{backend, true};
+    cd::DrawRuntime runtime;
     cd::HostTarget target;
     std::vector<std::uint8_t> strings = std::vector<std::uint8_t>(544 * 64);
 
-    Graph(unsigned anchor = 33, unsigned offset = 32) {
+    Graph(unsigned anchor = 33, unsigned offset = 32,
+          std::optional<caliper_builder::spec::TextSelected> selected = {}, bool webgpu = true)
+        : runtime(backend, webgpu) {
         auto piece = interp_pieces::load("attribution_graph");
         piece.name = "hover_fixture"; // The runtime uses the declaration, not a library name.
         piece.draw->text->hover = caliper_builder::spec::TextHover{anchor, offset};
+        if (selected) piece.draw->text->selected = selected;
         piece.hash = cp::piece_hash(piece);
         const auto installed = runtime.install(piece, {"graph", {}, "graph"}, 7);
         REQUIRE_MESSAGE(installed.ok(), installed.code, ": ", installed.message);
@@ -73,9 +76,14 @@ struct Graph {
         version.bytes = bytes.data(); version.size = bytes.size();
         REQUIRE(runtime.set_resource(version).ok());
     }
-    void draw() {
+    void draw(std::int32_t selected = 0, bool use_default = false) {
         std::vector<gfx::Frame> frames;
-        REQUIRE(runtime.encode(&frames, {}, target));
+        cd::FrameInputs inputs;
+        if (!use_default) {
+            inputs.params.resize(4);
+            std::memcpy(inputs.params.data(), &selected, 4);
+        }
+        REQUIRE(runtime.encode(&frames, inputs, target));
         // This backend records commands on the CPU. It executes no shader and creates no device.
         for (auto& frame : frames) REQUIRE(backend.submit(std::move(frame)) != 0);
         runtime.frame_done(0);
@@ -130,8 +138,78 @@ TEST_CASE("the viewer manifest decoder preserves the hover declaration and pin")
         piece.files.at("draw.wgsl"), &decoded, &instance, cd::DrawChecks::pieces(), piece.files.at("derive.wgsl"));
     REQUIRE_MESSAGE(check.ok(), check.message);
     REQUIRE(decoded.draw->text->hover);
+    CHECK(decoded.draw->text->selected == piece.draw->text->selected);
     CHECK(decoded.draw->text->hover == piece.draw->text->hover);
     CHECK(cp::piece_hash(decoded) == cp::piece_hash(piece));
+}
+
+TEST_CASE("selected text follows frame parameters without new resource versions") {
+    bool webgpu = true;
+    SUBCASE("browser composition") {}
+    SUBCASE("native composition") { webgpu = false; }
+    Graph graph(33, 32, {}, webgpu);
+    const auto shown = graph.runtime.shown_items();
+    REQUIRE(graph.runtime.labels().size() == 2);
+    CHECK(graph.runtime.labels()[1].text == "Selected Feature");
+    graph.draw(1);
+    const auto changed = graph.runtime.labels();
+    REQUIRE(changed.size() == 2);
+    CHECK(changed[1].text == "Hovered Feature");
+    CHECK(graph.runtime.shown_items().version == shown.version);
+    CHECK(graph.runtime.status().resource_step == 1);
+    const auto hover = graph.runtime.pick(0).value();
+    const auto both = graph.runtime.labels(&hover);
+    REQUIRE(both.size() == 3);
+    CHECK(both[1].text == "Hovered Feature");
+    CHECK(both[2].text == "Selected Feature");
+    graph.draw(0);
+    CHECK(graph.runtime.labels()[1].text == "Selected Feature");
+    CHECK(graph.runtime.shown_items().version == shown.version);
+}
+
+TEST_CASE("selected text rejects absent or invalid items and mismatched shown resources") {
+    Graph graph(33, 32, caliper_builder::spec::TextSelected{32, "selected_node", 32});
+    SUBCASE("cleared selection") { graph.draw(-1); }
+    SUBCASE("item beyond valid count") { graph.draw(2); }
+    SUBCASE("maximum signed item") { graph.draw(std::numeric_limits<std::int32_t>::max()); }
+    SUBCASE("default selection") { graph.draw(0, true); }
+    SUBCASE("empty item map") {
+        graph.set("nodes", {}, 0, 1);
+        graph.set("curves", std::vector<std::uint8_t>(48), 1, 1);
+        graph.draw();
+    }
+    SUBCASE("newer item map") {
+        graph.set("nodes", std::vector<std::uint8_t>(48), 1, 2);
+        graph.draw();
+    }
+    SUBCASE("newer text") {
+        graph.set("strings", graph.strings, 544, 2);
+        graph.draw();
+    }
+    SUBCASE("invalid UTF-8") {
+        graph.put_text(32, "\xc3\x28");
+        graph.set("strings", graph.strings, 544, 1);
+        graph.draw();
+    }
+    SUBCASE("empty text") {
+        graph.put_text(32, "");
+        graph.set("strings", graph.strings, 544, 1);
+        graph.draw();
+    }
+    const auto labels = graph.runtime.labels();
+    REQUIRE(labels.size() == 1);
+    CHECK(labels[0].text == "Token");
+}
+
+TEST_CASE("selected text uses its declared anchor and string offset") {
+    Graph graph(33, 32, caliper_builder::spec::TextSelected{31, "selected_node", 0});
+    graph.put_text(1, "Current Item");
+    graph.set("strings", graph.strings, 544, 1);
+    graph.draw(1);
+    const auto labels = graph.runtime.labels();
+    REQUIRE(labels.size() == 3);
+    CHECK(labels[1].text == "Current Item");
+    CHECK(labels[2].text == "Selected Feature");
 }
 
 TEST_CASE("graph hover labels reject a different program, invalid item, or stale hit") {
@@ -152,7 +230,8 @@ TEST_CASE("graph hover labels retain UTF-8 checks and require matching text step
     SUBCASE("newer text") {
         graph.set("strings", graph.strings, 544, 2);
         graph.draw();
-        CHECK(graph.runtime.labels(&picked).size() == 2);
+        // Neither item label can use text from a different step than its node map.
+        CHECK(graph.runtime.labels(&picked).size() == 1);
         return;
     }
     graph.set("strings", graph.strings, 544, 1);

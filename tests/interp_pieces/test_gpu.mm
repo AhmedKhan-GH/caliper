@@ -204,8 +204,8 @@ TEST_CASE("graph layout has disjoint cells, stable bytes, labels, and sixteen ce
         if (!metal.backend) CALIPER_SKIP_NO_GPU(metal.why);
         const auto piece=ip::load("attribution_graph");
         const auto tensors=graph_tensors();
-        const auto data=mr::run_derive(metal.device,piece,tensors,{{"selected_node",4},{"hovered_node",5}});
-        const auto again=mr::run_derive(metal.device,piece,tensors,{{"selected_node",4},{"hovered_node",5}});
+        const auto data=mr::run_derive(metal.device,piece,tensors,{{"selected_node",4}});
+        const auto again=mr::run_derive(metal.device,piece,tensors,{{"selected_node",4}});
         for (const auto& r:data) CHECK(r.bytes==resource(again,r.id).bytes);
         const auto& nodes=resource(data,"nodes");
         const auto& curves=resource(data,"curves");
@@ -221,7 +221,7 @@ TEST_CASE("graph layout has disjoint cells, stable bytes, labels, and sixteen ce
         }
         mr::PieceDraw draw(*metal.backend,size);
         set_resources(draw,piece,data);
-        Json params=Json::object(); params.set("selected_node",4); params.set("hovered_node",5);
+        Json params=Json::object(); params.set("selected_node",4);
         REQUIRE(draw.draw(frame(piece,params)));
         Json picks=Json::array();
         for (unsigned i=0;i<16;++i) {
@@ -229,12 +229,20 @@ TEST_CASE("graph layout has disjoint cells, stable bytes, labels, and sixteen ce
             check_pick(draw,x,y,i); picks.push(pick_at(x,y,i));
         }
         const auto labels=draw.rt.labels();
-        REQUIRE(labels.size()==5); // A synthetic parameter alone supplies no local pointer hit.
+        REQUIRE(labels.size()==5); // Four token labels and one selected label, without a pointer hit.
         CHECK(labels[0].text=="label 0"); CHECK(labels[4].text=="label 36");
+        CHECK(scalar<unsigned>(resource(data,"labels"),32,16,32)==0xffffffffu);
         auto& output=exporter();
         output.add("graph_selected",piece,data,draw,params,picks);
         const auto selected=draw.color;
+        const auto shown=draw.rt.shown_items();
+        Json changed=Json::object(); changed.set("selected_node",5);
+        REQUIRE(draw.draw(frame(piece,changed)));
+        REQUIRE(draw.rt.labels().size()==5);
+        CHECK(draw.rt.labels()[4].text=="label 37");
+        CHECK(draw.rt.shown_items().version==shown.version);
         REQUIRE(draw.draw(frame(piece)));
+        REQUIRE(draw.rt.labels().size()==4);
         std::size_t dimmed=0;
         for (unsigned y=0;y<size;++y) for (unsigned x=0;x<size;++x) {
             if (mr::identity_of(draw.ids,size,x,y)) continue;
