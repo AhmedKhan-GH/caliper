@@ -62,34 +62,60 @@ class _RunGuard:
     def __init__(self, guard, *, extra=None, on_stop=None):
         self.guard, self.extra, self.failure = guard, extra, None
         self.on_stop = on_stop
+        self._readings = {}
+        self._observed_peak = 0
+
+    def _owners(self):
+        return (owner for guard in (self.guard, self.extra) if guard is not None
+                for owner in (guard, getattr(guard, "_guard", guard)))
 
     @property
     def limit(self):
-        return min(getattr(guard, "limit", math.inf) for guard in (self.guard, self.extra))
+        return min((getattr(owner, "limit", math.inf) for owner in self._owners()), default=math.inf)
 
     @property
     def peak(self):
-        return max(getattr(guard, "peak", 0) for guard in (self.guard, self.extra))
+        return max(self._observed_peak, *(getattr(owner, "peak", 0) for owner in self._owners()), 0)
+
+    @property
+    def current(self):
+        values = []
+        for index, guard in enumerate((self.guard, self.extra)):
+            if guard is None:
+                continue
+            owners = (guard, getattr(guard, "_guard", guard))
+            readings = [getattr(owner, "current", None) for owner in owners]
+            readings.append(self._readings.get(index))
+            readings = [value for value in readings if value is not None]
+            values.append(max(readings) if readings else max(getattr(owner, "peak", 0) for owner in owners))
+        return max(values, default=0)
 
     @property
     def device(self):
         guard = self.guard if self.guard is not None else self.extra
         return getattr(guard, "device", torch.device("cpu"))
 
-    def check(self, *args, **kwargs):
-        self._check("check", *args, **kwargs)
+    def check(self, stage, *, force=True):
+        return self._check("check" if force else "_check_interval", stage)
 
     def _check_interval(self, stage):
-        self._check("_check_interval", stage)
+        return self.check(stage, force=False)
 
-    def _check(self, method, *args, **kwargs):
+    def _check(self, method, stage):
         from ._memory import CleanStop
         if self.failure is not None:
             raise self.failure
         try:
-            for guard in (self.guard, self.extra):
+            for index, guard in enumerate((self.guard, self.extra)):
                 if guard is not None:
-                    getattr(guard, method, guard.check)(*args, **kwargs)
+                    reading = getattr(guard, method, guard.check)(stage)
+                    if isinstance(reading, (int, float)):
+                        self._readings[index] = reading
+                        self._observed_peak = max(self._observed_peak, reading)
+            self._observed_peak = max(self.peak, self.current)
+            if self._observed_peak > self.limit:
+                raise CleanStop("hosted allocation exceeds the process memory limit")
+            return self.current
         except CleanStop as exc:
             self.failure = exc
             if self.on_stop is not None:
