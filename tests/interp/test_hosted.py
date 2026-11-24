@@ -125,6 +125,7 @@ def test_trace_snapshot_uses_applied_effects_during_a_queued_replacement(resourc
     controls.step(7)
     run.interventions = interventions
     run.prompt = SimpleNamespace(set=lambda value: None)
+    run.selected = controls.param("selected_node", -1, min=-1, max=511)
     service = HostedService(run)
 
     def finish_trace(*args):
@@ -444,12 +445,12 @@ def test_resource_stop_remains_latched_after_a_caught_action_error():
         guard.check("boundary", force=False)
 
 
-def test_real_hosted_controls_update_bars_and_retrace_only_on_request(tmp_path, monkeypatch):
+@pytest.fixture
+def hosted_run(tmp_path, monkeypatch):
     import caliper
     from caliper import _net
     from caliper.interp import load_dictionary
     from caliper.interp._index import FeatureIndex, build_index
-    from caliper.interp._publish import _resolve
     from .test_dictionary import write_fixture
     from .test_service import Transport
 
@@ -479,55 +480,148 @@ def test_real_hosted_controls_update_bars_and_retrace_only_on_request(tmp_path, 
     route = controls.attach(transport)
     try:
         run.start()
-        trace_calls = []
-        tracer = run.service._resource("tracer")
-        trace = tracer.trace
-        def traced(*a, **kw):
-            trace_calls.append(1)
-            return trace(*a, **kw)
-        monkeypatch.setattr(tracer, "trace", traced)
-        replies = []
-        run.service.submit({"version": 1, "method": "trace.run", "params": {"prompt": "AB", "max_targets": 32}},
-                           lambda *args: replies.append(args))
-        run.boundary()
-        assert replies[-1][0] == "ok", replies
-        node = next(i for i, n in enumerate(run.service.graph.nodes) if n["kind"] == "feature")
-        baseline = _resolve("output.probs").clone()
-        assert route.on_control(None, wire.Control(1, "set", name="selected_node", value=node).to_meta())["status"] == "ok"
-        run.boundary()
-        assert not run.interventions.specifications()
-        assert route.on_control(None, wire.Control(2, "set", name="clamp", value=0.).to_meta())["status"] == "ok"
-        run.boundary()
-        assert len(trace_calls) == 1
-        assert run.interventions.specifications()[0]["value"] == 0.
-        assert not torch.equal(baseline, _resolve("output.probs"))
-        saved = run.interventions.state_dict()
-        result = run.validate()
-        assert result["trace_id"] == run.service.graph.trace_id
-        assert run.interventions.state_dict() == saved
-        assert len(trace_calls) == 1
-        run.retrace.set(True)
-        run.boundary()
-        assert len(trace_calls) == 2
-        run.retrace.set(False)
-        run.reset()
-        assert not run.interventions.specifications()
-        run.boundary()
-        assert len(trace_calls) == 2
-        assert torch.equal(baseline, _resolve("output.probs"))
-        run.clamp.set(2.)
-        run.boundary()
-        spec = run.interventions.specifications()[0]
-        assert spec["value"] == 2 * index.show(run.selection["layer"], run.selection["feature"])["maximum"]
-        assert spec["positions"] == [run.selection["position"]]
-        assert run.controls.n == 7
-        run.prompt.set("AC")
-        run.boundary()
-        assert len(trace_calls) == 2
-        assert run.output.prompt == "AC"
+        yield run, route
     finally:
         run.close()
         route.detach()
         server = _net.current_server()
         if server is not None:
             server.close()
+
+
+def test_real_hosted_controls_update_bars_and_retrace_only_on_request(hosted_run, monkeypatch):
+    from caliper.interp._publish import _resolve
+    run, route = hosted_run
+    index = run.index
+    trace_calls = []
+    tracer = run.service._resource("tracer")
+    trace = tracer.trace
+    def traced(*a, **kw):
+        trace_calls.append(1)
+        return trace(*a, **kw)
+    monkeypatch.setattr(tracer, "trace", traced)
+    replies = []
+    run.service.submit({"version": 1, "method": "trace.run", "params": {"prompt": "AB", "max_targets": 32}},
+                       lambda *args: replies.append(args))
+    run.boundary()
+    assert replies[-1][0] == "ok", replies
+    node = next(i for i, n in enumerate(run.service.graph.nodes) if n["kind"] == "feature")
+    baseline = _resolve("output.probs").clone()
+    assert route.on_control(None, wire.Control(1, "set", name="selected_node", value=node).to_meta())["status"] == "ok"
+    run.boundary()
+    assert not run.interventions.specifications()
+    assert route.on_control(None, wire.Control(2, "set", name="clamp", value=0.).to_meta())["status"] == "ok"
+    run.boundary()
+    assert len(trace_calls) == 1
+    assert run.interventions.specifications()[0]["value"] == 0.
+    assert not torch.equal(baseline, _resolve("output.probs"))
+    saved = run.interventions.state_dict()
+    result = run.validate()
+    assert result["trace_id"] == run.service.graph.trace_id
+    assert run.interventions.state_dict() == saved
+    assert len(trace_calls) == 1
+    run.reset()
+    assert not run.interventions.specifications()
+    run.boundary()
+    assert len(trace_calls) == 1
+    assert torch.equal(baseline, _resolve("output.probs"))
+    run.clamp.set(2.)
+    run.boundary()
+    spec = run.interventions.specifications()[0]
+    assert spec["value"] == 2 * index.show(run.selection["layer"], run.selection["feature"])["maximum"]
+    assert spec["positions"] == [run.selection["position"]]
+    run.retrace.set(True)
+    run.boundary()
+    assert len(trace_calls) == 2
+    assert run.controls.n == 7
+    run.retrace.set(False)
+    run.prompt.set("AC")
+    run.boundary()
+    assert len(trace_calls) == 2
+    assert run.output.prompt == "AC"
+
+
+def _trace_at_boundary(run, **params):
+    replies = []
+    run.service.submit({"version": 1, "method": "trace.run", "params": params}, lambda *args: replies.append(args))
+    run.boundary()
+    assert replies[-1][0] == "ok", replies
+    return run.service.graph
+
+
+@pytest.mark.parametrize("new_params,retained", [({"prompt": "AC", "max_targets": 32}, False),
+    ({"prompt": "AB", "max_targets": 32, "max_nodes": 20}, False),
+    ({"prompt": "AB", "max_targets": 32, "max_nodes": 20}, True)])
+def test_new_trace_reconciles_semantic_selection_before_clamp_or_reset(hosted_run, new_params, retained):
+    run, _ = hosted_run
+    original = _trace_at_boundary(run, prompt="AB", max_targets=32)
+    changed = _trace_at_boundary(run, **new_params)
+    fields = ("layer", "feature", "position")
+    changed_ids = {node["id"] for node in changed.nodes}
+    candidates = [(i, node) for i, node in enumerate(original.nodes) if node["kind"] == "feature"
+                  and (node["id"] in changed_ids) == retained
+                  and (i >= len(changed.nodes) or changed.nodes[i]["id"] != node["id"])]
+    assert candidates, "fixture must change a selected graph row"
+    row, feature = candidates[0]
+    _trace_at_boundary(run, prompt="AB", max_targets=32)
+    run.selected.set(row)
+    run.update_controls()
+    selected = {key: feature[key] for key in fields}
+    assert run.selection == selected
+    _trace_at_boundary(run, **new_params)
+    expected = next((i for i, node in enumerate(run.service.graph.nodes) if node["kind"] == "feature"
+                     and all(node[key] == value for key, value in selected.items())), -1)
+    assert run.selected.value == expected
+    assert run.selection == (selected if expected >= 0 else None)
+    assert (expected >= 0) == retained
+    run.clamp.set(2.)
+    if expected == -1:
+        with pytest.raises(ValueError, match="selected feature"):
+            run.update_controls()
+        run.reset()
+        assert not run.interventions.specifications()
+    else:
+        run.update_controls()
+        spec, = run.interventions.specifications()
+        assert spec["feature"] == selected["feature"] and spec["positions"] == [selected["position"]]
+        run.reset()
+        assert not run.interventions.specifications()
+
+
+def test_removed_feature_cannot_reset_a_stale_clamp(hosted_run):
+    run, _ = hosted_run
+    graph = _trace_at_boundary(run, prompt="AB", max_targets=32)
+    run.selected.set(next(i for i, node in enumerate(graph.nodes) if node["kind"] == "feature"))
+    run.clamp.set(0.)
+    run.boundary()
+    saved = run.interventions.state_dict()
+    _trace_at_boundary(run, prompt="AC", max_targets=32)
+    assert run.selection is None and run.selected.value == -1
+    run.reset()
+    assert run.interventions.state_dict() == saved
+
+
+def test_reset_with_retrace_has_one_public_boundary(hosted_run, monkeypatch):
+    run, route = hosted_run
+    graph = _trace_at_boundary(run, prompt="AB", max_targets=32)
+    row = next(i for i, node in enumerate(graph.nodes) if node["kind"] == "feature")
+    run.selected.set(row)
+    run.clamp.set(2.)
+    run.boundary()
+    run.retrace.set(True)
+    run.boundary()
+    assert run.selection is not None
+    calls = []
+    tracer = run.service._resource("tracer")
+    trace = tracer.trace
+    def traced(*args, **kwargs):
+        calls.append(run.controls.n)
+        return trace(*args, **kwargs)
+    monkeypatch.setattr(tracer, "trace", traced)
+    before = run.controls.n
+    assert route.on_control(None, wire.Control(3, "run", name="reset").to_meta())["status"] == "queued"
+    run.boundary()
+    assert run.controls.n == before + 1
+    assert calls == [before + 1]
+    assert not run.interventions.specifications()
+    assert not run.service.running and not run.service.boundary_running

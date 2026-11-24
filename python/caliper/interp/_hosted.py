@@ -321,6 +321,7 @@ class HostedService(InterpretationService):
             self.owner.traced_specifications = traced_specifications
             # Queued replacements may differ from the hooks that produced this graph.
             self.owner.traced_state = deepcopy(traced_specifications)
+            self.owner._reconcile_selection(self.graph)
         return result
 
     def step(self, step=None):
@@ -375,6 +376,7 @@ class HostedInference:
         self.restored = None
         self.handle = self.service = self.managed = None
         self.selection = None
+        self._selection_graph = None
         self.traced_prompt = None
         self.traced_specifications = None
         self.traced_state = None
@@ -458,20 +460,39 @@ class HostedInference:
         if changed:
             self.controls._publish()
 
-    def update_controls(self):
-        prompt_inputs(self.model, self.tokenizer, self.prompt.value)
+    def _reconcile_selection(self, graph):
+        """Keep the semantic feature selected only while its displayed row exists."""
+        row = -1
+        if graph is not None and self.selection is not None:
+            row = next((i for i, node in enumerate(graph.nodes) if node["kind"] == "feature"
+                        and all(node[key] == value for key, value in self.selection.items())), -1)
+        if row == -1:
+            self.selection = None
+        if self.selected.value != row:
+            self.selected.set(row)
+        self._selected_version = self.selected._version
+        self._selection_graph = graph
+
+    def _update_selection(self):
+        graph = self.service.graph
+        if graph is not self._selection_graph or (graph is None and self.selection is not None):
+            self._reconcile_selection(graph)
         if self.selected._version != self._selected_version:
             node = self.selected.value
-            if node == -1:
-                self.selection = None
-            elif self.service.graph is None or node >= len(self.service.graph.nodes):
-                raise ValueError("selected_node requires a completed trace")
-            else:
-                record = self.service.graph.nodes[node]
-                if record["kind"] != "feature":
-                    raise ValueError("selected_node must identify a feature")
-                self.selection = {k: record[k] for k in ("layer", "feature", "position")}
+            self.selection = None
             self._selected_version = self.selected._version
+            if node == -1:
+                return
+            if graph is None or node >= len(graph.nodes):
+                raise ValueError("selected_node requires a completed trace")
+            record = graph.nodes[node]
+            if record["kind"] != "feature":
+                raise ValueError("selected_node must identify a feature")
+            self.selection = {k: record[k] for k in ("layer", "feature", "position")}
+
+    def update_controls(self):
+        prompt_inputs(self.model, self.tokenizer, self.prompt.value)
+        self._update_selection()
         if self.clamp._version != self._clamp_version:
             if self.selection is None:
                 raise ValueError("clamp requires a selected feature")
@@ -506,14 +527,15 @@ class HostedInference:
         return "Generated 24 tokens for each output."
 
     def reset(self):
-        if self.selection is not None:
-            point = self.dictionary.metadata["write_points"][self.selection["layer"]]
-            self.interventions.clear_feature(point, self.selection["feature"], kind="clamp")
-            with internal_forward():
+        with internal_forward():
+            self._update_selection()
+            if self.selection is not None:
+                point = self.dictionary.metadata["write_points"][self.selection["layer"]]
+                self.interventions.clear_feature(point, self.selection["feature"], kind="clamp")
                 self._apply()
-        self.clamp.set(0.)
-        self._clamp_version = self.clamp._version
-        self.update_output()
+            self.clamp.set(0.)
+            self._clamp_version = self.clamp._version
+            self.update_output()
         return "The selected feature clamp is reset."
 
     def sweep(self, *, clean_prompt, corrupted_prompt, metric):
