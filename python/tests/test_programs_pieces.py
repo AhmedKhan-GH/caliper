@@ -918,7 +918,8 @@ def _check_two_programs_share_admission(server, monkeypatch, payload_bytes, *, b
             frames = []
             for index, p in enumerate(progs):
                 p.last_step = step
-                data = bytes([4 * index + step]) * payload_bytes
+                pattern = bytes((value + 4 * index + step) % 256 for value in range(256))
+                data = (pattern * ((payload_bytes + 255) // 256))[:payload_bytes]
                 hashes[p.id, step] = hashlib.sha256(data).hexdigest()
                 frame = _resource_frame("points", data, p.id, 32, step)
                 assert len(frame) == frame_bytes
