@@ -155,7 +155,7 @@ struct Export {
             m.stride = layout.stride;
             add_frame(m);
         }
-        if (id == "graph_selected") {
+        {
             // The actual browser spec page consumes these same files and resource bytes.
             nlohmann::json viewer = {{"id", id}, {"title", "Attribution Graph"}, {"state", "ready"}, {"error", nullptr},
                 {"piece", {{"name", piece.name}, {"version", piece.version}, {"from", "library"}}},
@@ -174,7 +174,8 @@ struct Export {
                     {"count", r.count}, {"stride", layout.stride}, {"width", 0}, {"height", 0}, {"bytes", r.bytes}});
             }
             const auto json = viewer.dump();
-            write(out / "hover.json", json.data(), json.size());
+            write(out / (id + ".viewer.json"), json.data(), json.size());
+            if (id == "graph_selected") write(out / "hover.json", json.data(), json.size());
         }
         dp::ProgramPlan pp;
         pp.id = id; pp.pick_id = mr::kPiecePick; pp.inputs = frame(piece,values);
@@ -492,6 +493,40 @@ TEST_CASE("native scene pointer hover shows labels without a click or derive upd
         };
         move(-100, -100);
         until([&] { return has("label 36"); });
+        REQUIRE(std::holds_alternative<caliper_scene::PanZoom>(view.camera()));
+        CHECK_FALSE(std::get<caliper_scene::PanZoom>(view.camera()).y_down);
+        const auto clip = view.program_clip();
+        CHECK(clip.m[0] == doctest::Approx(1));
+        CHECK(clip.m[5] == doctest::Approx(1));
+        CHECK(clip.m[3] == 0);
+        CHECK(clip.m[7] == 0);
+        CHECK(clip.m[15] == 1);
+        REQUIRE(view.render(1024, 256, 1, 0xff101010, &why));
+        CHECK(view.program_clip().m[0] == doctest::Approx(1));
+        CHECK(view.program_clip().m[5] == doctest::Approx(1));
+        view.pan(64, 16, 256);
+        CHECK(std::get<caliper_scene::PanZoom>(view.camera()).center[0] == doctest::Approx(-0.125));
+        CHECK(std::get<caliper_scene::PanZoom>(view.camera()).center[1] == doctest::Approx(0.125));
+        view.fit();
+        view.zoom(1, 0.4f, -0.2f, 1024, 256);
+        const auto zoomed = std::get<caliper_scene::PanZoom>(view.camera());
+        CHECK(zoomed.center[0] + 0.4 * zoomed.half_height == doctest::Approx(0.4));
+        CHECK(zoomed.center[1] - 0.2 * zoomed.half_height == doctest::Approx(-0.2));
+        view.reset();
+        draw();
+        view.pan(32, 16, size);
+        CHECK(view.moved());
+        const auto moved = view.camera();
+        draw();
+        CHECK(std::get<caliper_scene::PanZoom>(view.camera()).center[0] ==
+              std::get<caliper_scene::PanZoom>(moved).center[0]);
+        view.fit();
+        draw();
+        CHECK(view.program_clip().m[0] == doctest::Approx(1));
+        CHECK(view.program_clip().m[12] == doctest::Approx(0));
+        view.reset();
+        draw();
+        CHECK(view.program_clip().m[5] == doctest::Approx(1));
         auto point = at_node(5); move(point.x, point.y);
         until([&] { return has("label 37"); });
         CHECK(has("label 36")); CHECK(events.empty()); CHECK(feed.sent == 1);
@@ -518,6 +553,135 @@ TEST_CASE("native scene pointer hover shows labels without a click or derive upd
         REQUIRE(events.size() == 1); CHECK(events[0].first == "pick");
         const auto picked = nlohmann::json::parse(events[0].second);
         CHECK(picked.at("item") == 5); CHECK(picked.at("fields").at("index") == 5);
+    }
+}
+
+TEST_CASE("panel layouts retain graph coverage and disjoint example and probability labels") {
+    for (const std::string name : {"attribution_graph", "token_strip", "logit_bars"}) {
+        @autoreleasepool {
+            CAPTURE(name);
+            const unsigned width = name == "attribution_graph" ? 1100 : name == "token_strip" ? 1440 : 760;
+            const unsigned height = name == "attribution_graph" ? 760 : 360;
+            const unsigned label_count = name == "attribution_graph" ? 4 : name == "token_strip" ? 200 : 10;
+            std::string why;
+            auto canvas = caliper_host::SpecOffscreen::create(width, height, 1, &why);
+            if (!canvas) CALIPER_SKIP_NO_GPU(why);
+            auto backend = caliper_gfx::make_metal_backend(canvas->native_device(), canvas->native_queue());
+            REQUIRE(backend);
+            struct Feed : cd::DrawFeed {
+                cs::Piece piece;
+                std::vector<Published> data;
+                bool sent = false;
+                std::uint64_t revision() const override { return 1; }
+                std::vector<cd::PanelProgram> programs() const override {
+                    return {{piece, {"panel", {}, "panel"}, mr::kPiecePick, 1, {}}};
+                }
+                void frame(cd::DrawRuntime& rt, cd::FrameInputs*) override {
+                    if (sent) return;
+                    for (const auto& r : data) {
+                        cd::ResourceVersion v;
+                        v.resource = r.id; v.step = 1; v.count = r.count;
+                        v.bytes = r.bytes.data(); v.size = r.bytes.size();
+                        REQUIRE(rt.set_resource(v).ok());
+                    }
+                    sent = true;
+                }
+                void status(const cd::DrawRuntime& rt) override {
+                    CHECK_MESSAGE(rt.status().error.ok(), rt.status().error.message);
+                }
+            } feed;
+            feed.piece = ip::load(name);
+            std::vector<HostTensor> tensors;
+            if (name == "attribution_graph") tensors = graph_tensors();
+            else if (name == "token_strip") {
+                std::vector<float> activations(400);
+                for (unsigned i = 0; i < 400; ++i) activations[i] = float(i % 25) / 24;
+                tensors = {HostTensor::of("tokens", "i32", {16,25}, std::vector<int>(400, 17)),
+                    HostTensor::of("activations", "f32", {16,25}, activations),
+                    HostTensor::of("example_ids", "i32", {16}, std::vector<int>(16, 27)),
+                    HostTensor::of("valid_tokens", "i32", {16}, std::vector<int>(16, 25)), text_tensor(400, "")};
+                const std::vector<std::string> words = {"The", "small", "model", "reads", "each", "token", "and", "shows",
+                    "a", "clear", "pattern", "in", "this", "short", "example", "while", "the", "color", "marks", "its",
+                    "feature", "value", "for", "every", "position"};
+                for (unsigned i = 0; i < 400; ++i) {
+                    auto* bytes = tensors.back().bytes.data() + 64*i;
+                    std::memset(bytes, 0, 64);
+                    std::memcpy(bytes, words[i%25].data(), words[i%25].size());
+                }
+            } else {
+                std::vector<float> probs(20);
+                for (unsigned i = 0; i < 10; ++i) { probs[i] = float(10-i)*0.08f; probs[10+i] = float(i+1)*0.06f; }
+                tensors = {HostTensor::of("probs", "f32", {2,10}, probs),
+                    HostTensor::of("tokens", "i32", {10}, std::vector<int>(10, 37)), text_tensor(10, "Output Token ")};
+            }
+            feed.data = mr::run_derive((__bridge id<MTLDevice>)canvas->native_device(), feed.piece, tensors, {});
+            caliper_live_views::SceneView view(*backend, caliper_gfx::shaders::kMetalPrograms);
+            REQUIRE_MESSAGE(view.init(&why), why);
+            wire::SceneView description; description.space = CALIPER_NET_SPACE_3D; description.up = "+z";
+            view.describe(description);
+            caliper_live_views::SceneRectOptions options; options.draw_feed = &feed;
+            caliper_live_views::SceneRectState state;
+            const auto scene = [&](const ImRect& area) {
+                caliper_live_views::draw_scene_view_in_rect(view, 1, "##layout", area.Min, area.GetSize(), options, state, {});
+            };
+            for (unsigned frame = 0; frame < 120 && state.labels.size() != label_count; ++frame) {
+                @autoreleasepool { REQUIRE_MESSAGE(canvas->render(1, scene, nullptr, &why), why); }
+            }
+            REQUIRE(state.labels.size() == label_count);
+            REQUIRE(std::holds_alternative<caliper_scene::PanZoom>(view.camera()));
+            CHECK(view.program_clip().m[0] == doctest::Approx(1));
+            CHECK(view.program_clip().m[5] == doctest::Approx(1));
+            nlohmann::json report = {{"width", width}, {"height", height}, {"labels", nlohmann::json::array()}};
+            for (std::size_t i = 0; i < state.labels.size(); ++i) {
+                const auto& a = state.labels[i];
+                CHECK(a.x0 >= 0); CHECK(a.y0 >= 0); CHECK(a.x1 <= width); CHECK(a.y1 <= height);
+                CHECK(a.x1 > a.x0); CHECK(a.y1 > a.y0);
+                report["labels"].push_back({a.text, a.x0, a.y0, a.x1, a.y1});
+                for (std::size_t j = i+1; j < state.labels.size(); ++j) {
+                    const auto& b = state.labels[j];
+                    CHECK_FALSE((a.x0 < b.x1 && b.x0 < a.x1 && a.y0 < b.y1 && b.y0 < a.y1));
+                }
+            }
+            if (name == "attribution_graph") {
+                const auto& nodes = resource(feed.data, "nodes");
+                float x0 = 1, y0 = 1, x1 = -1, y1 = -1;
+                for (unsigned i = 0; i < nodes.count; ++i) {
+                    const float x = scalar<float>(nodes, i, 0, 48), y = scalar<float>(nodes, i, 4, 48);
+                    x0 = std::min(x0, x); x1 = std::max(x1, x); y0 = std::min(y0, y); y1 = std::max(y1, y);
+                    CHECK(x > -1); CHECK(x < 1); CHECK(y > -1); CHECK(y < 1);
+                    if (i && i < 4) CHECK(x > scalar<float>(nodes, i-1, 0, 48));
+                    if (i >= 14) CHECK(y > scalar<float>(nodes, 12, 4, 48));
+                    if (i >= 4 && i < 12) CHECK(y > scalar<float>(nodes, i-4, 4, 48));
+                }
+                CHECK((x1-x0)/2 >= 0.7f); CHECK((y1-y0)/2 >= 0.7f);
+                CHECK((x1-x0)*(y1-y0)/4 >= 0.7f);
+                report["coverage"] = {(x1-x0)/2, (y1-y0)/2};
+                report["coverage_area"] = (x1-x0)*(y1-y0)/4;
+            }
+            std::vector<std::uint8_t> rgba;
+            REQUIRE_MESSAGE(canvas->render(1, scene, &rgba, &why), why);
+            if (name == "attribution_graph") {
+                const auto& nodes = resource(feed.data, "nodes");
+                const int cx = int((scalar<float>(nodes, 5, 0, 48)+1)*width/2);
+                const int cy = int((1-scalar<float>(nodes, 5, 4, 48))*height/2);
+                const auto green = [&](int x, int y) {
+                    const auto at = 4*(y*width+x);
+                    return rgba[at+1] > rgba[at]+45 && rgba[at+1] > rgba[at+2]+20;
+                };
+                REQUIRE(green(cx, cy));
+                int left = cx, right = cx, top = cy, bottom = cy;
+                while (left > 0 && green(left-1, cy)) --left;
+                while (right+1 < int(width) && green(right+1, cy)) ++right;
+                while (top > 0 && green(cx, top-1)) --top;
+                while (bottom+1 < int(height) && green(cx, bottom+1)) ++bottom;
+                CHECK(std::abs((right-left)-(bottom-top)) <= 2);
+                report["feature_pixels"] = {right-left+1, bottom-top+1};
+            }
+            const auto out = exporter().out / "app";
+            REQUIRE(stbi_write_png((out / (name + "-panel.png")).string().c_str(), width, height, 4, rgba.data(), width*4));
+            const auto json = report.dump(2);
+            write(out / (name + "-layout.json"), json.data(), json.size());
+        }
     }
 }
 CALIPER_GPU_TEST_MAIN()

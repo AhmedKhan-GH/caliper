@@ -43,6 +43,10 @@ struct PlacedLabel {
 std::vector<PlacedLabel> place_labels(const std::vector<LabelBox>& boxes, const LabelRect& panel,
                                       const std::vector<LabelRect>& markers);
 
+// Horizontal slots for pinned labels, with unshifted center anchors. Adjacent
+// anchors divide a row at their midpoint. Each slot stays inside the panel.
+std::vector<LabelRect> pinned_label_slots(const std::vector<LabelBox>& boxes, const LabelRect& panel);
+
 // The ellipsis that ends a cut text, U+2026 in UTF-8.
 inline constexpr const char* kTextEllipsis = "\xE2\x80\xA6";
 

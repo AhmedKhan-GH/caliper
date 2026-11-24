@@ -56,8 +56,14 @@ fn node_vs(@builtin(instance_index) i: u32, @builtin(vertex_index) v: u32) -> No
     let corners = array<vec2<f32>,6>(vec2<f32>(-1.0,-1.0),vec2<f32>(1.0,-1.0),vec2<f32>(-1.0,1.0),
                                    vec2<f32>(-1.0,1.0),vec2<f32>(1.0,-1.0),vec2<f32>(1.0,1.0));
     let p = nodes[i].position;
+    let center = camera::clip(p.xyz);
+    let right = camera::clip(p.xyz+vec3<f32>(p.w,0.0,0.0));
+    let up = camera::clip(p.xyz+vec3<f32>(0.0,p.w,0.0));
+    let pixels = caliper_view.viewport.zw*0.5;
+    let radius = min(length((right.xy/right.w-center.xy/center.w)*pixels),
+                     length((up.xy/up.w-center.xy/center.w)*pixels));
     var out: NodeOut;
-    out.position = camera::clip(vec3<f32>(p.xy+corners[v]*p.w,0.0));
+    out.position = camera::offset_pixels(center,corners[v]*radius);
     out.uv = corners[v];
     out.item = i;
     out.kind = nodes[i].kind;

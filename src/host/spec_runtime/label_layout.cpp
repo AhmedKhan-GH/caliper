@@ -105,6 +105,23 @@ std::vector<PlacedLabel> place_labels(const std::vector<LabelBox>& boxes, const 
     return out;
 }
 
+std::vector<LabelRect> pinned_label_slots(const std::vector<LabelBox>& boxes, const LabelRect& panel) {
+    std::vector<LabelRect> slots(boxes.size(), panel);
+    for (std::size_t i = 0; i < boxes.size(); ++i) {
+        const auto& a = boxes[i];
+        if (!a.pinned) continue;
+        auto& slot = slots[i];
+        for (std::size_t j = 0; j < boxes.size(); ++j) {
+            const auto& b = boxes[j];
+            if (i == j || !b.pinned || std::fabs(a.anchor_y - b.anchor_y) >= 0.5f * (a.height + b.height)) continue;
+            const float mid = 0.5f * (a.anchor_x + b.anchor_x);
+            if (b.anchor_x <= a.anchor_x) slot.x0 = std::max(slot.x0, mid);
+            if (b.anchor_x >= a.anchor_x) slot.x1 = std::min(slot.x1, mid);
+        }
+    }
+    return slots;
+}
+
 std::string fit_with_ellipsis(std::string_view text, float width,
                               const std::function<float(std::string_view)>& width_of) {
     if (!width_of || !(width >= 0.0f)) return {};
