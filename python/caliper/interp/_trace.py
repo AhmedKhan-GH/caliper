@@ -6,16 +6,18 @@ from copy import deepcopy
 from dataclasses import dataclass
 import hashlib
 import json
+import time
 
 import torch
 
 from ._dictionary import _state_hash, weights_hash
 from ._frozen import (FrozenPath, MemoryGuard, _validate_dictionary, _validate_ablation_points,
                       _validate_intervention_positions)
-from ._memory import autorelease_scope
+from ._memory import CleanStop, autorelease_scope
 from ._graph import Graph, bounded_integer
 from ._influence import influence
 from ._labels import token_label
+from ._feature_labels import label_graph_nodes
 
 
 @dataclass
@@ -342,7 +344,7 @@ class Tracer:
     the global owner when this keyword is absent.
     """
 
-    def __init__(self, model, tokenizer, dictionary, *, controls=None):
+    def __init__(self, model, tokenizer, dictionary, *, controls=None, index=None):
         if dictionary is None:
             raise ValueError("trace requires a dictionary")
         _validate_dictionary(model, dictionary)
@@ -351,12 +353,22 @@ class Tracer:
             controls = CONTROLS
         self.model, self.tokenizer, self.dictionary = model, tokenizer, dictionary
         self.controls = controls
+        self.bind_index(index)
         self.target_batch_size = 64
         self._cache = OrderedDict()
         self._forward_cache = None
         self._prompt = None
         self.guard = MemoryGuard(next(model.parameters()).device)
         self._settings = _forward_settings(model, self.guard._guard)
+
+    def bind_index(self, index):
+        """Bind heuristic labels to the same immutable trace resources."""
+        if index is not None:
+            for name in ("model", "tokenizer", "dictionary"):
+                if getattr(index, name, None) is not getattr(self, name):
+                    raise ValueError("trace feature index must share the same " + name)
+            index.label_identity  # Refuse closed or invalid indexes before trace work.
+        self.index = index
 
     def _validate_forward_settings(self):
         try:
@@ -428,6 +440,14 @@ class Tracer:
             return self._trace(prompt, max_targets, max_nodes, max_edges)
 
     def _trace(self, prompt, max_targets, max_nodes, max_edges):
+        started = time.monotonic()
+        label_index = self.index
+        label_key = None if label_index is None else label_index.label_identity
+
+        def label_check(stage):
+            if time.monotonic() - started > 20:
+                raise CleanStop("trace feature labels exceeded the 20 second budget")
+
         state = self._intervention_state()
         specifications = state["specifications"] if isinstance(state, dict) else state
         if (specifications and isinstance(state, dict) and state["rows"] is not None
@@ -471,7 +491,7 @@ class Tracer:
                         "tokenizer": id(self.tokenizer), "prompt": prompt, "tokens": ids.tolist(),
                         "interventions": state}
             state_key = hashlib.sha256(json.dumps(identity, sort_keys=True, allow_nan=False).encode()).hexdigest()
-            cache_key = (state_key, max_targets, max_nodes, max_edges, self.target_batch_size)
+            cache_key = (state_key, max_targets, max_nodes, max_edges, self.target_batch_size, label_key)
             self._validate_forward_settings()
             if cache_key in self._cache:
                 graph = self._cache.pop(cache_key)
@@ -546,6 +566,7 @@ class Tracer:
             tolerance = 1e-9 if path.dtype == torch.float64 else 2e-2
             if completeness["max_absolute_residual"] > tolerance:
                 raise ValueError(f"direct-effect completeness residual exceeds {tolerance}")
+            display_nodes = label_graph_nodes(display_nodes, label_index, check=label_check)
             graph_data = dict(nodes=display_nodes, edges=display_edges, tokens=effects.tokens,
                               layers=path.layers, completeness=completeness, omitted_influence=omitted,
                               error_share=error_share, feature_share=feature_share,

@@ -512,7 +512,7 @@ def test_resource_stop_terminates_queue_and_reaches_controls_owner(method):
         raise failure
 
     service = InterpretationService(dictionary=SimpleNamespace(metadata={}),
-        tracer=SimpleNamespace(trace=stop), index=SimpleNamespace(examples=stop))
+        tracer=SimpleNamespace(trace=stop, bind_index=lambda index: None), index=SimpleNamespace(examples=stop))
     register_service(service, controls=controls)
     params = {"prompt": "AB"} if method == "trace.run" else {"layer": 0, "feature": 1}
     if method == "feature.examples":

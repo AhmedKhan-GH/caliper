@@ -44,6 +44,8 @@ class InterpretationService:
     def _bind_resources(self):
         """Use one model, tokenizer, and dictionary for all supplied resources."""
         self._check_tracer_controls(self.tracer, getattr(self, "controls", None))
+        if self.index is None and self.factories["index"] is None:
+            self.index = getattr(self.tracer, "index", None)
         for resource in (self.index, self.tracer):
             if resource is None:
                 continue
@@ -186,7 +188,10 @@ class InterpretationService:
             started = time.monotonic()
             with self.lock:
                 self.status = {"state": "running", "seconds": 0., "step": step}
-            graph = self._resource("tracer").trace(**params)
+            tracer = self._resource("tracer")
+            index = self._resource("index") if self.index is not None or self.factories["index"] is not None else None
+            tracer.bind_index(index)
+            graph = tracer.trace(**params)
             summary = graph.read(node_limit=0, edge_limit=0)
             result = {"state": "done", "seconds": time.monotonic() - started, "step": step,
                       **{k: v for k, v in summary.items() if k not in ("nodes", "edges", "tokens")}}
