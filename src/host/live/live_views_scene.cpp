@@ -317,12 +317,14 @@ void adopt_view(const SceneView& view, SceneRectState& state) {
 // never supersedes a click. Pointer, camera, and resource changes invalidate an old answer.
 void program_hover(SceneView& view, SceneRectState& state, bool active, float x, float y) {
 #if defined(CALIPER_HAVE_DRAW)
+    const auto runtimes = view.draw_runtimes();
+    const bool has_hover_label = std::any_of(runtimes.begin(), runtimes.end(),
+                                           [](const auto* rt) { return rt->has_hover_label(); });
+    if (!has_hover_label && !state.program_hover) return;
     if (!state.program_hover) state.program_hover = std::make_shared<SceneProgramHover>();
     SceneProgramHover& h = *state.program_hover;
     std::vector<std::pair<uint32_t, std::shared_ptr<const void>>> versions;
-    bool has_hover_label = false;
-    for (const auto* rt : view.draw_runtimes()) {
-        has_hover_label = has_hover_label || rt->has_hover_label();
+    for (const auto* rt : runtimes) {
         const auto shown = rt->shown_items();
         if (shown) versions.emplace_back(rt->pick_id(), shown.version);
     }
