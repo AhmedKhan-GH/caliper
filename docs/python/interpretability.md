@@ -92,9 +92,10 @@ Replacement of all MLPs must increase cross-entropy by at most 0.5 nats.
 These thresholds describe acceptance criteria, not a claim that a local dictionary passed.
 The example index uses two million other tokens and a 12 GB process limit.
 
-Gemma 2 2B with Gemma Scope transcoders remains a documented fallback.
-It requires a compatible converter because its normalization points and encoder orientation differ.
-A Qwen dictionary cannot serve that model.
+Gemma 2 2B with Gemma Scope transcoders requires a separate converter.
+Its normalization points and encoder orientation differ.
+This release contains no Gemma converter or fallback model run.
+The demo uses the accepted Qwen dictionary. A Qwen dictionary cannot serve Gemma.
 
 ## Example Index
 
