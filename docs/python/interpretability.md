@@ -331,6 +331,13 @@ The driver saves `result.json` with the graph, command log, event log, example p
 Hidden runs also save `before.png`, `after.png`, and the second example page capture under the acceptance folder.
 A bounded hidden diagnostic reads actual renderer IDs, color pixels, panel image quads, clips, generations, and font references from those captures.
 
+An explicit founder decision can admit one demo dictionary through `--quality-override FILE`.
+The JSON record uses version 1 and authority `founder`, with `dictionary_fingerprint`, `evaluated_tokens`, `fvu`, `dead_fraction`, `cross_entropy_delta`, and `failed_gates`.
+The fingerprint and measured values must match the live dictionary evidence exactly.
+The driver retains failed quality status and displays the override, measurements, and full fingerprint in the instrument and `result.json`.
+The override cannot bypass incomplete resources, stale evidence, or causal, pixel, parity, and budget checks.
+The hidden test reads the optional record path from `CALIPER_QWEN_QUALITY_OVERRIDE`.
+
 The pixel oracle applies the window origin, framebuffer scale, linear texture samples, and text alpha composition.
 It compares the resulting panel pixels with the window PNG and requires visible geometry for every source item.
 The PNG/raw equality check establishes only capture consistency.

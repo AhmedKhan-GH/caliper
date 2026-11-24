@@ -310,6 +310,64 @@ def test_finish_preserves_fixture_without_qwen_qualification():
     assert result["qwen_acceptance"] is False
 
 
+def failed_quality_override():
+    response = qualification_reply(token_budget=40_000_000)
+    quality = response["metadata"]["quality"]
+    quality.update(status="failed", fvu=.329, dead_fraction=.261, cross_entropy_delta=1.18,
+                   per_layer_fvu=[.329] * 24, per_layer_dead_fraction=[.261] * 24,
+                   replaced_cross_entropy=quality["original_cross_entropy"] + 1.18)
+    record = {"version": 1, "authority": "founder", "dictionary_fingerprint": "a" * 64,
+              "evaluated_tokens": 200_000, "fvu": .329, "dead_fraction": .261,
+              "cross_entropy_delta": 1.18, "failed_gates": ["dead_fraction", "cross_entropy_delta"]}
+    return response, record
+
+
+def test_quality_override_retains_failures_and_cannot_override_causal_checks():
+    response, record = failed_quality_override()
+    original = deepcopy(response)
+    assert dictionary_qualification(response)["qualified"] is False
+    qualified = dictionary_qualification(response, quality_override=record)
+    assert qualified["qualified"] is True and qualified["status"] == "founder_override"
+    assert qualified["reported_status"] == "failed" and qualified["quality_override"] == record
+    assert response == original
+    result = {"mode": "qwen", "checks": [check("steering", False, .01, .05)],
+              "pixel_evidence_collected": True, "dictionary_evidence": response,
+              "dictionary_quality_override": record}
+    assert finish(result) == 1
+    assert result["failed_checks"] == ["steering"] and result["qwen_acceptance"] is False
+    result["checks"][0]["passed"] = True
+    assert finish(result) == 0 and result["qwen_acceptance"] is True
+    assert result["dictionary_evidence"]["metadata"]["quality"]["status"] == "failed"
+
+
+@pytest.mark.parametrize("key,value", [
+    ("version", True), ("authority", "unknown"), ("dictionary_fingerprint", "f" * 64),
+    ("evaluated_tokens", 199_999), ("fvu", .33), ("dead_fraction", .262),
+    ("cross_entropy_delta", 1.181), ("fvu", float("nan")), ("failed_gates", []),
+    ("failed_gates", ["dead_fraction"]), ("extra", True),
+])
+def test_quality_override_refuses_changed_identity_or_measurements(key, value):
+    response, record = failed_quality_override()
+    record[key] = value
+    assert dictionary_qualification(response, quality_override=record)["qualified"] is False
+
+
+@pytest.mark.parametrize("fault", ["index", "training", "evaluation", "model", "layer_metrics"])
+def test_quality_override_preserves_resource_and_evidence_requirements(fault):
+    response, record = failed_quality_override()
+    if fault == "index":
+        response["index"]["tokens"] -= 1
+    elif fault == "training":
+        response["metadata"]["training"]["tokens"] -= 1
+    elif fault == "evaluation":
+        response["metadata"]["quality"]["stop_reason"] = "interrupted"
+    elif fault == "model":
+        response["identity"]["model_hash"] = "other"
+    else:
+        response["metadata"]["quality"]["per_layer_fvu"][0] = .1
+    assert dictionary_qualification(response, quality_override=record)["qualified"] is False
+
+
 def test_parity_retains_the_existing_edge_side_tolerance():
     import numpy as np
     from parity import compare
@@ -652,7 +710,7 @@ def test_bridge_creates_examples_after_an_early_refusal(tmp_path):
 
 def test_visible_bridge_continues_after_first_event():
     from unittest.mock import Mock
-    session = Mock()
+    session = Mock(quality_override=None)
     session.live.side_effect = [True, True, False]
     bridge = driver.Bridge(session)
     bridge.consume = Mock()
@@ -872,7 +930,7 @@ def test_acceptance_uses_explicit_ablation_and_retains_selection_gate(tmp_path, 
     before_reply = {"step": 9, "elements": [
         [0, 0, 0, 0, .1, .2 if selection_changed else .1, token, token - 1] for token in range(1, 11)]}
     after_reply = dict(before_reply, step=14)
-    session = Mock(out=tmp_path, run_id="circuit-trace", program_evidence={"before": {}})
+    session = Mock(out=tmp_path, run_id="circuit-trace", program_evidence={"before": {}}, quality_override=None)
     session.read.return_value = before_reply
     session.ablate_selected.return_value = after_reply, after
     def complete(method, **args):
@@ -1013,10 +1071,12 @@ def test_session_ready_failure_reaps_owned_standard_library_child(tmp_path, monk
     assert not psutil.pid_exists(probe["pid"])
 
 
-def test_instrument_uses_three_panels_and_confirmed_bindings():
+@pytest.mark.parametrize("override", [False, True])
+def test_instrument_uses_three_panels_and_confirmed_bindings(override):
     from unittest.mock import Mock
     import jsonschema
-    session = Mock()
+    record = failed_quality_override()[1] if override else None
+    session = Mock(quality_override=record)
     driver.instrument(session)
     driver.programs(session)
     driver.programs(session, examples=True)
@@ -1030,7 +1090,12 @@ def test_instrument_uses_three_panels_and_confirmed_bindings():
     description = next(call.kwargs["description"] for call in calls if call.args[0] == "spec.new")
     readouts = {call.kwargs["id"]: call.kwargs["options"]["format"] for call in calls
                 if call.args[0] == "control.create" and call.kwargs["kind"] == "readout"}
-    assert len(readouts) == 6
+    assert len(readouts) == (8 if override else 6)
+    if override:
+        assert record["dictionary_fingerprint"] in readouts["method_dictionary_identity"]
+        text = readouts["method_dictionary_quality_override"]
+        assert "Founder override" in text and "Quality remains failed" in text
+        assert all(f"{record[key]:.9f}" in text for key in ("fvu", "dead_fraction", "cross_entropy_delta"))
     for name, text in driver.METHOD_DISCLOSURES.items():
         assert text in description and readouts["method_" + name] == text
     controls = {call.kwargs["id"]: call.kwargs for call in calls if call.args[0] == "control.create"}
@@ -1123,6 +1188,8 @@ def hidden(tmp_path, model, dictionary):
     out = Path(os.environ.get("CALIPER_CIRCUIT_OUT", tmp_path / "result"))
     command = [sys.executable, str(DEMO / "run.py"), "--model", model, "--dictionary", str(dictionary),
                "--hidden", "--out", str(out)]
+    if model != "tiny-lm" and env.get("CALIPER_QWEN_QUALITY_OVERRIDE"):
+        command.extend(["--quality-override", env["CALIPER_QWEN_QUALITY_OVERRIDE"]])
     with subprocess.Popen(command, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True) as process:
         try:
             stdout, stderr = process.communicate(timeout=540)

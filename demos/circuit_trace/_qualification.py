@@ -28,11 +28,29 @@ def _integer(value, expected):
     return type(value) is int and value == expected
 
 
-def _quality(metadata, fingerprint, *, fallback=False, failed=False):
+def validate_quality_override(record):
+    """Require an explicit decision bound to exact bytes and measured quality."""
+    fields = {"version", "authority", "dictionary_fingerprint", "evaluated_tokens",
+              "fvu", "dead_fraction", "cross_entropy_delta", "failed_gates"}
+    _require(isinstance(record, dict) and set(record) == fields, "Invalid quality override fields.")
+    _require(_integer(record["version"], 1) and record["authority"] == "founder"
+             and _digest(record["dictionary_fingerprint"])
+             and _integer(record["evaluated_tokens"], QUALITY_TOKENS), "Invalid quality override identity.")
+    limits = {"fvu": .40, "dead_fraction": .15, "cross_entropy_delta": .5}
+    _require(all(_number(record[key]) for key in limits)
+             and record["fvu"] >= 0 and 0 <= record["dead_fraction"] <= 1,
+             "Invalid quality override measurements.")
+    failures = [key for key, limit in limits.items() if record[key] > limit]
+    _require(bool(failures) and record["failed_gates"] == failures,
+             "Quality override must name every failed quality gate.")
+    return {**record, "failed_gates": list(failures)}
+
+
+def _quality(metadata, fingerprint, *, fallback=False, failed=False, override=None):
     quality = metadata["quality"]
     layers = metadata["layers"]
     active = list(range(layers // 2, layers)) if fallback else list(range(layers))
-    status = "failed" if failed else "fallback_passed" if fallback else "passed"
+    status = "failed" if failed or override is not None else "fallback_passed" if fallback else "passed"
     _require(quality.get("status") == status, "Quality status does not match the required result.")
     _require(_digest(fingerprint) and quality.get("dictionary_hash") == fingerprint,
              "Quality does not identify the exact dictionary.")
@@ -67,7 +85,13 @@ def _quality(metadata, fingerprint, *, fallback=False, failed=False):
              and _number(delta) and math.isclose(delta, replaced - original, rel_tol=1e-9, abs_tol=1e-12),
              "Quality cross-entropy evidence is invalid.")
     passes = quality["fvu"] <= .40 and quality["dead_fraction"] <= .15 and delta <= .5
-    _require(passes != failed, "Quality metrics contradict the required status.")
+    _require(passes != (failed or override is not None), "Quality metrics contradict the required status.")
+    if override is not None:
+        approved = validate_quality_override(override)
+        _require(not fallback and approved["dictionary_fingerprint"] == fingerprint
+                 and all(approved[key] == quality[key] for key in
+                         ("evaluated_tokens", "fvu", "dead_fraction", "cross_entropy_delta")),
+                 "Quality override differs from the exact dictionary or measured values.")
 
 
 def _partitions(training):
@@ -130,7 +154,7 @@ def _fallback(metadata, response):
              "Fallback source evaluation is incomplete or stale.")
 
 
-def dictionary_qualification(response):
+def dictionary_qualification(response, *, quality_override=None):
     """Refuse absent or stale evidence without model, tensor, or file access."""
     result = {"qualified": False, "scope": None, "status": "unverified"}
     try:
@@ -162,10 +186,12 @@ def dictionary_qualification(response):
                  "The index source or held-out partition differs.")
         if "source_id" in provenance:
             _require(provenance["source_id"] == training["source_id"], "The index source identity differs.")
-        _quality(metadata, identity["dictionary_fingerprint"], fallback=fallback)
+        _quality(metadata, identity["dictionary_fingerprint"], fallback=fallback, override=quality_override)
         if fallback:
             _fallback(metadata, response)
         result.update(qualified=True, status="fallback_passed" if fallback else "passed", identity=dict(identity))
+        if quality_override is not None:
+            result.update(status="founder_override", quality_override=validate_quality_override(quality_override))
     except (KeyError, TypeError, ValueError, AttributeError, OverflowError) as error:
         result["reason"] = str(error)
     return result

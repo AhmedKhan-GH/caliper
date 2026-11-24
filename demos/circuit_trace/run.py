@@ -19,6 +19,7 @@ from _checks import (FIXTURE_HASH, FIXTURE_PROMPT, QWEN_PROMPT, bar_rows, captur
                      check, finish, math_checks, program_budget_checks, selected_feature)
 from _inference_evidence import (bound_completion, comparison_evidence, generation_baseline,
                                  generation_evidence, inference_state)
+from _qualification import dictionary_qualification, validate_quality_override
 
 ROOT = Path(__file__).resolve().parents[2]
 METHOD_DISCLOSURES = {
@@ -65,6 +66,7 @@ class Session:
     """Own one app and one MCP process, plus the hosted run that MCP starts."""
     def __init__(self, args, out, *, show=False):
         self.out, self.show = out, show
+        self.quality_override = getattr(args, "quality_override", None)
         self.app = self.mcp = self.events = None
         self.app_process = None
         self.app_owner = None
@@ -326,7 +328,15 @@ def read_graph(session):
 
 def instrument(session):
     m = session.mcp
-    m.body("spec.new", id="circuit-trace", title="Circuit Trace", description=" ".join(METHOD_DISCLOSURES.values()))
+    disclosures = dict(METHOD_DISCLOSURES)
+    override = getattr(session, "quality_override", None)
+    if override is not None:
+        override = validate_quality_override(override)
+        disclosures["dictionary_quality_override"] = (
+            f"Founder override. Quality remains failed. FVU {override['fvu']:.9f}. "
+            f"Dead fraction {override['dead_fraction']:.9f}. Cross-entropy rise {override['cross_entropy_delta']:.9f} nats.")
+        disclosures["dictionary_identity"] = "Dictionary SHA256: " + override["dictionary_fingerprint"]
+    m.body("spec.new", id="circuit-trace", title="Circuit Trace", description=" ".join(disclosures.values()))
     for identifier, default, maximum in (("selected_node", -1, 511), ("example_page", 0, 1)):
         m.body("state.create", id=identifier, type="integer", default=default, min=default, max=maximum)
     m.body("state.create", id="activation_max", type="number", default=1., min=1e-6, max=1e20)
@@ -351,11 +361,11 @@ def instrument(session):
     m.body("control.create", id="clamp_status_value", kind="text", bind="param:clamp.status", title="Clamp Status")
     m.body("control.create", id="clamp_status", kind="readout", title="Clamp Status",
            options={"format": "{status:s}", "fields": {"status": {"control": "clamp_status_value"}}})
-    for name, text in METHOD_DISCLOSURES.items():
+    for name, text in disclosures.items():
         m.body("control.create", id="method_" + name, kind="readout", title=name.replace("_", " ").title(),
                options={"format": text})
     # The status spans the instrument width. Buttons share one control row.
-    nodes = [{"id": "instrument", "split": "vertical", "ratio": .82, "children": ["main", "methods"]},
+    nodes = [{"id": "instrument", "split": "vertical", "ratio": .74 if override else .82, "children": ["main", "methods"]},
              {"id": "main", "split": "vertical", "ratio": .08, "children": ["prompt", "status_body"]},
              {"id": "status_body", "split": "vertical", "ratio": .06, "children": ["clamp_status", "body"]},
              {"id": "body", "split": "horizontal", "ratio": .66, "children": ["graph", "right"]},
@@ -368,7 +378,7 @@ def instrument(session):
                       "ratio": 1 / (len(control_ids) - index),
                       "children": [control_ids[index], control_ids[index + 1] if index + 2 == len(control_ids)
                                    else f"controls-{index + 1}"]})
-    method_ids = ["method_" + name for name in METHOD_DISCLOSURES]
+    method_ids = ["method_" + name for name in disclosures]
     for index in range(len(method_ids) - 1):
         nodes.append({"id": "methods" if index == 0 else f"methods-{index}", "split": "vertical",
                       "ratio": 1 / (len(method_ids) - index),
@@ -472,6 +482,11 @@ class Bridge:
 
 def acceptance(session, args, result):
     s = session
+    if result.get("dictionary_quality_override") is not None:
+        qualification = dictionary_qualification(s.events.complete("feature.dictionary"),
+                                                  quality_override=result["dictionary_quality_override"])
+        if not qualification["qualified"]:
+            raise Failure("The quality override does not qualify this dictionary: " + qualification.get("reason", "unknown"))
     instrument(s)
     trace = s.events.complete("trace.run", prompt=args.prompt)
     status = s.events.complete("trace.status")
@@ -592,6 +607,7 @@ def parser():
     p.add_argument("--model", required=True)
     p.add_argument("--dictionary", required=True)
     p.add_argument("--prompt")
+    p.add_argument("--quality-override", type=Path, help="Explicit founder decision for one dictionary and its measured quality")
     group = p.add_mutually_exclusive_group()
     group.add_argument("--hidden", action="store_true", default=True)
     group.add_argument("--show", action="store_true", help="Founder-only live window")
@@ -601,6 +617,10 @@ def parser():
 
 def main(argv=None):
     args = parser().parse_args(argv)
+    if args.quality_override is not None:
+        if args.model == "tiny-lm" or args.quality_override.stat().st_size > 4096:
+            raise Failure("A quality override requires Qwen and at most 4096 JSON bytes.")
+        args.quality_override = validate_quality_override(json.loads(args.quality_override.read_text(encoding="utf-8")))
     args.prompt = args.prompt or (FIXTURE_PROMPT if args.model == "tiny-lm" else QWEN_PROMPT)
     if args.model != "tiny-lm":
         args.model = str(Path(args.model).resolve())
@@ -612,6 +632,8 @@ def main(argv=None):
               "method_disclosures": dict(METHOD_DISCLOSURES),
               "fixture_forward_hash": FIXTURE_HASH if args.model == "tiny-lm" else None,
               "checks": [], "passed": False, "qwen_acceptance": False}
+    if args.quality_override is not None:
+        result["dictionary_quality_override"] = args.quality_override
     session = None
     try:
         # One bounded app case establishes measured memory before the full-cap case.

@@ -286,6 +286,11 @@ The trace budget is 20 seconds, the steering budget is one second, and the demo 
 The driver checks node IDs and window bar heights within two pixels. The Qwen top bar must also become shorter after the clamp.
 App/browser parity applies to the fixture graph, with the existing draw tolerances.
 
+The 24 November founder decision permits this demo dictionary despite its recorded dead-feature and cross-entropy failures.
+A quality override must identify the exact dictionary fingerprint, complete evaluation count, measured values, and failed gates.
+The driver displays that decision and retains the failed measurements in its result.
+This exception does not change causal, pixel, parity, or budget checks, and it does not block either code milestone merge.
+
 The driver ties graph, example, and bar targets to the window through the actual image quads, clips, and framebuffer scale.
 An independent CPU reference uses the actual font atlas and expected glyph quads to check prompt and selected labels.
 The reference permits two channel levels of interior difference and at most one percent differing edge pixels.

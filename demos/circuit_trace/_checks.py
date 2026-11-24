@@ -223,7 +223,8 @@ def capture_checks(folder, metadata, png, graph, bars, *, selected):
 
 def finish(result):
     has_evidence = any(g["name"] != "dictionary_qualification" for g in result.get("checks", []))
-    qualification = dictionary_qualification(result.get("dictionary_evidence"))
+    qualification = dictionary_qualification(result.get("dictionary_evidence"),
+                                              quality_override=result.get("dictionary_quality_override"))
     result["dictionary_qualification"] = qualification
     if result["mode"] == "qwen":
         # Recompute this gate from evidence. A cached status cannot qualify a run.
