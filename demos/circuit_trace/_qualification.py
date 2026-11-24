@@ -183,6 +183,16 @@ def _gemma_model_binding(metadata, response):
              "Gemma quality model tensors or forward settings differ from the current resources.")
 
 
+def _gemma_dictionary_binding(metadata, response):
+    """Require the exact dictionary tensors that produced the quality metrics."""
+    for binding in (metadata["quality"].get("tensor_binding"), response.get("tensor_binding")):
+        _require(isinstance(binding, dict) and set(binding) == {"version", "tensor_hash"}
+                 and _integer(binding.get("version"), 1) and _digest(binding.get("tensor_hash")),
+                 "Gemma requires complete dictionary tensor evidence for quality and live resources.")
+    _require(metadata["quality"]["tensor_binding"] == response["tensor_binding"],
+             "Gemma quality dictionary tensors differ from the current resources.")
+
+
 def _fallback(metadata, response):
     training = metadata["training"]
     fallback = training["fallback"]
@@ -258,6 +268,7 @@ def dictionary_qualification(response, *, quality_override=None, family="qwen"):
         _partitions(training)
         if gemma:
             _gemma_model_binding(metadata, response)
+            _gemma_dictionary_binding(metadata, response)
             _require(provenance.get("publisher_training_overlap") == "unknown",
                      "Gemma index must retain unknown publisher training overlap.")
         else:

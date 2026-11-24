@@ -1,25 +1,19 @@
 """Bounded evidence for the artifact and tensors in one evaluation."""
 from __future__ import annotations
 
-import hashlib
 import json
 from pathlib import Path
 
-import torch
-from safetensors import safe_open
-
 from caliper.interp._dictionary import (
-    _canonical_device, _checkpoint_slices, _dense_state, _hf_digest,
+    _dense_state, _hf_digest,
     dictionary_fingerprint, model_identity, weight_names,
 )
 from caliper.interp._evaluation_identity import (
-    _evaluation_settings, evaluation_model_evidence,
+    _evaluation_settings, evaluation_dictionary_evidence, evaluation_model_evidence,
 )
 from caliper.interp._gemma_import_identity import verified_import_binding
-from .memory_limits import CleanStop, autorelease_scope
 
 
-_CHUNK_BYTES = 1024 * 1024
 _CHANGED = "evaluation dictionary or settings changed: artifact binding differs"
 _MODEL_CHANGED = "evaluation model identity mismatch: runtime binding differs"
 
@@ -54,7 +48,7 @@ class EvaluationBinding:
         self.stamps = self._tensor_stamps()
         self.files = self._file_stamps()
         self.check()
-        self.evidence = {"version": 1, "tensor_hash": self._digest(compare=True)}
+        self.evidence = evaluation_dictionary_evidence(dictionary, memory=memory, folder=self.folder)
         self._check_files()
         self.check()
 
@@ -110,49 +104,6 @@ class EvaluationBinding:
                 or self._file_stamps() != self.files):
             raise ValueError(_CHANGED)
 
-    def _admit(self, tensor):
-        if tensor.device.type != "cpu":
-            if self.memory is None:
-                raise ValueError("evaluation device tensors require a process memory guard")
-            if _canonical_device(tensor.device) != _canonical_device(self.memory.device):
-                raise ValueError("evaluation tensor and memory guard devices differ")
-        if self.memory:
-            # Admit every readback. File hashes force a fresh stage measurement.
-            self.memory.check("evaluation_binding", force=False)
-            if self.memory.peak + 4 * _CHUNK_BYTES > self.memory.limit:
-                raise CleanStop("evaluation binding exceeds the process memory limit")
-
-    def _digest(self, *, compare=False):
-        digest = hashlib.sha256(b"caliper.evaluation.tensors.v1\0")
-        for i, layer in enumerate(self.layers):
-            with safe_open(self.folder / f"layer_{i:02d}.safetensors",
-                           framework="pt", device="cpu") as source:
-                if set(source.keys()) != set(weight_names(layer)):
-                    raise ValueError(_CHANGED)
-                for name in weight_names(layer):
-                    tensor = getattr(layer, name)
-                    stored = source.get_slice(name)
-                    if list(tensor.shape) != stored.get_shape():
-                        raise ValueError(_CHANGED)
-                    header = json.dumps([i, name, str(tensor.dtype), list(tensor.shape)]).encode()
-                    digest.update(len(header).to_bytes(8, "little"))
-                    digest.update(header)
-                    # Eight bytes cover the largest supported source or target dtype.
-                    for selection in _checkpoint_slices(tensor.shape, _CHUNK_BYTES // 8):
-                        self._admit(tensor)
-                        with autorelease_scope(tensor.device):
-                            chunk = tensor.detach()[selection].to(device="cpu").contiguous()
-                            raw = chunk.view(torch.uint8)
-                            if compare:
-                                # Convert the file slice as the loader converts the parameter.
-                                expected = stored[selection].to(dtype=tensor.dtype).contiguous()
-                                if not torch.equal(raw, expected.view(torch.uint8)):
-                                    raise ValueError(_CHANGED)
-                                del expected
-                            digest.update(memoryview(raw.numpy()))
-                            del raw, chunk
-        return digest.hexdigest()
-
     def _check_files(self):
         if dictionary_fingerprint(self.folder, self.dictionary.metadata, memory=self.memory) != self.identity:
             raise ValueError(_CHANGED)
@@ -167,6 +118,6 @@ class EvaluationBinding:
         if _hf_digest(self.model, memory=self.memory) != self.model_evidence["tensor_hash"]:
             raise ValueError(_MODEL_CHANGED)
         self._check_files()
-        if self._digest() != self.evidence["tensor_hash"]:
+        if evaluation_dictionary_evidence(self.dictionary, memory=self.memory) != self.evidence:
             raise ValueError(_CHANGED)
         self.check()

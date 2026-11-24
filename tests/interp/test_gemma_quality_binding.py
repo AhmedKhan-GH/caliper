@@ -9,11 +9,12 @@ from types import SimpleNamespace
 import pytest
 import torch
 
+from caliper.interp import load_dictionary
 from caliper.interp._dictionary import dictionary_fingerprint, model_identity, verify_hf_model
-from caliper.interp._evaluation_identity import evaluation_model_evidence
+from caliper.interp._evaluation_identity import _evaluation_settings, evaluation_dictionary_evidence, evaluation_model_evidence
 from caliper.interp._index import FeatureIndex, build_index
 from caliper.interp._qualification import dictionary_response
-from demos.circuit_trace._qualification import _gemma_model_binding
+from demos.circuit_trace._qualification import _gemma_dictionary_binding, _gemma_model_binding
 from tools.interp import eval_dictionary
 from tools.interp.evaluation_binding import EvaluationBinding
 from tools.interp.text_stream import TextStream
@@ -52,14 +53,70 @@ def test_quality_and_live_response_share_verified_evidence(artifact):
     with TextStream(documents(), tokenizer, "quality") as stream:
         resumed = eval_dictionary.evaluate(model, dictionary, stream, folder, tokens=8,
                                           context=4, batch_tokens=8, chunk_tokens=2, resume=True)
-    for field in ("fvu", "dead_fraction", "cross_entropy_delta", "evaluated_tokens", "model_binding", "evaluation_source"):
+    for field in ("fvu", "dead_fraction", "cross_entropy_delta", "evaluated_tokens", "model_binding",
+                  "tensor_binding", "evaluation_source"):
         assert resumed[field] == quality[field]
     assert resumed["publisher_training_overlap"] == "unknown"
     result = reply(folder, model, dictionary)
     assert result["model_binding"] == quality["model_binding"] == evidence(model)
+    assert result["tensor_binding"] == quality["tensor_binding"] == state["tensor_binding"]
+    assert result["tensor_binding"] == evaluation_dictionary_evidence(dictionary)
     _gemma_model_binding(result["metadata"], result)
+    _gemma_dictionary_binding(result["metadata"], result)
     result["model_binding"]["tensor_hash"] = "0" * 64
     assert result["metadata"]["quality"]["model_binding"] == evidence(model)
+    result["tensor_binding"]["tensor_hash"] = "0" * 64
+    assert result["metadata"]["quality"]["tensor_binding"] == evaluation_dictionary_evidence(dictionary)
+
+
+@pytest.mark.parametrize("change", ["dtype", "decoder", "decoder_alias"])
+def test_fresh_index_cannot_reuse_quality_for_changed_dictionary(artifact, change):
+    folder, model, dictionary, _ = artifact
+    tokenizer = SimpleNamespace(encode=lambda text, **kw: [3 + ord(ch) % 34 for ch in text], eos_token_id=2)
+    with TextStream(documents(), tokenizer, "quality") as stream:
+        quality = eval_dictionary.evaluate(model, dictionary, stream, folder, tokens=8,
+                                          context=4, batch_tokens=8, chunk_tokens=2)
+    before = (folder / "dictionary.json").read_bytes()
+    if change == "dtype":
+        dictionary = load_dictionary(folder, model=model, dtype=torch.float16)
+        assert dictionary.layers[0].W_dec.dtype == torch.float16
+    else:
+        weight = dictionary.layers[0].W_dec
+        version = weight._version
+        alias = weight.data if change == "decoder_alias" else weight.detach()
+        alias[0, 0] += .125
+        assert bool(torch.isfinite(weight).all())
+        assert (weight._version == version) == (change == "decoder_alias")
+    result = reply(folder, model, dictionary)
+    assert result["index"]["complete"]
+    assert result["identity"]["dictionary_hash"] == result["index"]["dictionary_hash"]
+    assert result["identity"]["dictionary_fingerprint"] == quality["dictionary_hash"]
+    assert result["model_binding"] == quality["model_binding"]
+    assert result["tensor_binding"] != quality["tensor_binding"]
+    assert result["tensor_binding"] == evaluation_dictionary_evidence(dictionary)
+    assert (folder / "dictionary.json").read_bytes() == before
+    _gemma_model_binding(result["metadata"], result)
+    with pytest.raises(ValueError, match="dictionary tensors differ"):
+        _gemma_dictionary_binding(result["metadata"], result)
+
+
+def test_quality_binds_exact_evaluation_placement_on_cpu(artifact):
+    _, model, _, _ = artifact
+    identity = model_identity(model)
+    settings = _evaluation_settings(model, None)
+    key = "model.embed_tokens.embed_scale"
+    scale = json.loads(settings[key])
+    assert scale["device"] == "cpu" and scale["tensor"].startswith("sha256:")
+    evaluated = evaluation_model_evidence(model, identity, settings=settings)
+    assert evaluated == evidence(model)
+    # Change only the placement record. This test allocates no device tensor.
+    settings[key] = json.dumps({**scale, "device": "mps:0"}, sort_keys=True)
+    elsewhere = evaluation_model_evidence(model, identity, settings=settings)
+    assert elsewhere["model_hash"] == evaluated["model_hash"]
+    assert elsewhere["tensor_hash"] == evaluated["tensor_hash"]
+    assert elsewhere["forward_settings_hash"] != evaluated["forward_settings_hash"]
+    with pytest.raises(ValueError, match="tensors or forward settings differ"):
+        _gemma_model_binding({"quality": {"model_binding": evaluated}}, {"model_binding": elsewhere})
 
 
 @pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16, torch.float64])

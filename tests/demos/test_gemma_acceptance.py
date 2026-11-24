@@ -49,6 +49,8 @@ def gemma_reply():
     response["model_binding"] = {"version": 2, "model_hash": GEMMA_HASH,
                                  "tensor_hash": "2" * 64, "forward_settings_hash": "3" * 64}
     metadata["quality"]["model_binding"] = deepcopy(response["model_binding"])
+    response["tensor_binding"] = {"version": 1, "tensor_hash": "4" * 64}
+    metadata["quality"]["tensor_binding"] = deepcopy(response["tensor_binding"])
     identity["model_hash"] = index["model_hash"] = GEMMA_HASH
     index.update(layers=26, features=16384,
                  provenance={**deepcopy(source), "partition": "index", "publisher_training_overlap": "unknown"})
@@ -63,6 +65,30 @@ def test_gemma_requires_its_own_identity_and_preserves_unknown_training():
     assert response == original
     assert not dictionary_qualification(response)["qualified"]
     assert not dictionary_qualification(qualification_reply(), family="gemma")["qualified"]
+
+
+@pytest.mark.parametrize("location", ["quality", "live"])
+@pytest.mark.parametrize("fault", ["missing", "version", "boolean_version", "hash", "different", "extra"])
+def test_gemma_requires_exact_dictionary_tensor_evidence(location, fault):
+    response = gemma_reply()
+    owner = response["metadata"]["quality"] if location == "quality" else response
+    if fault == "missing":
+        del owner["tensor_binding"]
+    else:
+        field, value = {"version": ("version", 2), "boolean_version": ("version", True),
+                        "hash": ("tensor_hash", "invalid"), "different": ("tensor_hash", "5" * 64),
+                        "extra": ("unverified", True)}[fault]
+        owner["tensor_binding"][field] = value
+    result = dictionary_qualification(response, family="gemma")
+    assert not result["qualified"] and "dictionary tensor" in result["reason"]
+
+
+def test_qwen_artifact_qualification_keeps_legacy_tensor_policy():
+    response = qualification_reply()
+    assert "tensor_binding" not in response["metadata"]["quality"]
+    assert dictionary_qualification(response)["qualified"]
+    response["tensor_binding"] = {"version": 1, "tensor_hash": "5" * 64}
+    assert dictionary_qualification(response)["qualified"]
 
 
 @pytest.mark.parametrize("metric,value", [("fvu", .300001), ("dead_fraction", .150001),

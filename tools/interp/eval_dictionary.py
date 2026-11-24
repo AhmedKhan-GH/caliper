@@ -376,7 +376,8 @@ def evaluate(model, dictionary, stream, folder, *, tokens=200_000, context=256,
                    "per_layer_dead_fraction": [None] * len(dictionary.layers),
                    "thresholds": dict(stats.thresholds)}
     quality.update(elapsed_seconds=elapsed_before + time.monotonic() - started, stop_reason=reason,
-                   dictionary_hash=identity, model_binding=binding.model_evidence, partition="quality")
+                   dictionary_hash=identity, tensor_binding=binding.evidence,
+                   model_binding=binding.model_evidence, partition="quality")
     if "import_source" in metadata:
         quality.update(evaluation_source=source_metadata, publisher_training_overlap="unknown")
     if stats.scope == "upper_half":

@@ -1,14 +1,72 @@
-"""Stable model evidence shared by quality evaluation and live qualification."""
+"""Exact evidence shared by quality evaluation and live qualification."""
 from __future__ import annotations
 
+from contextlib import nullcontext
 import hashlib
 import json
+from pathlib import Path
 
 import torch
+from safetensors import safe_open
 
-from ._dictionary import _hf_digest, _state_hash
+from ._dictionary import _canonical_device, _checkpoint_slices, _dense_state, _hf_digest, _state_hash, weight_names
 from ._forward_identity import forward_settings
+from ._memory import CleanStop, autorelease_scope
 from ._trace import _forward_settings
+
+
+_CHUNK_BYTES = 1024 * 1024
+_DICTIONARY_CHANGED = "evaluation dictionary or settings changed: artifact binding differs"
+
+
+def _admit_dictionary_tensor(tensor, memory):
+    if tensor.device.type != "cpu":
+        if memory is None:
+            raise ValueError("evaluation device tensors require a process memory guard")
+        if _canonical_device(tensor.device) != _canonical_device(memory.device):
+            raise ValueError("evaluation tensor and memory guard devices differ")
+    if memory:
+        memory.check("evaluation_binding", force=False)
+        if memory.peak + 4 * _CHUNK_BYTES > memory.limit:
+            raise CleanStop("evaluation binding exceeds the process memory limit")
+
+
+def evaluation_dictionary_evidence(dictionary, *, memory=None, folder=None):
+    """Hash live tensors in cursor order, with an optional converted-file check.
+
+    The version 1 digest preserves existing evaluation cursors. Each copy stays
+    within one chunk, including file conversion and device readback.
+    """
+    digest = hashlib.sha256(b"caliper.evaluation.tensors.v1\0")
+    for i, layer in enumerate(dictionary.layers):
+        weights = weight_names(layer)
+        tensors = _dense_state({name: getattr(layer, name) for name in weights})
+        context = (nullcontext(None) if folder is None else
+                   safe_open(Path(folder) / f"layer_{i:02d}.safetensors", framework="pt", device="cpu"))
+        with context as source:
+            if source is not None and set(source.keys()) != set(weights):
+                raise ValueError(_DICTIONARY_CHANGED)
+            for name, tensor in tensors.items():
+                stored = source.get_slice(name) if source is not None else None
+                if stored is not None and list(tensor.shape) != stored.get_shape():
+                    raise ValueError(_DICTIONARY_CHANGED)
+                header = json.dumps([i, name, str(tensor.dtype), list(tensor.shape)]).encode()
+                digest.update(len(header).to_bytes(8, "little"))
+                digest.update(header)
+                # Eight bytes cover the largest supported source or target dtype.
+                for selection in _checkpoint_slices(tensor.shape, _CHUNK_BYTES // 8):
+                    _admit_dictionary_tensor(tensor, memory)
+                    with autorelease_scope(tensor.device):
+                        chunk = tensor.detach()[selection].to(device="cpu").contiguous()
+                        raw = chunk.view(torch.uint8)
+                        if stored is not None:
+                            expected = stored[selection].to(dtype=tensor.dtype).contiguous()
+                            if not torch.equal(raw, expected.view(torch.uint8)):
+                                raise ValueError(_DICTIONARY_CHANGED)
+                            del expected
+                        digest.update(memoryview(raw.numpy()))
+                        del raw, chunk
+    return {"version": 1, "tensor_hash": digest.hexdigest()}
 
 
 def _evaluation_settings(model, memory):

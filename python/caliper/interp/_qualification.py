@@ -4,7 +4,7 @@ import hashlib
 import json
 
 from ._dictionary import dictionary_fingerprint, model_identity
-from ._evaluation_identity import evaluation_model_evidence
+from ._evaluation_identity import evaluation_dictionary_evidence, evaluation_model_evidence
 from ._gemma_import_identity import verified_import_binding
 from ._index import FeatureIndex, _FILES, _dictionary_hash, _hash_file, _json, _source_hash, _tokenizer_hash
 
@@ -48,7 +48,8 @@ def dictionary_response(dictionary, index=None, *, model=None, tokenizer=None):
         if path.stat().st_size != record["bytes"] or _hash_file(path) != record["sha256"]:
             raise ValueError("index qualification file changed")
     fingerprint = dictionary_fingerprint(index.root, metadata, memory=memory)
-    result.update(index=deepcopy(manifest), model_binding=model_binding, identity={
+    tensor_binding = evaluation_dictionary_evidence(dictionary, memory=memory)
+    result.update(index=deepcopy(manifest), model_binding=model_binding, tensor_binding=tensor_binding, identity={
         "model_hash": identity, "dictionary_hash": content, "dictionary_fingerprint": fingerprint,
         "index_hash": manifest["index_hash"], "tokenizer_hash": tokenizer_hash,
     })

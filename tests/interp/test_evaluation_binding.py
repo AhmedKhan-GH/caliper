@@ -1,6 +1,7 @@
 """CPU regressions for evaluation artifact and cursor evidence."""
 import json
 import copy
+import hashlib
 from contextlib import contextmanager
 
 import pytest
@@ -8,6 +9,8 @@ import torch
 from safetensors.torch import load_file, save_file
 
 from caliper.interp import load_dictionary
+from caliper.interp import _evaluation_identity as identity_module
+from caliper.interp._dictionary import weight_names
 from tools.interp import eval_dictionary as evaluation, evaluation_binding as binding_module
 from tools.interp.checkpoint_state import dictionary_fingerprint, write_json
 from tools.interp.memory_limits import CleanStop
@@ -166,12 +169,12 @@ def test_binding_accepts_loader_dtype_conversion_in_bounded_slices(tmp_path, mon
     model, _ = fixture(tmp_path)
     dictionary = load_dictionary(tmp_path, model=model, device="cpu", dtype=dtype)
     identity = dictionary_fingerprint(tmp_path, dictionary.metadata)
-    monkeypatch.setattr(binding_module, "_CHUNK_BYTES", 16)
+    monkeypatch.setattr(identity_module, "_CHUNK_BYTES", 16)
     from caliper.interp import _dictionary
     monkeypatch.setattr(_dictionary, "_HASH_CHUNK_BYTES", 16)
     transfers = []
     original_to = torch.Tensor.to
-    original_open = binding_module.safe_open
+    original_open = identity_module.safe_open
 
     @contextmanager
     def sliced_file(*args, **kwargs):
@@ -214,9 +217,10 @@ def test_binding_accepts_loader_dtype_conversion_in_bounded_slices(tmp_path, mon
         return original_to(tensor, *args, **kwargs)
 
     monkeypatch.setattr(torch.Tensor, "to", bounded_to)
-    monkeypatch.setattr(binding_module, "safe_open", sliced_file)
+    monkeypatch.setattr(identity_module, "safe_open", sliced_file)
     bound = binding_module.EvaluationBinding(tmp_path, dictionary, identity, model=model, memory=guard)
     bound.verify()
+    assert identity_module.evaluation_dictionary_evidence(dictionary, memory=guard) == bound.evidence
     assert transfers and guard.checks > 0
     assert len(bound.evidence["tensor_hash"]) == 64
 
@@ -343,9 +347,33 @@ def test_same_model_resume_keeps_artifact_fingerprint(tmp_path):
     resumed = evaluate(tmp_path, copy.deepcopy(model), dictionary, resume=True)
     state = json.loads((tmp_path / "evaluation" / "state.json").read_text())
     assert quality["model_binding"] == resumed["model_binding"] == state["model_binding"]
+    assert quality["tensor_binding"] == resumed["tensor_binding"] == state["tensor_binding"]
     assert quality["model_binding"]["model_hash"] == dictionary.metadata["model_hash"]
     assert quality["fvu"] == resumed["fvu"]
     assert identity == dictionary_fingerprint(tmp_path, dictionary.metadata)
+
+
+def test_legacy_cursor_digest_and_quality_resume_stay_compatible(tmp_path):
+    model, dictionary = fixture(tmp_path)
+    # Reproduce the version 1 byte format independently on these tiny CPU tensors.
+    legacy = hashlib.sha256(b"caliper.evaluation.tensors.v1\0")
+    for i, layer in enumerate(dictionary.layers):
+        for name in weight_names(layer):
+            tensor = getattr(layer, name).detach()
+            header = json.dumps([i, name, str(tensor.dtype), list(tensor.shape)]).encode()
+            legacy.update(len(header).to_bytes(8, "little") + header)
+            legacy.update(tensor.view(torch.uint8).numpy().tobytes())
+    expected = {"version": 1, "tensor_hash": legacy.hexdigest()}
+    quality = evaluate(tmp_path, model, dictionary)
+    assert quality["tensor_binding"] == expected
+    state = json.loads((tmp_path / "evaluation" / "state.json").read_text())
+    assert state["version"] == 1 and state["tensor_binding"] == expected
+    del dictionary.metadata["quality"]["tensor_binding"]
+    write_json(tmp_path / "dictionary.json", dictionary.metadata)
+    resumed = evaluate(tmp_path, model, dictionary, resume=True)
+    assert resumed["tensor_binding"] == expected
+    assert resumed["model_binding"] == state["model_binding"]
+    assert resumed["fvu"] == quality["fvu"]
 
 
 @pytest.mark.parametrize("boundary", ["batch", "stop", "metrics", "statistics", "cursor"])
