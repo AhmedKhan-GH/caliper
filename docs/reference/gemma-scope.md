@@ -169,6 +169,10 @@ Qwen and fixture paths retain 12 GB, and the Qwen trainer retains 24 GB.
 CPU model load and device transfer have separate allocation admission checks.
 Fresh current-memory measurements govern those reserves, and the process guard also enforces the historical peak.
 Dictionary identity covers all tensor content, including thresholds, and content checks require memory admission.
+Gemma MPS dictionaries can retain a private CPU snapshot when the complete process reserve fits.
+Each identity check reads bounded live byte blocks and compares every byte with that snapshot.
+The snapshot preserves source device identity and never supplies model weights.
+If the reserve does not fit, checks hash all live bytes instead.
 The budget is a limit, not a measured memory result or a speed guarantee.
 
 Gemma quality requires exactly 200,000 tokens, mean FVU at most 0.30, dead fraction at most 0.15, and cross-entropy rise at most 0.5 nats.
