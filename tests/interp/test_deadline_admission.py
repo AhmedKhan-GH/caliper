@@ -32,6 +32,7 @@ def test_startup_exhaustion_preserves_generation_and_export(tmp_path, monkeypatc
                 "--context", "4", "--batch-tokens", "8", "--microbatch-tokens", "4", "--tokens", "32"]
         if resume:
             model, _, _ = synthetic_source(output)
+            argv[argv.index("--tokens") + 1] = "16"  # Resume keeps the checkpoint learning-rate schedule.
             folder, record = checkpoint_state.checkpoint_record(output / "checkpoints")
             record["progress"].update(elapsed_seconds=35_939, checkpoint_seconds=5)
             checkpoint_state.write_json(folder / "state.json", record)
