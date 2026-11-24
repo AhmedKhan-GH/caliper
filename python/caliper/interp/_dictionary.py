@@ -11,9 +11,14 @@ import torch
 from torch import nn
 from torch.nn import functional as F
 
+from ._memory import CleanStop, MemoryGuard, autorelease_scope
+
 
 _WEIGHTS = ("W_enc", "b_enc", "W_dec", "b_dec")
 _DTYPES = {torch.float16, torch.bfloat16, torch.float32, torch.float64}
+_STORED_DTYPES = {"F16": torch.float16, "BF16": torch.bfloat16,
+                  "F32": torch.float32, "F64": torch.float64}
+_FINITE_CHUNK_ELEMENTS = 65_536
 
 
 def weights_hash(model):
@@ -167,11 +172,63 @@ def _reject_constant(value):
     raise ValueError(f"nonfinite dictionary metadata: {value}")
 
 
-def load_dictionary(path, *, model=None, model_hash=None, device=None, dtype=None):
-    """Load safe tensors after an independent model identity matches the manifest."""
-    from safetensors import safe_open
-    from ._memory import autorelease_scope
+def _layer_header(source, index, shapes, dtype):
+    if set(source.keys()) != set(_WEIGHTS):
+        raise ValueError(f"dictionary layer {index} has unexpected tensor names")
+    stored = {}
+    for name, shape in shapes.items():
+        header = source.get_slice(name)
+        if tuple(header.get_shape()) != shape:
+            raise ValueError(f"dictionary layer {index} has incorrect {name} shape")
+        stored[name] = _STORED_DTYPES.get(header.get_dtype())
+        if stored[name] is None:
+            raise ValueError(f"dictionary layer {index} has invalid {name} dtype")
+    if dtype is None and len(set(stored.values())) != 1:
+        raise ValueError("dictionary tensors must share one dtype per layer")
+    return stored
 
+
+def _layer_bytes(stored, shapes, device, dtype):
+    counts = {name: math.prod(shape) for name, shape in shapes.items()}
+    targets = {name: dtype or value for name, value in stored.items()}
+    converted = device.type != "cpu" or targets != stored
+    destination = sum(counts[name] * value.itemsize for name, value in targets.items())
+    # A mapped source layer can retain all its pages until the handle closes.
+    source = sum(counts[name] * value.itemsize for name, value in stored.items()) if converted else 0
+    # Reserve one extra target tensor for device/dtype conversion staging.
+    staging = max(counts[name] * value.itemsize for name, value in targets.items()) if converted else 0
+    itemsize = max(value.itemsize for value in (*stored.values(), *targets.values()))
+    finite = min(max(counts.values()), _FINITE_CHUNK_ELEMENTS) * (2 * itemsize + 4)
+    return destination, source + staging + finite, converted
+
+
+def _finite(value):
+    flat = value.reshape(-1)
+    for start in range(0, flat.numel(), _FINITE_CHUNK_ELEMENTS):
+        with autorelease_scope(value.device):
+            if not torch.isfinite(flat[start:start + _FINITE_CHUNK_ELEMENTS]).all().item():
+                return False
+    return True
+
+
+def _admit(memory, required, stage):
+    memory.check(stage)
+    if memory.peak + required > memory.limit:
+        raise CleanStop("dictionary allocation exceeds the process memory limit")
+
+
+def load_dictionary(path, *, model=None, model_hash=None, device=None, dtype=None,
+                    memory_limit_gb=12):
+    """Load a matching dictionary within a total process limit of at most 12 GB.
+
+    ``memory_limit_gb`` uses decimal GB and includes current process/model memory,
+    destination weights, and temporary conversion storage. All headers pass byte
+    admission before tensor materialization. Resource refusal raises ``CleanStop``.
+    """
+    from safetensors import safe_open
+
+    if type(memory_limit_gb) not in (int, float) or not 0 < memory_limit_gb <= 12:
+        raise ValueError("dictionary memory limit must be positive and at most 12 GB")
     if model is None and model_hash is None:
         from .. import _programs
         model = _programs._STATE.get("model")
@@ -200,28 +257,42 @@ def load_dictionary(path, *, model=None, model_hash=None, device=None, dtype=Non
         dtype = parameter.dtype if dtype is None else dtype
     if dtype is not None and dtype not in _DTYPES:
         raise ValueError("dictionary dtype must be floating point")
+    device = torch.device(device or "cpu")
     shapes = {"W_enc": (data["latents"], data["width"]), "b_enc": (data["latents"],),
               "W_dec": (data["latents"], data["width"]), "b_dec": (data["width"],)}
+    headers, budgets = [], []
+    for index in range(data["layers"]):
+        # Header inspection uses CPU mappings and never requests tensor data.
+        with safe_open(folder / f"layer_{index:02d}.safetensors", framework="pt", device="cpu") as source:
+            stored = _layer_header(source, index, shapes, dtype)
+        headers.append(stored)
+        budgets.append(_layer_bytes(stored, shapes, device, dtype))
+    remaining = sum(budget[0] for budget in budgets)
+    temporary = max(budget[1] for budget in budgets)
+    if remaining + temporary > int(memory_limit_gb * 1_000_000_000):
+        raise CleanStop("dictionary allocation exceeds the process memory limit")
+    memory = MemoryGuard(memory_limit_gb, device)
+    _admit(memory, remaining + temporary, "dictionary_admission")
     layers = []
     for index in range(data["layers"]):
+        _admit(memory, remaining + temporary, f"dictionary_layer_{index}")
         tensors = {}
-        # Validate the header before tensor allocation. Never unpickle a checkpoint.
-        with autorelease_scope(device or "cpu"), safe_open(
+        with autorelease_scope(device), safe_open(
             folder / f"layer_{index:02d}.safetensors", framework="pt", device="cpu",
         ) as source:
-            if set(source.keys()) != set(_WEIGHTS):
-                raise ValueError(f"dictionary layer {index} has unexpected tensor names")
-            for name, shape in shapes.items():
-                if tuple(source.get_slice(name).get_shape()) != shape:
-                    raise ValueError(f"dictionary layer {index} has incorrect {name} shape")
+            if _layer_header(source, index, shapes, dtype) != headers[index]:
+                raise ValueError(f"dictionary layer {index} header changed after memory admission")
+            for name in _WEIGHTS:
                 value = source.get_tensor(name)
-                if value.dtype not in _DTYPES or not torch.isfinite(value).all().item():
+                if not _finite(value):
                     raise ValueError(f"dictionary layer {index} has invalid or nonfinite {name}")
-                value = value.to(device=device, dtype=dtype)
-                if not torch.isfinite(value).all().item():
+                # Converted CPU layers must release the entire source mapping.
+                value = value.to(device=device, dtype=dtype, copy=budgets[index][2])
+                if not _finite(value):
                     raise ValueError(f"dictionary layer {index} overflows the requested dtype")
                 tensors[name] = value
-        if len({v.dtype for v in tensors.values()}) != 1:
-            raise ValueError("dictionary tensors must share one dtype per layer")
+                del value
         layers.append(TopKTranscoder(**tensors, k=data["k"]))
+        remaining -= budgets[index][0]
+    memory.check("dictionary_loaded")
     return Dictionary(data, layers).eval()
