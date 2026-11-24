@@ -136,12 +136,19 @@ def test_comparison_labels_preserve_sparse_rows_and_shared_display_text(output_c
     logits[:, 0, :10] = torch.arange(10, 0, -1, dtype=torch.float64)
     spellings = {0: "A\0B", 1: None, 2: "None", 3: "", 4: "é" * 40,
                  5: "\ud800", 6: "<eos>", 7: "Ġtail", 8: r"\x00", 9: "word"}
+    decoded = {**spellings, 7: " tail"}
+    def decode(ids, *, skip_special_tokens=True, clean_up_tokenization_spaces=True):
+        assert skip_special_tokens is False
+        assert clean_up_tokenization_spaces is False
+        return "".join(decoded[i] for i in ids)
+
     monkeypatch.setattr(tokenizer, "convert_ids_to_tokens", spellings.get)
+    monkeypatch.setattr(tokenizer, "decode", decode)
     monkeypatch.setattr(_output, "forward_logits", lambda *a, **k: logits)
     result = output.compare("A")
     assert result["tokens"] == list(range(10))
     assert result["labels"] == [r"A\x00B", "[unmapped token 1]", "None", "", "é" * 31,
-                                "?", "<eos>", "Ġtail", r"\x00", "word"]
+                                "?", "<eos>", " tail", r"\x00", "word"]
     packed = _resolve("output.label_text").tolist()
     for token, label, row in zip(result["tokens"], result["labels"], packed):
         assert label == token_label(tokenizer, token).encode("utf-8")[:63].decode("utf-8", errors="ignore")

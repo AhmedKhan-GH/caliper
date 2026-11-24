@@ -15,7 +15,7 @@ from ._frozen import (FrozenPath, MemoryGuard, _validate_dictionary, _validate_a
 from ._memory import autorelease_scope
 from ._graph import Graph, bounded_integer
 from ._influence import influence
-from ._labels import display_text
+from ._labels import token_label
 
 
 @dataclass
@@ -37,7 +37,7 @@ class _DirectEffects:
         self.path, self.dictionary = path, dictionary
         self.nodes, self.source_layers = [], []
         self.feature_columns = {}
-        self.tokens = [{"position": p, "token_id": token, "text": display_text(tokenizer.decode([token]))}
+        self.tokens = [{"position": p, "token_id": token, "text": token_label(tokenizer, token)}
                        for p, token in enumerate(token_ids)]
         for token in self.tokens:
             self.nodes.append({"id": f"token:{token['position']}:{token['token_id']}", "kind": "token",
@@ -75,7 +75,7 @@ class _DirectEffects:
             self.nodes.append({"id": f"logit:{path.tokens - 1}:{token}", "kind": "logit", "layer": path.layers,
                                "position": path.tokens - 1, "token_id": token,
                                "activation": float(path.logits[0, token] - path.logits[0].mean()),
-                               "probability": probability, "label": display_text(tokenizer.decode([token]))})
+                               "probability": probability, "label": token_label(tokenizer, token)})
         self.feature_nodes = [i for i, n in enumerate(self.nodes) if n["kind"] == "feature"]
         path.guard.check("source preparation")
 

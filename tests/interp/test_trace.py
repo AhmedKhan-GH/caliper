@@ -443,7 +443,8 @@ def test_trace_cache_identity_full_state_and_lru(monkeypatch):
     tracer = Tracer(model, TinyTokenizer(), dictionary)
     state = []
     invalidations = []
-    service = type("Service", (), {"invalidate_source_cache": lambda self: invalidations.append(True)})()
+    executor = type("Executor", (), {"invalidate_cache": lambda self: invalidations.append(True)})()
+    service = type("Service", (), {"executor": executor})()
     monkeypatch.setattr(tracer, "_service", lambda: service)
     monkeypatch.setattr(tracer, "_intervention_state", lambda: state)
     initial = tracer.trace("A", 0)

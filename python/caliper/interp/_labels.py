@@ -1,5 +1,7 @@
 """Display text for token metadata and packed piece labels."""
 
+from inspect import Parameter, signature
+
 
 def display_text(value):
     """Return valid UTF-8 text with NUL as a visible escape."""
@@ -7,16 +9,24 @@ def display_text(value):
 
 
 def token_label(tokenizer, token_id):
-    """Retain vocabulary text, or identify a row with no token spelling.
+    """Decode one token, or identify a row with no token spelling.
 
-    Sparse IDs and padded output rows keep their IDs and scores. The marker
-    describes absent token text. It is not a decoded token or a vocabulary entry.
+    Vocabulary lookup detects sparse IDs and padded output rows. The decoder
+    supplies display text with special tokens and boundary whitespace intact.
+    Raw vocabulary text remains separate from display text for identity checks.
     """
     token_id = int(token_id)
-    value = tokenizer.convert_ids_to_tokens(token_id)
-    if value is None:
+    lookup = getattr(tokenizer, "convert_ids_to_tokens", None)
+    if lookup is not None and lookup(token_id) is None:
         return f"[unmapped token {token_id}]"
-    return display_text(value)
+    decode = tokenizer.decode
+    parameters = signature(decode).parameters
+    accepts_kwargs = any(p.kind == Parameter.VAR_KEYWORD for p in parameters.values())
+    options = {name: False for name in ("skip_special_tokens", "clean_up_tokenization_spaces")
+               if accepts_kwargs or (name in parameters and parameters[name].kind in
+                                     (Parameter.POSITIONAL_OR_KEYWORD, Parameter.KEYWORD_ONLY))}
+    # Select supported options before the call. Decoder errors must propagate.
+    return display_text(decode([token_id], **options))
 
 
 def pack_labels(values, count):
