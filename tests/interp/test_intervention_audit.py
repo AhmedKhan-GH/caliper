@@ -255,3 +255,118 @@ def test_invalid_applied_snapshot_refuses_before_live_replacement(controlled, ap
     with pytest.raises(InterventionError):
         service.load_state_dict(state, restore_active=True)
     assert service.state_dict() == before
+
+
+class SourceGuard:
+    def __init__(self, stop=None):
+        self.stop = stop
+        self.stages = []
+
+    def check(self, stage, **kwargs):
+        self.stages.append(stage)
+        if self.stop in ("all", stage):
+            raise RuntimeError("source guard stop")
+
+
+def patch_spec(**fields):
+    return dict(kind="patch", point="layers.0.resid_pre", source_prompt="AB", **fields)
+
+
+def test_clean_source_obeys_latched_guard_before_forward(controlled):
+    model, tokenizer, _, service = controlled
+    service.configure(tokenizer=tokenizer, resource_guard=SourceGuard("all"))
+    calls = []
+    handle = model.register_forward_pre_hook(lambda *_: calls.append(1))
+    try:
+        with pytest.raises(RuntimeError, match="source guard stop"):
+            service.executor.install(patch_spec())
+        assert calls == [] and not service.executor._cache
+        assert not service.executor.preparing_source
+    finally:
+        handle.remove()
+
+
+def test_clean_source_uses_internal_scope_and_decoder_options(controlled, monkeypatch):
+    from caliper.interp import _intervene, _points
+    from caliper.interp._output import is_internal_forward
+    model, _, _, service = controlled
+    probes = _points._architecture(model)
+    # This fixture checks keyword dispatch only. Its probes retain the fixture map.
+    monkeypatch.setattr(_points, "_architecture", lambda _: probes)
+    monkeypatch.setattr(_intervene, "_architecture", lambda _: probes)
+    model.config.model_type = "qwen3_5_text"
+    original = model.forward
+    observed = []
+
+    def forward(*args, **kwargs):
+        observed.append((is_internal_forward(), kwargs.get("use_cache"), kwargs.get("logits_to_keep")))
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(model, "forward", forward)
+    service.executor.install(patch_spec())
+    assert observed == [(True, False, 1)]
+    assert not is_internal_forward()
+
+
+def test_source_guard_stages_scope_and_replay_inheritance(controlled, monkeypatch):
+    from contextlib import contextmanager
+    from caliper.interp import _memory
+    from caliper.interp._output import is_internal_forward
+    model, tokenizer, ctl, service = controlled
+    guard = SourceGuard()
+    service.configure(tokenizer=tokenizer, resource_guard=guard)
+    scopes = []
+
+    @contextmanager
+    def scope(device):
+        assert device.type == "cpu" and is_internal_forward()
+        scopes.append("enter")
+        try:
+            yield
+        finally:
+            scopes.append("exit")
+
+    monkeypatch.setattr(_memory, "autorelease_scope", scope)
+    service.set(patch_spec())
+    ctl.step()
+    stages = ["patch source forward start", "patch source forward complete"]
+    assert guard.stages == stages and scopes == ["enter", "exit"]
+    with service.temporary_state(service.specifications()) as replay:
+        assert replay.executor.resource_guard is guard
+    assert guard.stages == stages * 2 and scopes == ["enter", "exit"] * 2
+    guard.stop = "all"
+    with pytest.raises(RuntimeError, match="source guard stop"):
+        with service.temporary_state(service.specifications()):
+            pytest.fail("latched guard allowed replay")
+    assert not is_internal_forward() and ctl.n == 1
+
+
+def test_source_guard_failure_after_forward_releases_capture(controlled):
+    model, tokenizer, _, service = controlled
+    guard = SourceGuard("patch source forward complete")
+    service.configure(tokenizer=tokenizer, resource_guard=guard)
+    hooks = [(len(m._forward_hooks), len(m._forward_pre_hooks)) for m in model.modules()]
+    with pytest.raises(RuntimeError, match="source guard stop"):
+        service.executor.install(patch_spec())
+    assert guard.stages == ["patch source forward start", "patch source forward complete"]
+    assert hooks == [(len(m._forward_hooks), len(m._forward_pre_hooks)) for m in model.modules()]
+    assert not service.executor._cache and not service.executor.preparing_source
+
+
+def test_source_refill_checks_guard_and_isolates_hook_failure(controlled):
+    model, tokenizer, ctl, service = controlled
+    guard = SourceGuard()
+    service.configure(tokenizer=tokenizer, resource_guard=guard)
+    service.set(patch_spec())
+    ctl.step()
+    service.invalidate_source_cache()
+    guard.stop = "all"
+    calls = []
+    handle = model.register_forward_pre_hook(lambda *_: calls.append(1))
+    try:
+        model(**tokenizer("AC"))
+        assert calls == [1]
+        assert ctl.summary()["interventions"][0]["state"] == "ended"
+        assert not service.executor._cache and not service.executor.preparing_source
+    finally:
+        handle.remove()

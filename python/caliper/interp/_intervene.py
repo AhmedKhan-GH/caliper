@@ -130,6 +130,7 @@ class InterventionService:
         self.dictionary = None
         self.dictionary_id = None
         self.tokenizer = None
+        self.resource_guard = None
         self._cache = OrderedDict()
         self._cache_identity = None
         self.preparing_source = False
@@ -145,7 +146,7 @@ class InterventionService:
     def suspended(self):
         return id(self.model) in _SUSPENDED.get()
 
-    def configure(self, *, dictionary=None, tokenizer=None, dictionary_id=None):
+    def configure(self, *, dictionary=None, tokenizer=None, dictionary_id=None, resource_guard=None):
         """Bind a validated dictionary and tokenizer before requests arrive.
 
         Reconfiguration removes existing hooks. Controls must also end their records.
@@ -177,8 +178,11 @@ class InterventionService:
             raise InterventionError("dictionary identifier requires a dictionary", "intervene.unknown_dictionary")
         if tokenizer is not None and not callable(tokenizer):
             raise InterventionError("tokenizer must be callable")
+        if resource_guard is not None and not callable(getattr(resource_guard, "check", None)):
+            raise InterventionError("resource_guard must provide check(stage, **kwargs)")
         self.close()
         self.dictionary, self.dictionary_id, self.tokenizer = dictionary, dictionary_id, tokenizer
+        self.resource_guard = resource_guard
 
     def invalidate_cache(self):
         """Release patch sources after a prompt or model change."""
@@ -339,15 +343,28 @@ class InterventionService:
             self._cache_identity = identity
         point = spec["point"]
         if point not in self._cache:
+            from ._memory import autorelease_scope
+            from ._output import internal_forward
             inputs = self._source_inputs(spec)
             device = next(self.model.parameters()).device
             inputs = {k: v.to(device) for k, v in inputs.items()}
+            config = getattr(self.model, "config", None)
+            kwargs = {"use_cache": False} if config is not None else {}
+            if getattr(config, "model_type", None) == "qwen3_5_text":
+                kwargs["logits_to_keep"] = 1
             self.preparing_source = True
             try:
-                with self.suspend(), torch.no_grad(), capture(self.model, [point]) as values:
-                    self.model(**inputs)
-                    source = values[point].detach().clone()
-                values.close(clear=True)
+                with internal_forward(), self.suspend(), torch.no_grad(), autorelease_scope(device):
+                    with capture(self.model, [point]) as values:
+                        if self.resource_guard is not None:
+                            self.resource_guard.check("patch source forward start")
+                        try:
+                            self.model(**inputs, **kwargs)
+                        finally:
+                            if self.resource_guard is not None:
+                                self.resource_guard.check("patch source forward complete")
+                        source = values[point].detach().clone()
+                    values.close(clear=True)
             finally:
                 self.preparing_source = False
             if source.ndim != 3 or not torch.isfinite(source).all().item():
@@ -398,6 +415,7 @@ class _InterventionReplay:
         self.executor.dictionary = executor.dictionary
         self.executor.dictionary_id = executor.dictionary_id
         self.executor.tokenizer = executor.tokenizer
+        self.executor.resource_guard = executor.resource_guard
         self._effects = []
 
     @property

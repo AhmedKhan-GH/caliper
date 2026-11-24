@@ -753,13 +753,13 @@ class Interventions:
         """Release clean patch sources after an external prompt or model change."""
         self.executor.invalidate_cache()
 
-    def configure(self, *, dictionary=None, tokenizer=None, dictionary_id=None):
+    def configure(self, *, dictionary=None, tokenizer=None, dictionary_id=None, resource_guard=None):
         """Bind resources and end prior interventions after validation succeeds."""
         with self._ctl.lock:
             if self._ctl._iv_model is not self:
                 raise ValueError("the intervention service is no longer attached")
             self.executor.configure(dictionary=dictionary, tokenizer=tokenizer,
-                                    dictionary_id=dictionary_id)
+                                    dictionary_id=dictionary_id, resource_guard=resource_guard)
             for iv in self._ctl._ivs.values():
                 self._ctl._unhook(iv)
                 if iv.state != IV_ENDED:
