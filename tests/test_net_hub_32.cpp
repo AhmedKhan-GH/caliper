@@ -501,15 +501,28 @@ TEST_CASE("net/hub 3.2: past CALIPER_NET_MAX_BATCHES batches the hub forgets a s
     subscribe(*a, 5, "world");
     REQUIRE(w.until([&] { return a->scene_log(5).size() == 2; }));
     const int n = (int)CALIPER_NET_MAX_BATCHES + 8;
-    for (int i = 0; i < n; ++i) p->points("e/" + std::to_string(i), {(float)i, 0, 0});
-    REQUIRE(w.until([&] { return h.hub->stats().scenes_in == 2 + (uint64_t)n; }, 20000));
+    // Drain bounded groups before the next group. A burst past the viewer's pending
+    // cap requests a fresh state and changes the count. Groups also bound round trips.
+    const int window = std::min(64, (int)CALIPER_NET_MAX_BATCHES / 2);
+    int sent = 0;
+    REQUIRE(w.until([&] {
+        if (sent < n && a->scene_log(5).size() == 2 + (size_t)sent) {
+            const int end = std::min(sent + window, n);
+            for (; sent < end; ++sent) p->points("e/" + std::to_string(sent), {(float)sent, 0, 0});
+        }
+        return h.hub->stats().scenes_in == 2 + (uint64_t)n;
+    }, 20000));
     REQUIRE(w.until([&] { return a->scene_log(5).size() == 2 + (size_t)n; }, 20000));
+    CHECK(p->scene_subscribes == 1);
+    CHECK(a->scene_log(5, true).size() == 2);
     // The hub holds at most CALIPER_NET_MAX_BATCHES batches of the scene (each frame is under 512 bytes).
     CHECK(h.hub->stats().retained_scene_bytes <= (uint64_t)CALIPER_NET_MAX_BATCHES * 512);
+    CHECK(h.hub->stats().retained_scene_bytes == 0);
     auto b = scene_viewer(w, h, {CALIPER_NET_CAP_SCENES});
     subscribe(*b, 9, "world");
     REQUIRE(w.until([&] { return b->scene_log(9).size() == 2 + (size_t)n; }, 20000));
     CHECK(p->scene_subscribes == 2);
+    CHECK(b->scene_log(9, true).size() == 2 + (size_t)n);
     CHECK(b->scene_log(9, true).front() == "reset");
 }
 
