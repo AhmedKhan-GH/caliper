@@ -100,7 +100,7 @@ def test_no_vocabulary_projection_in_hidden_forward():
 
 def test_memory_stop_thresholds():
     values = iter([21, 19, 21, 19, 19])
-    ticks = iter(range(5))
+    ticks = iter(range(0, 75, 15))
     readers = {"resident": lambda: 0, "footprint": lambda: 0,
                "peak": lambda: 0, "driver": lambda: 0, "clock": lambda: 0}
     guard = MemoryGuard(1, "cpu", **{**readers, "clock": lambda: next(ticks)},
@@ -110,7 +110,7 @@ def test_memory_stop_thresholds():
         assert guard.low == expected_low
     with pytest.raises(CleanStop, match="pressure"):
         guard.check("fixture")
-    assert guard.low == 2 and guard.peak == 0 and guard.last == 4
+    assert guard.low == 2 and guard.peak == 0 and guard.last == 60
     guard = MemoryGuard(1, "cpu", **readers, pressure=lambda: 14)
     with pytest.raises(CleanStop, match="pressure"):
         guard.check("fixture")
