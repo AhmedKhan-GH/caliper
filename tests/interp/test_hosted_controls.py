@@ -55,6 +55,35 @@ def _queue_action(route, name, request_id):
     assert reply["status"] == "queued"
 
 
+@pytest.mark.parametrize("draft", ["", "A" * 33])
+def test_reset_removes_clamp_with_invalid_draft_without_false_output_evidence(hosted_run, draft):
+    run, route = hosted_run
+    run.selected.set(_feature_rows(run)[0])
+    run.boundary()
+    _queue_action(route, "apply_clamp", 1)
+    run.boundary()
+    assert run._owned_clamp is not None
+    previous = deepcopy(run.inference_status()["comparison"])
+    published = _resolve("output.probs")
+    run.prompt.set(draft)
+    run.boundary()
+    _queue_action(route, "reset", 2)
+    run.boundary()
+    reply, = [reply for reply in route.transport.replies if reply.request_id == 2]
+    assert reply.status == "ok"
+    assert run.prompt.value == draft and run.checkpoint_prompt == "AB"
+    assert run._owned_clamp is None and not run.interventions.specifications()
+    assert run.clamp.value == 0 and "No slider clamp" in run.clamp_status.value
+    assert run.status.value != "ready"
+    assert run.inference_status()["comparison"] == previous
+    assert _resolve("output.probs") is published
+    run.prompt.set("AB")
+    run.boundary()
+    assert run.status.value == "ready"
+    assert run.inference_status()["comparison"]["interventions_hash"] != previous["interventions_hash"]
+    torch.testing.assert_close(_resolve("output.probs")[0], _resolve("output.probs")[1], rtol=0, atol=0)
+
+
 def _count_clamp_work(run, monkeypatch):
     calls = {"requests": [], "installations": [], "comparisons": []}
     intervene = run.controls._intervene

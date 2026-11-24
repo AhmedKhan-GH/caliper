@@ -983,13 +983,22 @@ class HostedInference:
         return "Generated 24 tokens for each output."
 
     def reset(self):
+        self._check_stop()
         with internal_forward():
             with self.controls.lock:
                 self._discard_owned_clamp()
             self._apply()
             self.clamp.set(0.)
             self._clamp_version = self.clamp._version
-            self.update_output()
+            try:
+                try:
+                    prompt_inputs(self.model, self.tokenizer, self.prompt.value)
+                except ValueError:
+                    self.status.set("The clamp is reset. Correct the prompt to update the output.")
+                else:
+                    self.update_output()
+            finally:
+                self._sync_clamp_control()
         return "The feature clamp is reset."
 
     def sweep(self, *, clean_prompt, corrupted_prompt, metric):
