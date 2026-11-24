@@ -431,8 +431,15 @@ class HostedService(InterpretationService):
         self.owner = owner
         super().__init__(model=owner.model, tokenizer=owner.tokenizer, dictionary=owner.dictionary, index=owner.index,
                          handlers={"patch.sweep": owner.sweep, "trace.validate": owner.validate})
+        if getattr(owner.model.config, "model_type", None) == "gemma2":
+            self.factories["tracer"] = self._gemma_tracer
         self.boundary_running = False
         self.boundary_thread = None
+
+    def _gemma_tracer(self):
+        from . import Tracer
+        return Tracer(self.model, self.tokenizer, self._resource("dictionary"),
+                      controls=getattr(self, "controls", None), memory_limit_gb=28)
 
     def submit(self, metadata, reply, *, acknowledge=None):
         status, result = super().submit(metadata, reply, acknowledge=acknowledge)

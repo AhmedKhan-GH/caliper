@@ -78,7 +78,8 @@ def _admit_model_transfer(memory, estimate, device, *, staged=False):
 def _load_gemma_model(snapshot, *, device, memory):
     """Load and verify the exact local Gemma snapshot before device transfer."""
     from transformers import Gemma2Config, Gemma2ForCausalLM
-    from ._dictionary import verify_hf_model
+    from dataclasses import replace
+    from ._dictionary import _VERIFIED_MODELS, model_identity, verify_hf_model
 
     snapshot = Path(snapshot).resolve(strict=True)
     if (snapshot.name != GEMMA_REVISION or snapshot.parent.name != "snapshots"
@@ -102,7 +103,12 @@ def _load_gemma_model(snapshot, *, device, memory):
     # Verify bytes, tied parameters, settings, and reconstructed buffers before
     # the trusted identity enters the cache. Loading information alone is insufficient.
     verify_hf_model(model, snapshot, memory_limit_gb=memory.limit / 1e9)
+    verified = _VERIFIED_MODELS[model]
     _admit_model_transfer(memory, estimate, device, staged=True)
     model.to(device=device, dtype=torch.float32)
     memory.check("inference model load")
+    # Preserve the proven bytes and settings across transfer. Only the guard
+    # changes, because future readbacks must use the destination device guard.
+    _VERIFIED_MODELS[model] = replace(verified, memory=memory)
+    model_identity(model, memory_limit_gb=memory.limit / 1e9)
     return model

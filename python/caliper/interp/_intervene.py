@@ -82,6 +82,9 @@ def _dictionary_digest(dictionary, content):
     identity = {"version": 1, "content": content,
                 "metadata": {key: value for key, value in dictionary.metadata.items() if key != "quality"},
                 "topk": [layer.k for layer in dictionary.layers]}
+    activations = [getattr(layer, "activation", "topk") for layer in dictionary.layers]
+    if any(activation != "topk" for activation in activations):
+        identity["activations"] = activations
     encoded = json.dumps(identity, sort_keys=True, allow_nan=False, separators=(",", ":")).encode("utf-8")
     return "sha256:" + hashlib.sha256(encoded).hexdigest()
 
@@ -121,6 +124,11 @@ class _DictionarySnapshot:
     def create(cls, dictionary, identifier, guard):
         from ._dictionary import _dense_state, _HASH_CHUNK_BYTES, _UNVERIFIED_CPU_BYTES
         from ._memory import autorelease_scope
+        from ._admission import GEMMA_ID
+        # The imported dictionary already occupies most of Gemma's headroom.
+        # Keep full byte hashes on each check without a second retained copy.
+        if dictionary.metadata.get("model_id") == GEMMA_ID:
+            return None
         state = _dense_state(dictionary.state_dict())
         sizes = [tensor.numel() * tensor.element_size() for tensor in state.values()]
         total, largest = sum(sizes), max(sizes, default=0)
@@ -599,7 +607,7 @@ class InterventionService:
             inputs = {k: v.to(device) for k, v in inputs.items()}
             config = getattr(self.model, "config", None)
             kwargs = {"use_cache": False} if config is not None else {}
-            if getattr(config, "model_type", None) == "qwen3_5_text":
+            if getattr(config, "model_type", None) in ("qwen3_5_text", "gemma2"):
                 kwargs["logits_to_keep"] = 1
             self.preparing_source = True
             try:
@@ -646,6 +654,15 @@ class InterventionService:
                     raise InterventionError("source position is outside the clean prompt")
             hook = Intervention(self, spec, width, probe, on_error)
             try:
+                if spec["op"] in ("scale", "clamp"):
+                    read = self._target(self.dictionary.metadata["read_points"][probe.layer])
+                    if read[0] is not module:
+                        if read[1] != "input":
+                            raise InterventionError("feature interventions require a semantic input probe")
+                        hook.separate_read = True
+                        hook.handles.append(read[0].register_forward_hook(hook.read, with_kwargs=True))
+                        hook.handles.append(self.model.register_forward_pre_hook(hook.enter_read))
+                        hook.handles.append(self.model.register_forward_hook(hook.clear_read, always_call=True))
                 if event == "input":
                     hook.handles.append(module.register_forward_pre_hook(hook.pre, with_kwargs=True))
                 else:
@@ -714,6 +731,9 @@ class Intervention:
         self.width, self.probe = width, probe
         self.on_error = on_error
         self.handles = []
+        self.separate_read = False
+        self.live_input = None
+        self.read_stack = []
         self.calls, self.errors, self.error = 0, 0, None
 
     @property
@@ -724,6 +744,8 @@ class Intervention:
         self._remove()
 
     def _remove(self, *, retain_source=False):
+        self.live_input = None
+        self.read_stack.clear()
         while self.handles:
             self.handles.pop().remove()
         if self.spec["op"] == "patch" and not retain_source:
@@ -806,13 +828,27 @@ class Intervention:
             return None
 
     def post(self, module, args, kwargs, output):
+        live_input = self.live_input if self.separate_read else _input(args, kwargs)
+        self.live_input = None
         if self.removed or _hook_muted(self) or selected_rows(self.service.model) == ():
             return None
         self.calls += 1
         try:
-            return self._apply(output, _input(args, kwargs))
+            return self._apply(output, live_input)
         except Exception as error:
             self._failed(error)
             if isinstance(error, CleanStop):
                 raise
             return None
+
+    def read(self, module, args, kwargs, output):
+        self.live_input = None
+        if not self.removed and not _hook_muted(self) and selected_rows(self.service.model) != ():
+            self.live_input = _input(args, kwargs)
+
+    def enter_read(self, module, args):
+        self.read_stack.append(self.live_input)
+        self.live_input = None
+
+    def clear_read(self, module, args, output):
+        self.live_input = self.read_stack.pop() if self.read_stack else None

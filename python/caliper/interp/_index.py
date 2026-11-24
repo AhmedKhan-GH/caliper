@@ -89,7 +89,13 @@ def _compatible(model, dictionary):
         if (tuple(layer.W_enc.shape) != shape or tuple(layer.W_dec.shape) != shape or
                 tuple(layer.b_enc.shape) != (shape[0],) or tuple(layer.b_dec.shape) != (shape[1],)):
             raise ValueError("index dictionary dimensions mismatch")
-        if type(layer.k) is not int or layer.k != data["k"]:
+        activation = getattr(layer, "activation", "topk")
+        if activation != data["activation"]:
+            raise ValueError("index dictionary activation mismatch")
+        if activation == "jumprelu":
+            if layer.k is not None or data["k"] is not None or tuple(layer.threshold.shape) != (shape[0],):
+                raise ValueError("index dictionary JumpReLU mismatch")
+        elif activation != "topk" or type(layer.k) is not int or layer.k != data["k"]:
             raise ValueError("index dictionary TopK mismatch")
     return data
 
@@ -174,7 +180,7 @@ class _TopTable:
 
 
 def _forward(model, input_ids, attention_mask):
-    if model.config.model_type == "qwen3_5_text":
+    if model.config.model_type in ("qwen3_5_text", "gemma2"):
         # The decoder supplies MLP probes without a vocabulary-sized logit tensor.
         return model.model(input_ids=input_ids, attention_mask=attention_mask, use_cache=False)
     return model(input_ids=input_ids, attention_mask=attention_mask, use_cache=False)
@@ -556,7 +562,7 @@ class FeatureIndex:
         # Attention patterns can remain on fixture modules after each layer.
         patterns = 4 * rows * heads * WINDOW_TOKENS**2 * len(self.dictionary.layers)
         recurrent = 4 * rows * value_heads * key_dim * value_dim
-        logits = 0 if config.model_type == "qwen3_5_text" else tokens * config.vocab_size
+        logits = 0 if config.model_type in ("qwen3_5_text", "gemma2") else tokens * config.vocab_size
         # Include token tensors, output lists, temporary copies, and allocator reserve.
         return size * (workspace + patterns + recurrent + logits) + tokens * 32 + 512_000_000
 
