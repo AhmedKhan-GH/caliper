@@ -680,7 +680,7 @@ class InterventionService:
             self._cache_identity = identity, tuple((key, value) for key, value in inputs if key in prompts)
 
     def _source_space(self, sources):
-        """Admit captures within fixed bounds without eviction of an active source."""
+        """Plan cache eviction after successful capture within fixed bounds."""
         sizes = {key: value.numel() * value.element_size() for key, value in self._cache.items()}
         extra = sum(value.numel() * value.element_size() for value in sources.values())
         total, count = sum(sizes.values()) + extra, len(sizes) + len(sources)
@@ -693,17 +693,17 @@ class InterventionService:
                 total, count = total - size, count - 1
         if total > MAX_SOURCE_BYTES or count > MAX_SOURCE_ENTRIES:
             raise InterventionError("active patch sources exceed the bounded source cache")
-        for key in evict:
-            del self._cache[key]
-        self._trim_source_inputs()
+        return evict
 
     @contextmanager
-    def _capture_sources(self, points):
+    def _capture_sources(self, points, *, prompt):
         """Capture generic tensor outputs without decoder or trace admission."""
         try:
             values = capture(self.model, points)
         except NotImplementedError:
             values, handles = {}, []
+            memory = _IdentityMemory(self.resource_guard) if self.resource_guard is not None else None
+            initial = None
             try:
                 for point in points:
                     module, event, _, probe = self._target(point)
@@ -711,12 +711,29 @@ class InterventionService:
                         raise InterventionError("generic patch sources require module outputs")
 
                     def save(module, args, output, point=point):
+                        nonlocal initial
                         if not isinstance(output, torch.Tensor):
                             raise InterventionError("patch source point must produce a tensor")
-                        values[point] = output.detach()
+                        pending = {(prompt, name): value for name, value in values.items()}
+                        pending[prompt, point] = output
+                        try:
+                            self._source_space(pending)
+                        finally:
+                            pending.clear()
+                        if memory is not None:
+                            memory.check("patch source capture")
+                            if initial is None:
+                                initial = allocation_bytes(memory)
+                            retained = sum(value.numel() * value.element_size() for value in values.values())
+                            reserve = output.numel() * output.element_size()
+                            if allocation_bytes(memory, floor=initial + retained) + reserve > memory.limit:
+                                raise CleanStop("patch source allocation exceeds the process memory limit")
+                        # The next module can change this output in place. Preserve
+                        # the point value now and retain prior copies in admission.
+                        values[point] = output.detach().clone()
 
                     handles.append(module.register_forward_hook(save))
-                yield values
+                yield values, True
             finally:
                 for handle in reversed(handles):
                     handle.remove()
@@ -724,7 +741,7 @@ class InterventionService:
         else:
             try:
                 with values:
-                    yield values
+                    yield values, False
             finally:
                 values.close(clear=True)
 
@@ -764,10 +781,11 @@ class InterventionService:
             if getattr(config, "model_type", None) in ("qwen3_5_text", "gemma2"):
                 kwargs["logits_to_keep"] = 1
             self.preparing_source = True
+            sources = {}
             try:
                 with (internal_forward(), self.suspend(), torch.no_grad(), autorelease_scope(device),
                       _preserve_captures(self.model)):
-                    with self._capture_sources(sorted(item[1] for item in missing)) as values:
+                    with self._capture_sources(sorted(item[1] for item in missing), prompt=prompt) as (values, copied):
                         if self.resource_guard is not None:
                             self.resource_guard.check("patch source forward start")
                         try:
@@ -781,11 +799,17 @@ class InterventionService:
                         if any(value.ndim != 3 or not torch.isfinite(value).all().item()
                                for value in sources.values()):
                             raise InterventionError("patch source must be a finite batch-token-width tensor")
-                        self._source_space(sources)
+                        evict = self._source_space(sources)
                         # Admission precedes clones, and a failed capture retains no partial entries.
-                        sources = {item: value.detach().clone() for item, value in sources.items()}
+                        if not copied:
+                            sources = {item: value.detach().clone() for item, value in sources.items()}
+            except BaseException:
+                sources.clear()
+                raise
             finally:
                 self.preparing_source = False
+            for old_key in evict:
+                del self._cache[old_key]
             self._cache.update(sources)
             input_identities[prompt] = input_identity
             # Keep model and input evidence in one immutable transaction record.
