@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+from copy import deepcopy
 import os
 from pathlib import Path
 import subprocess
@@ -16,6 +17,7 @@ if str(DEMO) not in sys.path:
 import run as driver
 from _checks import check, finish, math_checks, program_budget_checks, selected_feature, token_path, FIXTURE_PROMPT
 from _mcp import Failure
+from _qualification import dictionary_qualification, MODEL_ID, MODEL_REVISION, MODEL_HASH
 
 
 @pytest.fixture(scope="module")
@@ -114,6 +116,203 @@ def test_finish_refuses_missing_evidence():
     result = {"mode": "fixture", "checks": []}
     assert finish(result) == 1
     assert result["qwen_acceptance"] is False
+
+
+def qualification_reply(*, fallback=False):
+    """Synthetic metadata exercises gates without model or index allocation."""
+    training = {"dataset_id": "test-source", "dataset_config": "test", "dataset_revision": "revision",
+                "split": "train", "source_id": "test-source:revision", "tokens": 20_000_000,
+                "token_budget": 20_000_000, "stop_reason": "token_budget",
+                "partitions": {"algorithm": "sha256-utf8-text-mod10000-v1", "train": [0, 9400],
+                               "quality": [9400, 9500], "index": [9500, 10000],
+                               "quality_tokens": 200_000, "index_tokens": 2_000_000}}
+    quality = {"status": "passed", "evaluated_tokens": 200_000, "partition": "quality", "stop_reason": "complete",
+               "dictionary_hash": "a" * 64, "all_mlps_replaced": 24,
+               "fvu": .3, "dead_fraction": .15, "cross_entropy_delta": .5,
+               "per_layer_fvu": [.3] * 24, "per_layer_dead_fraction": [.15] * 24,
+               "cross_entropy_tokens": 199_000, "original_cross_entropy": 2., "replaced_cross_entropy": 2.5}
+    metadata = {"model_id": MODEL_ID, "revision": MODEL_REVISION, "model_hash": MODEL_HASH,
+                "layers": 24, "latents": 8192, "training": training, "quality": quality}
+    identity = {"model_hash": MODEL_HASH, "dictionary_hash": "b" * 64,
+                "dictionary_fingerprint": "a" * 64, "index_hash": "c" * 64, "tokenizer_hash": "d" * 64}
+    index = {k: identity[k] for k in ("model_hash", "dictionary_hash", "index_hash", "tokenizer_hash")}
+    index.update(complete=True, tokens=2_000_000, token_budget=2_000_000, layers=24, features=8192,
+                 provenance={k: deepcopy(training[k]) for k in
+                             ("dataset_id", "dataset_config", "dataset_revision", "split", "source_id", "partitions")})
+    index["provenance"]["partition"] = "index"
+    response = {"metadata": metadata, "identity": identity, "index": index}
+    if fallback:
+        source = deepcopy(metadata)
+        source["quality"].update(status="failed", dictionary_hash="e" * 64,
+                                  fvu=.4, per_layer_fvu=[.4] * 24)
+        response["fallback_source"] = {
+            "metadata": source, "identity": {"model_hash": MODEL_HASH, "dictionary_fingerprint": "e" * 64},
+            "evaluation": {"version": 1, "count": 200_000, "pending_ids": None, "identity": "e" * 64,
+                           "settings": {"tokens": 200_000, "scope": "all_layers", "active_layers": list(range(24))},
+                           "stream": {"partition": "quality", "source_id": training["source_id"],
+                                      "partitions": deepcopy(training["partitions"])}}}
+        metadata["fallback_source"] = response["fallback_source"]
+        training["fallback"] = {"version": 1, "mode": "upper_half", "active_layers": list(range(12, 24)),
+                                "zero_layers": list(range(12)), "source_dictionary_hash": "e" * 64,
+                                "source_training_tokens": 20_000_000, "source_id": training["source_id"],
+                                "token_budget": 20_000_000, "warm_start": "upper_weights_fresh_adam",
+                                "lower_behavior": "zero_dictionary_original_mlp"}
+        del quality["all_mlps_replaced"]
+        quality.update(status="fallback_passed", scope="upper_half", active_layers=list(range(12, 24)),
+                       replaced_mlps=12, per_layer_status=["error_only"] * 12 + ["active"] * 12,
+                       per_layer_fvu=[None] * 12 + [.3] * 12, per_layer_dead_fraction=[None] * 12 + [.15] * 12)
+    return response
+
+
+@pytest.mark.parametrize("fallback", [False, True])
+def test_qualification_accepts_exact_complete_scope(fallback):
+    response = qualification_reply(fallback=fallback)
+    qualified = dictionary_qualification(response)
+    assert qualified["qualified"] is True
+    assert qualified["scope"] == ("upper_half" if fallback else "all_layers")
+    assert qualified["status"] == ("fallback_passed" if fallback else "passed")
+    assert qualified["identity"] == response["identity"]
+
+
+@pytest.mark.parametrize("field,value", [
+    ("status", "approved"), ("status", "partial"), ("evaluated_tokens", 199_999),
+    ("evaluated_tokens", "200000"), ("stop_reason", "memory_stop"), ("partition", "train"),
+    ("dictionary_hash", None), ("dictionary_hash", "f" * 64), ("all_mlps_replaced", 12),
+    ("fvu", float("nan")), ("cross_entropy_delta", float("inf")), ("cross_entropy_tokens", 0),
+])
+def test_qualification_rejects_incomplete_or_stale_quality(field, value):
+    response = qualification_reply()
+    response["metadata"]["quality"][field] = value
+    assert dictionary_qualification(response)["qualified"] is False
+
+
+@pytest.mark.parametrize("field,value", [("fvu", .301), ("dead_fraction", .151), ("cross_entropy_delta", .501)])
+def test_qualification_rejects_failed_metrics_under_passed_status(field, value):
+    response = qualification_reply()
+    quality = response["metadata"]["quality"]
+    quality[field] = value
+    if field == "cross_entropy_delta":
+        quality["replaced_cross_entropy"] = quality["original_cross_entropy"] + value
+    else:
+        quality["per_layer_" + field] = [value] * 24
+    assert dictionary_qualification(response)["qualified"] is False
+
+
+@pytest.mark.parametrize("section,field,value", [
+    ("index", "tokens", 1_999_999), ("index", "token_budget", 1_999_999), ("index", "complete", 1),
+    ("index", "model_hash", "other-model"), ("index", "dictionary_hash", "f" * 64),
+    ("index", "index_hash", "f" * 64), ("index", "tokenizer_hash", "f" * 64),
+    ("identity", "dictionary_fingerprint", "f" * 64), ("identity", "dictionary_hash", None),
+])
+def test_qualification_rejects_index_and_live_identity_mismatch(section, field, value):
+    response = qualification_reply()
+    response[section][field] = value
+    assert dictionary_qualification(response)["qualified"] is False
+
+
+@pytest.mark.parametrize("section", ["identity", "index", "metadata"])
+def test_qualification_requires_live_response_evidence(section):
+    response = qualification_reply()
+    del response[section]
+    assert dictionary_qualification(response)["qualified"] is False
+
+
+def test_qualification_rejects_overlapping_partitions():
+    response = qualification_reply()
+    response["metadata"]["training"]["partitions"]["quality"] = [0, 100]
+    response["index"]["provenance"]["partitions"]["quality"] = [0, 100]
+    assert dictionary_qualification(response)["qualified"] is False
+
+
+@pytest.mark.parametrize("fault", ["missing_source", "detached_source", "stale_source", "partial_source", "fake_failure",
+                                    "unfinished_training", "wrong_scope", "all_layer_claim", "lower_metrics"])
+def test_qualification_requires_authorized_fallback_evidence(fault):
+    response = qualification_reply(fallback=True)
+    source = response["fallback_source"]
+    quality = response["metadata"]["quality"]
+    if fault == "missing_source":
+        del response["fallback_source"]
+    elif fault == "detached_source":
+        del response["metadata"]["fallback_source"]
+    elif fault == "stale_source":
+        source["evaluation"]["identity"] = "f" * 64
+    elif fault == "partial_source":
+        source["evaluation"]["count"] -= 1
+    elif fault == "fake_failure":
+        source["metadata"]["quality"].update(fvu=.3, per_layer_fvu=[.3] * 24)
+    elif fault == "unfinished_training":
+        source["metadata"]["training"]["tokens"] -= 1
+    elif fault == "wrong_scope":
+        quality["active_layers"] = list(range(12))
+    elif fault == "all_layer_claim":
+        quality["all_mlps_replaced"] = 24
+    elif fault == "lower_metrics":
+        quality["per_layer_fvu"][0] = .3
+    assert dictionary_qualification(response)["qualified"] is False
+
+
+@pytest.mark.parametrize("fallback", [False, True])
+def test_finish_keeps_qwen_qualification_scope(fallback):
+    result = {"mode": "qwen", "checks": [check("synthetic_evidence", True, True, True)],
+              "pixel_evidence_collected": True, "dictionary_evidence": qualification_reply(fallback=fallback)}
+    assert finish(result) == 0
+    assert result["qwen_acceptance"] is True
+    assert result["qwen_full_mlp_acceptance"] is (not fallback)
+    assert result["qwen_acceptance_scope"] == ("upper_half" if fallback else "all_layers")
+    result["dictionary_evidence"]["metadata"]["quality"]["dictionary_hash"] = "f" * 64
+    assert finish(result) == 1
+    assert result["qwen_acceptance"] is False
+    assert result["qwen_full_mlp_acceptance"] is False
+    assert result["failed_checks"] == ["dictionary_qualification"]
+
+
+def test_finish_rejects_a_cached_qualification_without_evidence():
+    result = {"mode": "qwen", "pixel_evidence_collected": True,
+              "dictionary_qualification": {"qualified": True, "status": "passed"},
+              "checks": [check("dictionary_qualification", True, "passed", "passed")]}
+    assert finish(result) == 1
+    assert result["qwen_acceptance"] is False
+
+
+def test_finish_preserves_fixture_without_qwen_qualification():
+    result = {"mode": "fixture", "checks": [check("synthetic_fixture", True, True, True)]}
+    assert finish(result) == 0
+    assert result["qwen_acceptance"] is False
+
+
+def test_parity_retains_the_existing_edge_side_tolerance():
+    import numpy as np
+    from parity import compare
+    bands = np.arange(512, dtype=np.uint32) // 16
+    app = np.zeros((8, 512, 4), dtype=np.uint8)
+    app[:, :, :3] = ((bands % 2) * 255)[None, :, None]
+    app[:, :, 3] = 255
+    ids = np.zeros((8, 512, 2), dtype=np.uint32)
+    ids[:, :, 0], ids[:, :, 1] = 1, bands
+    web, web_ids = np.roll(app, 1, axis=1), np.roll(ids, 1, axis=1)
+    # The review example changes 6.25 percent of pixels to an adjacent edge color.
+    assert np.any(app != web, axis=2).mean() == .0625
+    metrics = compare(app, ids, web, web_ids)
+    assert metrics["interior_over"] == metrics["interior_id_mismatch"] == metrics["edge_share"] == 0
+
+
+def test_parity_rejects_colors_with_no_edge_side_match():
+    import numpy as np
+    from parity import compare
+    app = np.zeros((8, 8, 4), dtype=np.uint8)
+    web = np.full_like(app, 255)
+    ids = np.zeros((8, 8, 2), dtype=np.uint32)
+    ids[:, :, 1] = np.indices((8, 8)).sum(axis=0) % 2
+    assert compare(app, ids, web, ids)["edge_share"] == 1
+
+
+def test_parity_keeps_interior_color_and_identity_checks():
+    import numpy as np
+    from parity import compare
+    app = np.zeros((8, 8, 4), dtype=np.uint8)
+    ids = np.zeros((8, 8, 2), dtype=np.uint32)
+    metrics = compare(app, ids, app + 3, ids + 1)
+    assert metrics["interior_over"] == metrics["interior_id_mismatch"] == 64
 
 
 def inference_fixture():
@@ -373,16 +572,52 @@ def test_bridge_sets_selection_and_queries_examples():
         events = Events()
         def parameter(self, name, value):
             calls.append((name, value))
+        def ready_programs(self, names):
+            calls.append(("ready_programs", names))
     session = Session()
     # This transport unit test writes no acceptance artifact.
     from unittest.mock import patch
-    with patch.object(driver, "save"), patch.object(Session, "out", Path("unused"), create=True):
+    with patch.object(driver, "save"), patch.object(Session, "out", Path("unused"), create=True), \
+            patch.object(driver, "programs") as programs:
         bridge = driver.Bridge(session)
         bridge.consume()
+    programs.assert_called_once_with(session, examples=True)
     assert calls == [("selected_node", 10), ("feature.show", {"node": 10}),
                      ("feature.examples", {"node": 10, "limit": 16}),
-                     ("state.set", {"id": "activation_max", "value": 2})]
+                     ("state.set", {"id": "activation_max", "value": 2}),
+                     ("ready_programs", ["example_tokens"]),
+                     ("feature.examples", {"node": 10, "limit": 16})]
     assert bridge.last_selection == 10
+
+
+@pytest.mark.parametrize("kind", [0, 2, 3])
+def test_bridge_clears_shared_state_for_non_feature_picks(tmp_path, kind):
+    from unittest.mock import Mock
+    session = Mock(out=tmp_path)
+    bridge = driver.Bridge(session)
+    bridge.last_selection, bridge.examples_present = 10, True
+    bridge.handle({"kind": "pick", "panel": "graph", "fields": {"kind": kind, "index": 12}})
+    bridge.handle({"kind": "run", "change": "param", "name": "selected_node", "value": -1})
+    session.mcp.body.assert_any_call("state.set", id="selected_node", value=-1)
+    session.parameter.assert_called_once_with("selected_node", -1)
+    session.mcp.body.assert_any_call("program.remove", id="example_tokens")
+    assert bridge.last_selection is None and bridge.examples_present is False
+
+
+def test_bridge_creates_examples_after_an_early_refusal(tmp_path):
+    from unittest.mock import Mock, patch
+    session = Mock(out=tmp_path)
+    bridge = driver.Bridge(session)
+    session.events.complete.side_effect = [Failure("feature unavailable"), {"maximum": 2},
+                                           {"examples": []}, {"examples": []}]
+    event = {"kind": "pick", "panel": "graph", "fields": {"kind": 1, "index": 10}}
+    with pytest.raises(Failure, match="unavailable"):
+        bridge.handle(event)
+    with patch.object(driver, "programs") as programs:
+        bridge.handle(event)
+    programs.assert_called_once_with(session, examples=True)
+    session.ready_programs.assert_called_once_with(["example_tokens"])
+    assert bridge.examples_present is True and bridge.last_selection == 10
 
 
 def test_visible_bridge_continues_after_first_event():
@@ -570,6 +805,12 @@ def test_instrument_uses_three_panels_and_confirmed_bindings():
         jsonschema.validate(call.kwargs, schemas[call.args[0]])
     panels = [call.kwargs["id"] for call in calls if call.args[0] == "panel.create"]
     assert panels == ["graph", "examples", "output"]
+    description = next(call.kwargs["description"] for call in calls if call.args[0] == "spec.new")
+    readouts = {call.kwargs["id"]: call.kwargs["options"]["format"] for call in calls
+                if call.args[0] == "control.create" and call.kwargs["kind"] == "readout"}
+    assert len(readouts) == 5
+    for name, text in driver.METHOD_DISCLOSURES.items():
+        assert text in description and readouts["method_" + name] == text
     graph = next(call.kwargs for call in calls if call.args[0] == "program.create" and call.kwargs["id"] == "attribution")
     assert graph["bind"]["graph_counts"] == "live:trace.counts"
     bars = next(call.kwargs for call in calls if call.args[0] == "program.create" and call.kwargs["id"] == "probabilities")

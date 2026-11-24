@@ -948,6 +948,19 @@ foreach(_caliper_pg_dir programmable_graphics points_match draw_parity surface_m
     endif()
 endforeach()
 
+# These bounded CPU checks create no platform backend, window, or GPU.
+add_executable(caliper_circuit_readback_cpu "${CMAKE_SOURCE_DIR}/demos/circuit_trace/readback_test.cpp")
+target_include_directories(caliper_circuit_readback_cpu PRIVATE "${CMAKE_SOURCE_DIR}/src/host")
+target_link_libraries(caliper_circuit_readback_cpu PRIVATE caliper::sdk)
+add_executable(caliper_circuit_reference_cpu "${CMAKE_SOURCE_DIR}/demos/circuit_trace/reference_test.cpp")
+target_include_directories(caliper_circuit_reference_cpu PRIVATE "${CMAKE_SOURCE_DIR}/src/host" "${CMAKE_SOURCE_DIR}/include")
+target_link_libraries(caliper_circuit_reference_cpu PRIVATE caliper::sdk imgui nlohmann_json::nlohmann_json sternbild_tokens)
+foreach(_circuit_cpu_target caliper_circuit_readback_cpu caliper_circuit_reference_cpu)
+    set_target_properties(${_circuit_cpu_target} PROPERTIES CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON)
+    add_test(NAME ${_circuit_cpu_target} COMMAND ${_circuit_cpu_target})
+    set_tests_properties(${_circuit_cpu_target} PROPERTIES LABELS "interp;circuit_trace;cpu" TIMEOUT 15)
+endforeach()
+
 # The circuit fixture uses the actual hosted run and MCP bridge. Its browser
 # comparison runs after the workflow prepares Chromium and WebAssembly.
 function(caliper_circuit_trace_targets)

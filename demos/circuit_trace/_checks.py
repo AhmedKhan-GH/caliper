@@ -9,6 +9,7 @@ from PIL import Image
 
 from _mcp import Failure
 from _composition import panel_composition, read_rgba, required_text, MAX_PIXELS, MAX_ATLAS_PIXELS
+from _qualification import dictionary_qualification
 
 FIXTURE_HASH = "2464295694bd3690f156dcc7248882f0ad289f55972caafbbd7bd23f4e3d109e"
 FIXTURE_PROMPT = "The red cube is beside a tree."
@@ -221,8 +222,20 @@ def capture_checks(folder, metadata, png, graph, bars, *, selected):
 
 
 def finish(result):
+    has_evidence = any(g["name"] != "dictionary_qualification" for g in result.get("checks", []))
+    qualification = dictionary_qualification(result.get("dictionary_evidence"))
+    result["dictionary_qualification"] = qualification
+    if result["mode"] == "qwen":
+        # Recompute this gate from evidence. A cached status cannot qualify a run.
+        result["checks"] = [g for g in result.get("checks", []) if g["name"] != "dictionary_qualification"]
+        result["checks"].append(check("dictionary_qualification", qualification["qualified"], qualification,
+                                      "exact current dictionary, 200000 quality tokens, 2000000 index tokens",
+                                      required=result.get("pixel_evidence_collected") is not False))
     failed = [g["name"] for g in result.get("checks", []) if g["required"] and not g["passed"]]
     result["failed_checks"] = failed
-    result["passed"] = not failed and not result.get("error") and bool(result.get("checks"))
-    result["qwen_acceptance"] = result["passed"] and result["mode"] == "qwen" and result.get("pixel_evidence_collected", False)
+    result["passed"] = not failed and not result.get("error") and has_evidence
+    result["qwen_acceptance"] = (result["passed"] and result["mode"] == "qwen"
+                                 and qualification["qualified"] and result.get("pixel_evidence_collected", False))
+    result["qwen_acceptance_scope"] = qualification["scope"] if result["qwen_acceptance"] else None
+    result["qwen_full_mlp_acceptance"] = result["qwen_acceptance"] and qualification["scope"] == "all_layers"
     return 0 if result["passed"] else 1

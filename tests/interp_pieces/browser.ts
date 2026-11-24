@@ -5,7 +5,8 @@ import { REPO, WEB, serve } from '../../web/test/util.js';
 import { mockApp, openSpec, ready, VIEWS_FILES, type MockApp } from '../../web/test/spec-mock.js';
 
 // These limits match web/test/draw_parity.spec.ts: two channel levels in interiors,
-// at most one percent differing edge pixels, and identical interior IDs. There is no bloom.
+// at most one percent edge pixels with no adjacent color match on either side,
+// and identical interior IDs. There is no bloom.
 function compare(size: number, app: Uint8Array, aIds: Uint32Array, web: Uint8Array, wIds: Uint32Array) {
   const sameAround = (ids: Uint32Array, x: number, y: number) => {
     const p = y * size + x;
@@ -146,8 +147,7 @@ export function registerInterpPieceTests(test: typeof import('../../web/node_mod
     test.setTimeout(120_000);
     const program = JSON.parse(fs.readFileSync(path.join(fixture, 'hover.json'), 'utf8'));
     expect(program.instance.manifest.draw.text.hover).toEqual({ anchor: 33, string_offset: 32 });
-    program.params.hovered_node = -1;
-    program.instance.params.hovered_node = -1;
+    expect(program.instance.manifest.draw.text.selected).toEqual({ anchor: 32, param: 'selected_node', string_offset: 32 });
     for (const r of program.resources) { r.base64 = Buffer.from(r.bytes).toString('base64'); delete r.bytes; }
     const panel = program.id as string;
     const spec = {
@@ -225,6 +225,9 @@ export function registerInterpPieceTests(test: typeof import('../../web/node_mod
     expect(second).toBe(`label ${32 + picked.item}`);
     expect(picked.fields.index).toBe(picked.item);
     expect(await page.evaluate(() => (window as any).caliperSpec.programs.localState.selected_node)).toBe(picked.item);
+    await page.mouse.move(1, 1);
+    const nodeLabels = async () => (await labels()).filter((s) => /^label (3[2-9]|4[0-7])$/.test(s));
+    await expect.poll(nodeLabels).toEqual([second]);
     expect(app.requests.filter((r) => ['state.set', 'selection.set', 'trace.run'].includes(r.name))).toEqual([]);
   });
 }

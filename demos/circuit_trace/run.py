@@ -20,6 +20,13 @@ from _checks import (FIXTURE_HASH, FIXTURE_PROMPT, QWEN_PROMPT, bar_rows, captur
 from _inference_evidence import comparison_evidence, generation_baseline, generation_evidence
 
 ROOT = Path(__file__).resolve().parents[2]
+METHOD_DISCLOSURES = {
+    "dictionary": "The graph uses a separate transcoder dictionary for each layer.",
+    "routing": "The graph fixes attention routing, normalization scales, and feature masks for this prompt.",
+    "labels": "Feature labels use a heuristic from promoted output tokens and frequent example tokens.",
+    "prompt_limit": "Prompts contain at most 32 tokens, including special tokens.",
+    "analysis_scope": "The graph describes local prompt effects and excludes global weight analysis.",
+}
 
 
 def save(path, value):
@@ -280,7 +287,7 @@ def read_graph(session):
 
 def instrument(session):
     m = session.mcp
-    m.body("spec.new", id="circuit-trace", title="Circuit Trace")
+    m.body("spec.new", id="circuit-trace", title="Circuit Trace", description=" ".join(METHOD_DISCLOSURES.values()))
     for identifier, default, maximum in (("selected_node", -1, 511), ("example_page", 0, 1)):
         m.body("state.create", id=identifier, type="integer", default=default, min=default, max=maximum)
     m.body("state.create", id="activation_max", type="number", default=1., min=1e-6, max=1e20)
@@ -300,8 +307,12 @@ def instrument(session):
                 ("steered_text", "text", "param:output.steered", "Steered Tokens", {})]
     for identifier, kind, bind, title, options in controls:
         m.body("control.create", id=identifier, kind=kind, bind=bind, title=title, options=options)
+    for name, text in METHOD_DISCLOSURES.items():
+        m.body("control.create", id="method_" + name, kind="readout", title=name.replace("_", " ").title(),
+               options={"format": text})
     # Controls occupy one strip beside the three acceptance panels.
-    nodes = [{"id": "main", "split": "vertical", "ratio": .10, "children": ["prompt", "body"]},
+    nodes = [{"id": "instrument", "split": "vertical", "ratio": .82, "children": ["main", "methods"]},
+             {"id": "main", "split": "vertical", "ratio": .10, "children": ["prompt", "body"]},
              {"id": "body", "split": "horizontal", "ratio": .66, "children": ["graph", "right"]},
              {"id": "right", "split": "vertical", "ratio": .37, "children": ["examples", "lower"]},
              {"id": "lower", "split": "vertical", "ratio": .48, "children": ["output", "controls"]}]
@@ -311,7 +322,13 @@ def instrument(session):
                       "ratio": 1 / (len(control_ids) - index),
                       "children": [control_ids[index], control_ids[index + 1] if index + 2 == len(control_ids)
                                    else f"controls-{index + 1}"]})
-    m.body("layout.set", layout={"root": "main", "nodes": nodes})
+    method_ids = ["method_" + name for name in METHOD_DISCLOSURES]
+    for index in range(len(method_ids) - 1):
+        nodes.append({"id": "methods" if index == 0 else f"methods-{index}", "split": "vertical",
+                      "ratio": 1 / (len(method_ids) - index),
+                      "children": [method_ids[index], method_ids[index + 1] if index + 2 == len(method_ids)
+                                   else f"methods-{index + 1}"]})
+    m.body("layout.set", layout={"root": "instrument", "nodes": nodes})
 
 
 def programs(session, *, examples=False):
@@ -333,7 +350,7 @@ class Bridge:
         self.session = session
         self.last_examples = None
         self.last_selection = None
-        self.examples_present = None
+        self.examples_present = False
 
     def clear_examples(self):
         if self.examples_present:
@@ -348,9 +365,9 @@ class Bridge:
         s.mcp.body("state.set", id="activation_max", value=max(1e-6, feature["maximum"]))
         if self.examples_present is False:
             programs(s, examples=True)
+            self.examples_present = True
             s.ready_programs(["example_tokens"])
             s.events.complete("feature.examples", node=index, limit=16)
-            self.examples_present = True
         self.last_selection = index
         save(s.out / "selected-examples.json", self.last_examples)
 
@@ -360,6 +377,7 @@ class Bridge:
             fields = event.get("fields") or {}
             index = fields.get("index", event.get("index"))
             if fields.get("kind") != 1:
+                s.mcp.body("state.set", id="selected_node", value=-1)
                 s.parameter("selected_node", -1)
                 self.clear_examples()
                 return
@@ -422,14 +440,11 @@ def acceptance(session, args, result):
     result["selected_feature"] = selected
     programs(s)
     s.ready_programs(["attribution", "probabilities"])
-    s.events.complete("feature.dictionary")
+    result["dictionary_evidence"] = s.events.complete("feature.dictionary")
     s.read("attribution", "nodes", minimum_step=trace["step"])
     bridge = Bridge(s)
     s.bridge = bridge
     examples = bridge.select(selected["index"])
-    programs(s, examples=True)
-    bridge.examples_present = True
-    s.ready_programs(["example_tokens"])
     s.events.complete("feature.examples", node=selected["index"], limit=16)
     first_page = s.read("example_tokens", "rows")
     first_cells = s.read("example_tokens", "cells", minimum_step=first_page["step"])
@@ -519,6 +534,9 @@ def acceptance(session, args, result):
     baseline = {r["token"]: r["baseline"] for r in before}
     restored = all(r["token"] in baseline and abs(r["probability"] - baseline[r["token"]]) <= 1e-7 for r in reset)
     result["checks"].append(check("reset", restored, reset, "baseline restored within 1e-7"))
+    current_dictionary = s.events.complete("feature.dictionary")
+    result["checks"].append(check("dictionary_identity_stable", current_dictionary == result["dictionary_evidence"],
+                                   current_dictionary.get("identity"), "the qualification evidence remains unchanged"))
     s.mcp.body("applet.save")
     spec = s.mcp.body("spec.get")
     (s.out / "instrument.toml").write_text(spec["text"], encoding="utf-8")
@@ -547,6 +565,7 @@ def main(argv=None):
     if any(out.iterdir()):
         raise Failure("The output folder must be empty to preserve earlier evidence.")
     result = {"mode": "fixture" if args.model == "tiny-lm" else "qwen", "prompt": args.prompt,
+              "method_disclosures": dict(METHOD_DISCLOSURES),
               "fixture_forward_hash": FIXTURE_HASH if args.model == "tiny-lm" else None,
               "checks": [], "passed": False, "qwen_acceptance": False}
     session = None
