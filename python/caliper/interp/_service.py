@@ -112,7 +112,11 @@ class InterpretationService:
 
     def _execute(self, method, params, step):
         if method == "feature.dictionary":
-            return {"metadata": deepcopy(self._resource("dictionary").metadata)}
+            dictionary = self._resource("dictionary")
+            if self.index is None:
+                return {"metadata": deepcopy(dictionary.metadata)}
+            from ._qualification import dictionary_response
+            return dictionary_response(dictionary, self.index, model=self.model, tokenizer=self.tokenizer)
         if method in ("feature.show", "feature.examples"):
             with self._baseline():
                 self._resource("dictionary")
