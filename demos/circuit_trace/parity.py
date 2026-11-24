@@ -67,16 +67,20 @@ def run_parity(out):
     """Run each comparison process after the acceptance app and run close."""
     from run import executable, memory_bytes, save
     native = executable("CALIPER_CIRCUIT_PARITY_EXE", "cmake-build-release/caliper_circuit_parity")
+    temporary = out.resolve() / "temp"
+    temporary.mkdir(exist_ok=True)
+    env = dict(os.environ, TMPDIR=str(temporary), TMP=str(temporary), TEMP=str(temporary),
+               CALIPER_AGENT_OFFLINE="1", HF_HUB_OFFLINE="1", TRANSFORMERS_OFFLINE="1",
+               CALIPER_HIDDEN="1", CALIPER_TEST_NO_WINDOW="1", CI="1")
     flags = ["-l"] if sys.platform == "darwin" else ["-v"]
     with (out / "native.log").open("w") as log:
         run_owned(["/usr/bin/time", *flags, "-o", str(out / "native-memory.txt"),
                         str(native), str(out / "resources.json"), str(out)],
-                       stdout=log, timeout=90)
+                       stdout=log, timeout=90, env=env)
     native_peak = memory_bytes(out)
     save(out / "memory.json", {"native_peak_bytes": native_peak})
     if native_peak > 12_000_000_000:
         raise Failure(f"Native parity peak {native_peak} exceeds 12,000,000,000 bytes.")
-    env = dict(os.environ, CI="1")
     with (out / "browser.log").open("w") as log:
         run_owned(["/usr/bin/time", *flags, "-o", str(out / "browser-memory.txt"),
                         "node", str(Path(__file__).with_name("browser.mjs")), str(out)], env=env,

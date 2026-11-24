@@ -548,6 +548,7 @@ def acceptance(session, args, result):
     before_reply = s.read("probabilities", "cells")
     before = bar_rows(before_reply)
     before_comparison = comparison_evidence(s.events.complete("trace.status"), args.prompt, before)
+    baseline_top_token = before_comparison["argmax_token_ids"][0]
     # A resource barrier confirms selected-label derivation before the capture.
     labels = s.read("attribution", "labels", minimum_step=before_reply["step"])
     expected_steps = {"attribution": labels["step"], "example_tokens": first_page["step"],
@@ -590,7 +591,8 @@ def acceptance(session, args, result):
         reports = []
         for name, meta, png, bars in (("before", before_meta, before_png, before),
                                       ("page-2", page_meta, page_png, before), ("after", after_meta, after_png, after)):
-            gates, measured = capture_checks(s.out / "captures", meta, png, graph, bars, selected=selected)
+            gates, measured = capture_checks(s.out / "captures", meta, png, graph, bars, selected=selected,
+                                              baseline_top_token=baseline_top_token)
             for gate in gates:
                 gate["name"] = name + "." + gate["name"]
             result["checks"].extend(gates)
@@ -621,7 +623,7 @@ def acceptance(session, args, result):
         bridge.details(True)
         expanded_png, expanded_meta = s.capture("methods-expanded", dict(expected_steps))
         gates, _ = capture_checks(s.out / "captures", expanded_meta, expanded_png, graph, after,
-                                  selected=selected, expanded=True)
+                                  selected=selected, baseline_top_token=baseline_top_token, expanded=True)
         for gate in gates:
             gate["name"] = "methods-expanded." + gate["name"]
         result["checks"].extend(gates)

@@ -125,6 +125,68 @@ def test_selection_uses_top_logit_effect_and_keeps_original_measurement():
     assert secondary_selection(graph)["measured_ablation_effect"] is None
 
 
+@pytest.fixture
+def secondary_case():
+    """Place ten final-layer features above the influence-selected feature."""
+    nodes = [dict(kind="feature", layer=3, position=0, feature=index, index=index,
+                  influence=1., effect=1.) for index in range(10)]
+    nodes.append(dict(kind="feature", layer=1, position=2, feature=10, index=10,
+                      influence=.5, effect=-.3))
+    rows = [dict(layer=node["layer"], position=node["position"], feature=node["feature"],
+                 predicted=-node["effect"], measured=-node["effect"] / 2, sign_match=True) for node in nodes]
+    return {"nodes": nodes, "counts": {"layers": 4}}, {
+        "count": 10, "correct_signs": 10, "spearman": .8,
+        "measurements": rows[:10], "secondary_measurement": rows[10]}
+
+
+def test_secondary_selection_uses_measurement_outside_scored_ten(secondary_case):
+    graph, validation = secondary_case
+    original = deepcopy(validation)
+    record = secondary_selection(graph, validation)
+    assert record["feature"] == graph["nodes"][10]
+    assert record["predicted_ablation_effect"] == .3
+    assert record["measured_ablation_effect"] == .15
+    assert record["measurement_source"] == "trace.validate"
+    assert validation == original and len(validation["measurements"]) == 10
+
+
+def test_secondary_selection_accepts_reused_measurement(secondary_case):
+    graph, validation = secondary_case
+    graph["nodes"][0]["layer"] = 0
+    validation["measurements"][0]["layer"] = 0
+    validation["secondary_measurement"] = validation["measurements"][0]
+    record = secondary_selection(graph, validation)
+    assert record["feature"] == graph["nodes"][0]
+    assert record["measured_ablation_effect"] == -.5
+    assert record["measurement_source"] == "trace.validate"
+
+
+@pytest.mark.parametrize("fault", ["layer", "position", "feature", "missing_identity", "null"])
+def test_secondary_selection_rejects_mismatched_explicit_identity(secondary_case, fault):
+    graph, validation = secondary_case
+    # A legacy match must not hide an invalid explicit measurement.
+    validation["measurements"][0] = deepcopy(validation["secondary_measurement"])
+    if fault == "null":
+        validation["secondary_measurement"] = None
+    elif fault == "missing_identity":
+        validation["secondary_measurement"].pop("position")
+    else:
+        validation["secondary_measurement"][fault] += 1
+    with pytest.raises(Failure, match="secondary measurement does not match"):
+        secondary_selection(graph, validation)
+
+
+def test_secondary_selection_preserves_legacy_missing_measurement(secondary_case):
+    graph, validation = secondary_case
+    validation.pop("secondary_measurement")
+    original = deepcopy(validation)
+    record = secondary_selection(graph, validation)
+    assert record["feature"] == graph["nodes"][10]
+    assert record["measured_ablation_effect"] is None
+    assert record["measurement_source"] is None
+    assert validation == original
+
+
 def test_missing_top_bar_is_a_failure(measured):
     top = max(measured["before"], key=lambda r: r["baseline"])["token"]
     after = [r for r in measured["after"] if r["token"] != top]
@@ -425,6 +487,52 @@ def test_parity_keeps_interior_color_and_identity_checks():
     assert metrics["interior_over"] == metrics["interior_id_mismatch"] == 64
 
 
+@pytest.mark.parametrize("parent_temp", ["absent", "external", "mixed"])
+def test_parity_children_receive_private_temporary_environment(tmp_path, monkeypatch, parent_temp):
+    from unittest.mock import Mock
+    import parity
+    monkeypatch.chdir(tmp_path)
+    out = Path("parity")
+    out.mkdir()
+    for index, key in enumerate(("TMPDIR", "TMP", "TEMP")):
+        if parent_temp == "absent" or (parent_temp == "mixed" and key == "TMPDIR"):
+            monkeypatch.delenv(key, raising=False)
+        else:
+            monkeypatch.setenv(key, str(tmp_path / ("external-" + str(index))))
+    for key in ("CALIPER_AGENT_OFFLINE", "HF_HUB_OFFLINE", "TRANSFORMERS_OFFLINE",
+                "CALIPER_HIDDEN", "CALIPER_TEST_NO_WINDOW", "CI"):
+        monkeypatch.setenv(key, "0")
+    monkeypatch.setenv("CALIPER_TEST_FORCE_NO_GPU", "1")
+    monkeypatch.setenv("PARITY_INHERITED_MARKER", "retained")
+    parent = dict(os.environ)
+    calls = []
+    def run_owned(command, *, stdout, timeout, env):
+        calls.append((command, timeout, dict(env)))
+        assert not stdout.closed
+        assert env is not os.environ and dict(os.environ) == parent
+        temporary = out.resolve() / "temp"
+        assert temporary.is_dir()
+        assert all(env[key] == str(temporary) for key in ("TMPDIR", "TMP", "TEMP"))
+        assert all(env[key] == "1" for key in ("CALIPER_AGENT_OFFLINE", "HF_HUB_OFFLINE",
+                   "TRANSFORMERS_OFFLINE", "CALIPER_HIDDEN", "CALIPER_TEST_NO_WINDOW", "CI",
+                   "CALIPER_TEST_FORCE_NO_GPU"))
+        assert env["PARITY_INHERITED_MARKER"] == "retained"
+        if len(calls) == 2:
+            raise Failure("both child environments checked")
+    monkeypatch.setattr(parity, "run_owned", run_owned)
+    native = tmp_path / "native-parity"
+    monkeypatch.setattr(driver, "executable", Mock(return_value=native))
+    monkeypatch.setattr(driver, "memory_bytes", Mock(return_value=1024))
+    with pytest.raises(Failure, match="both child environments checked"):
+        parity.run_parity(out)
+    assert len(calls) == 2
+    assert str(native) in calls[0][0] and calls[0][1] == 90
+    assert "node" in calls[1][0] and calls[1][1] == 180
+    assert any(arg.endswith("browser.mjs") for arg in calls[1][0])
+    assert calls[0][2] == calls[1][2]
+    assert dict(os.environ) == parent
+
+
 def inference_fixture():
     from _inference_evidence import text_hash
     prompt = "A neutral fixture prompt"
@@ -562,7 +670,7 @@ def test_steering_correction_preserves_graph_thresholds(steering_case, count, si
     assert gate["required"] and gate["passed"] is passed
 
 
-def synthetic_capture(tmp_path, *, missing_panel=None, text_fault=None):
+def synthetic_capture(tmp_path, *, missing_panel=None, text_fault=None, output_bars=None):
     """Paint a tiny independent CPU scene. This is never application evidence."""
     import numpy as np
     from PIL import Image
@@ -593,9 +701,15 @@ def synthetic_capture(tmp_path, *, missing_panel=None, text_fault=None):
             for row in range(8):
                 source[3 + row * 3:5 + row * 3, 5:27] = [50, 90 + row * 10, 130, 255]
                 ids[3 + row * 3:5 + row * 3, 5:27] = [pick, row]
-        else:
+        elif output_bars is None:
             source[8:24, 10:18] = [30, 180, 220, 255]
             ids[8:24, 10:18] = [pick, 0]
+        else:
+            for row in output_bars:
+                x = 2 + row["index"] * 3
+                height = round(row["probability"] * 32)
+                source[28 - height:28, x:x + 2] = [30, 180, 220, 255]
+                ids[28 - height:28, x:x + 2] = [pick, row["index"]]
         source.tofile(tmp_path / (name + ".rgba"))
         ids.tofile(tmp_path / (name + ".id"))
         left, top = 4 + index * 72, 8
@@ -640,7 +754,7 @@ def synthetic_capture(tmp_path, *, missing_panel=None, text_fault=None):
 def synthetic_gates(tmp_path, **faults):
     from _checks import capture_checks
     metadata, graph, bars = synthetic_capture(tmp_path, **faults)
-    gates, measured = capture_checks(tmp_path, metadata, tmp_path / "capture.png", graph, bars, selected={"label": "B"})
+    gates, measured = capture_checks(tmp_path, metadata, tmp_path / "capture.png", graph, bars, selected={"label": "B"}, baseline_top_token=7)
     return {gate["name"]: gate for gate in gates}, measured
 
 
@@ -662,11 +776,20 @@ def test_bar_height_preserves_two_pixel_tolerance(tmp_path, offset, passed):
     from _checks import capture_checks
     metadata, graph, bars = synthetic_capture(tmp_path)
     bars[0]["probability"] = (32 + offset) / 64
-    gates, measured = capture_checks(tmp_path, metadata, tmp_path / "capture.png", graph, bars, selected={"label": "B"})
+    gates, measured = capture_checks(tmp_path, metadata, tmp_path / "capture.png", graph, bars, selected={"label": "B"}, baseline_top_token=7)
     gate = next(g for g in gates if g["name"] == "bar_height")
     assert gate["passed"] is passed
     assert measured["height"] == 32
     assert gate["threshold"] == "within 2 pixels"
+
+
+@pytest.mark.parametrize("token", [None, True, -1, "7", 8])
+def test_capture_requires_original_top_token_identity(tmp_path, token):
+    from _checks import capture_checks
+    metadata, graph, bars = synthetic_capture(tmp_path)
+    with pytest.raises(Failure, match="original baseline top token"):
+        capture_checks(tmp_path, metadata, tmp_path / "capture.png", graph, bars,
+                       selected={"label": "B"}, baseline_top_token=token)
 
 
 @pytest.mark.parametrize("panel", ["graph", "examples", "output"])
@@ -689,7 +812,7 @@ def test_missing_panel_placement_is_a_failure(tmp_path):
     metadata, graph, bars = synthetic_capture(tmp_path)
     del metadata["panels"]["graph"]["composition"]
     with pytest.raises(Failure, match="composition evidence"):
-        capture_checks(tmp_path, metadata, tmp_path / "capture.png", graph, bars, selected={"label": "B"})
+        capture_checks(tmp_path, metadata, tmp_path / "capture.png", graph, bars, selected={"label": "B"}, baseline_top_token=7)
 
 
 def test_text_oracle_requires_each_repeated_graph_label():
@@ -704,7 +827,7 @@ def test_text_oracle_rejects_partial_glyphs_under_the_actual_clip(tmp_path):
     label = metadata["panels"]["graph"]["labels"][0]
     for quad in label["quads"]:
         quad["clip"][2] = quad["rect"][0] + .5
-    gates, _ = capture_checks(tmp_path, metadata, tmp_path / "capture.png", graph, bars, selected={"label": "B"})
+    gates, _ = capture_checks(tmp_path, metadata, tmp_path / "capture.png", graph, bars, selected={"label": "B"}, baseline_top_token=7)
     text = next(gate for gate in gates if gate["name"] == "host_labels")
     assert not text["passed"]
     assert not text["measured"]["glyphs"][0]["complete"]
@@ -1153,7 +1276,8 @@ def test_acceptance_wires_zero_clamp_prediction_to_probability_and_pixels(
             raise Failure("steering checks recorded")
         return folder / (name + ".png"), {"name": name}
     session.capture.side_effect = capture
-    def capture_checks(folder, metadata, png, graph, bars, *, selected):
+    def capture_checks(folder, metadata, png, graph, bars, *, selected, baseline_top_token):
+        assert baseline_top_token == 1
         return [], {"row_ids": list(range(8)), "height": height if metadata["name"] == "after" else 30}
     monkeypatch.setattr(driver, "instrument", Mock())
     monkeypatch.setattr(driver, "read_graph", lambda s: graph)
@@ -1189,6 +1313,114 @@ def test_acceptance_wires_zero_clamp_prediction_to_probability_and_pixels(
     assert steering["measured"]["absolute_probability_change"] == pytest.approx(abs(probability - .3))
     assert pixels["measured"]["pixel_change"] == height - 30
     assert gates["validation"]["passed"]
+
+
+@pytest.mark.parametrize("tie", ["exact", "rounded"])
+@pytest.mark.parametrize("missing", [None, "comparison", "before", "after"])
+def test_acceptance_pixels_keep_original_argmax(tmp_path, monkeypatch, steering_case, tie, missing):
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+    import numpy as np
+    import _checks
+    prompt, _, status, _ = inference_fixture()
+    # Float32 bar values can hide a distinct float64 argmax.
+    exact = np.array([.5, .5 if tie == "exact" else .5 + 1e-9], dtype=np.float64)
+    original = int(exact.argmax()) + 1
+    other = 3 - original
+    rounded = exact.astype(np.float32)
+    assert rounded[0] == rounded[1]
+    binding = {key: status["inference"][key] for key in ("prompt_hash", "interventions_hash")}
+    prior = dict(binding, argmax_token_ids=[original, original], completed_step=9)
+    after_comparison = dict(binding, argmax_token_ids=[original, other], completed_step=14)
+    graph = steering_case["graph"]
+    graph["tokens"] = [{"text": "A"}]
+    graph["nodes"][1].update(effect=4.64, label="B")
+    secondary = graph["nodes"][2]
+    steering_case["validation"]["secondary_measurement"] = dict(
+        layer=secondary["layer"], position=secondary["position"], feature=secondary["feature"],
+        predicted=-secondary["effect"], measured=-.5, sign_match=True)
+    status.update(state="done", counts={"nodes": len(graph["nodes"])})
+    status["inference"]["comparison"] = prior
+    before_rows = [[0, 0, 0, 0, float(rounded[token - 1]) if token <= 2 else 0.,
+                   float(rounded[token - 1]) if token <= 2 else 0., token, token - 1]
+                  for token in range(1, 11)]
+    after_rows = deepcopy(before_rows)
+    after_rows[original - 1][5] = .25
+    after_rows[other - 1][5] = .75
+    # Reorder both the resource rows and their pixel IDs after the clamp.
+    after_rows.sort(key=lambda row: row[5], reverse=True)
+    for index, row in enumerate(after_rows):
+        row[7] = index
+    if missing == "comparison":
+        prior.pop("argmax_token_ids")
+    elif missing in ("before", "after"):
+        rows = before_rows if missing == "before" else after_rows
+        next(row for row in rows if row[6] == original)[6] = 99
+    before_reply = {"step": 9, "elements": before_rows}
+    after_reply = {"step": 14, "elements": after_rows}
+    folder = tmp_path / "acceptance"
+    folder.mkdir()
+    session = Mock(out=folder, run_id="circuit-trace", show=False, quality_override=None,
+                   program_evidence={"before": {}, "after": {}})
+    session.read.return_value = before_reply
+    session.example_page.return_value = before_reply, before_reply
+    session.ablate_selected.return_value = after_reply, after_comparison
+    captures = []
+    def complete(method, **args):
+        if method == "trace.run": return {"step": 1, "seconds": 0}
+        if method == "trace.status":
+            if "methods-expanded" in captures:
+                raise Failure("pixel checks recorded")
+            return status
+        if method == "trace.validate": return steering_case["validation"]
+        return {}
+    session.events.complete.side_effect = complete
+    def capture(name, steps):
+        captures.append(name)
+        target = folder / "captures" / name
+        target.mkdir(parents=True)
+        reply = after_reply if name in ("after", "methods-expanded") else before_reply
+        metadata, _, _ = synthetic_capture(target, output_bars=driver.bar_rows(reply))
+        metadata["window"] = name + "/" + metadata["window"]
+        metadata["font_atlas"]["file"] = name + "/" + metadata["font_atlas"]["file"]
+        for panel in metadata["panels"].values():
+            for key in ("ids", "color"):
+                panel[key] = name + "/" + panel[key]
+        return target / "capture.png", metadata
+    session.capture.side_effect = capture
+    monkeypatch.setattr(driver, "instrument", Mock())
+    monkeypatch.setattr(driver, "read_graph", lambda s: graph)
+    monkeypatch.setattr(driver, "programs", Mock())
+    monkeypatch.setattr(driver.Bridge, "select", lambda bridge, row: steering_case["examples"])
+    monkeypatch.setattr(driver.Bridge, "details", Mock())
+    monkeypatch.setattr(driver, "program_budget_checks", lambda snapshot: [])
+    monkeypatch.setattr(driver, "time", SimpleNamespace(monotonic=lambda: 0))
+    monkeypatch.setattr(_checks, "example_page_check", lambda *args: {})
+    result = {"checks": []}
+    message = {None: "pixel checks recorded", "comparison": "actual argmax token IDs",
+               "before": "omit an actual argmax", "after": "omit the original baseline top token"}[missing]
+    with pytest.raises(Failure, match=message):
+        driver.acceptance(session, SimpleNamespace(prompt=prompt, model="local-qwen"), result)
+    if missing is not None:
+        assert not any(g.get("name") == "bar_change_matches_prediction" for g in result["checks"])
+        return
+    gates = {gate["name"]: gate for gate in result["checks"] if "name" in gate}
+    assert captures == ["before", "examples-page-2", "after", "methods-expanded"]
+    for name, height in (("before", 32), ("page-2", 32), ("after", 16), ("methods-expanded", 16)):
+        gate = gates[name + ".bar_height"]
+        assert gate["passed"] and gate["threshold"] == "within 2 pixels"
+        assert gate["measured"]["token"] == original
+        assert gate["measured"]["pixels"] == height
+        assert gate["measured"]["expected"] == pytest.approx(height)
+    pixels = gates["bar_change_matches_prediction"]
+    assert pixels["passed"] and pixels["measured"]["pixel_change"] == -16
+    semantic = gates["steering_change_matches_prediction"]
+    assert semantic["passed"] and semantic["measured"]["baseline_top"] == original
+    assert semantic["measured"]["probability_change"] == -.25
+    saved = json.loads((tmp_path / "result.json").read_text())
+    assert saved["secondary_selection"]["feature"] == secondary
+    assert saved["secondary_selection"]["measured_ablation_effect"] == -.5
+    assert saved["secondary_selection"]["measurement_source"] == "trace.validate"
 
 
 @pytest.mark.parametrize("platform,text,expected", [

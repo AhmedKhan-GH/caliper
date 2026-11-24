@@ -32,8 +32,15 @@ def selected_feature(graph, *, rule="effect"):
 def secondary_selection(graph, validation=None):
     """Keep the original selection and its independently measured ablation."""
     node = selected_feature(graph, rule="influence")
-    row = next((row for row in (validation or {}).get("measurements", [])
-                if all(row[key] == node[key] for key in ("layer", "position", "feature"))), None)
+    validation = validation or {}
+    identity = ("layer", "position", "feature")
+    if "secondary_measurement" in validation:
+        row = validation["secondary_measurement"]
+        if not isinstance(row, dict) or any(row.get(key) != node[key] for key in identity):
+            raise Failure("The secondary measurement does not match the influence-selected feature.")
+    else:
+        row = next((row for row in validation.get("measurements", [])
+                    if all(row[key] == node[key] for key in identity)), None)
     return {"rule": "largest influence before the last layer", "feature": node,
             "predicted_ablation_effect": -node["effect"],
             "measured_ablation_effect": None if row is None else row["measured"],
@@ -209,8 +216,13 @@ def raw_panel(folder, metadata, name):
     return panel, ids, color
 
 
-def capture_checks(folder, metadata, png, graph, bars, *, selected, expanded=False):
+def capture_checks(folder, metadata, png, graph, bars, *, selected, baseline_top_token, expanded=False):
     """Read renderer targets and the exact PNG pixels from one capture."""
+    if type(baseline_top_token) is not int or baseline_top_token < 0:
+        raise Failure("The capture lacks the original baseline top token ID.")
+    top = next((row for row in bars if row["token"] == baseline_top_token), None)
+    if top is None:
+        raise Failure("The captured bars omit the original baseline top token.")
     root = Path(folder)
     if metadata.get("error"):
         raise Failure(metadata["error"])
@@ -237,7 +249,6 @@ def capture_checks(folder, metadata, png, graph, bars, *, selected, expanded=Fal
     output = compositions["output"]
     bi, bc = output["ids"], output["actual"].astype(np.float32)
     bar_pick = bp["programs"][0]["pick_id"]
-    top = max(bars, key=lambda row: row["baseline"])
     # Teal comes from the actual current bar, while ghost-only sides remain distinct.
     mask = (output["geometry"] & (bi[:, :, 0] == bar_pick) & (bi[:, :, 1] == top["index"])
             & (bc[:, :, 1] > bc[:, :, 0] * 1.5) & (bc[:, :, 2] > bc[:, :, 0] * 1.5)
@@ -255,7 +266,7 @@ def capture_checks(folder, metadata, png, graph, bars, *, selected, expanded=Fal
               "expected prompt and selected glyph pixels within two channel levels"),
         check("example_page", len(row_ids) == 8, row_ids, "8 actual row IDs"),
         check("bar_height", abs(measured - expected) <= 2,
-              {"pixels": measured, "expected": expected, "scale": bar_scale}, "within 2 pixels"),
+              {"token": baseline_top_token, "pixels": measured, "expected": expected, "scale": bar_scale}, "within 2 pixels"),
     ]
     for name, composition in compositions.items():
         gates.append(check(name + "_composition", composition["passed"], composition["summary"],
@@ -270,7 +281,7 @@ def capture_checks(folder, metadata, png, graph, bars, *, selected, expanded=Fal
     for name in ("graph", "examples", "output"):
         target, target_ids, _ = raw_panel(root, metadata, name)
         gates.extend(visual_checks(name, target, target_ids, metadata, node_count=len(graph["nodes"]), expanded=expanded))
-    return gates, {"row_ids": row_ids, "height": measured, "expected_height": expected}
+    return gates, {"row_ids": row_ids, "token": baseline_top_token, "height": measured, "expected_height": expected}
 
 
 def finish(result):
