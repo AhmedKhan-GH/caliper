@@ -176,7 +176,7 @@ export function canonicalJson(v: unknown, source?: unknown, interpretation = fal
   if (v === null || typeof v !== 'object') {
     if (typeof v === 'number' && !Number.isFinite(v)) throw new TypeError('NaN and the infinities are not JSON');
     const text = JSON.stringify(v);
-    return typeof v === 'number' && (/[.eE]/.test(text) || (typeof source === 'string' ? /[.eE]/.test(source) : interpretation && !Number.isSafeInteger(v)))
+    return typeof v === 'number' && (/[.eE]/.test(text) || (typeof source === 'string' ? /[.eE]/.test(source) : interpretation && (!Number.isSafeInteger(v) || Object.is(v, -0))))
       ? canonicalFloat(v) : text;
   }
   source ??= numberSources.get(v);
