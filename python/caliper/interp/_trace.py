@@ -492,8 +492,8 @@ class Tracer:
             service = owner if callable(getattr(owner, "specifications", None)) else None
         return service if service is not None and service.model is self.model else None
 
-    def _intervention_state(self):
-        from ._intervene import _ACTIVE_REPLAYS, _MUTED_HOOKS, selected_rows
+    def _intervention_state(self, check=_no_check):
+        from ._intervene import _ACTIVE_REPLAYS, _MUTED_HOOKS, _source_input_identity, selected_rows
         muted = _MUTED_HOOKS.get()
         service = self._service()
         if service is not None:
@@ -512,9 +512,26 @@ class Tracer:
             rows = selected_rows(self.model)
             if feature_effect and (rows is None or 0 in rows) and bound is not self.dictionary:
                 raise ValueError("feature interventions require the same dictionary instance as the trace")
+            source_inputs = []
+            if patch_effect:
+                executor = service.executor
+                memory = _DeadlineMemory(BudgetMemory(self.guard._guard, self.guard.limit / 1e9,
+                                                     extra=executor.resource_guard), check)
+                prompts = {}
+                for spec in specifications:
+                    if spec.get("op", spec.get("kind")) == "patch":
+                        prompts.setdefault(spec["source_prompt"], spec)
+                # Tokenization runs outside the controls lock. Its current result
+                # must enter both cache keys before either cache can return.
+                for prompt, spec in sorted(prompts.items()):
+                    memory.check("trace patch source inputs")
+                    _, digest = _source_input_identity(executor._source_inputs(spec), memory)
+                    memory.check("trace patch source inputs complete")
+                    source_inputs.append((prompt, digest))
             return {"specifications": specifications, "rows": rows,
                     "dictionary": None if bound is None else (id(bound), _versions(bound)),
-                    "tokenizer": id(service.executor.tokenizer) if patch_effect else None}
+                    "tokenizer": id(service.executor.tokenizer) if patch_effect else None,
+                    "source_inputs": source_inputs}
         with self.controls.lock:
             watched = self.controls._iv_model
             if watched is None or watched.model is not self.model:
@@ -544,7 +561,7 @@ class Tracer:
         label_key = None if label_index is None else label_index.label_identity
         check("trace admission")
 
-        state = self._intervention_state()
+        state = self._intervention_state(check)
         specifications = state["specifications"] if isinstance(state, dict) else state
         if (specifications and isinstance(state, dict) and state["rows"] is not None
                 and any(row != 0 for row in state["rows"])):
@@ -608,12 +625,12 @@ class Tracer:
                 def check_forward(stage):
                     check(stage)
                     # A failed live hook invalidates the recording before frozen arithmetic.
-                    if stage == "record complete" and self._intervention_state() != identity["interventions"]:
+                    if stage == "record complete" and self._intervention_state(check) != identity["interventions"]:
                         raise RuntimeError("intervention state changed during the trace forward")
                 path = FrozenPath(self.model, ids.to(self.guard.device), self.dictionary,
                                   guard=self.guard, interventions=specifications, check=check_forward)
                 self._validate_forward_settings(check)
-                if self._intervention_state() != identity["interventions"]:
+                if self._intervention_state(check) != identity["interventions"]:
                     raise RuntimeError("intervention state changed during the trace forward")
             check("forward complete")
             effects = _DirectEffects(path, self.dictionary, ids[0].tolist(), self.tokenizer, check=check)
@@ -702,7 +719,7 @@ class Tracer:
             graph = Graph.build(**graph_data, trace_id=trace_id, device=path.device)
             check("graph construction")
             self.guard.check("graph publication")
-            if self._intervention_state() != identity["interventions"]:
+            if self._intervention_state(check) != identity["interventions"]:
                 self._forward_cache = None
                 raise RuntimeError("intervention state changed during the trace")
             self._validate_forward_settings(check)

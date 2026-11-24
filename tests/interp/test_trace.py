@@ -446,7 +446,7 @@ def test_trace_cache_identity_full_state_and_lru(monkeypatch):
     executor = type("Executor", (), {"invalidate_cache": lambda self: invalidations.append(True)})()
     service = type("Service", (), {"executor": executor})()
     monkeypatch.setattr(tracer, "_service", lambda: service)
-    monkeypatch.setattr(tracer, "_intervention_state", lambda: state)
+    monkeypatch.setattr(tracer, "_intervention_state", lambda *_: state)
     initial = tracer.trace("A", 0)
     assert tracer.trace("A", 0) is initial
     # Full specification fields participate, even when the point and kind stay the same.
@@ -566,7 +566,7 @@ def test_mid_forward_intervention_change_is_not_cached(monkeypatch):
     model = TinyLM(layers=1)
     tracer = Tracer(model, TinyTokenizer(), exact_dictionary(model))
     state = []
-    monkeypatch.setattr(tracer, "_intervention_state", lambda: list(state))
+    monkeypatch.setattr(tracer, "_intervention_state", lambda *_: list(state))
     def changed(*args):
         state.append("changed")
     handle = model.register_forward_hook(changed)
