@@ -315,3 +315,43 @@ options = { min = 0.0, max = 2.0, value = 0.5 }
     CHECK_FALSE(reopen.ok);
     CHECK(reopen.error.code == "command.not_allowed");
 }
+
+TEST_CASE("viewer readouts use current unplaced script parameters") {
+    sp::Spec s;
+    sp::Control source;
+    source.id = "status_value";
+    source.kind = sp::ControlKind::text;
+    source.bind = "param:clamp.status";
+    s.controls.push_back(source);
+    sp::Control readout;
+    readout.id = "status";
+    readout.kind = sp::ControlKind::readout;
+    sp::Reference ref;
+    ref.kind = sp::Reference::Kind::control;
+    ref.target = source.id;
+    ref.fallback = "Unavailable";
+    sp::BoundText text;
+    text.format = "{status:s}";
+    text.fields["status"] = ref;
+    readout.options.bound_text = text;
+    ViewerInputs in;
+    FakeRun run;
+    run.st.attached = true;
+    RunParam param;
+    param.name = "clamp.status";
+    param.type = "text";
+    param.value = "No slider clamp.";
+    run.st.params.push_back(param);
+    const auto shown = [&] { return control_data_result(s, readout, in, &run, "") ["data"]["text"]; };
+    CHECK(shown() == "No slider clamp.");
+    run.st.params.back().value = "L2 F4. Clamp 0.";
+    CHECK(shown() == "L2 F4. Clamp 0.");
+    run.st.params.back().pending = "Pending clamp.";
+    CHECK(shown() == "Pending clamp.");
+    run.st.attached = false;
+    CHECK(shown() == "Unavailable");
+    run.st.attached = true;
+    run.st.params.clear();
+    CHECK(shown() == "Unavailable");
+    CHECK(control_data_result(s, readout, in, nullptr, "")["data"]["text"] == "Unavailable");
+}

@@ -70,7 +70,19 @@ std::uint32_t line_count(const std::string& t) {
 
 // The value of a reference now: the cursor's fields from the history, else
 // the session's values, else its default.
-json read_reference(const spec::Reference& r, const ViewerInputs& in) {
+json read_reference(const spec::Reference& r, const ViewerInputs& in,
+                    const spec::Spec* shown = nullptr, const RunState* run = nullptr) {
+    if (r.kind == spec::Reference::Kind::control && shown) {
+        const spec::Control* control = shown->find_control(r.target);
+        const auto target = control ? spec::parse_control_target(control->bind) : std::nullopt;
+        if (target && target->kind == spec::ControlTarget::Kind::param) {
+            if (!run || !run->attached || r.field) return r.fallback;
+            for (const auto& param : run->params)
+                if (param.name == target->name)
+                    return param.pending.is_null() ? param.value : param.pending;
+            return r.fallback;
+        }
+    }
     if (r.kind == spec::Reference::Kind::state && r.target == spec::kCursorState && in.history) {
         const CursorState cur = in.history->cursor();
         const std::string f = r.field.value_or("step");
@@ -292,7 +304,7 @@ json control_data_result(const spec::Spec& spec, const spec::Control& c, const V
             for (const auto& [name, field] : bt.fields) {
                 names.push_back(name);
                 values[name] = std::holds_alternative<spec::Reference>(field)
-                                   ? read_reference(std::get<spec::Reference>(field), in)
+                                   ? read_reference(std::get<spec::Reference>(field), in, &spec, &st)
                                    : json(std::get<std::string>(field));
             }
             text::ParsedText parsed;
