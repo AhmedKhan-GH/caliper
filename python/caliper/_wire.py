@@ -165,7 +165,11 @@ RUN_NONE, RUN_RUNNING, RUN_PAUSING, RUN_PAUSED, RUN_STEPPING = (
 RUN_STATES = (RUN_NONE, RUN_RUNNING, RUN_PAUSING, RUN_PAUSED, RUN_STEPPING)
 OP_PAUSE, OP_RESUME, OP_STEP, OP_SET, OP_RUN = "pause", "resume", "step", "set", "run"
 OP_INTERVENE = "intervene"                 # 3.2 draft, capability "interventions"
-OPS = (OP_PAUSE, OP_RESUME, OP_STEP, OP_SET, OP_RUN, OP_INTERVENE)
+OP_INTERPRET = "interpret"
+CAP_INTERPRETATION = "interpretation"
+INTERPRET_MAX_BYTES = 262144
+INTERPRET_STRING_MAX = 4096
+OPS = (OP_PAUSE, OP_RESUME, OP_STEP, OP_SET, OP_RUN, OP_INTERVENE, OP_INTERPRET)
 PARAM_NUMBER, PARAM_INTEGER, PARAM_BOOLEAN, PARAM_CHOICE = "number", "integer", "boolean", "choice"
 PARAM_TYPES = (PARAM_NUMBER, PARAM_INTEGER, PARAM_BOOLEAN, PARAM_CHOICE)
 STATUS_OK, STATUS_QUEUED, STATUS_ERROR = "ok", "queued", "error"
@@ -1160,11 +1164,12 @@ class Control(_Msg):
     value: Any = None                            # set
     count: int | None = None                     # step: default 1
     intervene: dict | None = None                # intervene
+    interpretation: dict | None = None
 
     def to_meta(self):
         return _drop_none({"request_id": self.request_id, "op": self.op, "name": self.name,
                            "value": self.value, "count": self.count,
-                           "intervene": self.intervene})
+                           "intervene": self.intervene, "interpretation": self.interpretation})
 
     @classmethod
     def from_frame(cls, f):
@@ -1185,7 +1190,13 @@ class Control(_Msg):
             intervene = _req(m, "intervene", _intervene_request,
                              "exactly one of {set: {point, op, from_step, until_step}}, "
                              "{clear: point} and {clear_all: true}")
-        return cls(rid, op, name if op in (OP_SET, OP_RUN) else None, value, count, intervene)
+        from ._interpret_protocol import request
+        interpretation = None
+        if op == OP_INTERPRET:
+            interpretation = _req(m, "interpretation", request, "a version 1 interpretation request")
+        elif "interpretation" in m:
+            _bad("interpretation requires op interpret")
+        return cls(rid, op, name if op in (OP_SET, OP_RUN) else None, value, count, intervene, interpretation)
 
 
 def _reply_error(v) -> bool:
@@ -1206,11 +1217,12 @@ class ControlReply(_Msg):
     value: Any = None
     message: str | None = None
     error: dict | None = None
+    result: dict | None = None
 
     def to_meta(self):
         return _drop_none({"request_id": self.request_id, "op": self.op, "status": self.status,
                            "name": self.name, "value": self.value, "message": self.message,
-                           "error": self.error})
+                           "error": self.error, "result": self.result})
 
     @classmethod
     def from_frame(cls, f):
@@ -1220,12 +1232,18 @@ class ControlReply(_Msg):
         err = _opt(m, "error", _reply_error, "{code, message}")
         if (err is None) == (status == STATUS_ERROR):
             _bad("a control_reply carries 'error' exactly when its status is 'error'")
-        if status == STATUS_QUEUED and op != OP_RUN:
+        if status == STATUS_QUEUED and op not in (OP_RUN, OP_INTERPRET):
             _bad("only 'run' is queued")
+        from ._interpret_protocol import bounded
+        result = _opt(m, "result", bounded, "bounded structured result")
+        if "result" in m and (op != OP_INTERPRET or status != STATUS_OK):
+            _bad("result requires a successful interpretation reply")
+        if op == OP_INTERPRET and status == STATUS_OK and result is None:
+            _bad("a successful interpretation reply requires result")
         return cls(_req(m, "request_id", _u32, "a uint32"), op, status,
                    _opt(m, "name", _name, "a parameter or action name"),
                    _opt(m, "value", _set_value, "a number, a boolean or a choice"),
-                   _opt(m, "message", _text, f"a string of at most {TEXT_MAX} bytes"), err)
+                   _opt(m, "message", _text, f"a string of at most {TEXT_MAX} bytes"), err, result)
 
 
 def _ascending(v) -> bool:

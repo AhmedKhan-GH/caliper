@@ -932,6 +932,7 @@ class Controls:
         self._steps_reported = 0.0
         self.params: dict[str, Param] = {}
         self.actions: dict[str, Action] = {}
+        self.interpretation_service = None
         self.queue: collections.deque = collections.deque()
         self.spaces: dict[str, ItemSpace] = {}
         self.view_items: dict[str, dict] = {}    # view -> {dim, _FIRST, _LAST or None: space}
@@ -994,7 +995,8 @@ class Controls:
     def _update_busy(self) -> None:
         self.busy = (self.state in (RUN_NONE, RUN_PAUSING, RUN_STEPPING)
                      or self._npending > 0 or bool(self.queue) or self._report_due
-                     or self._iv_due)
+                     or self._iv_due or (self.interpretation_service is not None
+                                        and self.interpretation_service.pending))
 
     def _arm_report(self) -> None:
         """While the run runs, have the first checkpoint after RUN_REPORT_S send
@@ -1029,6 +1031,8 @@ class Controls:
             changed = self._apply_interventions(controllers) or changed
         if changed:
             self._publish()
+        if self.interpretation_service is not None:
+            self.interpretation_service.step(self.n)
         while True:
             with self.lock:
                 if not self.queue:
@@ -1331,6 +1335,28 @@ class Controls:
         def error(code, text):
             return w.ControlReply(rid, op, w.STATUS_ERROR, name,
                                   error={"code": code, "message": text}).to_meta()
+
+        if op == "interpret":
+            from . import _interpret_protocol as protocol
+            from .interp._service import Refused
+            if msg.interpretation["method"] not in protocol.READ_METHODS:
+                if not route.transport.may_control(conn):
+                    return error(w.ERR_FORBIDDEN, "This connection may not change the run.")
+            service = self.interpretation_service
+            if service is None:
+                return error("interpret.unsupported", "The run has no interpretation service.")
+
+            def completed(status, result, refused):
+                route._reply(conn, w.ControlReply(rid, op, status, result=result, error=refused).to_meta())
+
+            try:
+                status, result = service.submit(msg.interpretation, completed)
+            except Refused as exc:
+                return error(exc.code, str(exc))
+            with self.lock:
+                self.busy = True
+                self.cond.notify_all()
+            return w.ControlReply(rid, op, status, result=result).to_meta()
 
         try:
             allowed = bool(route.transport.may_control(conn))

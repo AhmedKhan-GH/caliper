@@ -267,6 +267,7 @@ def parser():
     result.add_argument("--memory-gb", type=float, default=24)
     result.add_argument("--resume", action="store_true")
     result.add_argument("--dataset-cache", type=Path)
+    result.add_argument("--local-dataset-manifest", type=Path)
     return result
 
 
@@ -295,7 +296,9 @@ def main(argv=None):
                           microbatch_tokens=args.microbatch_tokens, auxiliary_weight=args.auxiliary_weight,
                           dead_tokens=args.dead_tokens, context=args.context, batch_tokens=args.batch_tokens)
         memory.check("after_dictionary_init")
-        with TextStream(fineweb_documents(cache_dir=args.dataset_cache), tokenizer, "train") as stream:
+        source = fineweb_documents(cache_dir=args.dataset_cache, local_manifest=args.local_dataset_manifest)
+        with TextStream(source, tokenizer, "train") as stream:
+            trainer.metadata["training"]["source_id"] = stream.source_id
             progress = restore_checkpoint(args.output / "checkpoints", trainer, stream) if args.resume else None
             memory.check("after_resume")
             train_online(model, trainer, stream, args.output, token_budget=args.tokens, progress=progress,

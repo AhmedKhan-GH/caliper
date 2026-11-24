@@ -206,6 +206,9 @@ def evaluate(model, dictionary, stream, folder, *, tokens=200_000, context=256,
     if stream.partition != "quality":
         raise ValueError("quality evaluation requires the quality partition")
     metadata = dictionary.metadata
+    trained_source = metadata["training"].get("source_id")
+    if trained_source is not None and trained_source != stream.source_id:
+        raise ValueError("quality source differs from the training source")
     if metadata["training"]["dataset_id"] != "fixture" and metadata["training"]["partitions"] != partition_metadata():
         raise ValueError("dictionary text partitions differ from this evaluator")
     folder = Path(folder)
@@ -274,6 +277,7 @@ def main(argv=None):
     parser.add_argument("--chunk-tokens", type=int, default=64)
     parser.add_argument("--memory-gb", type=float, default=12)
     parser.add_argument("--dataset-cache", type=Path)
+    parser.add_argument("--local-dataset-manifest", type=Path)
     parser.add_argument("--resume", action="store_true")
     args = parser.parse_args(argv)
     if (not 2 <= args.tokens <= 200_000 or not 2 <= args.context <= 256
@@ -287,7 +291,8 @@ def main(argv=None):
         model, tokenizer = load_text_model(device=args.device, memory=memory)
         dictionary = load_dictionary(args.dictionary, model=model, device=args.device, dtype=torch.float32)
         memory.check("after_dictionary_load")
-        with TextStream(fineweb_documents(cache_dir=args.dataset_cache), tokenizer, "quality") as stream:
+        source = fineweb_documents(cache_dir=args.dataset_cache, local_manifest=args.local_dataset_manifest)
+        with TextStream(source, tokenizer, "quality") as stream:
             result = evaluate(model, dictionary, stream, args.dictionary, tokens=args.tokens,
                               context=args.context, batch_tokens=args.batch_tokens, chunk_tokens=args.chunk_tokens,
                               memory=memory, stop=stop, resume=args.resume)
