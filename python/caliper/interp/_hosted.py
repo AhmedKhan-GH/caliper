@@ -6,6 +6,7 @@ from contextlib import contextmanager
 from copy import deepcopy
 import json
 import math
+import os
 from pathlib import Path
 import threading
 from types import SimpleNamespace
@@ -55,18 +56,100 @@ def checkpoint_metadata(value):
 
 class _RunGuard:
     """Retain a resource stop after an action or service catches its exception."""
-    def __init__(self, guard):
-        self.guard, self.failure = guard, None
+    def __init__(self, guard, *, extra=None):
+        self.guard, self.extra, self.failure = guard, extra, None
 
     def check(self, *args, **kwargs):
         from ._memory import CleanStop
         if self.failure is not None:
             raise self.failure
         try:
-            self.guard.check(*args, **kwargs)
+            if self.guard is not None:
+                self.guard.check(*args, **kwargs)
+            if self.extra is not None:
+                self.extra.check(*args, **kwargs)
         except CleanStop as exc:
             self.failure = exc
             raise
+
+
+def _fixture_display_guard(model_name):
+    """Enable fixture display copies only through the explicit demo environment."""
+    enabled = os.environ.get("CALIPER_FIXTURE_DISPLAY_MPS", "0")
+    if enabled == "0":
+        return None
+    if enabled != "1":
+        raise ValueError("CALIPER_FIXTURE_DISPLAY_MPS must be 0 or 1")
+    if model_name != "tiny-lm":
+        raise ValueError("fixture display copies require tiny-lm")
+    if not torch.backends.mps.is_available():
+        raise ValueError("fixture display copies require MPS")
+    from ._memory import MemoryGuard
+    return MemoryGuard(12, "mps")
+
+
+class _FixtureDisplay:
+    """Copy only bounded display tensors while fixture math remains on the CPU."""
+    MAX_BYTES = 256 * 1024
+    TENSORS = {
+        "trace.counts": ((4,), torch.int32),
+        "trace.node_i": ((512, 4), torch.int32),
+        "trace.node_f": ((512, 4), torch.float32),
+        "trace.edge_i": ((8192, 2), torch.int32),
+        "trace.edge_f": ((8192, 2), torch.float32),
+        "trace.label_text": ((544, 16), torch.uint32),
+        "trace.probs": ((2, 10), torch.float32),
+        "trace.logit_tokens": ((10,), torch.int32),
+        "trace.logit_label_text": ((10, 16), torch.uint32),
+        "examples.tokens": ((16, 25), torch.int32),
+        "examples.activations": ((16, 25), torch.float32),
+        "examples.example_ids": ((16,), torch.int32),
+        "examples.valid_tokens": ((16,), torch.int32),
+        "examples.label_text": ((400, 16), torch.uint32),
+        "output.probs": ((2, 10), torch.float32),
+        "output.tokens": ((10,), torch.int32),
+        "output.label_text": ((10, 16), torch.uint32),
+        "patch.grid": ((4, None), torch.float32),
+    }
+
+    def __init__(self, guard, *, device="mps"):
+        # The private device seam permits CPU tests without an MPS operation.
+        self.guard, self.device = guard, torch.device(device)
+
+    def _transfer(self, tensor):
+        return tensor.detach().contiguous().to(device=self.device, copy=True)
+
+    def publish(self):
+        from . import publish
+        from ._memory import autorelease_scope
+        from ._publish import _resolve
+        pending, total = [], 0
+        for name, (shape, dtype) in self.TENSORS.items():
+            tensor = _resolve(name)
+            if tensor is None:
+                continue
+            if (tensor.dtype != dtype or tensor.ndim != len(shape)
+                    or any(actual != limit if limit is not None else not 1 <= actual <= 32
+                           for actual, limit in zip(tensor.shape, shape))):
+                raise ValueError(f"fixture display tensor {name} has an invalid shape or dtype")
+            total += tensor.numel() * tensor.element_size()
+            if tensor.device.type == "cpu":
+                pending.append((name, tensor))
+            elif tensor.device != self.device:
+                raise ValueError(f"fixture display tensor {name} has an invalid device")
+        if total > self.MAX_BYTES:
+            raise ValueError("fixture display tensors exceed the aggregate byte limit")
+        if not pending:
+            return 0
+        with autorelease_scope(self.device):
+            self.guard.check("fixture display copy start")
+            try:
+                converted = [(name, self._transfer(tensor)) for name, tensor in pending]
+            finally:
+                self.guard.check("fixture display copy complete")
+            for name, tensor in converted:
+                publish(name, tensor)
+        return sum(tensor.numel() * tensor.element_size() for _, tensor in pending)
 
 
 class RMSNorm(nn.Module):
@@ -366,11 +449,13 @@ class HostedService(InterpretationService):
 class HostedInference:
     """Own one model, its controls, and safe checkpoint metadata."""
     def __init__(self, model_name, dictionary_path, prompt, *, resources=None):
+        display_guard = _fixture_display_guard(model_name)
         self.model_name = model_name
         self.dictionary_path = str(Path(dictionary_path).resolve())
         self.model, self.tokenizer, self.dictionary, self.index, self.guard = (
             load_resources(model_name, dictionary_path) if resources is None else resources)
-        self.guard = _RunGuard(self.guard) if self.guard is not None else None
+        self.guard = _RunGuard(self.guard, extra=display_guard) if self.guard is not None or display_guard is not None else None
+        self.fixture_display = _FixtureDisplay(self.guard) if display_guard is not None else None
         prompt_inputs(self.model, self.tokenizer, prompt)
         self.initial_prompt = prompt
         self.restored = None
@@ -519,6 +604,8 @@ class HostedInference:
         self._retrace = self.retrace.value
         if self.guard is not None:
             self.guard.check("inference boundary", force=False)
+        if self.fixture_display is not None:
+            self.fixture_display.publish()
 
     def generate(self):
         with internal_forward():
