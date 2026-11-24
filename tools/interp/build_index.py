@@ -31,7 +31,7 @@ def validate_partitions(metadata):
                 "dataset_revision": DATASET_REVISION, "split": "train",
                 "partitions": partition_metadata()}
     if any(training.get(key) != value for key, value in expected.items()):
-        raise ValueError("dictionary text source or partitions differ from T2")
+        raise ValueError("dictionary text source or partitions differ from the training dataset")
     return expected
 
 

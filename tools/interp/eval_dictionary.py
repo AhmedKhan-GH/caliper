@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import argparse
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 import json
 import math
 from pathlib import Path
@@ -235,9 +235,7 @@ def evaluate(model, dictionary, stream, folder, *, tokens=200_000, context=256,
     if stats.scope == "upper_half":
         settings.update(scope=stats.scope, active_layers=list(stats.active_layers))
     pending, elapsed_before = None, 0.0
-    if resume:
-        pending, elapsed_before = restore_evaluation(state_folder, stats, stream, identity, settings)
-    elif (state_folder / "state.json").exists():
+    if not resume and (state_folder / "state.json").exists():
         raise ValueError("evaluation state exists; use --resume")
     started = time.monotonic()
     last_save = started
@@ -250,7 +248,12 @@ def evaluate(model, dictionary, stream, folder, *, tokens=200_000, context=256,
             memory.check("evaluation", force=False)
 
     reason = "complete"
+    ready = False
     try:
+        health()
+        if resume:
+            pending, elapsed_before = restore_evaluation(state_folder, stats, stream, identity, settings)
+        ready = True
         while stats.count < tokens:
             health()
             if pending is None:
@@ -270,34 +273,33 @@ def evaluate(model, dictionary, stream, folder, *, tokens=200_000, context=256,
                 last_save = time.monotonic()
             print(json.dumps({"stage": "quality_batch", "tokens": stats.count, "target": tokens}), flush=True)
     except CleanStop as error:
-        reason = str(error)
-    save_evaluation(state_folder, stats, stream, pending, identity, settings, elapsed_before + time.monotonic() - started)
+        reason = str(error)[:1024].encode("utf-8")[:1024].decode("utf-8", errors="ignore")
+        if not ready:
+            # A partial restore must not replace the last complete evaluation cursor.
+            stats = quality_stats(metadata)
+    if ready:
+        save_evaluation(state_folder, stats, stream, pending, identity, settings, elapsed_before + time.monotonic() - started)
     if stats.count >= 2 and stats.ce_tokens:
         quality = stats.metrics()
-        quality.update(elapsed_seconds=elapsed_before + time.monotonic() - started, stop_reason=reason,
-                       dictionary_hash=identity)
-        if stats.scope == "upper_half":
-            quality.update(replaced_mlps=len(stats.active_layers), partition="quality")
-        else:
-            quality.update(all_mlps_replaced=len(dictionary.layers), partition="quality")
-        if memory:
-            quality["peak_memory_bytes"] = memory.peak
-        metadata["quality"] = quality
-        write_json(folder / "dictionary.json", metadata)
-        print(json.dumps({"stage": "quality_end", **quality}), flush=True)
-        return quality
-    if stats.scope == "upper_half":
-        quality = {"status": "fallback_partial", "evaluated_tokens": stats.count, "stop_reason": reason,
+    else:
+        quality = {"status": "fallback_partial" if stats.scope == "upper_half" else "partial",
+                   "evaluated_tokens": stats.count, "cross_entropy_tokens": stats.ce_tokens,
                    "fvu": None, "dead_fraction": None, "cross_entropy_delta": None,
                    "per_layer_fvu": [None] * len(dictionary.layers),
                    "per_layer_dead_fraction": [None] * len(dictionary.layers),
-                   "partition": "quality", "replaced_mlps": len(stats.active_layers), "dictionary_hash": identity,
-                   "elapsed_seconds": elapsed_before + time.monotonic() - started, **stats.scope_fields()}
-        metadata["quality"] = quality
-        write_json(folder / "dictionary.json", metadata)
-        print(json.dumps({"stage": "quality_end", **quality}), flush=True)
-        return quality
-    return {"status": "interrupted", "evaluated_tokens": stats.count, "stop_reason": reason}
+                   **stats.scope_fields()}
+    quality.update(elapsed_seconds=elapsed_before + time.monotonic() - started, stop_reason=reason,
+                   dictionary_hash=identity, partition="quality")
+    if stats.scope == "upper_half":
+        quality.update(replaced_mlps=len(stats.active_layers))
+    else:
+        quality.update(all_mlps_replaced=len(dictionary.layers))
+    if memory:
+        quality["peak_memory_bytes"] = memory.peak
+    metadata["quality"] = quality
+    write_json(folder / "dictionary.json", metadata)
+    print(json.dumps({"stage": "quality_end", **quality}), flush=True)
+    return quality
 
 
 def main(argv=None):
@@ -318,18 +320,31 @@ def main(argv=None):
         raise ValueError("requested dimensions exceed the bounded evaluator allocations")
     if not 0 < args.memory_gb <= 12:
         raise ValueError("the evaluator memory limit is at most 12 GB")
-    memory = MemoryGuard(args.memory_gb, args.device)
-    memory.check("start")
-    with StopControl() as stop:
-        model, tokenizer = load_text_model(device=args.device, memory=memory)
-        dictionary = load_dictionary(args.dictionary, model=model, device=args.device, dtype=torch.float32,
-                                     memory_limit_gb=args.memory_gb)
-        memory.check("after_dictionary_load")
-        source = fineweb_documents(cache_dir=args.dataset_cache, local_manifest=args.local_dataset_manifest)
-        with TextStream(source, tokenizer, "quality") as stream:
+    try:
+        with StopControl() as stop, ExitStack() as resources:
+            stop.check()
+            memory = MemoryGuard(args.memory_gb, args.device)
+            memory.check("start")
+            stop.check()
+            model, tokenizer = load_text_model(device=args.device, memory=memory)
+            stop.check()
+            dictionary = load_dictionary(args.dictionary, model=model, device=args.device, dtype=torch.float32,
+                                         memory_limit_gb=args.memory_gb)
+            stop.check()
+            memory.check("after_dictionary_load")
+            stop.check()
+            source = fineweb_documents(cache_dir=args.dataset_cache, local_manifest=args.local_dataset_manifest)
+            if hasattr(source, "close"):
+                resources.callback(source.close)
+            stream = resources.enter_context(TextStream(source, tokenizer, "quality"))
+            stop.check()
             result = evaluate(model, dictionary, stream, args.dictionary, tokens=args.tokens,
                               context=args.context, batch_tokens=args.batch_tokens, chunk_tokens=args.chunk_tokens,
                               memory=memory, stop=stop, resume=args.resume)
+    except CleanStop as error:
+        reason = str(error)[:1024].encode("utf-8")[:1024].decode("utf-8", errors="ignore")
+        print(json.dumps({"stage": "clean_stop", "status": "interrupted", "reason": reason}), flush=True)
+        return 2
     return 0 if result["status"] in ("passed", "fallback_passed") else 2
 
 

@@ -6,6 +6,7 @@ require the shared heavy-job wrapper. The model and tokenizer use local files.
 from __future__ import annotations
 
 import argparse
+from contextlib import ExitStack
 import copy
 import json
 import math
@@ -18,6 +19,7 @@ import torch
 from safetensors import safe_open
 from torch.nn import functional as F
 
+from caliper._interpret_protocol import bounded
 from caliper.interp import capture, points
 from caliper.interp._dictionary import (
     TopKTranscoder, _finite, _layer_header, _manifest, fallback_metadata, model_identity,
@@ -71,6 +73,7 @@ class Trainer:
                  auxiliary_weight=1 / 32, dead_tokens=100_000, context=256, batch_tokens=4096,
                  upper_half_from=None):
         self.metadata = metadata
+        self.fallback_source = copy.deepcopy(metadata.get("fallback_source"))
         self.device = torch.device(device)
         self.settings = trainer_settings(metadata, learning_rate=learning_rate,
                                          microbatch_tokens=microbatch_tokens, auxiliary_weight=auxiliary_weight,
@@ -202,6 +205,8 @@ def train_online(model, trainer, stream, output, *, token_budget, progress=None,
     if token_budget < 1 or (run_seconds is not None and run_seconds <= 0):
         raise ValueError("token and runtime budgets must be positive")
     fallback = fallback_metadata(trainer.metadata)
+    if trainer.metadata.get("fallback_source") != trainer.fallback_source:
+        raise ValueError("admitted fallback source changed across resume")
     prior_wall = 0.0
     if fallback:
         if (fallback != trainer.settings["fallback"] or token_budget != fallback["token_budget"]
@@ -248,10 +253,11 @@ def train_online(model, trainer, stream, output, *, token_budget, progress=None,
                 trainer.metadata["training"]["peak_memory_bytes"], memory.peak)
         before = clock()
         save_checkpoint(output / "checkpoints", trainer, stream, progress, elapsed=elapsed)
-        duration = clock() - before
+        completed = clock()
+        duration = completed - before
         checkpoint_seconds = max(checkpoint_seconds, duration)
         progress["checkpoint_seconds"] = checkpoint_seconds
-        last_save = before
+        last_save = completed
         print(json.dumps({"stage": "checkpoint", "tokens": progress["tokens"],
                           "next_layer": progress["next_layer"], "save_seconds": duration,
                           "max_save_seconds": checkpoint_seconds,
@@ -308,7 +314,7 @@ def train_online(model, trainer, stream, output, *, token_budget, progress=None,
                               "elapsed_seconds": elapsed(), "tokens_per_second": rate,
                               "projected_seconds": token_budget / max(rate, 1e-9), "layers": last_metrics}), flush=True)
     except CleanStop as error:
-        reason = str(error)
+        reason = str(error)[:1024].encode("utf-8")[:1024].decode("utf-8", errors="ignore")
     finally:
         if captured is not None:
             captured.close(clear=True)
@@ -331,6 +337,7 @@ def train_online(model, trainer, stream, output, *, token_budget, progress=None,
     write_json(output / "runtime.json", {"generation": generation, "elapsed_seconds": elapsed(),
                                          "checkpoint_seconds": checkpoint_seconds})
     print(json.dumps({"stage": "train_end", "reason": reason, "tokens": progress["tokens"],
+                      "status": "complete" if progress["tokens"] == token_budget else "interrupted",
                       **({"status": trainer.metadata["training"]["status"],
                           "aggregate_elapsed_seconds": prior_wall + elapsed()} if fallback else {}),
                       "elapsed_seconds": elapsed()}), flush=True)
@@ -409,7 +416,7 @@ def prepare_upper_half(args, *, source_id, record=None):
         raise ValueError("fallback output is not empty; use --resume or a new output folder")
     source = _manifest(json.loads((source_folder / "dictionary.json").read_text()))
     source_training, quality = source["training"], source["quality"]
-    if fallback_metadata(source) is not None or source["layers"] < 2:
+    if fallback_metadata(source) is not None or "fallback_source" in source or source["layers"] < 2:
         raise ValueError("fallback requires an all-layer source with at least two layers")
     if (source["model_id"] != MODEL_ID or source["revision"] != MODEL_REVISION
             or source["latents"] != args.latents or source["k"] != args.k):
@@ -438,7 +445,7 @@ def prepare_upper_half(args, *, source_id, record=None):
     if (any(source[key] != saved_metadata[key] for key in _MODEL_FIELDS)
             or any(source_training[key] != saved_metadata["training"].get(key) for key in _TEXT_FIELDS)
             or source_record["stream"]["source_id"] != source_id
-            or fallback_metadata(saved_metadata) is not None):
+            or fallback_metadata(saved_metadata) is not None or "fallback_source" in saved_metadata):
         raise ValueError("fallback source checkpoint identity differs")
     elapsed_values = [source_training["elapsed_seconds"], progress["elapsed_seconds"],
                       saved_metadata["training"]["elapsed_seconds"]]
@@ -461,6 +468,16 @@ def prepare_upper_half(args, *, source_id, record=None):
     source_hash = dictionary_fingerprint(source_folder, source)
     _source_quality_state(source_folder, source, source_hash)
     metadata = copy.deepcopy(source)
+    metadata["fallback_source"] = {
+        "metadata": copy.deepcopy(source),
+        "identity": {"model_hash": source["model_hash"], "dictionary_fingerprint": source_hash},
+        "evaluation": {
+            "version": 1, "count": 200_000, "pending_ids": None, "identity": source_hash,
+            "settings": {"tokens": 200_000, "scope": "all_layers", "active_layers": list(range(source["layers"]))},
+            "stream": {"partition": "quality", "source_id": source_training["source_id"],
+                       "partitions": copy.deepcopy(source_training["partitions"])},
+        },
+    }
     metadata["training"] = {**expected_text, "tokens": 0, "elapsed_seconds": 0,
                             "peak_memory_bytes": 0, "seed": args.seed, "fallback": {
         "version": 1, "mode": "upper_half", "active_layers": list(range(source["layers"] // 2, source["layers"])),
@@ -475,7 +492,12 @@ def prepare_upper_half(args, *, source_id, record=None):
     metadata["quality"] = {"fvu": None, "dead_fraction": None, "cross_entropy_delta": None,
                            "evaluated_tokens": 0, "status": "not_evaluated"}
     _manifest(metadata)
+    # Include the service metadata and its source projection at response depth.
+    if not bounded({"result": {"metadata": metadata, "fallback_source": metadata["fallback_source"]}}):
+        raise ValueError("admitted fallback source exceeds response limits")
     if record is not None:
+        if record["metadata"].get("fallback_source") != metadata["fallback_source"]:
+            raise ValueError("checkpoint admitted fallback source differs")
         validate_checkpoint(record, trainer_settings(metadata, **_trainer_arguments(args)), metadata, source_id)
     return metadata
 
@@ -502,16 +524,33 @@ def main(argv=None):
         raise ValueError("prior wall seconds must be finite and nonnegative")
     if args.output.exists() and (args.output / "checkpoints" / "latest.json").exists() and not args.resume:
         raise ValueError("output has a checkpoint; use --resume or a new output folder")
+    try:
+        with StopControl() as stop, ExitStack() as resources:
+            stop.check()
+            return _run(args, started, stop, resources)
+    except CleanStop as error:
+        reason = str(error)[:1024].encode("utf-8")[:1024].decode("utf-8", errors="ignore")
+        print(json.dumps({"stage": "clean_stop", "status": "interrupted", "reason": reason}), flush=True)
+        return 2
+
+
+def _run(args, started, stop, resources):
+    """Admit startup before any checkpoint can replace a complete generation."""
+    stop.check()
     record = checkpoint_record(args.output / "checkpoints")[1] if args.resume else None
+    stop.check()
+    fallback = args.upper_half_from is not None
     if record is not None and bool(fallback_metadata(record["metadata"])) != fallback:
         raise ValueError("resume requires the original all-layer or upper-half mode")
-    source, prepared = None, None
+    stream, prepared = None, None
     if fallback:
         _fallback_reserve(args, record["progress"] if record else {}, started)
         # Source identity is established before the model, with no token consumption.
-        source = fineweb_documents(cache_dir=args.dataset_cache, local_manifest=args.local_dataset_manifest)
-        source_id = TextStream(source, None, "train").source_id
-        prepared = prepare_upper_half(args, source_id=source_id, record=record)
+        stop.check()
+        stream = _training_stream(args, None, resources)
+        stop.check()
+        prepared = prepare_upper_half(args, source_id=stream.source_id, record=record)
+        stop.check()
         _fallback_reserve(args, record["progress"] if record else {}, started)
     if args.resume:
         prior = record["progress"]
@@ -521,30 +560,50 @@ def main(argv=None):
     random.seed(args.seed)
     np.random.seed(args.seed)
     torch.manual_seed(args.seed)
+    stop.check()
     memory = MemoryGuard(args.memory_gb, args.device)
     memory.check("start")
-    with StopControl() as stop:
-        model, tokenizer = load_text_model(device=args.device, memory=memory)
-        metadata = make_manifest(model, args.latents, args.k)
-        if prepared is not None:
-            if any(metadata[key] != prepared[key] for key in _MODEL_FIELDS):
-                raise ValueError("fallback source differs from the loaded model")
-            metadata = prepared
-        metadata["training"]["seed"] = args.seed
-        trainer = Trainer(metadata, device=args.device, **_trainer_arguments(args))
-        if fallback and not args.resume:
-            trainer.initialize_upper(args.upper_half_from)
-        memory.check("after_dictionary_init")
-        if source is None:
-            source = fineweb_documents(cache_dir=args.dataset_cache, local_manifest=args.local_dataset_manifest)
-        with TextStream(source, tokenizer, "train") as stream:
-            trainer.metadata["training"]["source_id"] = stream.source_id
-            progress = restore_checkpoint(args.output / "checkpoints", trainer, stream) if args.resume else None
-            memory.check("after_resume")
-            train_online(model, trainer, stream, args.output, token_budget=args.tokens, progress=progress,
-                         memory=memory, stop=stop, save_seconds=args.save_seconds,
-                         max_wall_seconds=args.max_wall_seconds, run_seconds=args.run_seconds, started=started)
+    stop.check()
+    model, tokenizer = load_text_model(device=args.device, memory=memory)
+    stop.check()
+    metadata = make_manifest(model, args.latents, args.k)
+    if prepared is not None:
+        if any(metadata[key] != prepared[key] for key in _MODEL_FIELDS):
+            raise ValueError("fallback source differs from the loaded model")
+        metadata = prepared
+    metadata["training"]["seed"] = args.seed
+    stop.check()
+    trainer = Trainer(metadata, device=args.device, **_trainer_arguments(args))
+    stop.check()
+    if fallback and not args.resume:
+        trainer.initialize_upper(args.upper_half_from)
+        stop.check()
+    memory.check("after_dictionary_init")
+    stop.check()
+    if stream is None:
+        stream = _training_stream(args, tokenizer, resources)
+    else:
+        stream.tokenizer = tokenizer
+    stop.check()
+    trainer.metadata["training"]["source_id"] = stream.source_id
+    progress = restore_checkpoint(args.output / "checkpoints", trainer, stream) if args.resume else None
+    if trainer.metadata.get("fallback_source") != trainer.fallback_source:
+        raise ValueError("admitted fallback source changed across resume")
+    stop.check()
+    memory.check("after_resume")
+    stop.check()
+    result = train_online(model, trainer, stream, args.output, token_budget=args.tokens, progress=progress,
+                          memory=memory, stop=stop, save_seconds=args.save_seconds,
+                          max_wall_seconds=args.max_wall_seconds, run_seconds=args.run_seconds, started=started)
+    return 0 if result["tokens"] == args.tokens else 2
+
+
+def _training_stream(args, tokenizer, resources):
+    source = fineweb_documents(cache_dir=args.dataset_cache, local_manifest=args.local_dataset_manifest)
+    if hasattr(source, "close"):
+        resources.callback(source.close)
+    return resources.enter_context(TextStream(source, tokenizer, "train"))
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

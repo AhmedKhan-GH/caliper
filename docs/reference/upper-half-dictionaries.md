@@ -7,6 +7,8 @@ For other layer counts, the active range starts at `layers // 2`.
 An odd layer count gives the upper group one additional layer.
 The source must contain at least two layers.
 
+Section 7 of the approved M7 and M8 outline authorizes this fallback after complete source training and failed full quality evaluation.
+
 ## Eligibility
 
 The source must complete its full token budget and its separate quality evaluation on 200,000 tokens.
@@ -60,7 +62,7 @@ The object contains these fields:
 | `source_checkpoint_generation` | Final source checkpoint generation |
 | `source_training_tokens` | Completed source token count |
 | `source_elapsed_seconds` | Largest recorded source elapsed time |
-| `prior_wall_seconds` | Prior aggregate time supplied by the lead |
+| `prior_wall_seconds` | Prior aggregate time supplied by the operator |
 | `aggregate_wall_limit_seconds` | Aggregate cap, at most 36,000 seconds |
 | `token_budget` | Full fallback token budget |
 | `warm_start` | `"upper_weights_fresh_adam"` |
@@ -72,6 +74,32 @@ It excludes the mutable quality report.
 The source generation, source hash, and text source identity remain separate because they describe different facts.
 The existing `training.tokens` and `training.elapsed_seconds` fields describe only the fallback run.
 
+Each new fallback also contains a top-level `fallback_source` record.
+The trainer creates it after all source admission checks pass.
+Its `metadata` field contains a deep copy of the complete admitted source manifest, including the failed quality report.
+Its `identity` field contains the source `model_hash` and exact `dictionary_fingerprint`.
+The source must use all layers and must not contain another `fallback_source` record.
+
+The `evaluation` field contains the verified source cursor projection:
+
+| Field | Value |
+|---|---|
+| `version` | `1` |
+| `count` | `200000` |
+| `pending_ids` | `null` |
+| `identity` | Exact source fingerprint |
+| `settings.tokens` | `200000` |
+| `settings.scope` | `"all_layers"` |
+| `settings.active_layers` | All source layer indices in order |
+| `stream.partition` | `"quality"` |
+| `stream.source_id` | Source training text identity |
+| `stream.partitions` | Deep copy of source partition rules |
+
+This record preserves evidence verified at admission. It does not claim a second source evaluation after admission.
+The current dictionary fingerprint includes the complete record, and the source folder stays unchanged.
+The record must fit the service response bounds with its metadata wrapper.
+Older diagnostic dictionaries without this record can still load, but each new fallback run must produce it.
+
 ## Resume
 
 The first fallback checkpoint contains the warm upper weights and fresh optimizer state.
@@ -81,6 +109,9 @@ The trainer checks the unchanged source manifest and fingerprint before model al
 Checkpoint settings also bind the resolved source folder, model hash, text source identity, fallback object, and optimizer dimensions.
 The resolved source folder stays in checkpoint settings and does not enter the exported manifest.
 
+Resume also compares the complete admitted `fallback_source` record before model allocation and before training.
+A missing or changed source record causes refusal. Checkpoints and exports retain the admitted record without substitution.
+
 A changed active range, source, token budget, warm-start rule, or aggregate cap causes refusal before model allocation.
 The `pending_ids` field retains an unfinished model batch.
 The `next_layer` field uses a global layer index and advances only after a complete active update.
@@ -89,7 +120,7 @@ Checkpoints retain lower weight and activity files, but only active layers have 
 
 ## Aggregate Time
 
-The lead supplies the aggregate time for all earlier training jobs through `--prior-wall-seconds`.
+The operator supplies the aggregate time for all earlier training jobs through `--prior-wall-seconds`.
 That value must be at least the largest elapsed value from the source manifest, checkpoint, and runtime record.
 The available fallback allowance equals `max_wall_seconds - prior_wall_seconds`.
 Resume also subtracts elapsed fallback time.
@@ -117,9 +148,21 @@ The evaluator restores every replaced module after success or an exception.
 A complete evaluation reports `fallback_passed` or `fallback_failed`.
 A shorter or interrupted evaluation reports `fallback_partial`, including an interruption before the first batch.
 A fallback never receives the original `passed` status.
+Its acceptance scope remains `upper_half`, separate from full MLP acceptance.
+
 Evaluation resume binds the dictionary fingerprint, active layer indices, scope, and evaluation dimensions.
-All-layer thresholds, statuses, and checkpoint settings remain unchanged for dictionaries without fallback metadata.
+All-layer thresholds remain unchanged for dictionaries without fallback metadata.
+An all-layer evaluation that stops before two tokens records `partial`, null metrics, and the current dictionary fingerprint.
+Both scopes emit `quality_end` for this incomplete result and replace any earlier passed report.
+
+## Graph Coverage
+
+Lower-layer MLP contributions enter error nodes because their transcoders remain zero.
+The lower layers have no feature examples or feature intervention targets.
+This reduced coverage can increase `error_share` and reduce `feature_share`.
+Acceptance still requires a feature share of at least 0.30.
+The acceptance report must state the fallback scope and its measured feature share and error share.
 
 The CPU tests use tiny synthetic tensors and artificial status records.
 Those checks establish implementation behavior and provide no quality evidence for a trained dictionary.
-An actual fallback launch requires the completed source quality report and the lead's decision within the remaining aggregate allowance.
+An actual fallback launch requires the completed source quality report and the operator's decision within the remaining aggregate allowance.

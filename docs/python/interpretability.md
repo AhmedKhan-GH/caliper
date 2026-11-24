@@ -49,32 +49,40 @@ The supported Qwen checkpoint is `Qwen/Qwen3.5-0.8B` at revision `2fc06364715b96
 It has 24 decoder layers and width 1,024.
 Local preparation requires PyTorch 2.15.0 and Transformers 5.24.0.
 Place the complete pinned snapshot in the Hugging Face cache before tool execution.
-The tools load local files only and refuse an incomplete checkpoint.
+
+Model and tokenizer files must exist locally. The tools refuse an incomplete model checkpoint.
 Tests never download a model or dataset.
 
 The text source is `HuggingFaceFW/fineweb-edu`, configuration `sample-10BT`, split `train`.
 Its pinned revision is `87f09149ef4734204d70ed1d046ddc9ca3f2b8f9`.
 Training, quality checks, and the example index use separate document partitions.
 The manifest records the source and partition rules.
-A local dataset manifest can identify the staged Parquet files.
+
+A pinned local dataset manifest can identify the staged Parquet files.
+Without that manifest, the tools use the specifically approved public dataset stream at the fixed revision above.
+This dataset stream can require network access. Local model files do not imply a local dataset source.
 
 The preparation commands below use local resource folders.
-Each full job requires the project's resource wrapper and an exclusive model slot.
-Training also requires exclusive GPU access.
+Each full job requires an external resource wrapper, a heavy slot, and an exclusive model slot.
+The wrapper must set `nice -n 10` and enforce exclusive GPU access for training.
+These requirements are run policy. Portable tools do not contain machine-specific lock paths.
+Set `HEAVY_WRAPPER` to the project wrapper, which accepts a job name, a log path, and a command.
 
 ```sh
-PYTHONPATH=python:. python -m tools.interp.train_transcoders \
+"$HEAVY_WRAPPER" TRAIN-DICTIONARY "$TRAIN_LOG" env PYTHONPATH=python:. python -m tools.interp.train_transcoders \
   --output "$DICTIONARY" --local-dataset-manifest "$DATASET_MANIFEST"
-PYTHONPATH=python:. python -m tools.interp.eval_dictionary \
+"$HEAVY_WRAPPER" MODEL-QUALITY "$QUALITY_LOG" env PYTHONPATH=python:. python -m tools.interp.eval_dictionary \
   --dictionary "$DICTIONARY" --local-dataset-manifest "$DATASET_MANIFEST"
-PYTHONPATH=python:. python -m tools.interp.build_index \
+"$HEAVY_WRAPPER" MODEL-INDEX "$INDEX_LOG" env PYTHONPATH=python:. python -m tools.interp.build_index \
   --dictionary "$DICTIONARY" --local-dataset-manifest "$DATASET_MANIFEST"
 ```
 
 The trainer defaults to 16,384 latents per layer, TopK with `k=32`, and 40 million tokens.
 The context contains 256 tokens.
 The process limit is 24 GB, and the wall-time limit is ten hours.
-Checkpoints support `--resume` and occur at most five minutes apart.
+
+Checkpoints support `--resume`. The periodic checkpoint interval is 240 seconds after each completed save.
+A 270-second work interval forces a clean stop. Checkpoint writes consume additional time within the aggregate cap.
 A bounded pilot must establish time and memory requirements before a full run.
 
 Quality checks use 200,000 separate tokens.
