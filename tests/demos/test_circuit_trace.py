@@ -1715,7 +1715,7 @@ def hidden(tmp_path, model, dictionary):
     out = Path(os.environ.get("CALIPER_CIRCUIT_OUT", tmp_path / "result"))
     command = [sys.executable, str(DEMO / "run.py"), "--model", model, "--dictionary", str(dictionary),
                "--hidden", "--out", str(out)]
-    if model != "tiny-lm" and env.get("CALIPER_QWEN_QUALITY_OVERRIDE"):
+    if driver.acceptance_profile(model)[0] == "qwen" and env.get("CALIPER_QWEN_QUALITY_OVERRIDE"):
         command.extend(["--quality-override", env["CALIPER_QWEN_QUALITY_OVERRIDE"]])
     with subprocess.Popen(command, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True) as process:
         try:
@@ -1766,6 +1766,17 @@ def test_local_qwen_hidden(tmp_path):
     assert Path(model).is_dir() and Path(dictionary).is_dir()
     resources_and_device(fixture=False)
     assert hidden(tmp_path, model, dictionary)["qwen_acceptance"]
+
+
+@pytest.mark.local_model
+def test_local_gemma_hidden(tmp_path):
+    model, dictionary = os.environ.get("CALIPER_GEMMA_MODEL"), os.environ.get("CALIPER_GEMMA_DICTIONARY")
+    if not model or not dictionary:
+        pytest.skip("Set both explicit local Gemma resource paths to opt in.")
+    assert not os.environ.get("CI"), "The local Gemma case must not run in CI."
+    assert Path(model).is_dir() and Path(dictionary).is_dir()
+    resources_and_device(fixture=False)
+    assert hidden(tmp_path, model, dictionary)["gemma_acceptance"]
 
 
 def test_event_wait_bounds_completion_without_an_event(monkeypatch):
