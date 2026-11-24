@@ -7,6 +7,31 @@ import torch
 from caliper.interp._graph import Graph
 
 
+def test_trace_memory_records_keep_recent_stages_and_lifetime_peak(monkeypatch):
+    from caliper.interp import _frozen
+    from caliper.interp._memory import MemoryGuard as ProcessMemoryGuard
+    sample = {"current": 800, "peak": 1000}
+    def deterministic_guard(limit_gb, device, **kwargs):
+        return ProcessMemoryGuard(limit_gb, device, pressure=lambda: 80.,
+                                  resident=lambda: 50, footprint=lambda: sample["current"],
+                                  peak=lambda: sample["peak"], driver=lambda: 0, clock=lambda: 0.)
+    monkeypatch.setattr(_frozen, "ProcessMemoryGuard", deterministic_guard)
+    monkeypatch.setattr(_frozen.MemoryGuard, "record_limit", 4)
+    guard = _frozen.MemoryGuard("cpu")
+    assert guard.records[0]["stage"] == "trace start"
+    sample["peak"] = 0
+    # Six scalar checks evict the original peak record without any model trace.
+    for stage in range(6):
+        sample["current"] = 100 + stage
+        assert guard.check(f"stage {stage}") == sample["current"]
+        assert len(guard.records) <= 4
+    assert [record["stage"] for record in guard.records] == ["stage 2", "stage 3", "stage 4", "stage 5"]
+    assert guard.records[-1]["process_bytes"] == 105
+    assert guard._guard.peak == 1000
+    assert all(record["peak_memory_bytes"] == 1000 for record in guard.records)
+    assert all(record["allocated_bytes"] == record["driver_bytes"] == 0 for record in guard.records)
+
+
 def test_trace_memory_guard_uses_physical_footprint_and_prior_peak(monkeypatch):
     from caliper.interp import _frozen
     from caliper.interp._memory import CleanStop

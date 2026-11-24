@@ -1,6 +1,7 @@
 """Frozen value paths for the fixture and the Qwen3.5 text decoder."""
 from __future__ import annotations
 
+from collections import deque
 from contextlib import ExitStack
 import json
 import time
@@ -48,13 +49,14 @@ def _validate_dictionary(model, dictionary):
 
 
 class MemoryGuard:
-    """Record MPS allocation at stage boundaries and enforce the demo limit."""
+    """Keep recent stage records and the process peak, and enforce the demo limit."""
 
     limit = 12_000_000_000
+    record_limit = 128
 
     def __init__(self, device):
         self.device = torch.device(device)
-        self.records = []
+        self.records = deque(maxlen=self.record_limit)
         self._pressure_time = -float("inf")
         self._pressure_value = 100.
         self._guard = ProcessMemoryGuard(12, self.device, pressure=self._pressure)
