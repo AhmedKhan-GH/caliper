@@ -444,3 +444,47 @@ def test_nested_source_forward_preserves_outer_frozen_capture():
     assert actual.forward_residual < 1e-9
     for a, b in zip(actual.inputs + actual.outputs, baseline.inputs + baseline.outputs):
         torch.testing.assert_close(a, b, atol=0, rtol=0)
+
+
+def test_m8_live_service_cache_clamp_and_nested_patch(monkeypatch):
+    from caliper import _controls
+    if not hasattr(_controls.Controls, "intervention_service"):
+        pytest.skip("M8 service integration requires the M8 controls dependency")
+    from caliper.interp import Tracer
+    from .fixture import TinyLM, TinyTokenizer
+    model, tokenizer = TinyLM(layers=2), TinyTokenizer()
+    dictionary = exact_dictionary(model)
+    from .test_dictionary import fixture_manifest
+    dictionary.metadata = fixture_manifest(model)
+    controls = _controls.Controls()
+    monkeypatch.setattr(_controls, "CONTROLS", controls)
+    service = controls.interventions_on(model)
+    service.configure(dictionary=dictionary, tokenizer=tokenizer)
+    tracer = Tracer(model, tokenizer, dictionary)
+    try:
+        baseline = tracer.trace("AB", 16)
+        service.set({"kind": "clamp", "point": "layers.0.mlp_out", "feature": 0, "value": 1.})
+        # Pending changes must not invalidate the graph of the actual current effects.
+        assert tracer.trace("AB", 16) is baseline
+        controls.step()
+        clamped = tracer.trace("AB", 16)
+        assert clamped is not baseline and clamped.completeness["max_absolute_residual"] < 1e-9
+        with service.suspend():
+            suspended = tracer.trace("AB", 16)
+        assert suspended is not clamped
+        for name in baseline.tensors:
+            torch.testing.assert_close(suspended.tensors[name], baseline.tensors[name], atol=0, rtol=0)
+        service.clear()
+        controls.step()
+        assert tracer.trace("AB", 16) is baseline
+        service.set({"kind": "patch", "point": "layers.0.mlp_out", "source_prompt": "CD"})
+        controls.step()
+        patched = tracer.trace("AB", 16)
+        assert patched.completeness["max_absolute_residual"] < 1e-9 and service.executor._cache
+        other = tracer.trace("EF", 16)
+        assert other.completeness["max_absolute_residual"] < 1e-9
+        assert tracer.trace("AB", 16) is patched
+        # A cache hit for a new external prompt still releases the clean-source cache.
+        assert not service.executor._cache
+    finally:
+        service.remove()
