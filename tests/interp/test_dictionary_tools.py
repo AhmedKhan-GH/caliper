@@ -39,7 +39,11 @@ def test_requested_limit_refuses_before_tensor_materialization(tmp_path, monkeyp
     monkeypatch.setattr(command, "MemoryGuard", guard)
     monkeypatch.setattr(_dictionary, "MemoryGuard", guard)
     monkeypatch.setattr(command, "load_text_model", lambda **_: (model, TinyTokenizer()))
-    monkeypatch.setattr(command, "fineweb_documents", lambda **_: pytest.fail("dataset access ran"))
+    def unread_documents():
+        pytest.fail("dataset consumption ran")
+        yield  # Source identity admission must not consume text.
+
+    monkeypatch.setattr(command, "fineweb_documents", lambda **_: unread_documents())
     monkeypatch.setattr(safetensors, "safe_open", HeadersOnly)
     arguments = ["--dictionary", str(tmp_path), "--device", "cpu", "--memory-gb", "6"]
     assert command.main(arguments) == 2
