@@ -841,3 +841,31 @@ TEST_CASE("net/wire: interpretation metadata preserves framing and rejects malfo
     REQUIRE(decode(bytes.data(), bytes.size(), &message).status == valid);
     CHECK(std::get<Control>(message).interpretation.dump() == request.interpretation.dump());
 }
+
+TEST_CASE("net/wire: interpretation encoding rejects invalid UTF-8 prompt bytes locally") {
+    Control request;
+    request.request_id = 1;
+    request.op = CALIPER_NET_OP_INTERPRET;
+    request.interpretation = Json::object();
+    request.interpretation.set("version", 1);
+    request.interpretation.set("method", "trace.run");
+    std::string multibyte;
+    for (unsigned i = 0; i < CALIPER_NET_INTERPRET_STRING_MAX / 2; ++i) multibyte += "\xc3\xa9";
+    for (const auto& prompt : {std::string("a\0b", 3), multibyte + "\xc3\xa9", std::string("\xc3\x28", 2)}) {
+        Json params = Json::object(); params.set("prompt", prompt);
+        request.interpretation.set("params", params);
+        std::vector<uint8_t> bytes{1, 2, 3};
+        std::string reason;
+        CHECK_FALSE(encode(request, &bytes, &reason));
+        CHECK(bytes.empty());
+        CHECK_FALSE(reason.empty());
+        CHECK(reason.size() <= CALIPER_NET_TEXT_MAX);
+    }
+    Json params = Json::object(); params.set("prompt", multibyte);
+    request.interpretation.set("params", params);
+    std::vector<uint8_t> bytes;
+    REQUIRE(encode(request, &bytes));
+    Message decoded;
+    REQUIRE(decode_bytes(bytes, &decoded).ok());
+    CHECK(std::get<Control>(decoded).interpretation == request.interpretation);
+}

@@ -86,6 +86,9 @@ public:
     // What a parameter's control shows: the value set here until the script
     // confirms it, else the script's pending value, else its value.
     caliper_net::Json shown_value(const ControlParam& p) const;
+    // Draw the text field within the caller's ImGui ID and disabled scopes.
+    // Keep its draft until Return or focus loss.
+    void draw_text_param(const ControlParam& p);
     // A value set here waits for its reply or for CONTROLS to confirm it.
     bool param_waiting(const ControlParam& p) const;
     // The script holds a pending value it reads at its next checkpoint.
@@ -154,8 +157,11 @@ private:
     Controls controls_;
     ControlAccess access_{false, "not attached to a session"};
     std::map<std::string, Local> locals_;
+    std::map<ImGuiID, std::string> text_edits_;
     std::map<uint32_t, std::string> runs_;     // run request -> action
     std::map<uint32_t, std::pair<std::string, ControlReply>> interpretations_;
+    uint64_t interpretation_start_ = 0;
+    int32_t interpretation_pid_ = 0;
     std::map<uint32_t, std::string> ops_;      // pause/resume/step request -> op
     std::map<std::string, Result> results_;
     Result notice_;

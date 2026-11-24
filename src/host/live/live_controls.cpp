@@ -2,6 +2,7 @@
 #include "live/live_controls.h"
 
 #include "caliper/live_net.h"
+#include "net/wire.h"
 #include "live/live_views_scene.h"   // scene views: links per batch
 #include "live/live_views_state.h"   // the views' payload maps and set_link (linked selections)
 
@@ -11,7 +12,6 @@
 #include <cmath>
 #include <cstdio>
 #include <cstring>
-#include <array>
 
 namespace caliper_live {
 
@@ -124,10 +124,8 @@ void draw_param(RunControls& rc, const ControlsLook& look, const ControlParam& p
         bool on = shown.is_bool() && shown.as_bool();
         if (ImGui::Checkbox("##v", &on)) rc.set(p.name, Json(on));
     } else if (p.type == CALIPER_NET_PARAM_TEXT) {
-        std::array<char, CALIPER_NET_TEXT_MAX + 1> buffer{};
-        if (shown.is_string()) std::memcpy(buffer.data(), shown.as_string().data(), std::min(shown.as_string().size(), buffer.size() - 1));
         ImGui::SetNextItemWidth(kSliderW);
-        if (ImGui::InputText("##v", buffer.data(), buffer.size())) rc.set(p.name, Json(std::string(buffer.data())));
+        rc.draw_text_param(p);
     } else if (p.type == CALIPER_NET_PARAM_CHOICE) {
         const std::string cur = shown.is_string() ? shown.as_string() : "";
         ImGui::SetNextItemWidth(kSliderW);
@@ -245,6 +243,14 @@ void RunControls::reset() {
 }
 
 void RunControls::update(Source* src, uint64_t now_ns) {
+    const uint64_t start = src ? src->start_unix_ms() : 0;
+    const int32_t pid = src ? src->producer_pid() : 0;
+    if (src != src_ || start != interpretation_start_ || pid != interpretation_pid_) {
+        interpretations_.clear();
+        text_edits_.clear();
+    }
+    interpretation_start_ = start;
+    interpretation_pid_ = pid;
     src_ = src;
     now_ns_ = now_ns;
     if (!src) {
@@ -253,6 +259,7 @@ void RunControls::update(Source* src, uint64_t now_ns) {
         controls_ = Controls{};
         access_ = ControlAccess{false, "not attached to a session"};
         locals_.clear();
+        text_edits_.clear();
         runs_.clear();
         ops_.clear();
         interpretations_.clear();
@@ -453,7 +460,19 @@ caliper_net::Json RunControls::interpret(const std::string& method, const Json& 
         e.set("code",code); e.set("message",message); out.set("error",e); return out;
     };
     if (!src_) return error("run.not_attached", "No stream is attached.");
+    if (request && (!params.is_object() || params.size() != 0))
+        return error("command.invalid_args", "A reply query accepts only request_id.");
     if (!request) {
+        caliper_net::wire::Control outbound;
+        outbound.request_id = 1; // Validate before the source allocates a transport ID.
+        outbound.op = CALIPER_NET_OP_INTERPRET;
+        outbound.interpretation = Json::object();
+        outbound.interpretation.set("version", 1);
+        outbound.interpretation.set("method", method);
+        outbound.interpretation.set("params", params);
+        std::vector<uint8_t> bytes;
+        std::string reason;
+        if (!caliper_net::wire::encode(outbound, &bytes, &reason)) return error("command.invalid_args", reason);
         if (interpretations_.size() >= 64) {
             auto it = std::find_if(interpretations_.begin(), interpretations_.end(), [](const auto& item) {
                 return item.second.second.status != "queued";
@@ -461,11 +480,13 @@ caliper_net::Json RunControls::interpret(const std::string& method, const Json& 
             if (it == interpretations_.end()) return error("interpret.busy", "Too many requests await completion.");
             interpretations_.erase(it);
         }
-        Json envelope = Json::object();
-        envelope.set("version",1); envelope.set("method",method); envelope.set("params",params);
-        std::string reason;
-        request = src_->send_control(CALIPER_NET_OP_INTERPRET, "", envelope, 0, &reason);
-        if (!request) return error("interpret.unsupported", reason);
+        request = src_->send_control(CALIPER_NET_OP_INTERPRET, "", outbound.interpretation, 0, &reason);
+        if (!request) {
+            if (reason.empty()) reason = "The stream refused the request; check the connection and retry.";
+            const char* end = ImTextFindValidUtf8CodepointEnd(reason.data(), reason.data() + reason.size(),
+                reason.data() + std::min<std::size_t>(reason.size(), CALIPER_NET_TEXT_MAX));
+            return error("interpret.refused", reason.substr(0, static_cast<std::size_t>(end - reason.data())));
+        }
         ControlReply pending;
         pending.request_id = request; pending.status = "queued";
         interpretations_[request] = {method, pending};
@@ -481,11 +502,22 @@ caliper_net::Json RunControls::interpret(const std::string& method, const Json& 
 }
 
 void RunControls::on_reply(const ControlReply& r) {
-    if (r.op == CALIPER_NET_OP_INTERPRET) {
-        auto it = interpretations_.find(r.request_id);
-        if (it != interpretations_.end() && it->second.second.status == CALIPER_NET_STATUS_QUEUED)
-            it->second.second = r;
+    if (r.request_id == 0 && r.op.empty() && r.status == CALIPER_NET_STATUS_ERROR) {
+        for (auto& [id, entry] : interpretations_) {
+            if (entry.second.status != CALIPER_NET_STATUS_QUEUED) continue;
+            entry.second = r;
+            entry.second.request_id = id;
+            entry.second.op = CALIPER_NET_OP_INTERPRET;
+        }
         return;
+    }
+    if (r.op == CALIPER_NET_OP_INTERPRET || (r.op.empty() && r.status == CALIPER_NET_STATUS_ERROR)) {
+        auto it = interpretations_.find(r.request_id);
+        if (it != interpretations_.end()) {
+            if (it->second.second.status == CALIPER_NET_STATUS_QUEUED) it->second.second = r;
+            return;
+        }
+        if (r.op == CALIPER_NET_OP_INTERPRET) return;
     }
     ++counts_.replies;
     if (r.status == CALIPER_NET_STATUS_ERROR) ++counts_.refused;
@@ -532,6 +564,28 @@ Json RunControls::shown_value(const ControlParam& p) const {
     if (it != locals_.end()) return it->second.value;
     if (!p.pending.is_null()) return p.pending;
     return p.value;
+}
+
+void RunControls::draw_text_param(const ControlParam& p) {
+    const ImGuiID key = ImGui::GetID("##v");
+    const Json shown = shown_value(p);
+    auto it = text_edits_.find(key);
+    if (it == text_edits_.end()) {
+        const std::string text = shown.is_string() ? shown.as_string() : std::string();
+        const char* end = ImTextFindValidUtf8CodepointEnd(text.data(), text.data() + text.size(),
+            text.data() + std::min<std::size_t>(text.size(), CALIPER_NET_TEXT_MAX));
+        std::string buffer = text.substr(0, static_cast<std::size_t>(end - text.data()));
+        buffer.resize(CALIPER_NET_TEXT_MAX + 1, '\0');
+        it = text_edits_.emplace(key, std::move(buffer)).first;
+    }
+    auto& buffer = it->second;
+    const bool enter = ImGui::InputText("##v", buffer.data(), buffer.size(), ImGuiInputTextFlags_EnterReturnsTrue);
+    const bool done = enter || ImGui::IsItemDeactivatedAfterEdit();
+    if (done && why_not(CALIPER_NET_OP_SET).empty()) {
+        const Json value{std::string(buffer.c_str())};
+        if (value != shown) set(p.name, value);
+    }
+    if (!ImGui::IsItemActive()) text_edits_.erase(it);
 }
 
 bool RunControls::param_waiting(const ControlParam& p) const {

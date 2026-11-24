@@ -383,6 +383,10 @@ public:
         if (op == CALIPER_NET_OP_STEP && count > 0) o.control.count = count;
         if (op == CALIPER_NET_OP_INTERVENE) o.control.intervene = value;
         if (op == CALIPER_NET_OP_INTERPRET) o.control.interpretation = value;
+        if (op == CALIPER_NET_OP_INTERPRET) {
+            std::vector<uint8_t> bytes;
+            if (!wire::encode(o.control, &bytes, err)) return 0;
+        }
         const uint32_t id = o.control.request_id;
         if (!enqueue(std::move(o))) {
             if (err) *err = "too many controls wait to be sent";
@@ -886,6 +890,16 @@ private:
             return;
         }
         if (r.status == wire::DecodeResult::Status::BadMessage) {
+            if (r.type == CALIPER_NET_MSG_CONTROL_REPLY) {
+                ControlReply reply;
+                const auto* id = r.frame.meta.find("request_id");
+                uint64_t request = 0;
+                if (id && id->get_u64(&request) && request <= UINT32_MAX) reply.request_id = uint32_t(request);
+                reply.status = CALIPER_NET_STATUS_ERROR;
+                reply.error_code = CALIPER_NET_ERR_BAD_REQUEST;
+                reply.error_message = "The producer sent an invalid interpretation reply. Check its protocol version.";
+                push_reply(std::move(reply));
+            }
             wire::Error e;
             e.code = r.error_code;
             e.message = r.message;
@@ -1313,6 +1327,25 @@ private:
     }
 
     void on_error(const wire::Error& e) {
+        if (!e.request_id && !e.sub && !e.view && !e.session &&
+            (!e.in_reply_to || *e.in_reply_to == CALIPER_NET_MSG_CONTROL)) {
+            // A decoder error can omit the request ID. End queued interpretation
+            // requests through the reply seam, and retain the connection notice.
+            ControlReply r;
+            r.status = CALIPER_NET_STATUS_ERROR;
+            r.error_code = e.code;
+            r.error_message = e.message;
+            push_reply(std::move(r));
+        }
+        if (e.in_reply_to && *e.in_reply_to == CALIPER_NET_MSG_CONTROL && e.request_id) {
+            ControlReply r;
+            r.request_id = *e.request_id;
+            r.status = CALIPER_NET_STATUS_ERROR;
+            r.error_code = e.code;
+            r.error_message = e.message;
+            push_reply(std::move(r));
+            return;
+        }
         if (e.in_reply_to && *e.in_reply_to == CALIPER_NET_MSG_PROGRAM && e.request_id) {
             ProgramAnswer a;   // a refused PROGRAM: its program's error, not the stream's
             a.request_id = e.request_id;
