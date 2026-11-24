@@ -16,7 +16,7 @@ import time
 
 from _mcp import Events, Failure, MCP, attempt, stop, wait_file
 from _checks import (FIXTURE_HASH, FIXTURE_PROMPT, QWEN_PROMPT, bar_rows, capture_checks,
-                     check, finish, math_checks, selected_feature)
+                     check, finish, math_checks, program_budget_checks, selected_feature)
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -62,6 +62,7 @@ class Session:
         self.run_id = "circuit-trace"
         self.started = False
         self.capture_number = 0
+        self.program_evidence = {}
         self.cleanup_error = None
         out.mkdir(parents=True)
         for name in ("data", "workspace", "user-applets", "captures", "temp"):
@@ -177,8 +178,8 @@ class Session:
 
     def capture(self, name, expected_steps):
         def rendered():
-            statuses = self.mcp.body("program.status")["programs"]
-            by_id = {p["id"]: p for p in statuses}
+            status = self.mcp.body("program.status")
+            by_id = {p["id"]: p for p in status["programs"]}
             for identifier, minimum in expected_steps.items():
                 program = by_id.get(identifier, {})
                 draw = program.get("draw", {})
@@ -186,8 +187,18 @@ class Session:
                     raise Failure(f"The {identifier} program reports an error: {program}")
                 if draw.get("resource_step") is None or draw["resource_step"] < minimum:
                     return False
-            return True
-        self.events.until("rendered resource steps", rendered)
+            return status
+        status = self.events.until("rendered resource steps", rendered)
+        pieces = {}
+        for program in status["programs"]:
+            if program["id"] in expected_steps:
+                pin = program["piece"]
+                pieces[program["id"]] = self.mcp.body("piece.show", name=pin["name"], version=pin.get("version", 1),
+                                                     **{"from": pin.get("from", "library")})["piece"]
+        snapshot = {"status": status, "pieces": pieces, "expected_steps": expected_steps,
+                    "phase": "after the resource barrier and before capture.frame"}
+        self.program_evidence[name] = snapshot
+        save(self.out / (name + "-program-status.json"), snapshot)
         reply = self.mcp.call("capture.frame")
         image = next((b for b in reply.get("content", []) if b.get("type") == "image"), None)
         encoded = image["data"] if image else reply["structuredContent"]["png_base64"]
@@ -430,6 +441,8 @@ def acceptance(session, args, result):
     result["checks"].append(check("selection_only", all(abs(r["probability"] - r["baseline"]) <= 1e-7 for r in before),
                                    before, "selection preserves the baseline"))
     before_png, before_meta = s.capture("before", dict(expected_steps))
+    result["checks"].extend(dict(gate, name="before." + gate["name"])
+                            for gate in program_budget_checks(s.program_evidence["before"]))
     s.mcp.body("control.set", id="page", value=1)
     s.events.complete("feature.examples", node=selected["index"], limit=16)
     page = s.read("example_tokens", "rows", minimum_step=first_page["step"] + 1)
@@ -453,6 +466,8 @@ def acceptance(session, args, result):
     after = bar_rows(after_reply)
     expected_steps["probabilities"] = after_reply["step"]
     after_png, after_meta = s.capture("after", dict(expected_steps))
+    result["checks"].extend(dict(gate, name="after." + gate["name"])
+                            for gate in program_budget_checks(s.program_evidence["after"]))
     validation = s.events.complete("trace.validate")
     save(s.out / "validation.json", validation)
     result["checks"] += math_checks(graph, examples, before, after, validation, trace["seconds"], steering_seconds,

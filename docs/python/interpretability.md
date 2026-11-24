@@ -306,6 +306,11 @@ The fixture comparison uses the actual published graph resources with the existi
 It exports those resources, closes the hidden app and run, then starts the native and browser comparisons in sequence.
 The process exits with code one when a required check fails.
 
+Each capture also saves actual `program.status` values and the declared piece limits after the resource barrier.
+Derive passes have limits of 50 ms and 64 MiB, while draw frames have limits of 4 ms and 64 MiB.
+The result checks these budgets before and after the clamp.
+Missing GPU times remain unverified and fail the required check.
+
 Qwen acceptance requires feature share of at least 0.30, between 20 and 512 nodes, and a token path to the top logit.
 It also requires 16 positive sorted examples, at least eight correct signs among ten features, and Spearman correlation of at least 0.6.
 The top-token probability must fall by at least 0.05, or the top token must change.

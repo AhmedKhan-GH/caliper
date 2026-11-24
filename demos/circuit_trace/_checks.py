@@ -42,6 +42,43 @@ def check(name, passed, measured, threshold, *, required=True):
             "threshold": threshold, "required": required}
 
 
+def program_budget_checks(snapshot):
+    """Keep absent GPU measurements unverified and enforce the declared budgets."""
+    by_id = {program["id"]: program for program in snapshot["status"]["programs"]}
+    checks = []
+    def number(value):
+        return type(value) in (int, float) and math.isfinite(value) and value >= 0
+    def byte_limit(value):
+        return value * (1 << 20) if number(value) else None
+    for identifier in snapshot["expected_steps"]:
+        program = by_id.get(identifier, {})
+        draw = program.get("draw") or {}
+        manifest = snapshot["pieces"].get(identifier, {})
+        derive_limits, draw_limits = manifest.get("derive", {}), manifest.get("draw", {})
+        metrics = [
+            ("derive_time_ms", program.get("last_pass_ms"), derive_limits.get("time_ms"), None, 50),
+            ("derive_memory_bytes", program.get("memory_bytes"), byte_limit(derive_limits.get("memory_mb")),
+             program.get("memory_limit_bytes"), 64 << 20),
+            ("draw_time_ms", draw.get("frame_ms"), draw_limits.get("frame_ms"), draw.get("frame_limit_ms"), 4),
+            ("draw_memory_bytes", draw.get("memory_bytes"), byte_limit(draw_limits.get("memory_mb")),
+             draw.get("memory_limit_bytes"), 64 << 20),
+        ]
+        for name, measured, declared, reported, planned in metrics:
+            verified = number(measured) and number(declared)
+            if name != "derive_time_ms":
+                verified = verified and number(reported)
+            passed = verified and 0 < declared <= planned and measured <= declared
+            if reported is not None:
+                passed = passed and reported == declared
+            gate = check(f"{identifier}.{name}", passed, measured,
+                         {"planned": planned, "declared": declared, "reported": reported})
+            gate["evidence"] = "measured" if verified else "unverified"
+            if not verified:
+                gate["reason"] = "A GPU measurement or declared limit is unavailable or invalid."
+            checks.append(gate)
+    return checks
+
+
 def math_checks(graph, examples, before, after, validation, trace_seconds, steering_seconds, *, fixture):
     rows = examples["examples"]
     strengths = [r["activation"] for r in rows]

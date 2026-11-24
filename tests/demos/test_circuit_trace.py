@@ -14,7 +14,7 @@ DEMO = ROOT / "demos" / "circuit_trace"
 if str(DEMO) not in sys.path:
     sys.path.insert(0, str(DEMO))
 import run as driver
-from _checks import check, finish, math_checks, selected_feature, token_path, FIXTURE_PROMPT
+from _checks import check, finish, math_checks, program_budget_checks, selected_feature, token_path, FIXTURE_PROMPT
 from _mcp import Failure
 
 
@@ -113,6 +113,34 @@ def test_visible_result_keeps_pixel_evidence_optional():
     assert result["qwen_acceptance"] is False
     result["checks"][0]["required"] = True
     assert finish(result) == 1
+
+
+@pytest.mark.parametrize("change,passed,evidence", [
+    ({}, True, "measured"),
+    ({"last_pass_ms": None}, False, "unverified"),
+    ({"last_pass_ms": 50.01}, False, "measured"),
+    ({"memory_bytes": (64 << 20) + 1}, False, "measured"),
+    ({"frame_ms": None}, False, "unverified"),
+    ({"frame_ms": 4.01}, False, "measured"),
+])
+def test_program_budgets_reject_missing_or_excess_measurements(change, passed, evidence):
+    # This pure validation input is not saved as acceptance evidence.
+    program = {"id": "attribution", "last_pass_ms": 50, "memory_bytes": 64 << 20,
+               "memory_limit_bytes": 64 << 20, "draw": {"frame_ms": 4, "frame_limit_ms": 4,
+               "memory_bytes": 64 << 20, "memory_limit_bytes": 64 << 20}}
+    for key, value in change.items():
+        (program["draw"] if key == "frame_ms" else program)[key] = value
+    snapshot = {"status": {"programs": [program]}, "expected_steps": {"attribution": 1},
+                "pieces": {"attribution": {"derive": {"time_ms": 50, "memory_mb": 64},
+                                           "draw": {"frame_ms": 4, "memory_mb": 64}}}}
+    gates = program_budget_checks(snapshot)
+    assert all(gate["passed"] for gate in gates) is passed
+    if change:
+        failed = [gate for gate in gates if not gate["passed"]]
+        assert len(failed) == 1 and failed[0]["evidence"] == evidence
+        assert failed[0]["measured"] == next(iter(change.values()))
+    result = {"mode": "fixture", "checks": gates}
+    assert finish(result) == (0 if passed else 1)
 
 
 def test_bridge_sets_selection_and_queries_examples():
