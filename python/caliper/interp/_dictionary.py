@@ -89,6 +89,23 @@ def weights_hash(model, *, memory=None):
     return _state_hash(model.state_dict(), memory=memory)
 
 
+def dictionary_fingerprint(folder, metadata, *, memory=None):
+    """Hash stable metadata and exact layer files, without the quality report."""
+    _hash_admission(memory, force=True)
+    digest = hashlib.sha256(json.dumps({k: v for k, v in metadata.items() if k != "quality"},
+                                     sort_keys=True, allow_nan=False).encode())
+    for i in range(metadata["layers"]):
+        with (Path(folder) / f"layer_{i:02d}.safetensors").open("rb") as source:
+            while True:
+                _hash_admission(memory)
+                chunk = source.read(_HASH_CHUNK_BYTES)
+                if not chunk:
+                    break
+                digest.update(chunk)
+                del chunk
+    return digest.hexdigest()
+
+
 def _hf_identity(config):
     """Parse checkpoint metadata without a claim about the actual weights."""
     name = str(getattr(config, "_name_or_path", "")).replace("\\", "/")

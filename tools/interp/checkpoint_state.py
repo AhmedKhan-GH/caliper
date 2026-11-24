@@ -1,7 +1,6 @@
 """Atomic safe-tensor checkpoints with one parameter copy at a time."""
 from __future__ import annotations
 
-import hashlib
 import json
 import os
 from pathlib import Path
@@ -13,7 +12,7 @@ import numpy as np
 import torch
 from safetensors import safe_open
 from safetensors.torch import save_file
-from caliper.interp._dictionary import _zero, fallback_metadata
+from caliper.interp._dictionary import _zero, dictionary_fingerprint, fallback_metadata
 from .memory_limits import autorelease_scope
 
 
@@ -38,17 +37,6 @@ def write_json(path, value):
 
 def _tuples(value):
     return tuple(_tuples(v) for v in value) if isinstance(value, list) else value
-
-
-def dictionary_fingerprint(folder, metadata):
-    """Hash stable metadata and every layer file, with no mutable quality report."""
-    digest = hashlib.sha256(json.dumps({k: v for k, v in metadata.items() if k != "quality"},
-                                     sort_keys=True, allow_nan=False).encode())
-    for i in range(metadata["layers"]):
-        with (Path(folder) / f"layer_{i:02d}.safetensors").open("rb") as source:
-            for chunk in iter(lambda: source.read(8 * 1024 * 1024), b""):
-                digest.update(chunk)
-    return digest.hexdigest()
 
 
 def save_checkpoint(root, trainer, stream, progress, *, elapsed=None):
@@ -128,6 +116,8 @@ def validate_checkpoint(record, settings, metadata, source_id):
     saved_fallback = fallback_metadata(record["metadata"])
     if fallback != saved_fallback:
         raise ValueError("checkpoint fallback metadata differs")
+    if record["metadata"].get("fallback_source") != metadata.get("fallback_source"):
+        raise ValueError("checkpoint fallback source evidence differs")
     if fallback and (settings.get("fallback") != fallback
                      or record["stream"]["source_id"] != source_id
                      or source_id != fallback["source_id"]):

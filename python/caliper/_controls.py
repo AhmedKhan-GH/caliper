@@ -1567,8 +1567,9 @@ class Controls:
             except Refused as exc:
                 return error(exc.code, str(exc))
             with self.lock:
-                self.busy = True
-                self.cond.notify_all()
+                self._update_busy()
+                if status == w.STATUS_QUEUED:
+                    self.cond.notify_all()
             if status == w.STATUS_QUEUED and acknowledge is not None:
                 return None
             return w.ControlReply(rid, op, status, result=result).to_meta()

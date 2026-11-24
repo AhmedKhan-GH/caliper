@@ -39,6 +39,20 @@ class InterpretationService:
         self.failure = None
         from ._memory import CleanStop
         self.stop_exception = CleanStop
+        self._bind_resources()
+
+    def _bind_resources(self):
+        """Use one model, tokenizer, and dictionary for all supplied resources."""
+        for resource in (self.index, self.tracer):
+            if resource is None:
+                continue
+            for name in ("model", "tokenizer", "dictionary"):
+                value = getattr(resource, name, None)
+                current = getattr(self, name)
+                if value is not None:
+                    if current is not None and current is not value:
+                        raise Refused("interpret.resource_mismatch", "Interpretation resources must share one " + name + ".")
+                    setattr(self, name, value)
 
     @property
     def pending(self):
@@ -71,11 +85,19 @@ class InterpretationService:
         return "queued", None
 
     def _resource(self, name):
+        self._bind_resources()
         value = getattr(self, name)
         if value is None:
             factory = self.factories[name]
             if factory is not None:
                 value = factory()
+            elif name == "dictionary":
+                for owner in ("index", "tracer"):
+                    if self.factories[owner] is not None:
+                        self._resource(owner)
+                        value = self.dictionary
+                        if value is not None:
+                            break
             elif name == "tracer":
                 if self.model is None or self.tokenizer is None:
                     raise Refused("interpret.missing_model", "A model and tokenizer are required.")
@@ -85,6 +107,7 @@ class InterpretationService:
             if value is None:
                 raise Refused("interpret.missing_" + name, "The run has no " + name + ".")
             setattr(self, name, value)
+            self._bind_resources()
         return value
 
     def _feature(self, params):
@@ -112,7 +135,13 @@ class InterpretationService:
 
     def _execute(self, method, params, step):
         if method == "feature.dictionary":
-            return {"metadata": deepcopy(self._resource("dictionary").metadata)}
+            dictionary = self._resource("dictionary")
+            if self.index is None and self.factories["index"] is not None:
+                self._resource("index")
+            if self.index is None:
+                return {"metadata": deepcopy(dictionary.metadata)}
+            from ._qualification import dictionary_response
+            return dictionary_response(dictionary, self.index, model=self.model, tokenizer=self.tokenizer)
         if method in ("feature.show", "feature.examples"):
             with self._baseline():
                 self._resource("dictionary")
@@ -195,8 +224,11 @@ class InterpretationService:
                         pass
                     raise self.failure
                 except Exception as exc:
-                    error = {"code": getattr(exc, "code", "interpret.refused"),
-                             "message": str(exc).encode("utf-8", errors="replace")[:1024].decode("utf-8", errors="ignore")}
+                    code = getattr(exc, "code", "interpret.refused")
+                    if not protocol.text(code, 63, False):
+                        code = "interpret.refused"
+                    error = {"code": code,
+                             "message": str(exc).replace("\0", "").encode("utf-8", errors="replace")[:1024].decode("utf-8", errors="ignore")}
                     if method == "trace.run":
                         with self.lock:
                             self.status = {"state": "error", "seconds": 0., "step": step, "error": error}
@@ -224,7 +256,10 @@ class InterpretationService:
             while self.running:
                 self.idle.wait()
         for _, _, reply in requests:
-            reply("error", None, {"code": "interpret.closed", "message": "The interpretation service closed."})
+            try:
+                reply("error", None, {"code": "interpret.closed", "message": "The interpretation service closed."})
+            except Exception:
+                pass  # A disconnected waiter must not prevent resource cleanup.
 
     def _publish_examples(self, rows):
         import torch
@@ -281,7 +316,9 @@ def register_service(service=None, *, controls=None, **resources):
         with controls.lock:
             controls.interpretation_service = service
             service.controls = controls
-            controls.busy = True
+            controls._update_busy()
+            if service.pending:
+                controls.cond.notify_all()
         _refresh_native_capability(controls)
     return service
 
@@ -296,4 +333,5 @@ def unregister_service(service, *, controls=None):
         with controls.lock:
             if controls.interpretation_service is service:
                 controls.interpretation_service = None
+                controls._update_busy()
         _refresh_native_capability(controls)

@@ -52,3 +52,27 @@ def test_tensor_file_sync_failure_closes_handle(tmp_path, monkeypatch):
         checkpoint_state._save_tensors({"weight": torch.ones(2)}, path)
     assert handles and all(handle.closed for handle in handles)
     path.unlink()
+
+
+@pytest.mark.parametrize("saved,current", [
+    (None, {"identity": "a"}), ({"identity": "a"}, None),
+    ({"identity": "a"}, {"identity": "b"}),
+])
+def test_checkpoint_refuses_changed_fallback_evidence(saved, current):
+    metadata = {"model_hash": "a" * 64, "training": {}}
+    previous = dict(metadata)
+    if saved is not None:
+        previous["fallback_source"] = saved
+    if current is not None:
+        metadata["fallback_source"] = current
+    with pytest.raises(ValueError, match="fallback source evidence"):
+        checkpoint_state.validate_checkpoint({"settings": {}, "metadata": previous}, {}, metadata, "source")
+
+
+@pytest.mark.parametrize("evidence", [None, {"identity": "a"}])
+def test_checkpoint_preserves_optional_fallback_evidence(evidence):
+    from copy import deepcopy
+    metadata = {"model_hash": "a" * 64, "training": {}}
+    if evidence is not None:
+        metadata["fallback_source"] = evidence
+    checkpoint_state.validate_checkpoint({"settings": {}, "metadata": deepcopy(metadata)}, {}, metadata, "source")
