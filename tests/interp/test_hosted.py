@@ -235,7 +235,11 @@ class HostedChild:
                         self.ready.set()
             self.ready.set()
         self.reader = threading.Thread(target=read_output, daemon=True)
-        self.reader.start()
+        try:
+            self.reader.start()
+        except BaseException:
+            self.close()
+            raise
 
     def connect(self):
         from websockets.sync.client import connect
@@ -272,18 +276,94 @@ class HostedChild:
         return path, json.loads(path.read_bytes())
 
     def close(self):
-        self.connections.close()
-        if self.process.poll() is None:
-            self.process.terminate()
-        self.process.wait(10)
-        self.reader.join(10)
-        self.process.stdout.close()
+        try:
+            self.connections.close()
+        finally:
+            try:
+                try:
+                    if self.process.poll() is None:
+                        try:
+                            self.process.terminate()
+                        except ProcessLookupError:
+                            pass
+                finally:
+                    try:
+                        self.process.wait(10)
+                    except subprocess.TimeoutExpired:
+                        try:
+                            self.process.kill()
+                        except ProcessLookupError:
+                            pass
+                        self.process.wait()
+            finally:
+                try:
+                    if self.reader.ident is not None:
+                        self.reader.join(10)
+                        assert not self.reader.is_alive(), "hosted output reader did not stop"
+                finally:
+                    self.process.stdout.close()
+
+
+@pytest.mark.parametrize("socket_failure", [False, True])
+def test_hosted_cleanup_reaps_exact_children_after_shutdown_timeout(monkeypatch, socket_failure):
+    children = []
+
+    def child():
+        # This process waits for EOF. The test forces the terminate-timeout branch.
+        owned = HostedChild.__new__(HostedChild)
+        owned.connections = ExitStack()
+        owned.process = subprocess.Popen(
+            [sys.executable, "-c", "import sys; print('ready', flush=True); sys.stdin.read()"],
+            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+        children.append(owned)
+        owned.reader = threading.Thread(target=lambda: owned.process.stdout.read(), daemon=True)
+        assert owned.process.stdout.readline() == "ready\n"
+        owned.reader.start()
+        return owned
+
+    def fail_socket():
+        raise RuntimeError("fixture socket cleanup failure")
+
+    try:
+        with pytest.raises(RuntimeError, match="fixture socket cleanup failure") if socket_failure else ExitStack():
+            with ExitStack() as cleanup:
+                parent = child()
+                cleanup.callback(parent.process.stdin.close)
+                cleanup.callback(parent.close)
+                fork = child()
+                cleanup.callback(fork.process.stdin.close)
+                cleanup.callback(fork.close)
+                if socket_failure:
+                    fork.connections.callback(fail_socket)
+                wait = fork.process.wait
+                calls = []
+
+                def timeout_once(timeout=None):
+                    calls.append(timeout)
+                    if len(calls) == 1:
+                        raise subprocess.TimeoutExpired(fork.process.args, timeout)
+                    return wait(timeout)
+
+                monkeypatch.setattr(fork.process, "wait", timeout_once)
+                monkeypatch.setattr(fork.process, "terminate", lambda: None)
+        assert calls == [10, None]
+        assert all(owned.process.returncode is not None for owned in children)
+    finally:
+        # Independent emergency cleanup also protects assertions inside this test.
+        with ExitStack() as cleanup:
+            for owned in children:
+                cleanup.callback(owned.process.stdin.close)
+                cleanup.callback(owned.close)
+    for owned in children:
+        assert owned.process.returncode is not None
+        assert not owned.reader.is_alive()
+        assert owned.process.stdout.closed and owned.process.stdin.closed
 
 
 def test_real_hosted_fork_carries_active_feature_and_text(resource_folder, tmp_path):
-    parent = HostedChild(tmp_path, resource_folder, "parent")
-    child = None
-    try:
+    with ExitStack() as cleanup:
+        parent = HostedChild(tmp_path, resource_folder, "parent")
+        cleanup.callback(parent.close)
         first = parent.connect()
         assert first.run["step"] == 1
         assert "prompt" in {p["name"] for p in first.params}
@@ -306,6 +386,7 @@ def test_real_hosted_fork_carries_active_feature_and_text(resource_folder, tmp_p
         checkpoint, saved = parent.checkpoint()
         assert saved["interventions"]["interventions"][0]["state"] == "active"
         child = HostedChild(tmp_path, resource_folder, "fork", resume=checkpoint)
+        cleanup.callback(child.close)
         restored = child.connect()
         assert restored.run["step"] == saved["step"]
         _, forked = child.checkpoint()
@@ -322,10 +403,6 @@ def test_real_hosted_fork_carries_active_feature_and_text(resource_folder, tmp_p
         assert child.process.wait(10) == 0
         assert parent.control("run", name="caliper.stop").status == "ok"
         assert parent.process.wait(10) == 0
-    finally:
-        if child is not None:
-            child.close()
-        parent.close()
 
 
 def test_script_checkpoint_keeps_the_existing_tensor_format(tmp_path):
