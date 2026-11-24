@@ -238,6 +238,16 @@ def train_online(model, trainer, stream, output, *, token_budget, progress=None,
         raise ValueError("wall time budget has no checkpoint reserve")
     last_metrics = {}
     model.requires_grad_(False).eval()
+    export_stop = None
+
+    def check_memory(stage, *, force=False):
+        nonlocal export_stop
+        if memory:
+            try:
+                memory.check(stage, force=force)
+            except CleanStop as error:
+                export_stop = str(error)[:1024].encode("utf-8")[:1024].decode("utf-8", errors="ignore")
+                raise
 
     def health():
         if stop:
@@ -246,8 +256,7 @@ def train_online(model, trainer, stream, output, *, token_budget, progress=None,
             raise CleanStop("wall time reserve")
         if clock() - last_save >= 270:
             raise CleanStop("checkpoint deadline")
-        if memory:
-            memory.check("train", force=False)
+        check_memory("train")
 
     def save():
         nonlocal last_save, checkpoint_seconds
@@ -293,8 +302,7 @@ def train_online(model, trainer, stream, output, *, token_budget, progress=None,
                          for i in trainer.active_layers]
             with autorelease_scope(trainer.device), capture(model, requested) as captured, torch.no_grad():
                 hidden_forward(model, padded)
-            if memory:
-                memory.check("after_forward", force=False)
+            check_memory("after_forward")
             for index in trainer.active_layers:
                 if index < progress["next_layer"]:
                     continue
@@ -336,17 +344,28 @@ def train_online(model, trainer, stream, output, *, token_budget, progress=None,
         )
     save()
     progress["elapsed_seconds"] = elapsed()
-    before_export = clock()
-    export_dictionary(output, trainer, progress)
+    if export_stop is None:
+        try:
+            check_memory("before_dictionary_export", force=True)
+        except CleanStop:
+            pass
+    # The resumable checkpoint is essential. A dictionary copy can wait for recovery.
+    if export_stop is None:
+        before_export = clock()
+        export_dictionary(output, trainer, progress)
+        trainer.metadata["training"]["elapsed_seconds"] = elapsed()
+        write_json(output / "dictionary.json", trainer.metadata)
+        progress["export_seconds"] = max(progress.get("export_seconds", 0.0), clock() - before_export)
+    progress["dictionary_export"] = "complete" if export_stop is None else "skipped"
     progress["elapsed_seconds"] = elapsed()
-    trainer.metadata["training"]["elapsed_seconds"] = elapsed()
-    write_json(output / "dictionary.json", trainer.metadata)
-    progress["export_seconds"] = max(progress.get("export_seconds", 0.0), clock() - before_export)
     generation = json.loads((output / "checkpoints" / "latest.json").read_text())["generation"]
     write_json(output / "runtime.json", {"generation": generation, "elapsed_seconds": elapsed(),
                                          "checkpoint_seconds": checkpoint_seconds,
-                                         "export_seconds": progress["export_seconds"]})
+                                         "export_seconds": progress.get("export_seconds", 0.0),
+                                         "dictionary_export": progress["dictionary_export"],
+                                         "export_stop_reason": export_stop})
     print(json.dumps({"stage": "train_end", "reason": reason, "tokens": progress["tokens"],
+                      "dictionary_export": progress["dictionary_export"], "export_stop_reason": export_stop,
                       "status": "complete" if progress["tokens"] == token_budget else "interrupted",
                       **({"status": trainer.metadata["training"]["status"],
                           "aggregate_elapsed_seconds": prior_wall + elapsed()} if fallback else {}),
@@ -604,7 +623,7 @@ def _run(args, started, stop, resources):
     result = train_online(model, trainer, stream, args.output, token_budget=args.tokens, progress=progress,
                           memory=memory, stop=stop, save_seconds=args.save_seconds,
                           max_wall_seconds=args.max_wall_seconds, run_seconds=args.run_seconds, started=started)
-    return 0 if result["tokens"] == args.tokens else 2
+    return 0 if result["tokens"] == args.tokens and result["dictionary_export"] == "complete" else 2
 
 
 def _training_stream(args, tokenizer, resources):
