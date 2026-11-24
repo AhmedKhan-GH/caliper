@@ -584,7 +584,9 @@ TEST_CASE("net/hub 3.2: a reset drops what a viewer that stopped reading has que
     // A viewer at a higher rate makes the hub subscribe again, and the producer sends its state.
     auto fast = scene_viewer(w, h, {CALIPER_NET_CAP_SCENES});
     subscribe(*fast, 6, "world", 120.0);
-    REQUIRE(w.until([&] { return p->scene_subscribes == 2 && fast->scene_log(6).size() >= 3; }));
+    // The fast viewer can receive the hub's cached state before the producer's new state.
+    // Poll the producer until all three replay messages reach the hub. resume() polls only slow.
+    REQUIRE(w.until([&] { return p->scene_subscribes == 2 && h.hub->stats().scenes_in == in + 100 + 3; }));
     REQUIRE(resume(*slow, 4, [&](const std::vector<std::string>& log) {
         return log.size() >= before + 4 && log.back() == "big:points" && log[log.size() - 3] == "reset";
     }));
@@ -592,6 +594,46 @@ TEST_CASE("net/hub 3.2: a reset drops what a viewer that stopped reading has que
     CHECK(clears_in(log, before) == 0);
     CHECK(std::vector<std::string>(log.begin() + (long)before, log.end()) ==
           std::vector<std::string>{"big:points", "reset", ":lines", "big:points"});
+}
+
+TEST_CASE("net/hub 3.2: a cached scene does not acknowledge the producer's new state") {
+    Runner h;
+    World32 w;
+    auto p = std::make_unique<SceneProducer>();
+    REQUIRE(p->connect(h.url()));
+    w.peers.push_back(p.get());
+    REQUIRE(w.until([&] { return p->welcomed; }));
+    auto slow = scene_viewer(w, h, {CALIPER_NET_CAP_SCENES});
+    subscribe(*slow, 4, "world");
+    REQUIRE(w.until([&] { return slow->scene_log(4).size() == 2; }));
+    p->points("big", {0.25f, 0.25f, 0.25f});
+    REQUIRE(w.until([&] { return slow->scene_log(4).size() == 3 && h.hub->stats().scenes_in == 3; }));
+    const size_t before = slow->scene_log(4).size();
+    const uint64_t in = h.hub->stats().scenes_in;
+
+    // Let the fast viewer receive the cached state before the producer reads its new SUBSCRIBE.
+    w.peers.erase(std::find(w.peers.begin(), w.peers.end(), p.get()));
+    w.peers.erase(std::find(w.peers.begin(), w.peers.end(), slow.get()));
+    auto fast = scene_viewer(w, h, {CALIPER_NET_CAP_SCENES});
+    subscribe(*fast, 6, "world", 120.0);
+    REQUIRE(w.until([&] { return fast->scene_log(6).size() == 3; }));
+    CHECK(p->scene_subscribes == 1);
+    CHECK(fast->scene_log(6, true) == std::vector<std::string>{"reset", ":lines", "big:points"});
+
+    // The callback queues the replay after Client::poll() returns its transport events.
+    // Stop at that callback, before the next poll can flush those messages.
+    World32 producer;
+    producer.peers.push_back(p.get());
+    REQUIRE(producer.until([&] { return p->scene_subscribes == 2; }));
+    CHECK((p->scene_subscribes == 2 && fast->scene_log(6).size() >= 3));
+    CHECK(h.hub->stats().scenes_in == in);
+
+    w.peers.push_back(p.get());
+    REQUIRE(w.until([&] { return p->scene_subscribes == 2 && h.hub->stats().scenes_in == in + 3; }));
+    REQUIRE(resume(*slow, 4, [&](const std::vector<std::string>& log) { return log.size() >= before + 3; }));
+    const std::vector<std::string> log = slow->scene_log(4);
+    CHECK(std::vector<std::string>(log.begin() + (long)before, log.end()) ==
+          std::vector<std::string>{"reset", ":lines", "big:points"});
 }
 
 // The pending batches of a viewer that stopped reading stay bounded: past CALIPER_NET_MAX_BATCHES
