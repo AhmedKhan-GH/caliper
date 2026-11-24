@@ -407,3 +407,171 @@ def test_detached_service_refuses_replay(controlled):
     with pytest.raises(InterventionError, match="no longer attached"):
         with service.temporary_state(snapshot()):
             pytest.fail("a detached service must not yield")
+
+
+def test_applied_specification_list_replays_effect_before_queued_replacement(controlled):
+    model, tokenizer, ctl, service = controlled
+    inputs = tokenizer("abc")
+    service.set(add_spec(until_step=4))
+    ctl.step()
+    expected = model(**inputs).logits
+    service.set(add_spec(coefficient=5))
+    traced = service.specifications()
+    assert traced[0]["coefficient"] == 1
+    assert service.state_dict()["interventions"][0]["specification"]["coefficient"] == 5
+    ctl.step()
+    current = model(**inputs).logits
+    assert not torch.equal(current, expected)
+    with service.temporary_state(traced) as replay:
+        assert replay.specifications()[0]["coefficient"] == 1
+        assert "until_step" not in replay.specifications()[0]
+        torch.testing.assert_close(model(**inputs).logits, expected, rtol=0, atol=0)
+    torch.testing.assert_close(model(**inputs).logits, current, rtol=0, atol=0)
+    assert traced[0]["until_step"] == 4
+
+
+@pytest.mark.parametrize("specifications", [[None], [add_spec(), add_spec()], [add_spec(value=0)]])
+def test_malformed_specification_list_refuses_before_installation(controlled, monkeypatch, specifications):
+    _, _, _, service = controlled
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("a malformed specification list must not install hooks")
+
+    monkeypatch.setattr(InterventionService, "install", forbidden)
+    with pytest.raises(InterventionError):
+        with service.temporary_state(specifications):
+            pytest.fail("a malformed specification list must not yield")
+
+
+def test_clear_feature_preserves_unrelated_active_pending_and_ended_records(controlled):
+    model, tokenizer, ctl, service = controlled
+    point = "layers.0.mlp_out"
+    service.set({"kind": "clamp", "point": point, "feature": 0, "value": 10})
+    service.set({"kind": "scale", "point": point, "feature": 0, "multiplier": 2})
+    service.set({"kind": "ablate", "point": "layers.1.mlp", "until_step": 3})
+    ctl.step()
+    ctl.step()
+    service.set(add_spec(point="layers.2.mlp_out"))
+    records = ctl._ivs
+    selected = records[point, "clamp"]
+    hook = selected.hook
+    originals = list(records.items())
+    before = service.state_dict()
+    hooks = hook_objects(model)
+    assert service.clear_feature(point, 0) is True
+    after = deepcopy(before)
+    after["interventions"][0]["clear"] = True
+    assert service.state_dict() == after and hook_objects(model) == hooks
+    assert ctl._ivs is records and list(records.items()) == originals
+    assert not hook.removed and ctl._iv_due and ctl.busy
+    assert service.clear_feature(point, 0) is False
+    ctl.step()
+    assert hook.removed and (point, "clamp") not in records
+    assert records[point, "scale"].state == "active"
+    assert records["layers.1.mlp", "ablate"].state == "ended"
+    assert records["layers.2.mlp_out", "add"].state == "active"
+
+
+@pytest.mark.parametrize("kind", ["clamp", "scale"])
+def test_clear_feature_matches_latest_specification_and_handles_pending_records(controlled, kind):
+    _, _, ctl, service = controlled
+    point = "layers.0.mlp_out"
+    parameter = {"value": 10} if kind == "clamp" else {"multiplier": 2}
+    spec = {"kind": kind, "point": point, "feature": 0, **parameter}
+    service.set(spec)
+    ctl.step()
+    record = ctl._ivs[point, kind]
+    hook = record.hook
+    service.set(dict(spec, feature=1))
+    before = service.state_dict()
+    assert service.clear_feature(point, 0, kind=kind) is False
+    assert service.state_dict() == before and not hook.removed
+    assert service.clear_feature(point, 1, kind=kind) is True
+    ctl.step()
+    assert hook.removed and (point, kind) not in ctl._ivs
+    service.set(spec)
+    assert ctl._ivs[point, kind].state == "pending"
+    assert service.clear_feature(point, 0, kind=kind) is True
+    ctl.step()
+    assert (point, kind) not in ctl._ivs
+
+
+@pytest.mark.parametrize("replacement", [False, True])
+def test_clear_feature_notifies_and_preserves_requests_before_publication(controlled, monkeypatch, replacement):
+    _, _, ctl, service = controlled
+    point = "layers.0.mlp_out"
+    spec = {"kind": "clamp", "point": point, "feature": 0, "value": 10}
+    service.set(spec)
+    ctl.step()
+    record = ctl._ivs[point, "clamp"]
+    ready, done = Event(), Event()
+    errors = []
+
+    def network():
+        try:
+            with ctl.cond:
+                ready.set()
+                assert ctl.cond.wait_for(lambda: record.clear, timeout=5)
+            service.set(dict(spec, feature=1) if replacement else add_spec(point="layers.1.mlp_out"))
+        except BaseException as error:
+            errors.append(error)
+        finally:
+            done.set()
+
+    publish = ctl._publish
+
+    def inspect_publication():
+        assert ctl.lock.acquire(blocking=False), "publication must release the controls lock first"
+        ctl.lock.release()
+        assert done.wait(5), "a notified request must finish before publication"
+        publish()
+
+    thread = Thread(target=network, daemon=True)
+    thread.start()
+    try:
+        assert ready.wait(5)
+        with monkeypatch.context() as patch:
+            patch.setattr(ctl, "_publish", inspect_publication)
+            assert service.clear_feature(point, 0) is True
+        assert not errors and record.hook is not None and not record.hook.removed
+        if replacement:
+            assert record.spec["feature"] == 1 and not record.clear
+        else:
+            assert ctl._ivs["layers.1.mlp_out", "add"].state == "pending"
+        ctl.step()
+        if replacement:
+            assert record.applied_spec["feature"] == 1
+        else:
+            assert (point, "clamp") not in ctl._ivs
+            assert ctl._ivs["layers.1.mlp_out", "add"].state == "active"
+    finally:
+        thread.join(5)
+    assert not thread.is_alive()
+
+
+@pytest.mark.parametrize("fields", [
+    {"point": "unknown", "feature": 0},
+    {"point": "layers.0.mlp_out", "feature": True},
+    {"point": "layers.0.mlp_out", "feature": -1},
+    {"point": "layers.0.mlp_out", "feature": 0, "kind": "add"},
+])
+def test_clear_feature_refuses_invalid_selection_without_lifecycle_changes(controlled, fields):
+    _, _, _, service = controlled
+    before = service.state_dict()
+    with pytest.raises(InterventionError):
+        service.clear_feature(**fields)
+    assert service.state_dict() == before
+
+
+def test_clear_feature_preserves_ended_records_and_refuses_detached_service(controlled):
+    _, _, ctl, service = controlled
+    point = "layers.0.mlp_out"
+    service.set({"kind": "clamp", "point": point, "feature": 0, "value": 10, "until_step": 3})
+    ctl.step()
+    ctl.step()
+    before = service.state_dict()
+    assert service.clear_feature(point, 0) is False
+    assert service.state_dict() == before and ctl._ivs[point, "clamp"].state == "ended"
+    service.remove()
+    with pytest.raises(InterventionError, match="no longer attached"):
+        service.clear_feature(point, 0)

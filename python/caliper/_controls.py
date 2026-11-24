@@ -779,6 +779,31 @@ class Interventions:
         """Queue removal at the next step boundary."""
         self._request({"clear_all": True} if point is None else {"clear": point})
 
+    def clear_feature(self, point, feature, *, kind="clamp"):
+        """Queue removal only if the latest specification matches this feature.
+
+        Return True for a new clear. Preserve replacements for other features and
+        all other records. The current hook remains until the next real boundary.
+        """
+        from .interp._intervene import InterventionError
+        with self._ctl.lock:
+            if self._ctl._iv_model is not self:
+                raise InterventionError("the intervention service is no longer attached")
+            if not isinstance(point, str) or point not in self.names:
+                raise InterventionError("unknown intervention point", "intervene.unknown_point")
+            if kind not in ("clamp", "scale") or type(feature) is not int or feature < 0:
+                raise InterventionError("clear_feature requires a feature index and clamp or scale kind")
+            iv = self._ctl._ivs.get((point, kind))
+            if iv is None or iv.state == IV_ENDED or iv.clear or iv.spec.get("feature") != feature:
+                return False
+            iv.clear = True
+            self._ctl._iv_due = True
+            self._ctl.counters["interventions_in"] += 1
+            self._ctl._update_busy()
+            self._ctl.cond.notify_all()
+        self._ctl._publish()
+        return True
+
     def _request(self, request):
         from .interp._intervene import InterventionError
         with self._ctl.lock:
@@ -825,8 +850,17 @@ class Interventions:
         still queue through Controls.lock and take effect at the next real boundary.
         Snapshot specifications must describe the effects at the original trace.
         Temporary hook failures raise InterventionError at exit and leave live records intact.
+
+        Accept a version 1 lifecycle object or an active list from specifications().
+        Use that list for a trace because state_dict() can contain queued replacements.
         """
         from .interp._intervene import InterventionError, _InterventionReplay
+        if isinstance(state, list):
+            if len(state) > MAX_INTERVENTIONS:
+                raise InterventionError("invalid intervention records")
+            state = {"version": 1, "interventions": [
+                {"specification": spec, "state": IV_ACTIVE, "since_step": 0,
+                 "clear": False, "error": None, "error_code": None} for spec in state]}
         if (not isinstance(state, dict) or type(state.get("version")) is not int
                 or state["version"] != 1 or set(state) != {"version", "interventions"}):
             raise InterventionError("unsupported intervention state")
