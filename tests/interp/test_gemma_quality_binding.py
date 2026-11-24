@@ -36,16 +36,23 @@ def reply(folder, model, dictionary):
 
 def test_quality_and_live_response_share_verified_evidence(artifact):
     folder, model, dictionary, _ = artifact
+    before = deepcopy(dictionary.metadata["training"])
+    source = deepcopy(dictionary.metadata["evaluation_source"])
     tokenizer = SimpleNamespace(encode=lambda text, **kw: [3 + ord(ch) % 34 for ch in text], eos_token_id=2)
     with TextStream(documents(), tokenizer, "quality") as stream:
         quality = eval_dictionary.evaluate(model, dictionary, stream, folder, tokens=8,
                                           context=4, batch_tokens=8, chunk_tokens=2)
     assert quality["status"] == "partial"
     assert quality["evaluated_tokens"] == 8
+    assert quality["thresholds"]["fvu"] == .30
+    assert quality["evaluation_source"] == source
+    assert dictionary.metadata["training"] == before
+    state = json.loads((folder / "evaluation" / "state.json").read_text())
+    assert state["settings"]["evaluation_source"] == source
     with TextStream(documents(), tokenizer, "quality") as stream:
         resumed = eval_dictionary.evaluate(model, dictionary, stream, folder, tokens=8,
                                           context=4, batch_tokens=8, chunk_tokens=2, resume=True)
-    for field in ("fvu", "dead_fraction", "cross_entropy_delta", "evaluated_tokens", "model_binding"):
+    for field in ("fvu", "dead_fraction", "cross_entropy_delta", "evaluated_tokens", "model_binding", "evaluation_source"):
         assert resumed[field] == quality[field]
     assert resumed["publisher_training_overlap"] == "unknown"
     result = reply(folder, model, dictionary)

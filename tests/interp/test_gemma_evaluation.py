@@ -208,42 +208,6 @@ def test_imported_metadata_requires_both_provenance_records(field):
         text_stream.evaluation_source_metadata(metadata)
 
 
-def test_imported_evaluation_publishes_independent_source_and_resumes(tmp_path, gemma_semantics):
-    import json
-    from safetensors.torch import save_file
-    from caliper.interp import _dictionary
-    from .test_training_stream import documents
-    model = gemma_semantics
-    dictionary = runtime_dictionary(model)
-    if not hasattr(_dictionary, "JumpReLUTranscoder"):
-        # Base-branch binding only supports TopK. Integration uses real JumpReLU.
-        dictionary.layers = torch.nn.ModuleList([_dictionary.TopKTranscoder(
-            layer.W_enc, layer.b_enc, layer.W_dec, layer.b_dec, 2) for layer in dictionary.layers])
-        dictionary.metadata.update(activation="topk", k=2)
-    provenance = imported_metadata()
-    dictionary.metadata.update({key: provenance[key] for key in ("training", "import_source", "evaluation_source")})
-    before = deepcopy(dictionary.metadata["training"])
-    (tmp_path / "dictionary.json").write_text(json.dumps(dictionary.metadata))
-    for i, layer in enumerate(dictionary.layers):
-        save_file(layer.state_dict(), tmp_path / f"layer_{i:02d}.safetensors")
-    tokenizer = SimpleNamespace(encode=lambda text, **kw: [3 + ord(ch) % 34 for ch in text], eos_token_id=2)
-    with text_stream.TextStream(documents(), tokenizer, "quality") as stream:
-        quality = evaluation.evaluate(model, dictionary, stream, tmp_path, tokens=8,
-                                      context=4, batch_tokens=8, chunk_tokens=2)
-    assert quality["status"] == "partial" and quality["evaluated_tokens"] == 8
-    assert quality["thresholds"]["fvu"] == .30
-    assert quality["evaluation_source"] == provenance["evaluation_source"]
-    assert quality["publisher_training_overlap"] == "unknown"
-    assert dictionary.metadata["training"] == before
-    state = json.loads((tmp_path / "evaluation" / "state.json").read_text())
-    assert state["settings"]["evaluation_source"] == provenance["evaluation_source"]
-    with text_stream.TextStream(documents(), tokenizer, "quality") as stream:
-        resumed = evaluation.evaluate(model, dictionary, stream, tmp_path, tokens=8,
-                                      context=4, batch_tokens=8, chunk_tokens=2, resume=True)
-    for field in ("fvu", "dead_fraction", "cross_entropy_delta", "evaluated_tokens", "evaluation_source"):
-        assert resumed[field] == quality[field]
-
-
 def test_evaluator_explicit_gemma_selection_passes_budget_and_preserves_old_loader_api(tmp_path, monkeypatch):
     from .test_gemma_runtime import memory
     observed = []

@@ -170,7 +170,9 @@ def test_gemma_finish_keeps_causal_failure_and_separate_model_result():
                                "10 features, >=8 correct signs, Spearman >=0.6")]}
     assert finish(result) == 1 and not result["gemma_acceptance"]
     assert result["failed_checks"] == ["validation"]
-    result["checks"][0]["passed"] = True
+    # finish aggregates checks from the internal driver. Each check owns its measurements.
+    result["checks"][0] = check("validation", True, {"correct_signs": 8, "spearman": .6},
+                                "10 features, >=8 correct signs, Spearman >=0.6")
     assert finish(result) == 0 and result["gemma_acceptance"]
     assert not result["qwen_acceptance"] and not result["qwen_full_mlp_acceptance"]
 
