@@ -191,12 +191,30 @@ Optional `from_step` and `until_step` fields bound the active interval, with an 
 The runtime refuses incompatible dimensions, unknown features, invalid positions, and nonfinite values.
 Hook failures remove the failed hook and expose an error in intervention metadata.
 
+Feature requests cannot target layers excluded by an upper-half dictionary.
+The default dictionary identifier binds tensor content, actual TopK values, and metadata except the quality report.
+Generic state restore refuses a different dictionary under that identifier.
+A dictionary change requires resource reconfiguration before another feature request.
+An explicit identifier is an alias that the caller supplies.
+The caller must verify its restore compatibility.
+
+Device content checks require a supplied process memory guard with a finite limit.
+The hosted runner supplies its guard and retains its lower memory limits.
+
 ## Activation Patching
 
 A `patch` intervention replaces selected values with values from a clean source prompt.
 `source_position` selects one source token when the destination positions need a fixed mapping.
 The runtime preserves the current intervention state around clean source capture.
 Generation refuses a patch whose implicit source mapping exceeds the clean prompt.
+
+Patch source reuse checks all model parameters and buffers, including alias writes and nonpersistent buffers.
+Inference tensors use their contents because they have no version counters.
+Each readback uses bounded chunks and the supplied memory guard.
+
+Temporary replay runs on the model's run thread within `internal_forward()`.
+The caller must exclude concurrent model forwards from other contexts during that scope.
+Other threads can queue control requests for the next run boundary.
 
 `patch.sweep` compares clean and corrupted prompts with equal token counts.
 Its metric specifies distinct `positive_token` and `negative_token` IDs.
