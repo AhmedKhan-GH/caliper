@@ -113,6 +113,92 @@ def test_missing_resources_and_read_permission():
     assert transport.replies[-1].error["code"] == "interpret.missing_trace"
 
 
+@pytest.mark.parametrize("lazy", [False, True])
+def test_index_registration_binds_resources_and_qualifies_dictionary(actual, lazy):
+    service = InterpretationService(**({"index_factory": lambda: actual.index} if lazy else {"index": actual.index}))
+    replies = []
+    service.submit({"version": 1, "method": "feature.dictionary", "params": {}}, lambda *args: replies.append(args))
+    service.step()
+    assert replies[0][0] == "ok", replies[0][2]
+    assert replies[0][1]["identity"]["index_hash"] == actual.index.metadata["index_hash"]
+    assert service.model is actual.model and service.tokenizer is actual.tokenizer
+    assert service.dictionary is actual.dictionary
+    service.close()
+
+
+def test_resource_only_examples_publish_on_model_device(actual, monkeypatch):
+    import caliper.interp
+    import torch
+    service = InterpretationService(index=actual.index)
+    published = {}
+    # The meta device tests placement without an accelerator allocation.
+    monkeypatch.setattr(actual.model, "parameters", lambda: iter((torch.empty(1, device="meta"),)))
+    monkeypatch.setattr(caliper.interp, "publish", lambda name, tensor: published.update({name: tensor}))
+    service._publish_examples([])
+    assert len(published) == 5
+    assert all(value.device.type == "meta" for value in published.values())
+    service.close()
+
+
+def test_resource_registration_refuses_mixed_models(actual):
+    from .fixture import TinyLM
+    with pytest.raises(ValueError, match="share one model"):
+        InterpretationService(index=actual.index, model=TinyLM())
+
+
+def test_ordinary_trace_error_remains_valid_on_wire_and_in_status():
+    def fail():
+        error = ValueError("bad\0" + "é" * 1024 + "\ud800")
+        error.code = "invalid\0code"
+        raise error
+
+    controls, transport = _controls.Controls(), Transport()
+    route = controls.attach(transport)
+    service = register_service(InterpretationService(tracer_factory=fail), controls=controls)
+    assert call(route, "trace.run", {"prompt": "A"})["status"] == "queued"
+    service.step()
+    error = transport.replies[-1].error
+    assert error["code"] == "interpret.refused"
+    assert "\0" not in error["message"] and len(error["message"].encode("utf-8")) <= 1024
+    status = call(route, "trace.status")
+    assert protocol.bounded(status["result"]) and status["result"]["error"] == error
+    unregister_service(service, controls=controls)
+
+
+def test_close_disconnected_waiter_does_not_block_detachment():
+    controls = _controls.Controls()
+    service = register_service(controls=controls)
+    replies = []
+
+    def disconnected(*args):
+        raise ConnectionError("fixture connection closed")
+
+    request = {"version": 1, "method": "feature.dictionary", "params": {}}
+    service.submit(request, disconnected)
+    service.submit(request, lambda *args: replies.append(args))
+    unregister_service(service, controls=controls)
+    assert service.closed and not service.pending
+    assert controls.interpretation_service is None
+    assert replies == [("error", None, {"code": "interpret.closed", "message": "The interpretation service closed."})]
+
+
+def test_status_read_keeps_idle_controls_fast_and_work_wakes_them():
+    controls, transport = _controls.Controls(), Transport()
+    route = controls.attach(transport)
+    controls.state = _controls.RUN_RUNNING
+    controls._report_due = False
+    controls._update_busy()
+    assert not controls.busy
+    service = register_service(controls=controls)
+    assert not controls.busy
+    assert call(route, "trace.status")["status"] == "ok"
+    assert not controls.busy
+    assert call(route, "feature.dictionary")["status"] == "queued"
+    assert controls.busy
+    unregister_service(service, controls=controls)
+    assert not controls.busy
+
+
 @pytest.mark.parametrize("change", [
     {"version": True}, {"version": 2}, {"method": "unknown"}, {"extra": 1}, {"params": []},
     {"params": {"prompt": "x", "max_nodes": True}}, {"params": {"prompt": "x", "max_targets": 513}},
