@@ -7,6 +7,36 @@ import torch
 from caliper.interp._graph import Graph
 
 
+def test_trace_memory_guard_uses_physical_footprint_and_prior_peak(monkeypatch):
+    from caliper.interp import _frozen
+    from caliper.interp._memory import CleanStop
+    monkeypatch.setattr(_frozen, "free_percent", lambda: 80.)
+    guard = _frozen.MemoryGuard(torch.device("cpu"))
+    guard._guard.resident = lambda: 100
+    guard._guard.footprint = lambda: 12_000_000_001
+    guard._guard.peak_reader = lambda: 100
+    with pytest.raises(CleanStop, match="memory limit"):
+        guard.check("injected physical cap")
+    guard._guard.footprint = lambda: 100
+    with pytest.raises(CleanStop, match="memory limit"):
+        guard.check("prior peak remains over cap")
+
+
+def test_target_batch_admission_reduces_before_allocation(monkeypatch):
+    from caliper.interp import _frozen
+    from caliper.interp._memory import CleanStop
+    monkeypatch.setattr(_frozen, "free_percent", lambda: 80.)
+    guard = _frozen.MemoryGuard(torch.device("cpu"))
+    # Only the accounting device changes. No MPS tensor or dispatch exists in this test.
+    guard.device = torch.device("mps")
+    monkeypatch.setattr(guard, "check", lambda stage: 9_000_000_000)
+    admitted = guard.batch_size(64, layers=24, tokens=32, width=1024, mixer_width=2048)
+    assert 1 <= admitted < 64
+    monkeypatch.setattr(guard, "check", lambda stage: 11_800_000_000)
+    with pytest.raises(CleanStop, match="no target batch fits"):
+        guard.batch_size(64, layers=24, tokens=32, width=1024, mixer_width=2048)
+
+
 def test_graph_fixed_shapes_padding_and_paging():
     nodes = [{"id": "token:0:7", "kind": "token", "layer": -1, "position": 0,
               "token_id": 7, "activation": 1., "influence": .5, "effect": -.2,

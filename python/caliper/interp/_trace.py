@@ -9,6 +9,7 @@ import json
 import torch
 
 from ._frozen import FrozenPath, MemoryGuard
+from ._memory import autorelease_scope
 from ._graph import Graph, bounded_integer
 from ._influence import influence
 
@@ -36,25 +37,26 @@ class _DirectEffects:
             self.nodes.append({"id": f"token:{token['position']}:{token['token_id']}", "kind": "token",
                                "layer": -1, **token, "activation": 1., "label": token["text"]})
         for layer, a in enumerate(path.features):
-            weights = dictionary.layers[layer]
-            # Fixed k columns permit a batched decoder product without B by N by width expansion.
-            indices = a[0].topk(weights.k, dim=-1).indices.sort(dim=-1).values
-            activations = a[0].gather(-1, indices)
-            active = activations > 0
-            decoders = weights.W_dec.detach()[indices].to(path.dtype)
-            positions = torch.arange(path.tokens, device=path.device)[:, None].expand_as(indices)
-            start = len(self.nodes)
-            for position, feature, activation in zip(positions[active].tolist(), indices[active].tolist(),
-                                                      activations[active].tolist()):
-                self.nodes.append({"id": f"feature:{layer}:{position}:{feature}", "kind": "feature",
-                                   "layer": layer, "position": position, "feature": feature,
-                                   "activation": activation, "label": f"L{layer} F{feature}"})
-            end = len(self.nodes)
-            for position in range(path.tokens):
-                self.nodes.append({"id": f"error:{layer}:{position}", "kind": "error", "layer": layer,
-                                   "position": position, "activation": 1., "label": f"L{layer} error"})
-            self.source_layers.append((slice(start, end), slice(end, len(self.nodes)),
-                                       decoders, activations, active))
+            with autorelease_scope(path.device):
+                weights = dictionary.layers[layer]
+                # Fixed k columns permit a batched decoder product without B by N by width expansion.
+                indices = a[0].topk(weights.k, dim=-1).indices.sort(dim=-1).values
+                activations = a[0].gather(-1, indices)
+                active = activations > 0
+                decoders = weights.W_dec.detach()[indices].to(path.dtype)
+                positions = torch.arange(path.tokens, device=path.device)[:, None].expand_as(indices)
+                start = len(self.nodes)
+                for position, feature, activation in zip(positions[active].tolist(), indices[active].tolist(),
+                                                          activations[active].tolist()):
+                    self.nodes.append({"id": f"feature:{layer}:{position}:{feature}", "kind": "feature",
+                                       "layer": layer, "position": position, "feature": feature,
+                                       "activation": activation, "label": f"L{layer} F{feature}"})
+                end = len(self.nodes)
+                for position in range(path.tokens):
+                    self.nodes.append({"id": f"error:{layer}:{position}", "kind": "error", "layer": layer,
+                                       "position": position, "activation": 1., "label": f"L{layer} error"})
+                self.source_layers.append((slice(start, end), slice(end, len(self.nodes)),
+                                           decoders, activations, active))
         probabilities = path.logits[0].softmax(-1)
         order = torch.argsort(probabilities, descending=True, stable=True)[:10]
         count = min(10, int((probabilities[order].cumsum(0) < .95).sum()) + 1, len(order))
@@ -278,111 +280,113 @@ class Tracer:
     @torch.inference_mode(False)
     def trace(self, prompt, max_targets=512, max_nodes=512, max_edges=8192):
         """Publish and return one graph without truncation or model downloads."""
-        if self.model.training:
-            raise ValueError("trace requires an evaluation model")
-        device = next(self.model.parameters()).device
-        if device != self.guard.device:
-            self.guard = MemoryGuard(device)
-            self._forward_cache = None
-        if not isinstance(prompt, str):
-            raise TypeError("prompt must be a string")
-        bounded_integer(max_targets, "max_targets", 0, 512)
-        bounded_integer(max_nodes, "max_nodes", 1, 512)
-        bounded_integer(max_edges, "max_edges", 0, 8192)
-        bounded_integer(self.target_batch_size, "target_batch_size", 1, 64)
-        encoded = self.tokenizer(prompt, return_tensors="pt", truncation=False)
-        ids = encoded["input_ids"]
-        if ids.ndim != 2 or ids.shape[0] != 1 or ids.dtype not in (torch.int32, torch.int64):
-            raise ValueError("tokenizer must return one integer token sequence")
-        bounded_integer(ids.shape[1], "prompt tokens including special tokens", 1, 32)
-        if ids.min() < 0 or ids.max() >= self.model.config.vocab_size:
-            raise ValueError("tokenizer returned an out-of-range token")
-        self._new_prompt(prompt)
-        identity = {"model": id(self.model), "model_weights": _versions(self.model),
-                    "dictionary": id(self.dictionary), "dictionary_weights": _versions(self.dictionary),
-                    "dictionary_metadata": self.dictionary.metadata,
-                    "tokenizer": id(self.tokenizer), "prompt": prompt, "tokens": ids.tolist(),
-                    "interventions": self._intervention_state()}
-        state_key = hashlib.sha256(json.dumps(identity, sort_keys=True, allow_nan=False).encode()).hexdigest()
-        cache_key = (state_key, max_targets, max_nodes, max_edges)
-        if cache_key in self._cache:
-            graph = self._cache.pop(cache_key)
-            self._cache[cache_key] = graph
-            self.guard.check("cached publication")
-            return graph.publish()
-        if self._forward_cache is not None and self._forward_cache[0] == state_key:
-            path = self._forward_cache[1]
-        else:
-            self._forward_cache = None
-            path = FrozenPath(self.model, ids.to(self.guard.device), self.dictionary, guard=self.guard)
-            if self._intervention_state() != identity["interventions"]:
-                raise RuntimeError("intervention state changed during the trace forward")
-            self._forward_cache = (state_key, path)
-        effects = _DirectEffects(path, self.dictionary, ids[0].tolist(), self.tokenizer)
-        target_indices = list(effects.logit_nodes)
-        budget = len(target_indices) + min(max_targets, len(effects.feature_nodes))
-        weights = path.embedding.new_zeros(len(effects.nodes), budget)
-        seeds = path.embedding.new_zeros(len(effects.nodes))
-        for index in effects.logit_nodes:
-            seeds[index] = effects.nodes[index]["probability"]
-        diagnostics = []
-        visited = torch.zeros(len(effects.nodes), dtype=torch.bool, device=path.device)
-        feature_mask = visited.clone()
-        feature_mask[effects.feature_nodes] = True
-        completed = 0
-        while completed < budget:
-            size = self.guard.batch_size(self.target_batch_size, layers=path.layers, tokens=path.tokens,
-                                         width=path.width, mixer_width=path.mixer_width)
-            if completed < len(effects.logit_nodes):
-                batch = target_indices[completed:min(completed + size, len(effects.logit_nodes))]
+        with autorelease_scope(next(self.model.parameters()).device):
+            if self.model.training:
+                raise ValueError("trace requires an evaluation model")
+            device = next(self.model.parameters()).device
+            if device != self.guard.device:
+                self.guard = MemoryGuard(device)
+                self._forward_cache = None
+            if not isinstance(prompt, str):
+                raise TypeError("prompt must be a string")
+            bounded_integer(max_targets, "max_targets", 0, 512)
+            bounded_integer(max_nodes, "max_nodes", 1, 512)
+            bounded_integer(max_edges, "max_edges", 0, 8192)
+            bounded_integer(self.target_batch_size, "target_batch_size", 1, 64)
+            encoded = self.tokenizer(prompt, return_tensors="pt", truncation=False)
+            ids = encoded["input_ids"]
+            if ids.ndim != 2 or ids.shape[0] != 1 or ids.dtype not in (torch.int32, torch.int64):
+                raise ValueError("tokenizer must return one integer token sequence")
+            bounded_integer(ids.shape[1], "prompt tokens including special tokens", 1, 32)
+            if ids.min() < 0 or ids.max() >= self.model.config.vocab_size:
+                raise ValueError("tokenizer returned an out-of-range token")
+            self._new_prompt(prompt)
+            identity = {"model": id(self.model), "model_weights": _versions(self.model),
+                        "dictionary": id(self.dictionary), "dictionary_weights": _versions(self.dictionary),
+                        "dictionary_metadata": self.dictionary.metadata,
+                        "tokenizer": id(self.tokenizer), "prompt": prompt, "tokens": ids.tolist(),
+                        "interventions": self._intervention_state()}
+            state_key = hashlib.sha256(json.dumps(identity, sort_keys=True, allow_nan=False).encode()).hexdigest()
+            cache_key = (state_key, max_targets, max_nodes, max_edges)
+            if cache_key in self._cache:
+                graph = self._cache.pop(cache_key)
+                self._cache[cache_key] = graph
+                self.guard.check("cached publication")
+                return graph.publish()
+            if self._forward_cache is not None and self._forward_cache[0] == state_key:
+                path = self._forward_cache[1]
             else:
-                targets = torch.tensor(target_indices, dtype=torch.long, device=path.device)
-                estimated, _ = influence(weights[:, :completed], targets, seeds)
-                available = feature_mask & ~visited
-                ranked = torch.argsort(estimated.masked_fill(~available, -1), descending=True, stable=True)
-                count = min(size, budget - completed)
-                batch = ranked[:count].tolist()
-                target_indices.extend(batch)
-            incoming, accounting = effects.backward(batch)
-            weights[:, completed:completed + len(batch)] = incoming
-            diagnostics.extend(accounting)
-            visited[batch] = True
-            completed += len(batch)
-            self.guard.check("target batch complete")
-        targets = torch.tensor(target_indices, dtype=torch.long, device=path.device)
-        scores, normalized = influence(weights, targets, seeds)
-        top_seed = torch.zeros_like(seeds)
-        top_seed[effects.logit_nodes[0]] = 1
-        top_scores, _ = influence(weights, targets, top_seed)
-        source_total = float(top_scores[:effects.logit_nodes[0]].sum())
-        feature_share = float(top_scores[feature_mask].sum()) / source_total if source_total else 0.
-        error_mask = torch.tensor([n["kind"] == "error" for n in effects.nodes], device=path.device)
-        error_share = float(top_scores[error_mask].sum()) / source_total if source_total else 0.
-        display_nodes, display_edges, omitted, edge_omitted = _prune(
-            effects, weights, target_indices, scores, normalized, max_nodes=max_nodes, max_edges=max_edges)
-        completeness = {"max_absolute_residual": max(d["absolute_residual"] for d in diagnostics),
-                        "max_relative_residual": max(d["relative_residual"] for d in diagnostics),
-                        "forward_residual": path.forward_residual,
-                        "direct_forward_residual": path.direct_forward_residual,
-                        "replacement_forward_residual": path.replacement_forward_residual,
-                        "target_count": len(diagnostics),
-                        "feature_targets": len(target_indices) - len(effects.logit_nodes),
-                        "logit_targets": len(effects.logit_nodes), "logit_probability_mass": float(seeds.sum()),
-                        "unvisited_feature_influence": float(scores[feature_mask & ~visited].sum()),
-                        "omitted_edge_influence": edge_omitted, "targets": diagnostics}
-        tolerance = 1e-9 if path.dtype == torch.float64 else 2e-2
-        if completeness["max_absolute_residual"] > tolerance:
-            raise ValueError(f"direct-effect completeness residual exceeds {tolerance}")
-        graph = Graph.build(nodes=display_nodes, edges=display_edges, tokens=effects.tokens,
-                            layers=path.layers, completeness=completeness, omitted_influence=omitted,
-                            error_share=error_share, feature_share=feature_share, trace_id=state_key,
-                            device=path.device)
-        self.guard.check("graph publication")
-        if self._intervention_state() != identity["interventions"]:
-            self._forward_cache = None
-            raise RuntimeError("intervention state changed during the trace")
-        graph.publish()
-        self._cache[cache_key] = graph
-        while len(self._cache) > 8:
-            self._cache.popitem(last=False)
-        return graph
+                self._forward_cache = None
+                path = FrozenPath(self.model, ids.to(self.guard.device), self.dictionary, guard=self.guard)
+                if self._intervention_state() != identity["interventions"]:
+                    raise RuntimeError("intervention state changed during the trace forward")
+                self._forward_cache = (state_key, path)
+            effects = _DirectEffects(path, self.dictionary, ids[0].tolist(), self.tokenizer)
+            target_indices = list(effects.logit_nodes)
+            budget = len(target_indices) + min(max_targets, len(effects.feature_nodes))
+            weights = path.embedding.new_zeros(len(effects.nodes), budget)
+            seeds = path.embedding.new_zeros(len(effects.nodes))
+            for index in effects.logit_nodes:
+                seeds[index] = effects.nodes[index]["probability"]
+            diagnostics = []
+            visited = torch.zeros(len(effects.nodes), dtype=torch.bool, device=path.device)
+            feature_mask = visited.clone()
+            feature_mask[effects.feature_nodes] = True
+            completed = 0
+            while completed < budget:
+                with autorelease_scope(path.device):
+                    size = self.guard.batch_size(self.target_batch_size, layers=path.layers, tokens=path.tokens,
+                                                 width=path.width, mixer_width=path.mixer_width)
+                    if completed < len(effects.logit_nodes):
+                        batch = target_indices[completed:min(completed + size, len(effects.logit_nodes))]
+                    else:
+                        targets = torch.tensor(target_indices, dtype=torch.long, device=path.device)
+                        estimated, _ = influence(weights[:, :completed], targets, seeds)
+                        available = feature_mask & ~visited
+                        ranked = torch.argsort(estimated.masked_fill(~available, -1), descending=True, stable=True)
+                        count = min(size, budget - completed)
+                        batch = ranked[:count].tolist()
+                        target_indices.extend(batch)
+                    incoming, accounting = effects.backward(batch)
+                    weights[:, completed:completed + len(batch)] = incoming
+                    diagnostics.extend(accounting)
+                    visited[batch] = True
+                    completed += len(batch)
+                    self.guard.check("target batch complete")
+            targets = torch.tensor(target_indices, dtype=torch.long, device=path.device)
+            scores, normalized = influence(weights, targets, seeds)
+            top_seed = torch.zeros_like(seeds)
+            top_seed[effects.logit_nodes[0]] = 1
+            top_scores, _ = influence(weights, targets, top_seed)
+            source_total = float(top_scores[:effects.logit_nodes[0]].sum())
+            feature_share = float(top_scores[feature_mask].sum()) / source_total if source_total else 0.
+            error_mask = torch.tensor([n["kind"] == "error" for n in effects.nodes], device=path.device)
+            error_share = float(top_scores[error_mask].sum()) / source_total if source_total else 0.
+            display_nodes, display_edges, omitted, edge_omitted = _prune(
+                effects, weights, target_indices, scores, normalized, max_nodes=max_nodes, max_edges=max_edges)
+            completeness = {"max_absolute_residual": max(d["absolute_residual"] for d in diagnostics),
+                            "max_relative_residual": max(d["relative_residual"] for d in diagnostics),
+                            "forward_residual": path.forward_residual,
+                            "direct_forward_residual": path.direct_forward_residual,
+                            "replacement_forward_residual": path.replacement_forward_residual,
+                            "target_count": len(diagnostics),
+                            "feature_targets": len(target_indices) - len(effects.logit_nodes),
+                            "logit_targets": len(effects.logit_nodes), "logit_probability_mass": float(seeds.sum()),
+                            "unvisited_feature_influence": float(scores[feature_mask & ~visited].sum()),
+                            "omitted_edge_influence": edge_omitted, "targets": diagnostics}
+            tolerance = 1e-9 if path.dtype == torch.float64 else 2e-2
+            if completeness["max_absolute_residual"] > tolerance:
+                raise ValueError(f"direct-effect completeness residual exceeds {tolerance}")
+            graph = Graph.build(nodes=display_nodes, edges=display_edges, tokens=effects.tokens,
+                                layers=path.layers, completeness=completeness, omitted_influence=omitted,
+                                error_share=error_share, feature_share=feature_share, trace_id=state_key,
+                                device=path.device)
+            self.guard.check("graph publication")
+            if self._intervention_state() != identity["interventions"]:
+                self._forward_cache = None
+                raise RuntimeError("intervention state changed during the trace")
+            graph.publish()
+            self._cache[cache_key] = graph
+            while len(self._cache) > 8:
+                self._cache.popitem(last=False)
+            return graph

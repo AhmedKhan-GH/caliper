@@ -3,11 +3,13 @@ from __future__ import annotations
 
 from contextlib import ExitStack
 import json
+import time
 
 import torch
 from torch.nn import functional as F
 
 from ._points import _architecture, capture
+from ._memory import MemoryGuard as ProcessMemoryGuard, CleanStop, free_percent, autorelease_scope
 
 
 class MemoryGuard:
@@ -16,24 +18,37 @@ class MemoryGuard:
     limit = 12_000_000_000
 
     def __init__(self, device):
-        self.device = device
+        self.device = torch.device(device)
         self.records = []
-        if device.type == "mps":
-            torch.mps.set_per_process_memory_fraction(min(1., self.limit / torch.mps.recommended_max_memory()))
-            self.check("start")
+        self._pressure_time = -float("inf")
+        self._pressure_value = 100.
+        self._guard = ProcessMemoryGuard(12, self.device, pressure=self._pressure)
+        self.check("trace start")
+
+    def _pressure(self):
+        now = time.monotonic()
+        if now - self._pressure_time >= 15 or self._pressure_value < 20:
+            self._pressure_value = free_percent()
+            self._pressure_time = now
+        return self._pressure_value
 
     def check(self, stage):
-        if self.device.type != "mps":
-            return 0
-        allocated = torch.mps.current_allocated_memory()
-        driver = torch.mps.driver_allocated_memory()
+        # The shared guard checks physical footprint and any previously observed peak.
+        self._guard.check(stage)
+        allocated = torch.mps.current_allocated_memory() if self.device.type == "mps" else 0
+        driver = torch.mps.driver_allocated_memory() if self.device.type == "mps" else 0
+        rss = self._guard.resident()
+        physical = self._guard.footprint()
+        current = max(physical if physical is not None else rss + driver, rss, driver, allocated)
         record = {"stage": stage, "allocated_bytes": allocated, "driver_bytes": driver,
+                  "process_bytes": current, "peak_memory_bytes": self._guard.peak,
                   "limit_bytes": self.limit}
         self.records.append(record)
-        print("caliper.trace.memory " + json.dumps(record), flush=True)
-        if max(allocated, driver) > self.limit:
-            raise MemoryError("trace exceeded the 12 GB MPS memory limit")
-        return max(allocated, driver)
+        if self.device.type == "mps":
+            print("caliper.trace.memory " + json.dumps(record), flush=True)
+        if max(current, self._guard.peak) > self.limit:
+            raise CleanStop("trace exceeded the 12 GB process or MPS memory limit")
+        return current
 
     def batch_size(self, requested, *, layers, tokens, width, mixer_width):
         if self.device.type != "mps":
@@ -44,7 +59,7 @@ class MemoryGuard:
         available = self.limit - current - 512_000_000
         admitted = min(requested, int(available // max(1, per_target)))
         if admitted < 1:
-            raise MemoryError("no target batch fits the 12 GB MPS memory limit")
+            raise CleanStop("no target batch fits the 12 GB MPS memory limit")
         return admitted
 
 
@@ -198,6 +213,7 @@ class FrozenPath:
         recorded = {}
         self.norms, self.post_norms, self.mixers = [], [], []
         with ExitStack() as stack:
+            stack.enter_context(autorelease_scope(self.device))
             values = stack.enter_context(capture(model, list(probes)))
             def pre(name):
                 def hook(mod, args, kwargs):
@@ -250,59 +266,61 @@ class FrozenPath:
         self.inputs, self.outputs, self.features, self.errors, self.decoder_biases = [], [], [], [], []
         with torch.no_grad():
             for i, block in enumerate(self.blocks):
-                base = f"{prefix}.{i}"
-                x = values[f"{base}.mlp_in"]
-                y = values[f"{base}.mlp_out"]
-                layer = dictionary.layers[i]
-                if layer.W_enc.shape[1] != self.width or layer.W_dec.shape != layer.W_enc.shape:
-                    raise ValueError("dictionary width or decoder shape differs from the model")
-                if layer.W_enc.device != self.device:
-                    raise ValueError("dictionary and model must share one device")
-                a = dictionary.encode(i, x.to(layer.W_enc.dtype)).detach()
-                reconstruction = dictionary.decode(i, a).to(self.dtype)
-                self.inputs.append(x)
-                self.outputs.append(y)
-                self.features.append(a.to(self.dtype))
-                self.errors.append((y - reconstruction).detach())
-                self.decoder_biases.append(layer.b_dec.detach().to(self.dtype))
-                self.norms.append(FrozenNorm(block.input_layernorm, recorded[f"{i}.input_norm"], qwen=self.qwen))
-                self.post_norms.append(FrozenNorm(block.post_attention_layernorm, recorded[f"{i}.post_norm"], qwen=self.qwen))
-                pattern = values[f"{base}.attn_pattern"]
-                if self.qwen and block.block_type == "linear_attention":
-                    mixer = FrozenDeltaNet(block.linear_attn, recorded[f"{i}.input_norm"], pattern,
-                                           recorded[f"{i}.qkv"], recorded[f"{i}.delta_norm"],
-                                           recorded[f"{i}.delta_norm.gate"])
-                else:
-                    mixer = FrozenAttention(block.self_attn, recorded[f"{i}.input_norm"], pattern,
-                                            gate_projection=recorded.get(f"{i}.q_gate"))
-                self.mixers.append(mixer)
-                self.guard.check(f"freeze layer {i}")
-            self.final_norm = FrozenNorm(root.norm, recorded["final_norm"], qwen=self.qwen)
-            head = model.get_output_embeddings()
-            self.unembedding = head.weight.detach()
-            self.unembedding_mean = self.unembedding.mean(0)
-            self.unembedding_bias = _bias(head)
-            self.writes = [(y - b).detach() for y, b in zip(self.outputs, self.decoder_biases)]
-            reads, final = self.run(self.embedding, self.writes)
-            # Compare every read and all next-token logits, before any edge calculation.
-            self.forward_residual = max([float((a - b).abs().max()) for a, b in zip(reads, self.inputs)] +
-                                        [float((F.linear(final[:, -1], self.unembedding,
-                                                         self.unembedding_bias) - self.logits).abs().max())])
-            self.direct_forward_residual = self.forward_residual
-            replacement_reads, replacement_final = self.replacement(self.embedding, dictionary)
-            self.replacement_forward_residual = max(
-                max(float((a - b).abs().max()) for a, b in zip(replacement_reads, self.inputs)),
-                float((F.linear(replacement_final[:, -1], self.unembedding,
-                                self.unembedding_bias) - self.logits).abs().max()))
-            self.forward_residual = max(self.direct_forward_residual, self.replacement_forward_residual)
-            tolerance = 1e-9 if self.dtype == torch.float64 else 2e-2
-            if not self.forward_residual <= tolerance:
-                raise ValueError(f"frozen replacement forward mismatch: {self.forward_residual:.6g}")
-            self.guard.check("forward agreement")
-            # Three independent bias families. Encoder and unembedding biases are target-local.
-            zero = torch.zeros_like(self.embedding).expand(3, -1, -1)
-            masks = torch.eye(3, device=self.device, dtype=self.dtype).reshape(3, 3, 1, 1)
-            self.bias_reads, self.bias_final = self.run(zero, [zero] * self.layers, bias_masks=masks)
+                with autorelease_scope(self.device):
+                    base = f"{prefix}.{i}"
+                    x = values[f"{base}.mlp_in"]
+                    y = values[f"{base}.mlp_out"]
+                    layer = dictionary.layers[i]
+                    if layer.W_enc.shape[1] != self.width or layer.W_dec.shape != layer.W_enc.shape:
+                        raise ValueError("dictionary width or decoder shape differs from the model")
+                    if layer.W_enc.device != self.device:
+                        raise ValueError("dictionary and model must share one device")
+                    a = dictionary.encode(i, x.to(layer.W_enc.dtype)).detach()
+                    reconstruction = dictionary.decode(i, a).to(self.dtype)
+                    self.inputs.append(x)
+                    self.outputs.append(y)
+                    self.features.append(a.to(self.dtype))
+                    self.errors.append((y - reconstruction).detach())
+                    self.decoder_biases.append(layer.b_dec.detach().to(self.dtype))
+                    self.norms.append(FrozenNorm(block.input_layernorm, recorded[f"{i}.input_norm"], qwen=self.qwen))
+                    self.post_norms.append(FrozenNorm(block.post_attention_layernorm, recorded[f"{i}.post_norm"], qwen=self.qwen))
+                    pattern = values[f"{base}.attn_pattern"]
+                    if self.qwen and block.block_type == "linear_attention":
+                        mixer = FrozenDeltaNet(block.linear_attn, recorded[f"{i}.input_norm"], pattern,
+                                               recorded[f"{i}.qkv"], recorded[f"{i}.delta_norm"],
+                                               recorded[f"{i}.delta_norm.gate"])
+                    else:
+                        mixer = FrozenAttention(block.self_attn, recorded[f"{i}.input_norm"], pattern,
+                                                gate_projection=recorded.get(f"{i}.q_gate"))
+                    self.mixers.append(mixer)
+                    self.guard.check(f"freeze layer {i}")
+            with autorelease_scope(self.device):
+                self.final_norm = FrozenNorm(root.norm, recorded["final_norm"], qwen=self.qwen)
+                head = model.get_output_embeddings()
+                self.unembedding = head.weight.detach()
+                self.unembedding_mean = self.unembedding.mean(0)
+                self.unembedding_bias = _bias(head)
+                self.writes = [(y - b).detach() for y, b in zip(self.outputs, self.decoder_biases)]
+                reads, final = self.run(self.embedding, self.writes)
+                # Compare every read and all next-token logits, before any edge calculation.
+                self.forward_residual = max([float((a - b).abs().max()) for a, b in zip(reads, self.inputs)] +
+                                            [float((F.linear(final[:, -1], self.unembedding,
+                                                             self.unembedding_bias) - self.logits).abs().max())])
+                self.direct_forward_residual = self.forward_residual
+                replacement_reads, replacement_final = self.replacement(self.embedding, dictionary)
+                self.replacement_forward_residual = max(
+                    max(float((a - b).abs().max()) for a, b in zip(replacement_reads, self.inputs)),
+                    float((F.linear(replacement_final[:, -1], self.unembedding,
+                                    self.unembedding_bias) - self.logits).abs().max()))
+                self.forward_residual = max(self.direct_forward_residual, self.replacement_forward_residual)
+                tolerance = 1e-9 if self.dtype == torch.float64 else 2e-2
+                if not self.forward_residual <= tolerance:
+                    raise ValueError(f"frozen replacement forward mismatch: {self.forward_residual:.6g}")
+                self.guard.check("forward agreement")
+                # Three independent bias families. Encoder and unembedding biases are target-local.
+                zero = torch.zeros_like(self.embedding).expand(3, -1, -1)
+                masks = torch.eye(3, device=self.device, dtype=self.dtype).reshape(3, 3, 1, 1)
+                self.bias_reads, self.bias_final = self.run(zero, [zero] * self.layers, bias_masks=masks)
 
     def run(self, embedding, writes, *, bias_masks=None):
         """Return MLP reads and final normalized residual for independent writes.
@@ -314,9 +332,11 @@ class FrozenPath:
         x = embedding
         reads = []
         for i, (input_norm, post_norm, mixer, write) in enumerate(zip(self.norms, self.post_norms, self.mixers, writes)):
-            x = x + mixer(input_norm(x, norm), attention)
-            reads.append(post_norm(x, norm))
-            x = x + write + decoder * self.decoder_biases[i]
+            with autorelease_scope(self.device):
+                x = x + mixer(input_norm(x, norm), attention)
+                reads.append(post_norm(x, norm))
+                x = x + write + decoder * self.decoder_biases[i]
+                self.guard.check(f"frozen layer {i}")
         return reads, self.final_norm(x, norm)
 
 
@@ -329,16 +349,17 @@ class FrozenPath:
         x = embedding
         reads = []
         for i, (input_norm, post_norm, mixer) in enumerate(zip(self.norms, self.post_norms, self.mixers)):
-            x = x + mixer(input_norm(x))
-            read = post_norm(x)
-            reads.append(read)
-            layer = dictionary.layers[i]
-            indices = self.features[i][0].topk(layer.k, dim=-1).indices
-            mask = self.features[i][0].gather(-1, indices) > 0
-            encoder = layer.W_enc.detach()[indices].to(self.dtype)
-            decoder = layer.W_dec.detach()[indices].to(self.dtype)
-            activation = (torch.einsum("btw,tkw->btk", read, encoder) +
-                          layer.b_enc.detach()[indices].to(self.dtype)) * mask
-            x = x + torch.einsum("btk,tkw->btw", activation, decoder) + self.decoder_biases[i] + self.errors[i]
-            self.guard.check(f"replacement layer {i}")
+            with autorelease_scope(self.device):
+                x = x + mixer(input_norm(x))
+                read = post_norm(x)
+                reads.append(read)
+                layer = dictionary.layers[i]
+                indices = self.features[i][0].topk(layer.k, dim=-1).indices
+                mask = self.features[i][0].gather(-1, indices) > 0
+                encoder = layer.W_enc.detach()[indices].to(self.dtype)
+                decoder = layer.W_dec.detach()[indices].to(self.dtype)
+                activation = (torch.einsum("btw,tkw->btk", read, encoder) +
+                              layer.b_enc.detach()[indices].to(self.dtype)) * mask
+                x = x + torch.einsum("btk,tkw->btw", activation, decoder) + self.decoder_biases[i] + self.errors[i]
+                self.guard.check(f"replacement layer {i}")
         return reads, self.final_norm(x)
