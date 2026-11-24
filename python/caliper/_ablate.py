@@ -42,6 +42,19 @@ def _head_count(module) -> int:
         v = getattr(module, attr, None)
         if isinstance(v, int) and not isinstance(v, bool) and v > 0:
             return v
+    kind = type(module).__module__ + "." + type(module).__name__
+    if kind in (
+        "transformers.models.gemma2.modeling_gemma2.Gemma2Attention",
+        "transformers.models.qwen3_5.modeling_qwen3_5.Qwen3_5Attention",
+    ):
+        value = getattr(getattr(module, "config", None), "num_attention_heads", None)
+    elif kind == "transformers.models.qwen3_5.modeling_qwen3_5.Qwen3_5GatedDeltaNet":
+        # DeltaNet concatenates value heads before its output projection.
+        value = getattr(module, "num_v_heads", None)
+    else:
+        value = None
+    if type(value) is int and value > 0:
+        return value
     return 0
 
 
