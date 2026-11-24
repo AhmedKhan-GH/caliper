@@ -102,13 +102,25 @@ class _RunGuard:
         return self.check(stage, force=False)
 
     def _check(self, method, stage):
+        import inspect
         from ._memory import CleanStop
         if self.failure is not None:
             raise self.failure
         try:
             for index, guard in enumerate((self.guard, self.extra)):
                 if guard is not None:
-                    reading = getattr(guard, method, guard.check)(stage)
+                    interval = getattr(guard, "_check_interval", None)
+                    if method == "_check_interval" and interval is not None:
+                        reading = interval(stage)
+                    else:
+                        check = guard.check
+                        try:
+                            parameters = inspect.signature(check).parameters.values()
+                        except (TypeError, ValueError):
+                            parameters = ()
+                        keywords = any(p.kind == p.VAR_KEYWORD or (
+                            p.name == "force" and p.kind != p.POSITIONAL_ONLY) for p in parameters)
+                        reading = check(stage, force=method == "check") if keywords else check(stage)
                     if isinstance(reading, (int, float)):
                         self._readings[index] = reading
                         self._observed_peak = max(self._observed_peak, reading)

@@ -130,6 +130,38 @@ def test_hosted_wrapper_retains_stage_only_readings_and_lower_extra_limit():
     assert latched.value is stopped.value and stops == [stopped.value]
 
 
+@pytest.mark.parametrize("keyword_only", [False, True])
+def test_hosted_wrapper_passes_force_without_an_interval_method(keyword_only):
+    calls = []
+
+    def explicit(stage, *, force=False):
+        calls.append((stage, force))
+        return 100
+
+    def keywords(stage, **kwargs):
+        calls.append((stage, kwargs["force"]))
+        return 100
+
+    guard = _hosted._RunGuard(SimpleNamespace(check=explicit if keyword_only else keywords))
+    assert guard.check("forced") == 100
+    assert guard.check("deferred", force=False) == 100
+    assert guard._check_interval("interval") == 100
+    assert calls == [("forced", True), ("deferred", False), ("interval", False)]
+
+
+def test_hosted_wrapper_does_not_retry_a_guard_type_error():
+    calls = []
+
+    def check(stage, *, force=True):
+        calls.append((stage, force))
+        raise TypeError("guard implementation error")
+
+    guard = _hosted._RunGuard(SimpleNamespace(check=check))
+    with pytest.raises(TypeError, match="guard implementation error"):
+        guard.check("once", force=False)
+    assert calls == [("once", False)] and guard.failure is None
+
+
 @pytest.mark.parametrize("extra", [False, True])
 def test_hosted_wrapper_propagates_supplied_stop_once(extra):
     failure = CleanStop("explicit stop")
