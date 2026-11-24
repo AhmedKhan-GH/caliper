@@ -1,7 +1,7 @@
 """Target-batched direct effects through prompt-local frozen value paths."""
 from __future__ import annotations
 
-from collections import OrderedDict
+from collections import OrderedDict, deque
 from dataclasses import dataclass
 import hashlib
 import json
@@ -148,6 +148,25 @@ def _versions(module):
             for name, value in list(module.named_parameters()) + list(module.named_buffers())]
 
 
+def _token_path(nodes, incoming, target):
+    """Find a shortest token path with at most one visit per retained node."""
+    pending = deque([target])
+    next_step = {target: None}
+    while pending:
+        node = pending.popleft()
+        if nodes[node]["kind"] == "token":
+            path = []
+            while next_step[node] is not None:
+                node, edge = next_step[node]
+                path.append(edge)
+            return path
+        for source, edge in incoming.get(node, ()):
+            if source not in next_step:
+                next_step[source] = (node, edge)
+                pending.append(source)
+    return None
+
+
 def _prune(effects, weights, target_indices, scores, normalized, *, max_nodes, max_edges):
     nodes = effects.nodes
     logits = effects.logit_nodes
@@ -155,13 +174,14 @@ def _prune(effects, weights, target_indices, scores, normalized, *, max_nodes, m
     rank = torch.argsort(scores, descending=True, stable=True).tolist()
     score_values = scores.tolist()
     top_effects = weights[:, 0].tolist()
-    total = float(scores.sum())
+    # Terminal logit seeds weight source influence but do not count as sources.
+    total = float(scores[:logits[0]].sum())
     selected = set(logits[:max_nodes])
-    retained = sum(score_values[i] for i in selected)
+    retained = 0.
     for index in rank:
         if retained >= .8 * total or len(selected) >= max_nodes:
             break
-        if index not in selected and score_values[index] > 0:
+        if index < logits[0] and index not in selected and score_values[index] > 0:
             selected.add(index)
             retained += score_values[index]
     # A real token edge can preserve a supported path without a synthetic link.
@@ -208,17 +228,7 @@ def _prune(effects, weights, target_indices, scores, normalized, *, max_nodes, m
         for i in edge_rank.tolist():
             s, t = coordinate_list[i]
             incoming.setdefault(target_indices[column_list[t]], []).append((order[s], i))
-        def token_path(target, seen):
-            if nodes[target]["kind"] == "token":
-                return []
-            if target in seen:
-                return None
-            for source, edge in incoming.get(target, []):
-                found = token_path(source, seen | {target})
-                if found is not None:
-                    return found + [edge]
-            return None
-        path = token_path(logits[0], set()) if logits[0] in selected else None
+        path = _token_path(nodes, incoming, logits[0]) if logits[0] in selected else None
         if path is not None and len(path) <= max_edges:
             chosen = path + [i for i in chosen if i not in path][:max_edges - len(path)]
     row = {old: new for new, old in enumerate(order)}
