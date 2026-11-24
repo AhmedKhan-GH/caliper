@@ -1,4 +1,5 @@
 """Installed fixture identity, live hosted controls, and safe inference forks."""
+from contextlib import ExitStack
 import json
 import os
 from pathlib import Path
@@ -150,6 +151,7 @@ class HostedChild:
         self.folder.mkdir()
         self.ready = threading.Event()
         self.lines = []
+        self.connections = ExitStack()
         env = {k: v for k, v in os.environ.items() if not k.startswith("CALIPER_RUN_")}
         env.update(CALIPER_RUN_ID=name, CALIPER_RUN_DIR=str(self.folder), CALIPER_RUN_LINK_FILE=str(self.folder / "link"),
                    CALIPER_RUN_APP_PID=str(os.getpid()), CALIPER_AGENT_OFFLINE="1", CALIPER_TEST_RUN="1",
@@ -177,9 +179,11 @@ class HostedChild:
         assert any(s.startswith("caliper: inference ready") for s in self.lines), "".join(self.lines)
         link = urlsplit((self.folder / "link").read_text())
         token = parse_qs(link.query)["token"][0]
-        self.socket = connect(f"ws://{link.netloc}{wire.PATH}?{wire.TOKEN_PARAM}={token}",
-                              compression=None, open_timeout=10, close_timeout=1)
-        self.socket.send(wire.encode(wire.Hello("viewer", [wire.CAP_CONTROLS, wire.CAP_INTERVENTIONS, wire.CAP_INTERPRETATION])))
+        self.socket = self.connections.enter_context(connect(
+            f"ws://{link.netloc}{wire.PATH}?{wire.TOKEN_PARAM}={token}",
+            compression=None, open_timeout=10, close_timeout=1))
+        self.socket.send(wire.encode(wire.Hello("viewer", [wire.CAP_CONTROLS, wire.CAP_TEXT_PARAMS,
+                                                           wire.CAP_INTERVENTIONS, wire.CAP_INTERPRETATION])))
         self.expect(wire.Welcome)
         self.request_id = 0
         return self.expect(wire.Controls, lambda message: message.run["state"] == "running")
@@ -204,8 +208,7 @@ class HostedChild:
         return path, json.loads(path.read_bytes())
 
     def close(self):
-        if hasattr(self, "socket"):
-            self.socket.close()
+        self.connections.close()
         if self.process.poll() is None:
             self.process.terminate()
         self.process.wait(10)
@@ -248,6 +251,8 @@ def test_real_hosted_fork_carries_active_feature_and_text(resource_folder, tmp_p
         assert child.control("run", name="generate").status == "ok"
         _, generated = child.checkpoint()
         assert set(generated["params"]) >= {"output.baseline", "output.steered"}
+        for name in ("output.baseline", "output.steered"):
+            assert 0 < len(generated["params"][name].encode("utf-8")) <= 1024
         assert generated["step"] == forked["step"] + 2
         assert child.control("run", name="caliper.stop").status == "ok"
         assert child.process.wait(10) == 0

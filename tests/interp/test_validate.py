@@ -7,12 +7,14 @@ import torch
 from caliper._controls import Controls
 from caliper.interp._validate import spearman, validate_trace
 from .fixture import make_fixture
+from .test_dictionary import fixture_manifest
 from .test_intervene import dictionary_for, explicit_forward
 
 
 def validation_case():
     model, tokenizer = make_fixture()
     dictionary = dictionary_for(model)
+    dictionary.metadata = fixture_manifest(model)
     controls = Controls()
     service = controls.interventions_on(model)
     service.configure(dictionary=dictionary, tokenizer=tokenizer)
