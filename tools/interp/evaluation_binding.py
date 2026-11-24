@@ -12,6 +12,7 @@ from caliper.interp._dictionary import (
     _canonical_device, _checkpoint_slices, _dense_state, _hf_digest, _WEIGHTS,
     dictionary_fingerprint, model_identity,
 )
+from caliper.interp._trace import _forward_settings
 from .memory_limits import CleanStop, autorelease_scope
 
 
@@ -23,6 +24,32 @@ _MODEL_CHANGED = "evaluation model identity mismatch: runtime binding differs"
 def _metadata_bytes(metadata):
     return json.dumps({k: v for k, v in metadata.items() if k != "quality"},
                       sort_keys=True, allow_nan=False).encode()
+
+
+def _evaluation_settings(model, memory):
+    settings = _forward_settings(model, memory)
+    for name, module in model.named_modules():
+        config = getattr(module, "config", None)
+        if hasattr(config, "_attn_implementation"):
+            # Evaluation uses the configured backend for both full forwards.
+            key = (name + "." if name else "") + "config._attn_implementation"
+            settings[key] = json.dumps(config._attn_implementation, sort_keys=True, allow_nan=False)
+    return settings
+
+
+def _settings_digest(model, settings):
+    persistent = dict(settings)
+    for name, module in model.named_modules():
+        if hasattr(module, "act_fn"):
+            # Trace snapshots use object identity. Resume needs a stable type.
+            # Module fields and tensors remain bound by their existing evidence.
+            activation = module.act_fn
+            if not isinstance(activation, torch.nn.Module):
+                raise ValueError("evaluation requires module activation functions")
+            key = (name + "." if name else "") + "act_fn"
+            persistent[key] = json.dumps(type(activation).__module__ + "." + type(activation).__qualname__)
+    raw = json.dumps(persistent, sort_keys=True, allow_nan=False).encode()
+    return hashlib.sha256(b"caliper.evaluation.forward.v1\0" + raw).hexdigest()
 
 
 class EvaluationBinding:
@@ -38,8 +65,10 @@ class EvaluationBinding:
         self.model_modules = tuple(model.modules())
         self.model_tensors = tuple(self._model_tensors().values())
         self.model_stamps = self._model_stamps()
-        self.model_evidence = {"version": 1, "model_hash": self.model_hash,
-                               "tensor_hash": _hf_digest(model, memory=memory)}
+        self.model_settings = _evaluation_settings(model, memory)
+        self.model_evidence = {"version": 2, "model_hash": self.model_hash,
+                               "tensor_hash": _hf_digest(model, memory=memory),
+                               "forward_settings_hash": _settings_digest(model, self.model_settings)}
         self.metadata = _metadata_bytes(dictionary.metadata)
         self.layers = tuple(dictionary.layers)
         # Retain references so a replacement cannot reuse an old tensor identity.
@@ -86,9 +115,14 @@ class EvaluationBinding:
         return result
 
     def check(self):
-        """Refuse metadata, file, tensor replacement, or tensor version changes."""
+        """Refuse changes to forward settings, metadata, files, or tensors."""
         if self._model_stamps() != self.model_stamps:
             raise ValueError(_MODEL_CHANGED)
+        settings = _evaluation_settings(self.model, self.memory)
+        if settings != self.model_settings:
+            changed = next(name for name in sorted(settings.keys() | self.model_settings.keys())
+                           if settings.get(name) != self.model_settings.get(name))
+            raise ValueError(f"{_MODEL_CHANGED}; forward setting changed: {changed}")
         disk = json.loads((self.folder / "dictionary.json").read_text(encoding="utf-8"))
         if (_metadata_bytes(self.dictionary.metadata) != self.metadata
                 or _metadata_bytes(disk) != self.metadata
