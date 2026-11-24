@@ -230,7 +230,9 @@ class Session:
                     raise Failure(f"The {identifier} program reports an error: {program}")
                 if draw.get("resource_step") is None or draw["resource_step"] < minimum:
                     return False
-                if draw.get("frame_ms") is None:
+                if draw.get("frame_ms") is None or program.get("last_pass_ms") is None:
+                    return False
+                if program.get("last_step") is None or program["last_step"] < minimum:
                     return False
             return status
         status = self.events.until("rendered resource steps", rendered)

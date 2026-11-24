@@ -1357,3 +1357,35 @@ def test_mcp_journal_records_request_duration(monkeypatch):
     record = json.loads(client.journal.getvalue())
     assert record["command"] == "program.read"
     assert record["started_monotonic"] == 10. and record["seconds"] == .125
+
+
+def test_capture_waits_for_derive_status_at_the_rendered_step():
+    from copy import deepcopy
+    from types import SimpleNamespace
+    session = driver.Session.__new__(driver.Session)
+    ready = {"id": "examples", "last_step": 7, "last_pass_ms": .1,
+             "draw": {"resource_step": 7, "frame_ms": .2}, "piece": {"name": "token_strip"}}
+    missing = deepcopy(ready)
+    missing.update(last_step=None, last_pass_ms=None)
+    stale = deepcopy(ready)
+    stale["last_step"] = 6
+    replies = iter([missing, stale, ready])
+    seen = []
+    def body(command, **kwargs):
+        if command == "program.status":
+            item = next(replies)
+            seen.append(item)
+            return {"programs": [item]}
+        assert command == "piece.show"
+        raise Failure("capture barrier passed")
+    def until(label, callback):
+        for _ in range(3):
+            result = callback()
+            if result:
+                return result
+        pytest.fail("capture did not reach the complete derive status")
+    session.mcp = SimpleNamespace(body=body)
+    session.events = SimpleNamespace(until=until)
+    with pytest.raises(Failure, match="capture barrier passed"):
+        session.capture("before", {"examples": 7})
+    assert seen == [missing, stale, ready]
