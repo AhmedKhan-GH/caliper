@@ -17,7 +17,8 @@ Verification does not change checkpoint files or model weights.
 Each comparison uses slices of at most 1 MiB before dtype conversion.
 Missing weights, unexpected weights, duplicate keys, ambiguous mappings, and byte differences cause refusal.
 An omitted tied weight is valid only when the model uses the same Parameter object for both names.
-Nonpersistent model buffers enter the baseline for later checks, because the checkpoint does not contain them.
+The verifier reconstructs supported nonpersistent buffers from the checkpoint configuration before they enter the baseline for later checks.
+Unknown buffers and nondefault RoPE modes cause refusal.
 
 ## Pinned Qwen Text Subset
 
@@ -61,6 +62,27 @@ This subset does not permit additional vision or MTP keys through a wildcard.
 For another complete checkpoint, omit `checkpoint_subset` and supply literal prefix replacements through `key_mapping` if necessary.
 Those replacements use plain prefixes, not regular expressions.
 
+## Pinned Gemma Model
+
+Gemma uses `google/gemma-2-2b` at revision `c5ebcd40d208330abc697524c919956e692655cf`, with model type `gemma2`.
+The model has 26 layers, residual width 2,304, and vocabulary size 256,000.
+It uses the complete checkpoint without the Qwen text-subset mapping.
+The snapshot path must end with `models--google--gemma-2-2b/snapshots/c5ebcd40d208330abc697524c919956e692655cf`.
+
+Verification compares weights, tied parameters, and forward settings with the trusted local snapshot.
+The settings include the four block norms, GeGLU activation, attention and final softcaps, sliding-window configuration, and embedding scale.
+The verifier reconstructs default Gemma RoPE buffers and the nonpersistent embedding-scale scalar within the fixed CPU allocation bound.
+It does not allocate another embedding matrix for that scalar check.
+
+The Gemma runtime loader verifies the CPU model before device transfer.
+It admits the transfer separately, retains the verified digest and settings, then checks identity again with the destination memory guard.
+Model and tokenizer loads use local files only.
+The official model requires gated access under the Gemma license.
+
+CPU tests with random configurations cover these verification paths and refusals.
+They do not establish verification of the actual gated checkpoint or its memory use.
+The [Gemma Scope reference](gemma-scope.md) records conversion coordinates, source pins, and the remaining acceptance work.
+
 ## Identity And Resource Limits
 
 Verification records provenance for one model instance.
@@ -70,8 +92,10 @@ A dtype change requires verification against the snapshot again.
 A real device change also requires verification again when the previous memory guard does not cover that device.
 The spellings `mps` and `mps:0` refer to the same sole MPS device.
 
-Verification enforces a total process limit of at most 12 GB.
+Verification defaults to a total process limit of 12 GB.
+Only the exact pinned Gemma identity permits an explicit `memory_limit_gb` above 12, with a maximum of 28 GB.
+Qwen and other identities retain the 12 GB ceiling.
 The MPS process limit remains active after verification, as required by the run policy.
 Library memory diagnostics use stderr, and tool result records retain their stdout channel.
-The local MPS run uses this verification path.
+The recorded Qwen MPS run uses this verification path.
 CPU tests cover refusal cases and bounded transfers.

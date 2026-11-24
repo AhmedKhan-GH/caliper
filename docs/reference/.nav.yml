@@ -15,5 +15,6 @@ nav:
   - refusal-messages.md
   - upper-half-dictionaries.md
   - external-model-verification.md
+  - gemma-scope.md
   - trace-ablation-support.md
   - glossary.md
