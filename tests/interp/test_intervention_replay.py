@@ -1,10 +1,12 @@
 """CPU checks for snapshot replay without live lifecycle changes."""
 from contextvars import Context
+from copy import deepcopy
+from threading import Event, Thread
 
 import pytest
 import torch
 
-from caliper.interp._intervene import InterventionService, _mute_hooks
+from caliper.interp._intervene import InterventionError, InterventionService, _mute_hooks
 from tests.interp.test_intervene import add_spec, controlled
 
 
@@ -61,3 +63,347 @@ def test_nested_mute_scope_resets_after_exception(controlled):
                 raise RuntimeError("scope exit")
         torch.testing.assert_close(model(**inputs).logits, baseline, rtol=0, atol=0)
     torch.testing.assert_close(model(**inputs).logits, active, rtol=0, atol=0)
+
+
+def snapshot(*specifications):
+    return {"version": 1, "interventions": [
+        {"specification": spec, "state": "active", "since_step": 1,
+         "clear": False, "error": None, "error_code": None} for spec in specifications]}
+
+
+def hook_objects(model):
+    return [(tuple(module._forward_pre_hooks.items()), tuple(module._forward_hooks.items()))
+            for module in model.modules()]
+
+
+@pytest.mark.parametrize("fail", [False, True])
+@pytest.mark.parametrize("point", ["layers.0.mlp", "layers.0.self_attn#0"])
+def test_replay_restores_exact_live_objects_and_pending_replacement(controlled, fail, point):
+    model, tokenizer, ctl, service = controlled
+    inputs = tokenizer("abc")
+    service.set({"kind": "ablate", "point": point, "until_step": 3})
+    service.set({"kind": "clamp", "point": "layers.1.mlp_out", "feature": 0,
+                 "value": 10, "until_step": 3})
+    ctl.step()
+    traced = service.state_dict()
+    traced_copy = deepcopy(traced)
+    expected_trace = model(**inputs).logits
+    ctl.step()  # The two trace effects end at this boundary.
+    service.set(add_spec())
+    service.set({"kind": "patch", "point": "layers.2.resid_pre", "source_prompt": "xyz"})
+    ctl.step()
+    expected_live = model(**inputs).logits
+    service.set(add_spec(coefficient=2))  # The old hook still applies coefficient one.
+    service.set(add_spec(point="layers.3.mlp_out", from_step=20))
+    service.clear("layers.2.resid_pre")  # The patch stays active until a real boundary.
+    lifecycle = service.state_dict()
+    records = ctl._ivs
+    originals = list(records.items())
+    hooks = hook_objects(model)
+    active = [(iv.hook, iv.hook.calls, iv.applied_spec) for iv in records.values() if iv.hook]
+    cache = service.executor._cache
+    sources = list(cache.items())
+    cache_identity = service.executor._cache_identity
+    step = ctl.n
+    try:
+        with service.temporary_state(traced) as replay:
+            assert replay.model is model and replay.dictionary is service.dictionary
+            assert replay.tokenizer is tokenizer and replay.executor is not service.executor
+            assert all("from_step" not in spec and "until_step" not in spec
+                       for spec in replay.specifications())
+            assert len(replay.specifications()) == 2
+            replay.specifications()[0]["point"] = "invalid"
+            torch.testing.assert_close(model(**inputs).logits, expected_trace, rtol=0, atol=0)
+            assert service.state_dict() == lifecycle and ctl.n == step
+            if fail:
+                raise RuntimeError("validation forward failed")
+    except RuntimeError as error:
+        assert fail and str(error) == "validation forward failed"
+    assert ctl._ivs is records and list(records.items()) == originals
+    assert hook_objects(model) == hooks and service.state_dict() == lifecycle
+    assert traced == traced_copy and ctl.n == step
+    assert service.executor._cache is cache and service.executor._cache_identity is cache_identity
+    assert list(cache) == [key for key, _ in sources]
+    assert all(cache[key] is value for key, value in sources)
+    assert all(not hook.removed and hook.calls == calls for hook, calls, _ in active)
+    assert all(iv.applied_spec is applied for iv in records.values() if iv.hook
+               for hook, _, applied in active if hook is iv.hook)
+    torch.testing.assert_close(model(**inputs).logits, expected_live, rtol=0, atol=0)
+
+
+def test_replay_filters_inactive_records_and_keeps_queued_clear_effect(controlled):
+    model, tokenizer, ctl, service = controlled
+    inputs = tokenizer("abc")
+    service.set(add_spec())
+    ctl.step()
+    expected = model(**inputs).logits
+    state = service.state_dict()
+    state["interventions"][0]["clear"] = True
+    pending = snapshot(add_spec(point="layers.1.mlp_out"))["interventions"][0]
+    pending.update(state="pending", since_step=None)
+    ended = snapshot(add_spec(point="layers.2.mlp_out"))["interventions"][0]
+    ended.update(state="ended", error="prior failure", error_code="intervene.hook_failed")
+    state["interventions"].extend([pending, ended])
+    with service.temporary_state(state) as replay:
+        assert len(replay.specifications()) == 1
+        torch.testing.assert_close(model(**inputs).logits, expected, rtol=0, atol=0)
+
+
+def test_replay_patch_source_is_clean_and_cache_is_private(controlled):
+    model, tokenizer, ctl, service = controlled
+    clean = model(**tokenizer("abc")).logits
+    service.set({"kind": "ablate", "point": "layers.0.mlp"})
+    service.set({"kind": "patch", "point": "layers.0.resid_pre", "source_prompt": "xyz"})
+    ctl.step()
+    cached = service.executor._cache["layers.0.resid_pre"]
+    original = hook_objects(model)
+    traced = snapshot(add_spec(), {"kind": "patch", "point": "layers.2.resid_pre", "source_prompt": "abc"})
+    live = service.state_dict()
+    forwards = []
+
+    def inspect_lock(*args):
+        assert ctl.lock.acquire(blocking=False), "source and replay forwards must release Controls.lock"
+        ctl.lock.release()
+        forwards.append(service.state_dict())
+
+    observer = model.register_forward_pre_hook(inspect_lock)
+    try:
+        with service.temporary_state(traced) as replay:
+            assert replay.executor._cache is not service.executor._cache
+            torch.testing.assert_close(model(**tokenizer("xyz")).logits, clean, rtol=0, atol=0)
+            assert replay.executor._cache["layers.2.resid_pre"] is not cached
+    finally:
+        observer.remove()
+    assert forwards == [live, live]
+    assert not replay.executor._cache and hook_objects(model) == original
+    assert service.executor._cache["layers.0.resid_pre"] is cached
+
+
+def test_replay_allows_private_validation_clamp_and_nested_scopes(controlled):
+    model, tokenizer, ctl, service = controlled
+    inputs = tokenizer("abc")
+    baseline = model(**inputs).logits
+    service.set({"kind": "clamp", "point": "layers.1.mlp_out", "feature": 0, "value": 10})
+    ctl.step()
+    steered = model(**inputs).logits
+    with service.temporary_state(snapshot()) as outer:
+        torch.testing.assert_close(model(**inputs).logits, baseline, rtol=0, atol=0)
+        with service.temporary_state(service.state_dict()) as inner:
+            assert outer.specifications() == [] and len(inner.specifications()) == 1
+            torch.testing.assert_close(model(**inputs).logits, steered, rtol=0, atol=0)
+        private = InterventionService(model)
+        private.configure(dictionary=outer.dictionary, tokenizer=outer.tokenizer)
+        try:
+            private.install({"kind": "clamp", "point": "layers.1.mlp_out", "feature": 0, "value": 10})
+            torch.testing.assert_close(model(**inputs).logits, steered, rtol=0, atol=0)
+        finally:
+            private.close()
+        torch.testing.assert_close(model(**inputs).logits, baseline, rtol=0, atol=0)
+    torch.testing.assert_close(model(**inputs).logits, steered, rtol=0, atol=0)
+
+
+def test_nested_replay_mutes_outer_effects_and_restores_them_after_failure(controlled):
+    model, tokenizer, _, service = controlled
+    inputs = tokenizer("abc")
+    baseline = model(**inputs).logits
+    with service.temporary_state(snapshot(add_spec())):
+        outer = model(**inputs).logits
+        assert not torch.equal(outer, baseline)
+        with pytest.raises(RuntimeError, match="inner validation failure"):
+            with service.temporary_state(snapshot()):
+                torch.testing.assert_close(model(**inputs).logits, baseline, rtol=0, atol=0)
+                raise RuntimeError("inner validation failure")
+        torch.testing.assert_close(model(**inputs).logits, outer, rtol=0, atol=0)
+    torch.testing.assert_close(model(**inputs).logits, baseline, rtol=0, atol=0)
+
+
+class ReplayTransport:
+    def broadcast(self, *args, **kwargs):
+        pass
+
+    def reply(self, *args):
+        pass
+
+    def controllers(self):
+        return 1
+
+    def may_control(self, connection):
+        return True
+
+
+def test_network_requests_during_replay_wait_for_real_boundary(controlled):
+    model, tokenizer, ctl, service = controlled
+    inputs = tokenizer("abc")
+    baseline = model(**inputs).logits
+    service.set(add_spec())
+    service.set({"kind": "ablate", "point": "layers.1.mlp"})
+    ctl.step()
+    previous = model(**inputs).logits
+    add = ctl._ivs["layers.0.mlp_out", "add"]
+    ablate = ctl._ivs["layers.1.mlp", "ablate"]
+    original_hooks = add.hook, ablate.hook
+    step, records = ctl.n, ctl._ivs
+    route = ctl.attach(ReplayTransport())
+    ready, done = Event(), Event()
+    replies, errors = [], []
+
+    def network():
+        try:
+            assert ready.wait(5)
+            service.set(add_spec(coefficient=2))
+            for request_id, request in enumerate([
+                {"clear": "layers.1.mlp"},
+                {"set": {"op": "ablate", "point": "layers.2.mlp"}},
+            ]):
+                replies.append(route.on_control("fixture", {
+                    "request_id": request_id + 1, "op": "intervene", "intervene": request}))
+        except BaseException as error:
+            errors.append(error)
+        finally:
+            done.set()
+
+    def rendezvous(*args):
+        ready.set()
+        assert done.wait(5), "requests must complete during the replay forward"
+
+    thread = Thread(target=network, daemon=True)
+    thread.start()
+    forward = None
+    try:
+        with service.temporary_state(snapshot()):
+            forward = model.register_forward_pre_hook(rendezvous)
+            torch.testing.assert_close(model(**inputs).logits, baseline, rtol=0, atol=0)
+            forward.remove()
+            assert not errors and [reply["status"] for reply in replies] == ["ok", "ok"]
+            assert ctl._ivs is records and ctl.n == step
+            assert (add.hook, ablate.hook) == original_hooks
+            assert add.spec["coefficient"] == 2 and add.applied_spec["coefficient"] == 1
+            assert add.replace and ablate.clear
+            assert ctl._ivs["layers.2.mlp", "ablate"].state == "pending"
+        torch.testing.assert_close(model(**inputs).logits, previous, rtol=0, atol=0)
+        ctl.step()
+        assert ctl.n == step + 1 and ctl._ivs is records
+        assert all(hook.removed for hook in original_hooks)
+        assert add.applied_spec["coefficient"] == 2 and not add.replace
+        assert ("layers.1.mlp", "ablate") not in ctl._ivs
+        assert ctl._ivs["layers.2.mlp", "ablate"].state == "active"
+        assert not torch.equal(model(**inputs).logits, previous)
+    finally:
+        ready.set()
+        if forward is not None:
+            forward.remove()
+        thread.join(5)
+        route.detach()
+    assert not thread.is_alive()
+
+
+@pytest.mark.parametrize("mutation", [
+    "version_bool", "version_float", "extra_field", "records_type", "too_many", "record_fields",
+    "bad_spec", "bad_schedule", "active_step", "pending_step", "bad_clear", "bad_error", "duplicate",
+])
+def test_malformed_snapshot_refuses_before_any_installation(controlled, monkeypatch, mutation):
+    model, tokenizer, ctl, service = controlled
+    service.set(add_spec())
+    ctl.step()
+    before = service.state_dict()
+    hooks = hook_objects(model)
+    state = snapshot({"kind": "patch", "point": "layers.0.resid_pre", "source_prompt": "abc"},
+                     add_spec())
+    record = state["interventions"][1]
+    if mutation == "version_bool":
+        state["version"] = True
+    elif mutation == "version_float":
+        state["version"] = 1.0
+    elif mutation == "extra_field":
+        state["extra"] = None
+    elif mutation == "records_type":
+        state["interventions"] = {}
+    elif mutation == "too_many":
+        from caliper._controls import MAX_INTERVENTIONS
+        state["interventions"] *= MAX_INTERVENTIONS
+    elif mutation == "record_fields":
+        record.pop("error")
+    elif mutation == "bad_spec":
+        record["specification"]["point"] = "unknown"
+    elif mutation == "bad_schedule":
+        record["specification"]["from_step"] = True
+    elif mutation == "active_step":
+        record["since_step"] = None
+    elif mutation == "pending_step":
+        record["state"] = "pending"
+    elif mutation == "bad_clear":
+        record["clear"] = 1
+    elif mutation == "bad_error":
+        record["error"] = 42
+    else:
+        state["interventions"].append(deepcopy(record))
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("a malformed snapshot must not install hooks or run the model")
+
+    monkeypatch.setattr(InterventionService, "install", forbidden)
+    monkeypatch.setattr(model, "forward", forbidden)
+    with pytest.raises(InterventionError):
+        with service.temporary_state(state):
+            pytest.fail("a malformed snapshot must not yield")
+    assert hook_objects(model) == hooks and service.state_dict() == before
+
+
+@pytest.mark.parametrize("kind", ["clamp", "patch", "ablate"])
+def test_failed_replay_hook_does_not_end_original_intervention(controlled, monkeypatch, kind):
+    model, tokenizer, ctl, service = controlled
+    spec = {"clamp": {"kind": "clamp", "point": "layers.0.mlp_out", "feature": 0, "value": 10},
+            "patch": {"kind": "patch", "point": "layers.0.resid_pre", "source_prompt": "xyz"},
+            "ablate": {"kind": "ablate", "point": "layers.0.mlp"}}[kind]
+    service.set(spec)
+    ctl.step()
+    state = service.state_dict()
+    original = next(iter(ctl._ivs.values())).hook
+    hooks = hook_objects(model)
+    expected = model(**tokenizer("abc")).logits
+    calls = original.calls
+    with pytest.raises(InterventionError, match="snapshot hook failed") as error:
+        with service.temporary_state(state) as replay:
+            temporary = next(iter(replay.executor._hooks))
+
+            def fail(*args):
+                raise RuntimeError("fixture hook failure")
+
+            monkeypatch.setattr(temporary, "_zero" if kind == "ablate" else "_apply", fail)
+            model(**tokenizer("abc"))
+            assert temporary.removed and replay.specifications() == []
+    assert error.value.code == "intervene.hook_failed"
+    assert not original.removed and original.calls == calls and original.error is None
+    assert service.state_dict() == state and hook_objects(model) == hooks
+    torch.testing.assert_close(model(**tokenizer("abc")).logits, expected, rtol=0, atol=0)
+
+
+def test_source_forward_failure_cleans_partial_replay_and_resets_mute(controlled, monkeypatch):
+    model, tokenizer, ctl, service = controlled
+    service.set(add_spec())
+    ctl.step()
+    state = service.state_dict()
+    expected = model(**tokenizer("abc")).logits
+    hooks = hook_objects(model)
+    forward = model.forward
+
+    def fail(*args, **kwargs):
+        raise RuntimeError("fixture source failure")
+
+    monkeypatch.setattr(model, "forward", fail)
+    with pytest.raises(RuntimeError, match="fixture source failure"):
+        with service.temporary_state(snapshot(add_spec(), {
+            "kind": "patch", "point": "layers.1.resid_pre", "source_prompt": "xyz"
+        })):
+            pytest.fail("source failure must prevent entry")
+    monkeypatch.setattr(model, "forward", forward)
+    assert service.state_dict() == state and hook_objects(model) == hooks
+    torch.testing.assert_close(model(**tokenizer("abc")).logits, expected, rtol=0, atol=0)
+
+
+def test_detached_service_refuses_replay(controlled):
+    _, _, _, service = controlled
+    service.remove()
+    with pytest.raises(InterventionError, match="no longer attached"):
+        with service.temporary_state(snapshot()):
+            pytest.fail("a detached service must not yield")

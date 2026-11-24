@@ -93,6 +93,7 @@ the data of the step the run paused at goes out before the run state).
 """
 from __future__ import annotations
 
+from contextlib import contextmanager
 import collections
 import heapq
 import itertools
@@ -815,6 +816,55 @@ class Interventions:
                  "since_step": iv.since_step, "clear": iv.clear,
                  "error": iv.error, "error_code": iv.error_code}
                 for iv in self._ctl._ivs.values()]}
+
+    @contextmanager
+    def temporary_state(self, state):
+        """Replay active snapshot effects on the run thread without lifecycle changes.
+
+        The caller suppresses managed forward callbacks for this scope. Requests may
+        still queue through Controls.lock and take effect at the next real boundary.
+        Snapshot specifications must describe the effects at the original trace.
+        Temporary hook failures raise InterventionError at exit and leave live records intact.
+        """
+        from .interp._intervene import InterventionError, _InterventionReplay
+        if (not isinstance(state, dict) or type(state.get("version")) is not int
+                or state["version"] != 1 or set(state) != {"version", "interventions"}):
+            raise InterventionError("unsupported intervention state")
+        records = state["interventions"]
+        if not isinstance(records, list) or len(records) > MAX_INTERVENTIONS:
+            raise InterventionError("invalid intervention records")
+        with self._ctl.lock:
+            if self._ctl._iv_model is not self:
+                raise InterventionError("the intervention service is no longer attached")
+            hooks = [iv.hook for iv in self._ctl._ivs.values() if iv.hook is not None]
+            replay = _InterventionReplay(self.executor)
+
+        # Validate every record before any hook installation or patch-source forward.
+        specifications, keys = [], set()
+        for record in records:
+            if not isinstance(record, dict) or set(record) != {
+                "specification", "state", "since_step", "clear", "error", "error_code"
+            }:
+                raise InterventionError("invalid intervention record")
+            spec = replay.executor.validate(record["specification"])
+            if (record["state"] not in (IV_PENDING, IV_ACTIVE, IV_ENDED)
+                    or not _step_ok(record["since_step"]) or type(record["clear"]) is not bool
+                    or (record["state"] == IV_ACTIVE and record["since_step"] is None)
+                    or (record["state"] == IV_PENDING and record["since_step"] is not None)
+                    or any(value is not None and (not isinstance(value, str) or len(value) > TEXT_MAX)
+                           for value in (record["error"], record["error_code"]))):
+                raise InterventionError("invalid intervention lifecycle state")
+            key = spec["point"], spec["op"]
+            if key in keys:
+                raise InterventionError("duplicate intervention record")
+            keys.add(key)
+            if record["state"] == IV_ACTIVE:
+                # A queued clear does not remove an effect until the next boundary.
+                spec.pop("from_step", None)
+                spec.pop("until_step", None)
+                specifications.append(spec)
+        with replay._scope(hooks, specifications):
+            yield replay
 
     def load_state_dict(self, state):
         """Validate all fork records before replacement. Hooks resume at a boundary."""

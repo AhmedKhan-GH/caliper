@@ -19,6 +19,7 @@ KINDS = ("ablate", "add", "scale", "clamp", "patch")
 _SUSPENDED = ContextVar("caliper_interventions_suspended", default=frozenset())
 _ROWS = ContextVar("caliper_intervention_rows", default={})
 _MUTED_HOOKS = ContextVar("caliper_muted_intervention_hooks", default=frozenset())
+_ACTIVE_REPLAYS = ContextVar("caliper_intervention_replays", default=())
 
 
 class InterventionError(ValueError):
@@ -370,6 +371,51 @@ class InterventionService:
                 raise
         self._hooks.add(hook)
         return hook
+
+
+class _InterventionReplay:
+    """Private snapshot effects with borrowed resources and an independent source cache."""
+
+    def __init__(self, executor):
+        self.model = executor.model
+        self.executor = InterventionService(self.model)
+        self.executor.dictionary = executor.dictionary
+        self.executor.dictionary_id = executor.dictionary_id
+        self.executor.tokenizer = executor.tokenizer
+        self._effects = []
+
+    @property
+    def dictionary(self):
+        return self.executor.dictionary
+
+    @property
+    def tokenizer(self):
+        return self.executor.tokenizer
+
+    def specifications(self):
+        """Return detached specifications for effects that remain installed."""
+        return [deepcopy(spec) for spec, hook in self._effects if not hook.removed]
+
+    @contextmanager
+    def _scope(self, live_hooks, specifications):
+        outer = _ACTIVE_REPLAYS.get()
+        hooks = [*live_hooks, *(hook for replay in outer if replay.model is self.model
+                               for _, hook in replay._effects)]
+        with _mute_hooks(hooks):
+            token = _ACTIVE_REPLAYS.set((*outer, self))
+            try:
+                for spec in specifications:
+                    self._effects.append((spec, self.executor.install(spec)))
+                yield self
+                for _, hook in self._effects:
+                    if hook.error is not None:
+                        raise InterventionError("snapshot hook failed: " + hook.error,
+                                                "intervene.hook_failed")
+            finally:
+                try:
+                    self.executor.close()
+                finally:
+                    _ACTIVE_REPLAYS.reset(token)
 
 
 class Intervention:
