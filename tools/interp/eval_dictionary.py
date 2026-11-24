@@ -1,9 +1,8 @@
-"""Held-out FVU, dead features, and cross-entropy with every MLP replaced."""
+"""Held-out FVU, dead features, and cross-entropy for the active dictionary scope."""
 from __future__ import annotations
 
 import argparse
 from contextlib import contextmanager
-import hashlib
 import json
 import math
 from pathlib import Path
@@ -14,7 +13,8 @@ from torch.nn import functional as F
 from safetensors.torch import load_file, save_file
 
 from caliper.interp import capture, load_dictionary
-from .checkpoint_state import write_json
+from caliper.interp._dictionary import fallback_metadata
+from .checkpoint_state import dictionary_fingerprint, write_json
 from .memory_limits import CleanStop, MemoryGuard, StopControl, autorelease_scope
 from .model_load import hidden_forward, load_text_model
 from .text_stream import TextStream, fineweb_documents, partition_metadata
@@ -22,12 +22,15 @@ from .text_stream import TextStream, fineweb_documents, partition_metadata
 
 @contextmanager
 def replace_all_mlps(model, dictionary):
-    """Replace all MLP modules for one forward and restore them on every exit."""
+    """Replace every active MLP for one forward and restore it on every exit."""
     originals = []
     try:
         if len(dictionary.layers) != model.config.num_hidden_layers:
             raise ValueError("cross-entropy requires a replacement for every MLP")
-        for i, point in enumerate(dictionary.metadata["read_points"]):
+        fallback = fallback_metadata(dictionary.metadata)
+        active = fallback["active_layers"] if fallback else range(len(dictionary.layers))
+        for i in active:
+            point = dictionary.metadata["read_points"][i]
             block = model.get_submodule(point.rsplit(".", 1)[0])
             originals.append((block, block.mlp))
             block.mlp = dictionary.layers[i]
@@ -61,7 +64,9 @@ def cross_entropy_sum(model, hidden, input_ids, count, *, chunk_tokens=64, healt
 class QualityStats:
     """Merge stable per-batch variance statistics and feature activity counts."""
 
-    def __init__(self, layers, width, latents):
+    def __init__(self, layers, width, latents, *, active_layers=None):
+        self.scope = "all_layers" if active_layers is None else "upper_half"
+        self.active_layers = tuple(range(layers) if active_layers is None else active_layers)
         self.count = 0
         self.mean = torch.zeros(layers, width, dtype=torch.float64)
         self.variance_sum = torch.zeros(layers, dtype=torch.float64)
@@ -72,6 +77,8 @@ class QualityStats:
         self.ce_tokens = 0
 
     def merge(self, other):
+        if self.scope != other.scope or self.active_layers != other.active_layers:
+            raise ValueError("quality scopes differ")
         total = self.count + other.count
         if other.count == 0:
             return
@@ -86,10 +93,11 @@ class QualityStats:
         self.ce_tokens += other.ce_tokens
 
     def metrics(self):
-        if not self.count or not self.ce_tokens or (self.variance_sum <= 0).any():
+        active = list(self.active_layers)
+        if not self.count or not self.ce_tokens or (self.variance_sum[active] <= 0).any():
             raise ValueError("quality needs nonzero target variance and next-token targets")
-        fvu = self.error_sum / self.variance_sum
-        dead = (self.hits == 0).double().mean(-1)
+        fvu = self.error_sum[active] / self.variance_sum[active]
+        dead = (self.hits[active] == 0).double().mean(-1)
         delta = (self.replaced_ce - self.original_ce) / self.ce_tokens
         values = {"fvu": float(fvu.mean()), "dead_fraction": float(dead.mean()),
                   "cross_entropy_delta": delta, "evaluated_tokens": self.count,
@@ -104,7 +112,25 @@ class QualityStats:
             raise ValueError("quality metrics are nonfinite")
         passed = values["fvu"] <= 0.30 and values["dead_fraction"] <= 0.15 and delta <= 0.5
         values["status"] = ("passed" if passed else "failed") if self.count == 200_000 else "partial"
+        if self.scope == "upper_half":
+            values["status"] = "fallback_" + values["status"]
+            values.update(self.scope_fields())
+            for key, tensor in (("per_layer_fvu", fvu), ("per_layer_dead_fraction", dead)):
+                values[key] = [None] * len(self.hits)
+                for index, value in zip(active, tensor.tolist()):
+                    values[key][index] = value
         return values
+
+    def scope_fields(self):
+        return {"scope": self.scope, "active_layers": list(self.active_layers),
+                "per_layer_status": ["active" if i in self.active_layers else "error_only"
+                                     for i in range(len(self.hits))]}
+
+
+def quality_stats(metadata):
+    fallback = fallback_metadata(metadata)
+    return QualityStats(metadata["layers"], metadata["width"], metadata["latents"],
+                        active_layers=fallback["active_layers"] if fallback else None)
 
 
 @torch.no_grad()
@@ -116,8 +142,8 @@ def evaluate_batch(model, dictionary, ids, count, *, chunk_tokens=64, health=Non
 
 def _evaluate_batch(model, dictionary, ids, count, *, chunk_tokens, health):
     metadata = dictionary.metadata
-    result = QualityStats(metadata["layers"], metadata["width"], metadata["latents"])
-    requested = metadata["read_points"] + metadata["write_points"]
+    result = quality_stats(metadata)
+    requested = [metadata[field][i] for field in ("read_points", "write_points") for i in result.active_layers]
     captured = None
     try:
         with capture(model, requested) as captured:
@@ -125,7 +151,8 @@ def _evaluate_batch(model, dictionary, ids, count, *, chunk_tokens, health):
         result.original_ce, result.ce_tokens = cross_entropy_sum(model, original, ids, count,
                                                                 chunk_tokens=chunk_tokens, health=health)
         del original
-        for i, layer in enumerate(dictionary.layers):
+        for i in result.active_layers:
+            layer = dictionary.layers[i]
             if health:
                 health()
             x = captured[metadata["read_points"][i]].reshape(-1, metadata["width"])[:count]
@@ -154,17 +181,6 @@ def _evaluate_batch(model, dictionary, ids, count, *, chunk_tokens, health):
     finally:
         if captured is not None:
             captured.close(clear=True)
-
-
-def dictionary_fingerprint(folder, metadata):
-    """Bind evaluation resume to exact dictionary weights and fixed metadata."""
-    digest = hashlib.sha256(json.dumps({k: v for k, v in metadata.items() if k != "quality"},
-                                     sort_keys=True, allow_nan=False).encode())
-    for i in range(metadata["layers"]):
-        with (Path(folder) / f"layer_{i:02d}.safetensors").open("rb") as source:
-            for chunk in iter(lambda: source.read(8 * 1024 * 1024), b""):
-                digest.update(chunk)
-    return digest.hexdigest()
 
 
 def save_evaluation(folder, stats, stream, pending, identity, settings, elapsed):
@@ -214,8 +230,10 @@ def evaluate(model, dictionary, stream, folder, *, tokens=200_000, context=256,
     folder = Path(folder)
     identity = dictionary_fingerprint(folder, metadata)
     state_folder = folder / "evaluation"
-    stats = QualityStats(metadata["layers"], metadata["width"], metadata["latents"])
+    stats = quality_stats(metadata)
     settings = {"tokens": tokens, "context": context, "batch_tokens": batch_tokens, "chunk_tokens": chunk_tokens}
+    if stats.scope == "upper_half":
+        settings.update(scope=stats.scope, active_layers=list(stats.active_layers))
     pending, elapsed_before = None, 0.0
     if resume:
         pending, elapsed_before = restore_evaluation(state_folder, stats, stream, identity, settings)
@@ -256,10 +274,25 @@ def evaluate(model, dictionary, stream, folder, *, tokens=200_000, context=256,
     save_evaluation(state_folder, stats, stream, pending, identity, settings, elapsed_before + time.monotonic() - started)
     if stats.count >= 2 and stats.ce_tokens:
         quality = stats.metrics()
-        quality.update(elapsed_seconds=elapsed_before + time.monotonic() - started, stop_reason=reason)
-        quality.update(all_mlps_replaced=len(dictionary.layers), partition="quality")
+        quality.update(elapsed_seconds=elapsed_before + time.monotonic() - started, stop_reason=reason,
+                       dictionary_hash=identity)
+        if stats.scope == "upper_half":
+            quality.update(replaced_mlps=len(stats.active_layers), partition="quality")
+        else:
+            quality.update(all_mlps_replaced=len(dictionary.layers), partition="quality")
         if memory:
             quality["peak_memory_bytes"] = memory.peak
+        metadata["quality"] = quality
+        write_json(folder / "dictionary.json", metadata)
+        print(json.dumps({"stage": "quality_end", **quality}), flush=True)
+        return quality
+    if stats.scope == "upper_half":
+        quality = {"status": "fallback_partial", "evaluated_tokens": stats.count, "stop_reason": reason,
+                   "fvu": None, "dead_fraction": None, "cross_entropy_delta": None,
+                   "per_layer_fvu": [None] * len(dictionary.layers),
+                   "per_layer_dead_fraction": [None] * len(dictionary.layers),
+                   "partition": "quality", "replaced_mlps": len(stats.active_layers), "dictionary_hash": identity,
+                   "elapsed_seconds": elapsed_before + time.monotonic() - started, **stats.scope_fields()}
         metadata["quality"] = quality
         write_json(folder / "dictionary.json", metadata)
         print(json.dumps({"stage": "quality_end", **quality}), flush=True)
@@ -297,7 +330,7 @@ def main(argv=None):
             result = evaluate(model, dictionary, stream, args.dictionary, tokens=args.tokens,
                               context=args.context, batch_tokens=args.batch_tokens, chunk_tokens=args.chunk_tokens,
                               memory=memory, stop=stop, resume=args.resume)
-    return 0 if result["status"] == "passed" else 2
+    return 0 if result["status"] in ("passed", "fallback_passed") else 2
 
 
 if __name__ == "__main__":
