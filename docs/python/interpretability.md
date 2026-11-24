@@ -70,6 +70,7 @@ An explicit `model_hash` can supply the expected identity instead.
 The loader refuses an absent identity or a mismatch.
 Its `memory_limit_gb` argument caps total process memory at 12 GB by default.
 Only the exact pinned Gemma identity permits an explicit larger limit, up to 28 GB.
+The optional `memory` argument retains the supplied guard, its lower limit, and any prior stop.
 
 The loader admits metadata before the read and JSON parse.
 Metadata has a 1 MiB byte limit and a maximum depth of 64 containers.
@@ -83,6 +84,8 @@ The local snapshot must contain the checkpoint tensors and `config.json` for the
 Verification compares weights and forward settings with that trusted snapshot, including normalization epsilon, activation functions, rotary settings, and layer types.
 The local snapshot is trusted input. Verification does not authenticate its files against the remote repository.
 The model must use evaluation mode.
+Set `memory_limit_gb=28` at initial Gemma verification when the complete run needs that budget.
+Later callers cannot raise an earlier verification limit or clear its recorded stop.
 Qwen permits eager and SDPA attention with the same checkpoint identity.
 Gemma requires eager attention because the supported SDPA backend cannot apply its attention softcap.
 Later identity checks refuse changes to weights or forward settings, including changes before dictionary admission or tracer construction.
@@ -157,6 +160,9 @@ Replacement of all MLPs must increase cross-entropy by at most 0.5 nats.
 These thresholds describe acceptance criteria, not a claim that a local dictionary passed.
 The Qwen example index uses two million other tokens and a 12 GB process limit.
 Index version 2 records the `live_input_v1` encoder policy in its manifest hash.
+It also binds model tensor precision, device, effective forward settings, autocast, and float32 matmul precision.
+Rebuild the index when these settings change, including a move between CPU and MPS.
+The loader rejects missing or different evidence before it opens data maps.
 Version 1 remains readable when all model and encoder floating tensors use the same dtype.
 Rebuild other version 1 indexes because their stored activations use encoder storage precision.
 
