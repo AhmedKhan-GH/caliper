@@ -592,7 +592,7 @@ bool interpretation_text(const Json& v, size_t limit, bool empty = true) {
 bool interpretation_value(const Json& v, unsigned depth, size_t& count) {
     if (depth > 8 || ++count > 16384) return false;
     if (v.is_null() || v.is_bool()) return true;
-    if (v.is_string()) return interpretation_text(v, 4096);
+    if (v.is_string()) return interpretation_text(v, CALIPER_NET_INTERPRET_STRING_MAX);
     if (v.is_int()) return is_int53(v) && std::abs(v.as_double()) <= double(kSafeInt);
     if (v.is_number()) return is_finite(v);
     if (v.is_array()) {
@@ -609,7 +609,7 @@ bool interpretation_value(const Json& v, unsigned depth, size_t& count) {
 }
 bool interpretation_object(const Json& v) {
     size_t count = 0;
-    return v.is_object() && interpretation_value(v, 0, count) && v.dump().size() <= 262144;
+    return v.is_object() && interpretation_value(v, 0, count) && v.dump().size() <= CALIPER_NET_INTERPRET_MAX_BYTES;
 }
 bool interpretation_request(const Json& v) {
     if (!interpretation_object(v) || v.size() != 3) return false;
@@ -639,7 +639,7 @@ bool interpretation_request(const Json& v) {
     if (m == "patch.sweep") {
         for (auto* key : {"clean_prompt","corrupted_prompt"}) {
             auto* prompt = params->find(key);
-            if (!prompt || !interpretation_text(*prompt,4096,false)) return false;
+            if (!prompt || !interpretation_text(*prompt,CALIPER_NET_INTERPRET_STRING_MAX,false)) return false;
         }
         auto* metric = params->find("metric");
         if (!metric || !metric->is_object() || metric->size() != 2) return false;
@@ -649,7 +649,7 @@ bool interpretation_request(const Json& v) {
     }
     if (m == "trace.run") {
         auto* prompt = params->find("prompt");
-        return prompt && interpretation_text(*prompt,4096,false);
+        return prompt && interpretation_text(*prompt,CALIPER_NET_INTERPRET_STRING_MAX,false);
     }
     return true;
 }
@@ -2979,6 +2979,13 @@ DecodeResult decode(const uint8_t* buf, size_t n, Message* out) {
 }
 
 bool encode(const Message& m, std::vector<uint8_t>* out, std::string* err, uint16_t minor) {
+    if (const auto* c = std::get_if<Control>(&m);
+        c && c->op == CALIPER_NET_OP_INTERPRET && !interpretation_request(c->interpretation)) {
+        if (err) *err = "Use a version 1 interpretation request with valid parameters and UTF-8 text without NUL; "
+                        "each string must fit " + std::to_string(CALIPER_NET_INTERPRET_STRING_MAX) + " bytes.";
+        out->clear();
+        return false;
+    }
     Encoded e = to_meta(m);
     FrameError fe;
     if (!encode_frame(e.type, e.meta, e.sections, out, &fe, minor)) {

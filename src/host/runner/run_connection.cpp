@@ -157,7 +157,22 @@ bool RunConnection::poll(int timeout_ms) {
 void RunConnection::on_message(const std::vector<std::uint8_t>& bytes) {
     wire::Message msg;
     const wire::DecodeResult r = wire::decode(bytes.data(), bytes.size(), &msg);
-    if (!r.ok()) return;
+    if (!r.ok()) {
+        if (r.type == CALIPER_NET_MSG_CONTROL_REPLY) {
+            const auto* id = r.frame.meta.find("request_id");
+            std::uint64_t request = 0;
+            const bool identified = id && id->get_u64(&request) && request <= std::numeric_limits<std::uint32_t>::max();
+            for (auto& [pending_id, entry] : interpretation_replies_) {
+                auto& reply = entry.second;
+                if ((identified && pending_id != request) || reply.status != CALIPER_NET_STATUS_QUEUED) continue;
+                reply.status = CALIPER_NET_STATUS_ERROR;
+                reply.error_code = CALIPER_NET_ERR_BAD_REQUEST;
+                reply.error_message = "The producer sent an invalid interpretation reply. Check its protocol version.";
+                ++interpretation_revision_;
+            }
+        }
+        return;
+    }
     if (const auto* w = std::get_if<wire::Welcome>(&msg)) {
         control_allowed_ = w->control.value_or(false);
         interpretation_ = std::find(w->capabilities.begin(), w->capabilities.end(), CALIPER_NET_CAP_INTERPRETATION) != w->capabilities.end();
@@ -236,6 +251,17 @@ void RunConnection::on_message(const std::vector<std::uint8_t>& bytes) {
         std::vector<std::uint8_t> out;
         if (wire::encode(wire::Pong{p->nonce}, &out)) send_bytes(out);
     } else if (const auto* e = std::get_if<wire::Error>(&msg)) {
+        if (!e->request_id && !e->sub && !e->view && !e->session &&
+            (!e->in_reply_to || *e->in_reply_to == CALIPER_NET_MSG_CONTROL)) {
+            for (auto& [id, entry] : interpretation_replies_) {
+                auto& reply = entry.second;
+                if (reply.status != CALIPER_NET_STATUS_QUEUED) continue;
+                reply.status = CALIPER_NET_STATUS_ERROR;
+                reply.error_code = e->code;
+                reply.error_message = e->message;
+                ++interpretation_revision_;
+            }
+        }
         if (e->sub) {   // a refused subscription: the next VIEWS tries again
             const auto it = sub_views_.find(*e->sub);
             if (it != sub_views_.end()) {
@@ -276,14 +302,24 @@ std::uint32_t RunConnection::send_control(const std::string& op, const std::stri
     if (op == CALIPER_NET_OP_SET) c.value = to_net(value);
     if (op == CALIPER_NET_OP_STEP) c.count = std::max<std::uint32_t>(1, count);
     if (op == CALIPER_NET_OP_INTERVENE) c.intervene = to_net(value);
-    if (op == CALIPER_NET_OP_INTERPRET) c.interpretation = to_net(value);
+    if (op == CALIPER_NET_OP_INTERPRET) {
+        try {
+            c.interpretation = to_net(value);
+        } catch (const json::exception&) {
+            if (error) *error = "The interpretation request must contain valid UTF-8.";
+            return 0;
+        }
+    }
     std::vector<std::uint8_t> out;
     std::string err;
     if (!wire::encode(c, &out, &err)) {
         if (error) *error = "The request breaks a limit of the protocol: " + err;
         return 0;
     }
-    send_bytes(out);
+    if (!client_->send(out.data(), out.size(), true)) {
+        if (error) *error = "The transport refused the request; check the connection and retry.";
+        return 0;
+    }
     return c.request_id;
 }
 
@@ -291,8 +327,10 @@ json RunConnection::interpret(const std::string& method, const json& params, std
     auto error = [](const std::string& code, const std::string& message) {
         return json{{"error", {{"code",code},{"message",message}}}};
     };
-    if (!interpretation_) return error("interpret.unsupported", "The producer did not announce interpretation.");
+    if (request && (!params.is_object() || !params.empty()))
+        return error("command.invalid_args", "A reply query accepts only request_id.");
     if (state_ != State::open) return error("run.not_attached", "The run connection is closed.");
+    if (!interpretation_) return error("interpret.unsupported", "The producer did not announce interpretation.");
     const bool read = method.rfind("feature.",0) == 0 || method == "trace.read" || method == "trace.status";
     if (!read && !control_allowed_) return error("run.control_not_allowed", "The connection cannot change the run.");
     if (!request) {

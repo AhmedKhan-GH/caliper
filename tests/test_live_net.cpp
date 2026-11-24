@@ -2564,10 +2564,12 @@ public:
     uint64_t clock_ns = 0;
     std::vector<caliper_live::LinkedSelection> sel;
     uint64_t sel_version = 0;
+    std::string send_failure;
+    uint64_t started = 0;
 
     std::string label() const override { return "scripted"; }
     std::string script() const override { return "train.py"; }
-    uint64_t start_unix_ms() const override { return 0; }
+    uint64_t start_unix_ms() const override { return started; }
     int32_t producer_pid() const override { return 0; }
     bool producer_alive() override { return true; }
     bool sync(std::vector<caliper_live::SourceView>*) override { return false; }
@@ -2585,7 +2587,11 @@ public:
     }
     caliper_live::ControlAccess control_access() override { return access; }
     uint32_t send_control(const std::string& op, const std::string& name, const Json& value, uint32_t,
-                          std::string*) override {
+                          std::string* error) override {
+        if (!send_failure.empty()) {
+            if (error) *error = send_failure;
+            return 0;
+        }
         sent.push_back({op, name, value, (uint32_t)sent.size() + 1, clock_ns});
         return (uint32_t)sent.size();
     }
@@ -2630,6 +2636,57 @@ public:
 };
 
 constexpr uint64_t kMs = 1000000ull;
+
+// ImGui produces CPU draw data only. No window, renderer, or device exists.
+struct ControlsUi {
+    ImGuiContext* previous = ImGui::GetCurrentContext();
+    ImGuiContext* context = ImGui::CreateContext();
+    ScriptedSource source;
+    caliper_live::RunControls controls;
+    ControlsUi(std::string value = {}) {
+        auto& io = ImGui::GetIO();
+        io.IniFilename = nullptr;
+        io.LogFilename = nullptr;
+        io.BackendFlags |= ImGuiBackendFlags_RendererHasTextures;
+        io.DisplaySize = ImVec2(1100, 200);
+        io.DeltaTime = 1.0f / 60.0f;
+        source.controls_now(CALIPER_NET_RUN_RUNNING, 0);
+        auto& param = source.ctl.params.front();
+        param.name = "prompt"; param.type = CALIPER_NET_PARAM_TEXT; param.value = Json(std::move(value));
+        frame();
+        frame();
+    }
+    ~ControlsUi() {
+        ImGui::DestroyContext(context);
+        ImGui::SetCurrentContext(previous);
+    }
+    void frame() {
+        source.clock_ns += 100 * kMs;
+        controls.update(&source, source.clock_ns);
+        ImGui::NewFrame();
+        ImGui::SetNextWindowPos(ImVec2(0, 0));
+        ImGui::SetNextWindowSize(ImVec2(1100, 200));
+        ImGui::Begin("controls", nullptr, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoSavedSettings);
+        caliper_live::draw_run_bar(controls, {}, 1080);
+        ImGui::SetCursorPos(ImVec2(10, 100));
+        ImGui::Button("Outside");
+        ImGui::End();
+        ImGui::Render();
+    }
+    void click(float x, float y) {
+        ImGui::GetIO().AddMousePosEvent(x, y); frame();
+        ImGui::GetIO().AddMouseButtonEvent(0, true); frame();
+        ImGui::GetIO().AddMouseButtonEvent(0, false); frame();
+    }
+    void focus() {
+        const auto widget = caliper_live::bar_widgets().at("param:prompt");
+        click((widget.x0 + widget.x1) / 2, (widget.y0 + widget.y1) / 2);
+    }
+    void enter() {
+        ImGui::GetIO().AddKeyEvent(ImGuiKey_Enter, true); frame();
+        ImGui::GetIO().AddKeyEvent(ImGuiKey_Enter, false); frame();
+    }
+};
 }  // namespace
 
 TEST_CASE("live/controls: why a control is off, and what a checkpoint unlocks") {
@@ -3326,4 +3383,141 @@ TEST_CASE("live/controls: interpretation final replies survive late queued and d
             CHECK_FALSE(controls.interpret("feature.dictionary", Json::object(), request).find("pending")->as_bool());
         }
     }
+}
+
+TEST_CASE("live/controls: malformed interpretation text never reaches the source") {
+    ScriptedSource source;
+    caliper_live::RunControls controls;
+    controls.update(&source, 0);
+    std::string multibyte;
+    for (unsigned i = 0; i < 2048; ++i) multibyte += "\xc3\xa9";
+    for (const auto& prompt : {std::string("a\0b", 3), multibyte + "\xc3\xa9", std::string("\xc3\x28", 2)}) {
+        Json params = Json::object();
+        params.set("prompt", prompt);
+        const auto result = controls.interpret("trace.run", params, 0);
+        REQUIRE(result.find("error"));
+        CHECK(result.find("error")->find("code")->as_string() == "command.invalid_args");
+        CHECK(result.find("error")->find("message")->as_string().size() <= CALIPER_NET_TEXT_MAX);
+        CHECK(source.sent.empty());
+    }
+    Json params = Json::object(); params.set("prompt", multibyte);
+    CHECK(controls.interpret("trace.run", params, 0).find("request_id"));
+    CHECK(source.sent.size() == 1);
+}
+
+TEST_CASE("live/controls: send failures retain a bounded transport error") {
+    ScriptedSource source;
+    caliper_live::RunControls controls;
+    controls.update(&source, 0);
+    source.send_failure = "The connection is closed.";
+    SUBCASE("queue refusal") { source.send_failure = "Too many controls wait to be sent."; }
+    SUBCASE("long UTF-8 reason") { source.send_failure = std::string(1023, 'x') + "\xc3\xa9"; }
+    const auto result = controls.interpret("trace.status", Json::object(), 0);
+    REQUIRE(result.find("error"));
+    CHECK(result.find("error")->find("code")->as_string() == "interpret.refused");
+    const auto& reason = result.find("error")->find("message")->as_string();
+    CHECK_FALSE(reason.empty());
+    CHECK(reason.size() <= CALIPER_NET_TEXT_MAX);
+    CHECK(caliper_net::valid_utf8(reason.data(), reason.size()));
+    CHECK(source.sent.empty());
+}
+
+TEST_CASE("live/controls: protocol errors complete interpretation requests by ID") {
+    ScriptedSource source;
+    caliper_live::RunControls controls;
+    controls.update(&source, 0);
+    const auto result = controls.interpret("trace.status", Json::object(), 0);
+    const auto id = static_cast<uint32_t>(result.find("request_id")->as_double());
+    source.reply(id, "error", Json(), "bad_request");
+    source.replies.back().op.clear(); // ERROR identifies CONTROL and request ID, without an operation.
+    controls.update(&source, 1);
+    const auto final = controls.interpret("trace.status", Json::object(), id);
+    REQUIRE(final.find("error"));
+    CHECK(final.find("error")->find("code")->as_string() == "bad_request");
+    source.reply(id, "queued");
+    controls.update(&source, 2);
+    CHECK(controls.interpret("trace.status", Json::object(), id) == final);
+}
+
+TEST_CASE("live/controls: text drafts submit once on Return or focus loss") {
+    ControlsUi ui;
+    ui.focus();
+    ImGui::GetIO().AddInputCharactersUTF8("A caf"); ui.frame();
+    CHECK(ui.source.sent.empty());
+    ImGui::GetIO().AddInputCharactersUTF8("\xc3\xa9"); ui.frame();
+    CHECK(ui.source.sent.empty());
+    SUBCASE("Return") { ui.enter(); }
+    SUBCASE("focus loss") { ui.click(30, 110); }
+    REQUIRE(ui.source.sent.size() == 1);
+    CHECK(ui.source.sent.front().op == CALIPER_NET_OP_SET);
+    CHECK(ui.source.sent.front().name == "prompt");
+    CHECK(ui.source.sent.front().value.as_string() == "A caf\xc3\xa9");
+    ui.click(30, 110);
+    CHECK(ui.source.sent.size() == 1);
+}
+
+TEST_CASE("live/controls: text byte caps preserve complete UTF-8 characters") {
+    std::string prefix(CALIPER_NET_TEXT_MAX - 1, 'x');
+    std::string suffix = "\xc3\xa9";
+    SUBCASE("two byte character") {}
+    SUBCASE("three byte character") { prefix.pop_back(); suffix = "\xe2\x82\xac"; }
+    ControlsUi ui(prefix + suffix);
+    ui.focus();
+    CHECK(ui.source.sent.empty());
+    ui.enter();
+    REQUIRE(ui.source.sent.size() == 1);
+    const auto& value = ui.source.sent.front().value.as_string();
+    CHECK(value == prefix);
+    CHECK(value.size() <= CALIPER_NET_TEXT_MAX);
+    CHECK(caliper_net::valid_utf8(value.data(), value.size()));
+}
+
+TEST_CASE("live/controls: reply queries stay within their admitted method and run") {
+    ScriptedSource source, other;
+    caliper_live::RunControls controls;
+    controls.update(&source, 0);
+    Json params = Json::object(); params.set("prompt", "fixture");
+    const auto queued = controls.interpret("trace.run", params, 0);
+    const auto id = static_cast<uint32_t>(queued.find("request_id")->as_double());
+    const auto code = [](const Json& result) { return result.find("error")->find("code")->as_string(); };
+    CHECK(code(controls.interpret("trace.run", Json::object(), id + 1)) == "interpret.unknown_request");
+    CHECK(code(controls.interpret("trace.validate", Json::object(), id)) == "interpret.unknown_request");
+    CHECK(code(controls.interpret("trace.run", params, id)) == "command.invalid_args");
+    CHECK(controls.interpret("trace.run", Json::object(), id).find("pending")->as_bool());
+    CHECK(source.sent.size() == 1);
+    SUBCASE("different source") { controls.update(&other, 1); }
+    SUBCASE("new run on the same source") { ++source.started; controls.update(&source, 1); }
+    CHECK(code(controls.interpret("trace.run", Json::object(), id)) == "interpret.unknown_request");
+    CHECK(source.sent.size() == 1);
+    CHECK(other.sent.empty());
+}
+
+TEST_CASE("live/controls: unscoped protocol errors end only queued interpretation requests") {
+    ScriptedSource source;
+    caliper_live::RunControls controls;
+    controls.update(&source, 0);
+    const auto finished = controls.interpret("trace.status", Json::object(), 0);
+    const auto first = static_cast<uint32_t>(finished.find("request_id")->as_double());
+    source.reply(first, "ok");
+    source.replies.back().result = Json::object();
+    controls.update(&source, 1);
+    const auto final = controls.interpret("trace.status", Json::object(), first);
+    const auto waiting = controls.interpret("trace.status", Json::object(), 0);
+    const auto second = static_cast<uint32_t>(waiting.find("request_id")->as_double());
+    const auto another = controls.interpret("feature.dictionary", Json::object(), 0);
+    const auto third = static_cast<uint32_t>(another.find("request_id")->as_double());
+    caliper_live::ControlReply error;
+    error.status = CALIPER_NET_STATUS_ERROR;
+    error.error_code = CALIPER_NET_ERR_BAD_REQUEST;
+    error.error_message = "The producer decoder refused a message.";
+    source.replies.push_back(error);
+    controls.update(&source, 2);
+    CHECK(controls.interpret("trace.status", Json::object(), first) == final);
+    const auto result = controls.interpret("trace.status", Json::object(), second);
+    REQUIRE(result.find("error"));
+    CHECK(result.find("error")->find("code")->as_string() == CALIPER_NET_ERR_BAD_REQUEST);
+    CHECK(controls.interpret("feature.dictionary", Json::object(), third) == result);
+    source.reply(second, "queued");
+    controls.update(&source, 3);
+    CHECK(controls.interpret("trace.status", Json::object(), second) == result);
 }

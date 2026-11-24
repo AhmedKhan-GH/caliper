@@ -14,6 +14,7 @@
 
 #include <caliper_builder/commands/command_table.h>
 #include <caliper_builder/commands/schema.h>
+#include "../../../include/caliper/live_net.h"
 #include <set>
 #include <cmath>
 #include <algorithm>
@@ -255,7 +256,26 @@ CommandOutput interpretation_command(const CommandContext& context, RunControl* 
         if (params["metric"]["positive_token"] == params["metric"]["negative_token"])
             return CommandOutput::fail(fail("command.invalid_args", "The metric token IDs must differ."));
     }
-    return control->interpret(name, params, request);
+    for (const auto* key : {"prompt", "clean_prompt", "corrupted_prompt"}) {
+        const auto it = params.find(key);
+        if (it == params.end()) continue;
+        if (!it->is_string())
+            return CommandOutput::fail(fail("command.invalid_args", "The prompt must be text.", std::string("args.") + key));
+        const auto& text = it->get_ref<const std::string&>();
+        if (text.empty() || text.size() > CALIPER_NET_INTERPRET_STRING_MAX || text.find('\0') != std::string::npos)
+            return CommandOutput::fail(fail("command.invalid_args",
+                "Use a nonempty UTF-8 prompt without NUL and at most " +
+                    std::to_string(CALIPER_NET_INTERPRET_STRING_MAX) + " bytes.", std::string("args.") + key));
+    }
+    try {
+        if (params.dump().size() > CALIPER_NET_INTERPRET_MAX_BYTES)
+            return CommandOutput::fail(fail("command.invalid_args", "Reduce the interpretation request to 256 KiB."));
+    } catch (const json::exception&) {
+        return CommandOutput::fail(fail("command.invalid_args", "The interpretation request must contain valid UTF-8."));
+    }
+    auto output = control->interpret(name, params, request);
+    if (request) output.no_effect = true;
+    return output;
 }
 
 CommandOutput intervene_command(const CommandContext& context, RunControl* control) {
