@@ -1,0 +1,294 @@
+"""Held-out FVU, dead features, and cross-entropy with every MLP replaced."""
+from __future__ import annotations
+
+import argparse
+from contextlib import contextmanager
+import hashlib
+import json
+import math
+from pathlib import Path
+import time
+
+import torch
+from torch.nn import functional as F
+from safetensors.torch import load_file, save_file
+
+from caliper.interp import capture, load_dictionary
+from .checkpoint_state import write_json
+from .memory_limits import CleanStop, MemoryGuard, StopControl, autorelease_scope
+from .model_load import hidden_forward, load_text_model
+from .text_stream import TextStream, fineweb_documents, partition_metadata
+
+
+@contextmanager
+def replace_all_mlps(model, dictionary):
+    """Replace all MLP modules for one forward and restore them on every exit."""
+    originals = []
+    try:
+        if len(dictionary.layers) != model.config.num_hidden_layers:
+            raise ValueError("cross-entropy requires a replacement for every MLP")
+        for i, point in enumerate(dictionary.metadata["read_points"]):
+            block = model.get_submodule(point.rsplit(".", 1)[0])
+            originals.append((block, block.mlp))
+            block.mlp = dictionary.layers[i]
+        yield
+    finally:
+        for block, original in originals:
+            block.mlp = original
+
+
+@torch.no_grad()
+def cross_entropy_sum(model, hidden, input_ids, count, *, chunk_tokens=64, health=None):
+    """Project a bounded token chunk. Exclude padding and context boundaries."""
+    width = hidden.shape[-1]
+    context = input_ids.shape[-1]
+    positions = torch.arange(max(count - 1, 0), device=hidden.device)
+    positions = positions[(positions + 1) % context != 0]
+    head = model.get_output_embeddings()
+    states = hidden.reshape(-1, width)
+    ids = input_ids.reshape(-1)
+    total = 0.0
+    for start in range(0, len(positions), chunk_tokens):
+        if health:
+            health()
+        selected = positions[start:start + chunk_tokens]
+        logits = head(states[selected]).float()
+        loss = F.cross_entropy(logits, ids[selected + 1], reduction="sum")
+        total += float(loss.item())
+    return total, len(positions)
+
+
+class QualityStats:
+    """Merge stable per-batch variance statistics and feature activity counts."""
+
+    def __init__(self, layers, width, latents):
+        self.count = 0
+        self.mean = torch.zeros(layers, width, dtype=torch.float64)
+        self.variance_sum = torch.zeros(layers, dtype=torch.float64)
+        self.error_sum = torch.zeros(layers, dtype=torch.float64)
+        self.hits = torch.zeros(layers, latents, dtype=torch.int64)
+        self.original_ce = 0.0
+        self.replaced_ce = 0.0
+        self.ce_tokens = 0
+
+    def merge(self, other):
+        total = self.count + other.count
+        if other.count == 0:
+            return
+        delta = other.mean - self.mean
+        self.variance_sum += other.variance_sum + delta.square().sum(-1) * (self.count * other.count / total)
+        self.mean += delta * (other.count / total)
+        self.error_sum += other.error_sum
+        self.hits += other.hits
+        self.count = total
+        self.original_ce += other.original_ce
+        self.replaced_ce += other.replaced_ce
+        self.ce_tokens += other.ce_tokens
+
+    def metrics(self):
+        if not self.count or not self.ce_tokens or (self.variance_sum <= 0).any():
+            raise ValueError("quality needs nonzero target variance and next-token targets")
+        fvu = self.error_sum / self.variance_sum
+        dead = (self.hits == 0).double().mean(-1)
+        delta = (self.replaced_ce - self.original_ce) / self.ce_tokens
+        values = {"fvu": float(fvu.mean()), "dead_fraction": float(dead.mean()),
+                  "cross_entropy_delta": delta, "evaluated_tokens": self.count,
+                  "cross_entropy_tokens": self.ce_tokens,
+                  "original_cross_entropy": self.original_ce / self.ce_tokens,
+                  "replaced_cross_entropy": self.replaced_ce / self.ce_tokens,
+                  "per_layer_fvu": fvu.tolist(), "per_layer_dead_fraction": dead.tolist(),
+                  "thresholds": {"fvu": 0.30, "dead_fraction": 0.15, "cross_entropy_delta": 0.5,
+                                 "evaluated_tokens": 200_000}}
+        finite = all(torch.isfinite(x).all().item() for x in (fvu, dead)) and math.isfinite(delta)
+        if not finite:
+            raise ValueError("quality metrics are nonfinite")
+        passed = values["fvu"] <= 0.30 and values["dead_fraction"] <= 0.15 and delta <= 0.5
+        values["status"] = ("passed" if passed else "failed") if self.count == 200_000 else "partial"
+        return values
+
+
+@torch.no_grad()
+def evaluate_batch(model, dictionary, ids, count, *, chunk_tokens=64, health=None):
+    """Commit no statistics until both complete model forwards succeed."""
+    with autorelease_scope(ids.device):
+        return _evaluate_batch(model, dictionary, ids, count, chunk_tokens=chunk_tokens, health=health)
+
+
+def _evaluate_batch(model, dictionary, ids, count, *, chunk_tokens, health):
+    metadata = dictionary.metadata
+    result = QualityStats(metadata["layers"], metadata["width"], metadata["latents"])
+    requested = metadata["read_points"] + metadata["write_points"]
+    captured = None
+    try:
+        with capture(model, requested) as captured:
+            original = hidden_forward(model, ids)
+        result.original_ce, result.ce_tokens = cross_entropy_sum(model, original, ids, count,
+                                                                chunk_tokens=chunk_tokens, health=health)
+        del original
+        for i, layer in enumerate(dictionary.layers):
+            if health:
+                health()
+            x = captured[metadata["read_points"][i]].reshape(-1, metadata["width"])[:count]
+            y = captured[metadata["write_points"][i]].reshape(-1, metadata["width"])[:count]
+            mean = y.mean(0)
+            result.mean[i] = mean.cpu().double()
+            result.variance_sum[i] = (y - mean).square().sum().cpu().double()
+            # Chunk sparse features as well as vocabulary logits.
+            for start in range(0, count, chunk_tokens):
+                a = layer.encode(x[start:start + chunk_tokens])
+                residual = y[start:start + chunk_tokens] - layer.decode(a)
+                result.error_sum[i] += residual.square().sum().cpu().double()
+                result.hits[i] += (a > 0).sum(0).cpu()
+            del x, y
+            captured.pop(metadata["read_points"][i])
+            captured.pop(metadata["write_points"][i])
+        captured.close(clear=True)
+        with replace_all_mlps(model, dictionary):
+            replaced = hidden_forward(model, ids)
+        result.replaced_ce, replaced_count = cross_entropy_sum(model, replaced, ids, count,
+                                                              chunk_tokens=chunk_tokens, health=health)
+        if replaced_count != result.ce_tokens:
+            raise ValueError("cross-entropy target counts differ")
+        result.count = count
+        return result
+    finally:
+        if captured is not None:
+            captured.close(clear=True)
+
+
+def dictionary_fingerprint(folder, metadata):
+    """Bind evaluation resume to exact dictionary weights and fixed metadata."""
+    digest = hashlib.sha256(json.dumps({k: v for k, v in metadata.items() if k != "quality"},
+                                     sort_keys=True, allow_nan=False).encode())
+    for i in range(metadata["layers"]):
+        with (Path(folder) / f"layer_{i:02d}.safetensors").open("rb") as source:
+            for chunk in iter(lambda: source.read(8 * 1024 * 1024), b""):
+                digest.update(chunk)
+    return digest.hexdigest()
+
+
+def save_evaluation(folder, stats, stream, pending, identity, settings, elapsed):
+    """Atomically publish small statistics and an exact quality cursor."""
+    folder = Path(folder)
+    folder.mkdir(exist_ok=True, parents=True)
+    # Two alternating files prevent a partial update from corrupting the old state.
+    prior = json.loads((folder / "state.json").read_text()) if (folder / "state.json").exists() else {}
+    name = "stats-b.safetensors" if prior.get("tensors") == "stats-a.safetensors" else "stats-a.safetensors"
+    save_file({"mean": stats.mean, "variance_sum": stats.variance_sum,
+               "error_sum": stats.error_sum, "hits": stats.hits}, folder / name)
+    write_json(folder / "state.json", {"version": 1, "identity": identity, "settings": settings,
+               "tensors": name, "stream": stream.state_dict(), "pending_ids": pending,
+               "count": stats.count, "original_ce": stats.original_ce,
+               "replaced_ce": stats.replaced_ce, "ce_tokens": stats.ce_tokens, "elapsed_seconds": elapsed})
+
+
+def restore_evaluation(folder, stats, stream, identity, settings):
+    folder = Path(folder)
+    state = json.loads((folder / "state.json").read_text())
+    if state.get("version") != 1 or state["identity"] != identity or state["settings"] != settings:
+        raise ValueError("evaluation dictionary or settings changed across resume")
+    if state["tensors"] not in ("stats-a.safetensors", "stats-b.safetensors"):
+        raise ValueError("invalid evaluation tensor path")
+    tensors = load_file(folder / state["tensors"])
+    for name in ("mean", "variance_sum", "error_sum", "hits"):
+        getattr(stats, name).copy_(tensors[name])
+    for name in ("count", "original_ce", "replaced_ce", "ce_tokens"):
+        setattr(stats, name, state[name])
+    stream.load_state_dict(state["stream"])
+    return state["pending_ids"], state["elapsed_seconds"]
+
+
+def evaluate(model, dictionary, stream, folder, *, tokens=200_000, context=256,
+             batch_tokens=512, chunk_tokens=64, memory=None, stop=None, resume=False):
+    if tokens < 2 or context < 2 or batch_tokens < context or chunk_tokens < 1:
+        raise ValueError("invalid evaluation dimensions")
+    if stream.partition != "quality":
+        raise ValueError("quality evaluation requires the quality partition")
+    metadata = dictionary.metadata
+    if metadata["training"]["dataset_id"] != "fixture" and metadata["training"]["partitions"] != partition_metadata():
+        raise ValueError("dictionary text partitions differ from this evaluator")
+    folder = Path(folder)
+    identity = dictionary_fingerprint(folder, metadata)
+    state_folder = folder / "evaluation"
+    stats = QualityStats(metadata["layers"], metadata["width"], metadata["latents"])
+    settings = {"tokens": tokens, "context": context, "batch_tokens": batch_tokens, "chunk_tokens": chunk_tokens}
+    pending, elapsed_before = None, 0.0
+    if resume:
+        pending, elapsed_before = restore_evaluation(state_folder, stats, stream, identity, settings)
+    elif (state_folder / "state.json").exists():
+        raise ValueError("evaluation state exists; use --resume")
+    started = time.monotonic()
+    last_save = started
+    device = dictionary.layers[0].W_enc.device
+
+    def health():
+        if stop:
+            stop.check()
+        if memory:
+            memory.check("evaluation", force=False)
+
+    reason = "complete"
+    try:
+        while stats.count < tokens:
+            health()
+            if pending is None:
+                batch = stream.next_tokens(min(batch_tokens, tokens - stats.count), health=health)
+                if not len(batch):
+                    raise CleanStop("quality source exhausted")
+                pending = batch.input_ids.tolist()
+            count = len(pending)
+            ids = torch.tensor(pending, dtype=torch.int64, device=device)
+            ids = F.pad(ids, (0, (-count) % context)).reshape(-1, context)
+            result = evaluate_batch(model, dictionary, ids, count, chunk_tokens=chunk_tokens, health=health)
+            stats.merge(result)
+            pending = None
+            if time.monotonic() - last_save >= 240:
+                save_evaluation(state_folder, stats, stream, pending, identity, settings,
+                                elapsed_before + time.monotonic() - started)
+                last_save = time.monotonic()
+            print(json.dumps({"stage": "quality_batch", "tokens": stats.count, "target": tokens}), flush=True)
+    except CleanStop as error:
+        reason = str(error)
+    save_evaluation(state_folder, stats, stream, pending, identity, settings, elapsed_before + time.monotonic() - started)
+    if stats.count >= 2 and stats.ce_tokens:
+        quality = stats.metrics()
+        quality.update(elapsed_seconds=elapsed_before + time.monotonic() - started, stop_reason=reason)
+        quality.update(all_mlps_replaced=len(dictionary.layers), partition="quality")
+        if memory:
+            quality["peak_memory_bytes"] = memory.peak
+        metadata["quality"] = quality
+        write_json(folder / "dictionary.json", metadata)
+        print(json.dumps({"stage": "quality_end", **quality}), flush=True)
+        return quality
+    return {"status": "interrupted", "evaluated_tokens": stats.count, "stop_reason": reason}
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--dictionary", type=Path, required=True)
+    parser.add_argument("--device", choices=("mps", "cpu"), default="mps")
+    parser.add_argument("--tokens", type=int, default=200_000)
+    parser.add_argument("--context", type=int, default=256)
+    parser.add_argument("--batch-tokens", type=int, default=512)
+    parser.add_argument("--chunk-tokens", type=int, default=64)
+    parser.add_argument("--memory-gb", type=float, default=12)
+    parser.add_argument("--dataset-cache", type=Path)
+    parser.add_argument("--resume", action="store_true")
+    args = parser.parse_args(argv)
+    if args.memory_gb > 12:
+        raise ValueError("the evaluator memory limit is at most 12 GB")
+    memory = MemoryGuard(args.memory_gb, args.device)
+    memory.check("start")
+    with StopControl() as stop:
+        model, tokenizer = load_text_model(device=args.device, memory=memory)
+        dictionary = load_dictionary(args.dictionary, model=model, device=args.device, dtype=torch.float32)
+        memory.check("after_dictionary_load")
+        with TextStream(fineweb_documents(cache_dir=args.dataset_cache), tokenizer, "quality") as stream:
+            result = evaluate(model, dictionary, stream, args.dictionary, tokens=args.tokens,
+                              context=args.context, batch_tokens=args.batch_tokens, chunk_tokens=args.chunk_tokens,
+                              memory=memory, stop=stop, resume=args.resume)
+    return 0 if result["status"] == "passed" else 2
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
