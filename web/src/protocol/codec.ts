@@ -364,7 +364,8 @@ function isInterpretationObject(v: unknown, source?: unknown): boolean {
 }
 
 const INTERPRET_PARAMS: Record<string, readonly string[]> = {
-  'feature.dictionary': [], 'trace.status': [],
+  'feature.dictionary': [], 'trace.status': [], 'trace.validate': [],
+  'patch.sweep': ['clean_prompt', 'corrupted_prompt', 'metric'],
   'feature.show': ['layer', 'feature', 'node'],
   'feature.examples': ['layer', 'feature', 'node', 'limit'],
   'trace.run': ['prompt', 'max_targets', 'max_nodes', 'max_edges'],
@@ -388,6 +389,15 @@ function isInterpretationRequest(v: unknown, source?: unknown): boolean {
   if (o.method === 'feature.show' || o.method === 'feature.examples')
     return ('node' in params && !('layer' in params) && !('feature' in params))
       || (!('node' in params) && 'layer' in params && 'feature' in params);
+  if (o.method === 'patch.sweep') {
+    if (!interpretationText(params.clean_prompt, INTERPRET_LIMITS.maxString, false)
+      || !interpretationText(params.corrupted_prompt, INTERPRET_LIMITS.maxString, false) || !isObj(params.metric)) return false;
+    const metric = params.metric as Record<string, unknown>;
+    const raw = sourceField(rawParams, 'metric');
+    return Object.keys(metric).length === 2
+      && ['positive_token', 'negative_token'].every((key) => interpretationInteger(metric[key], sourceField(raw, key), 0, 2147483647))
+      && metric.positive_token !== metric.negative_token;
+  }
   return o.method !== 'trace.run' || interpretationText(params.prompt, INTERPRET_LIMITS.maxString, false);
 }
 

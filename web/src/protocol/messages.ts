@@ -297,7 +297,7 @@ export type ParamValue = number | boolean | string;
 export type ControlOp = 'pause' | 'resume' | 'step' | 'set' | 'run' | 'intervene' | 'interpret';
 export const CONTROL_OPS: readonly ControlOp[] = ['pause', 'resume', 'step', 'set', 'run', 'intervene', 'interpret'];
 
-/** M7 structured metadata limits (python/caliper/_interpret_protocol.py). */
+/** Structured metadata limits (python/caliper/_interpret_protocol.py). */
 export const INTERPRET_LIMITS = {
   maxBytes: 262144, maxString: 4096, maxList: 512, maxFields: 64, maxDepth: 8, maxValues: 16384,
 } as const;
@@ -305,11 +305,12 @@ export type InterpretationValue = null | boolean | number | string | Interpretat
 export interface InterpretationResult { [key: string]: InterpretationValue }
 type FeatureSelector = { node: number; layer?: never; feature?: never } | { node?: never; layer: number; feature: number };
 export type InterpretationRequest = { version: 1 } & (
-  | { method: 'feature.dictionary' | 'trace.status'; params: Record<string, never> }
+  | { method: 'feature.dictionary' | 'trace.status' | 'trace.validate'; params: Record<string, never> }
   | { method: 'feature.show'; params: FeatureSelector }
   | { method: 'feature.examples'; params: FeatureSelector & { limit?: number } }
   | { method: 'trace.run'; params: { prompt: string; max_targets?: number; max_nodes?: number; max_edges?: number } }
   | { method: 'trace.read'; params: { node_offset?: number; node_limit?: number; edge_offset?: number; edge_limit?: number } }
+  | { method: 'patch.sweep'; params: { clean_prompt: string; corrupted_prompt: string; metric: { positive_token: number; negative_token: number } } }
 );
 
 export interface RunInfo { state: RunState; step?: number; steps_left?: number }
