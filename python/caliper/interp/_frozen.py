@@ -352,6 +352,7 @@ class FrozenPath:
         self.embedding = recorded["embedding"]
         self.inputs, self.outputs, self.features, self.errors, self.decoder_biases = [], [], [], [], []
         self.residual_inputs, self.mlp_inputs = [], []
+        ablated = {s["point"] for s in interventions if s.get("op", s.get("kind")) == "ablate"}
         with torch.no_grad():
             for i, block in enumerate(self.blocks):
                 with autorelease_scope(self.device):
@@ -359,13 +360,16 @@ class FrozenPath:
                     x = values[f"{base}.mlp_in"]
                     y = values[f"{base}.mlp_out"]
                     layer = dictionary.layers[i]
+                    output_mask = torch.tensor(bool({f"{base}.mlp", f"{base}.mlp_out"} & ablated),
+                                               device=self.device)
                     a = dictionary.encode(i, x.to(layer.W_enc.dtype)).detach()
-                    reconstruction = dictionary.decode(i, a).to(self.dtype)
+                    a = a.masked_fill(output_mask, 0)
+                    reconstruction = dictionary.decode(i, a).to(self.dtype).masked_fill(output_mask, 0)
                     self.inputs.append(x)
                     self.outputs.append(y)
                     self.features.append(a.to(self.dtype))
                     self.errors.append((y - reconstruction).detach())
-                    self.decoder_biases.append(layer.b_dec.detach().to(self.dtype))
+                    self.decoder_biases.append(layer.b_dec.detach().to(self.dtype).masked_fill(output_mask, 0))
                     self.norms.append(FrozenNorm(block.input_layernorm, recorded[f"{i}.input_norm"], qwen=self.qwen))
                     self.post_norms.append(FrozenNorm(block.post_attention_layernorm, recorded[f"{i}.post_norm"], qwen=self.qwen))
                     self.residual_inputs.append(FrozenInput(recorded[f"{i}.residual_source"],

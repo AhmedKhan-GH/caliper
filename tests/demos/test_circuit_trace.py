@@ -34,8 +34,15 @@ def measured(tmp_path_factory):
     service.configure(dictionary=dictionary, tokenizer=tokenizer)
     graph = Tracer(model, tokenizer, dictionary, controls=owner).trace(FIXTURE_PROMPT)
     data = graph.read(node_limit=256, edge_limit=256)
-    # This fixture has fewer than 256 edges. A change must not silently omit edges.
-    assert data["next_node_offset"] is None and data["next_edge_offset"] is None
+    # Read every page because influence pruning can retain more than 256 edges.
+    for kind in ("node", "edge"):
+        offset = data[f"next_{kind}_offset"]
+        while offset is not None:
+            page = graph.read(**{f"{kind}_offset": offset,
+                                 "node_limit": 256, "edge_limit": 256})
+            data[f"{kind}s"].extend(page[f"{kind}s"])
+            offset = page[f"next_{kind}_offset"]
+        data[f"next_{kind}_offset"] = None
     selected = selected_feature(data)
     output = Output(model, tokenizer, service)
     before = output.compare(FIXTURE_PROMPT)
@@ -60,7 +67,8 @@ def measured(tmp_path_factory):
 
 def test_actual_fixture_selection_and_graph(measured):
     graph = measured["graph"]
-    assert len(graph["nodes"]) == 31
+    assert len(graph["nodes"]) == 52
+    assert len(graph["edges"]) == 596
     assert measured["selected"]["id"] == "feature:0:30:138"
     assert graph["completeness"]["max_absolute_residual"] <= 1e-9
     assert graph["feature_share"] >= .30

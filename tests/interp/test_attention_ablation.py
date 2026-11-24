@@ -117,3 +117,122 @@ def test_attention_ablation_direct_effect_matches_real_frozen_forward(mode):
         perturbation = torch.zeros_like(norm_input)
         perturbation[:, 0] = vector
         assert unmasked(perturbation, 0.)[:, -1].abs().max() > 1e-6
+
+
+@pytest.mark.parametrize("layer,attention", [(0, "linear_attn"), (3, "self_attn")])
+def test_qwen_attention_module_ablation_removes_value_derivatives(layer, attention):
+    from caliper._ablate import ablate, points as ablation_points
+    from caliper.interp._frozen import FrozenPath
+    from caliper.interp._trace import _DirectEffects
+    from .test_trace import qwen_for_trace, random_dictionary
+
+    model = qwen_for_trace()
+    dictionary = random_dictionary(model)
+    ids = torch.tensor([[1, 2, 3]])
+    name = f"model.layers.{layer}.{attention}"
+    # These primary Qwen modules do not expose heads through the existing interface.
+    assert not any(p["point"].startswith(name + "#") for p in ablation_points(model))
+    with pytest.raises(KeyError):
+        ablate(model, name + "#0")
+    with active_ablation(model, [name]):
+        path = FrozenPath(model, ids, dictionary, interventions=[{"op": "ablate", "point": name}])
+        assert path.forward_residual < 2e-5
+        mixer = path.mixers[layer]
+        value = path.embedding.clone().requires_grad_(True)
+        assert mixer(value).count_nonzero() == 0
+        assert mixer.offset.count_nonzero() == 0
+        assert torch.autograd.grad(mixer(value).sum(), value)[0].count_nonzero() == 0
+        effects = _DirectEffects(path, dictionary, ids[0].tolist(), TinyTokenizer())
+        targets = [i for i in effects.feature_nodes if effects.nodes[i]["layer"] == layer
+                   and effects.nodes[i]["position"] == path.tokens - 1]
+        source = 0 if layer == 0 else next(i for i in effects.feature_nodes
+                                         if effects.nodes[i]["layer"] == layer - 1
+                                         and effects.nodes[i]["position"] == 0)
+        weights, diagnostics = effects.backward(targets)
+        assert weights[source].count_nonzero() == 0
+        assert max(d["absolute_residual"] for d in diagnostics) < 2e-5
+        source_node = effects.nodes[source]
+        vector = path.embedding[0, 0] if layer == 0 else (
+            source_node["activation"] * dictionary.layers[layer - 1].W_dec[source_node["feature"]])
+        directions = torch.stack([effects.target(i).direction for i in targets])
+
+        def actual_read(scale):
+            reads = []
+            with ExitStack() as stack:
+                stack.enter_context(torch.no_grad())
+                for index, block in enumerate(model.model.layers):
+                    def fixed_write(module, args, output, index=index):
+                        value = path.outputs[index].clone()
+                        if index == layer - 1:
+                            value[:, 0] += scale * vector
+                        return value
+                    stack.callback(block.mlp.register_forward_hook(fixed_write).remove)
+                stack.callback(model.model.layers[layer].mlp.register_forward_pre_hook(
+                    lambda module, args: reads.append(args[0].detach().clone())).remove)
+                embedding = path.embedding.clone()
+                if layer == 0:
+                    embedding[:, 0] += scale * vector
+                model(inputs_embeds=embedding, use_cache=False)
+            return reads[0][0, -1] @ directions.T
+
+        # A whole-module ablation blocks this route even with live routing and norms.
+        measured = (actual_read(.01) - actual_read(-.01)) / .02
+        assert measured.count_nonzero() == 0
+
+
+@pytest.mark.parametrize("whole_module", [False, True])
+def test_attention_projection_bias_obeys_ablation_scope(whole_module):
+    from caliper._ablate import ablate
+    from caliper.interp._frozen import _attention_output
+
+    class Attention(torch.nn.Module):
+        num_heads = 2
+
+        def __init__(self):
+            super().__init__()
+            self.o_proj = torch.nn.Linear(4, 3, dtype=torch.float64)
+
+        def forward(self, x):
+            return self.o_proj(x)
+
+    # This separate projection checks nonzero bias without changes to the fixture weights.
+    with torch.random.fork_rng(devices=[]):
+        torch.manual_seed(19)
+        model = torch.nn.ModuleDict({"attention": Attention()})
+    points = ["attention"] if whole_module else ["attention#0", "attention#1"]
+    with ExitStack() as stack:
+        for point in points:
+            stack.callback(ablate(model, point))
+        frozen = _attention_output(model, "attention", "o_proj",
+                                   [{"op": "ablate", "point": p} for p in points])
+        x = torch.ones(2, 3, 4, dtype=torch.float64, requires_grad=True)
+        actual = model["attention"](x)
+        torch.testing.assert_close(frozen(x, True), actual, atol=0, rtol=0)
+        assert torch.autograd.grad(frozen(x, True).sum(), x)[0].count_nonzero() == 0
+        if whole_module:
+            assert actual.count_nonzero() == 0
+        else:
+            assert actual.count_nonzero() > 0
+            torch.testing.assert_close(actual, model["attention"].o_proj.bias.expand_as(actual), atol=0, rtol=0)
+
+
+def test_attention_ablation_trace_respects_suspension_and_selected_rows():
+    if not hasattr(_controls.Controls, "intervention_service"):
+        pytest.skip("Scoped rows require the M8 intervention service")
+    model, tokenizer = TinyLM(), TinyTokenizer()
+    dictionary = exact_dictionary(model)
+    with active_ablation(model, ["layers.0.self_attn#1"]) as owner:
+        tracer = Tracer(model, tokenizer, dictionary, controls=owner)
+        ablated = tracer.trace("AB", max_targets=32)
+        with owner.intervention_service.suspend():
+            suspended = tracer.trace("AB", max_targets=32)
+            suspended_logits = tracer._forward_cache[1].logits.clone()
+            assert suspended is not ablated
+        assert tracer.trace("AB", max_targets=32) is ablated
+        with owner.intervention_service.rows([]):
+            excluded = tracer.trace("AB", max_targets=32)
+            torch.testing.assert_close(tracer._forward_cache[1].logits, suspended_logits, atol=0, rtol=0)
+            assert excluded.nodes == suspended.nodes and excluded.edges == suspended.edges
+        with owner.intervention_service.rows([0]):
+            selected = tracer.trace("AB", max_targets=32)
+            assert selected.nodes == ablated.nodes and selected.edges == ablated.edges
