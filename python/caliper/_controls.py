@@ -1209,6 +1209,7 @@ class Controls:
         self._iv_model: Interventions | None = None   # the watched model of the interventions
         self._ivs: dict = {}                     # (point, op) -> _Intervention, oldest first
         self._iv_due = False                     # the next checkpoint has intervention work
+        self._iv_boundary_ready = True           # the last boundary completed intervention work
         self._iv_revision = 0                    # cancels preparation after a lifecycle edit
         self._iv_retiring = set()                # detached executors with work still in flight
         self._iv_attaching = False
@@ -1350,6 +1351,8 @@ class Controls:
             actions = {action: (action.run_id, len(action.waiters)) for action in self.queue}
             changed = self._apply_pending()
             changed = self._apply_interventions(controllers) or changed
+            # Service callbacks must not change this pass's admission decision.
+            interventions_ready = self._iv_boundary_ready
         if changed:
             self._publish()
         self._raise_resource_stop()
@@ -1358,7 +1361,7 @@ class Controls:
         while True:
             self._raise_resource_stop()
             with self.lock:
-                if not self.queue:
+                if not interventions_ready or not self.queue:
                     return
                 a = self.queue[0]
                 if actions.get(a) != (a.run_id, len(a.waiters)):
@@ -2145,24 +2148,30 @@ class Controls:
                 self._unhook(removed)
 
     def _apply_interventions(self, controllers=None) -> bool:
+        """Apply one pass and record whether queued actions can proceed."""
+        changed, self._iv_boundary_ready = self._intervention_boundary(controllers)
+        return changed
+
+    def _intervention_boundary(self, controllers=None) -> tuple[bool, bool]:
         """Prepare boundary effects outside the lock and commit one unchanged revision.
 
         Due lifecycle work completes first. Concurrent requests cancel speculative
         additions and remain queued. A failed preparation removes only its new hooks.
+        Return the metadata change flag and the action admission flag separately.
         """
         from copy import copy
         if not self._iv_due:
-            return False
+            return False, True
         m = self._iv_model
         if m is None:
             self._iv_due = False
-            return False
+            return False, True
         if m._operation_owner is not None or self._iv_attaching:
-            return False
+            return False, False
         with m._operation("boundary"):
             completed, traffic = self._complete_due_interventions(m, self._next_step())
             if traffic or self._iv_model is not m:
-                return completed
+                return completed, False
             revision = self._iv_revision
             originals = dict(self._ivs)
             records = {key: copy(iv) for key, iv in originals.items()}
@@ -2200,10 +2209,10 @@ class Controls:
                     if prepared is None:
                         for message in reports:
                             warnings.warn(message, RuntimeWarning, stacklevel=2)
-                        return points_changed or completed
+                        return points_changed or completed, False
                     changed = prepared or changed
                 if self._iv_model is not m or self._iv_revision != revision:
-                    return points_changed or completed
+                    return points_changed or completed, False
                 self._check_metadata_budget(ivs=records)
                 for key, iv in originals.items():
                     if key not in records:
@@ -2218,7 +2227,7 @@ class Controls:
                 if lingered:
                     self._alone_since = None
                 committed = True
-                return changed or completed
+                return changed or completed, True
             finally:
                 with self._outside_lock():
                     if committed:

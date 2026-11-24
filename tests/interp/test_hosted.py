@@ -748,9 +748,10 @@ def test_hosted_fork_matches_generation_after_late_intervention_requests(action_
     ]
     injected = []
     completed = []
-    earlier = [] if waiters == "late" else [10] if waiters == "queued" else [10, 11]
+    earlier = {"late": [], "queued": [10], "joined": [10, 11]}[waiters]
     joined = [] if waiters == "queued" else [3, 4]
-    after = run.controls.action("after_generate", lambda: completed.append(run.inference_status()["generation"]["id"]))
+    run.actions.append(run.controls.action(
+        "after_generate", lambda: completed.append(run.inference_status()["generation"]["id"])))
 
     def queue(request_id, name):
         reply = route.on_control(None, wire.Control(request_id, "run", name=name).to_meta())
@@ -807,7 +808,6 @@ def test_hosted_fork_matches_generation_after_late_intervention_requests(action_
     assert all(reply.status == "ok" for reply in route.transport.replies)
     assert completed == [1]
     assert not run.controls.queue
-    after.remove()
     saved = json.loads(Path(run.managed.checkpoint(run.model, None)).read_bytes())
     generation = run.inference_status()["generation"]
     assert saved["params"]["prompt"] == "AC"
