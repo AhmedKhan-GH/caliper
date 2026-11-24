@@ -172,13 +172,14 @@ def test_wall_limit_and_periodic_saves_preserve_pending_batch(tmp_path, monkeypa
         times.append(clock())
         return implementation(*args, **kwargs)
     monkeypatch.setattr(train_transcoders, "save_checkpoint", record)
+    monkeypatch.setattr(trainer, "step_layer", lambda *a, **k: {"fvu": 0.0})
     try:
         progress = train_online(model, trainer, source, tmp_path, token_budget=64,
-                                max_wall_seconds=10, save_seconds=1, clock=clock)
+                                max_wall_seconds=68, save_seconds=1, clock=clock)
     finally:
         hook.remove()
     assert progress["tokens"] == 48
-    assert progress["elapsed_seconds"] < 10
+    assert progress["elapsed_seconds"] == 8
     assert len(progress["pending_ids"]) == 16
     assert trainer.metadata["training"]["stop_reason"] == "wall time reserve"
     assert len(times) >= 3 and max(b - a for a, b in zip(times, times[1:])) <= 2
