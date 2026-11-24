@@ -859,3 +859,56 @@ TEST_CASE("spec controls: a text parameter sends UTF-8 on Return") {
     REQUIRE(rec.events.size() == 1);
     CHECK(rec.events[0].fields["value"] == "A café");
 }
+
+TEST_CASE("spec controls: a text parameter preserves a long current value") {
+    Ui ui;
+    Recorder rec;
+    FakeRun run;
+    run.run = training();
+    std::string text;
+    for (unsigned i = 0; i < 2048; ++i) text += "\xc3\xa9";
+    cb::RunParam prompt;
+    prompt.name = "prompt"; prompt.type = "text"; prompt.value = text;
+    run.run.params.push_back(prompt);
+    auto control = make("long_prompt", spec::ControlKind::text, "param:prompt");
+    bool accepts = true;
+    SUBCASE("default bound") {}
+    SUBCASE("explicit smaller bound") { control.options.max_length = 1024; accepts = false; }
+    const auto sp = instrument_spec({control});
+    cb::ValueStore values;
+    values.reset(sp);
+    SpecInstrumentHost host{&rec, &run, &values, nullptr, &sp};
+    const SpecLook look;
+    auto draw = [&] { return caliper_host::draw_spec_control(control, kRow, look, host); };
+    ui.click(300, 15, draw);
+    press(ui, ImGuiKey_Enter, [&] { draw(); });
+    if (accepts) {
+        REQUIRE(run.sent.size() == 1);
+        CHECK(run.sent[0].second == text);
+    } else CHECK(run.sent.empty());
+    CHECK(run.run.params.back().value == text);
+}
+
+TEST_CASE("spec controls: an oversized parameter edit is refused without a truncated send") {
+    Ui ui;
+    Recorder rec;
+    FakeRun run;
+    run.run = training();
+    cb::RunParam prompt;
+    prompt.name = "prompt"; prompt.type = "text"; prompt.value = "";
+    run.run.params.push_back(prompt);
+    auto control = make("oversized_prompt", spec::ControlKind::text, "param:prompt");
+    const auto sp = instrument_spec({control});
+    cb::ValueStore values;
+    values.reset(sp);
+    SpecInstrumentHost host{&rec, &run, &values, nullptr, &sp};
+    const SpecLook look;
+    auto draw = [&] { return caliper_host::draw_spec_control(control, kRow, look, host); };
+    ui.click(300, 15, draw);
+    ImGui::GetIO().AddInputCharactersUTF8(std::string(4097, 'a').c_str());
+    ui.frame([&] { draw(); });
+    press(ui, ImGuiKey_Enter, [&] { draw(); });
+    CHECK(run.sent.empty());
+    CHECK(rec.events.empty());
+    CHECK(run.run.params.back().value == "");
+}

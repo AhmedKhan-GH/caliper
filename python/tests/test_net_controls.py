@@ -602,16 +602,17 @@ def test_interpretation_capability_and_real_service_round_trip(mode, ctl, make_s
 
 
 def test_free_text_capability_round_trip(mode, ctl, make_server):
-    parameter = caliper.param("prompt", "A café")
+    parameter = caliper.param("prompt", "é" * 2048)
     server = make_server()
 
     async def check():
         async with Viewer(server, CAPS + [w.CAP_TEXT_PARAMS]) as viewer:
             controls = await viewer.expect(w.Controls)
             assert controls.params[0]["type"] == "text"
-            await viewer.send(w.Control(1, "set", name="prompt", value="river " * 30))
+            assert controls.params[0]["value"] == "é" * 2048
+            await viewer.send(w.Control(1, "set", name="prompt", value="river " * 682 + "leaf"))
             answer = await viewer.expect(w.ControlReply)
-            assert answer.status == "ok" and parameter.value == "river " * 30
+            assert answer.status == "ok" and parameter.value == "river " * 682 + "leaf"
         async with Viewer(server) as old:
             controls = await old.expect(w.Controls)
             assert controls.params == []

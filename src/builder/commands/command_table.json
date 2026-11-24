@@ -8002,8 +8002,8 @@
                 ]
               },
               "max_length": {
-                "description": "text: the most bytes of the value, at most 1024.",
-                "maximum": 1024,
+                "description": "Text byte limit. A param binding permits at most 4096 UTF-8 bytes. Value and state bindings permit at most 1024.",
+                "maximum": 4096,
                 "minimum": 1,
                 "type": "integer"
               },
@@ -8358,8 +8358,8 @@
                     ]
                   },
                   "max_length": {
-                    "description": "text: the most bytes of the value, at most 1024.",
-                    "maximum": 1024,
+                    "description": "Text byte limit. A param binding permits at most 4096 UTF-8 bytes. Value and state bindings permit at most 1024.",
+                    "maximum": 4096,
                     "minimum": 1,
                     "type": [
                       "integer",
@@ -8623,8 +8623,8 @@
                     ]
                   },
                   "max_length": {
-                    "description": "text: the most bytes of the value, at most 1024.",
-                    "maximum": 1024,
+                    "description": "Text byte limit. A param binding permits at most 4096 UTF-8 bytes. Value and state bindings permit at most 1024.",
+                    "maximum": 4096,
                     "minimum": 1,
                     "type": "integer"
                   },
@@ -10669,7 +10669,7 @@
             "type": "string"
           },
           "value": {
-            "description": "The new value: a number for a number or integer parameter, true or false for a boolean, one of the choices for a choice.",
+            "description": "The value must match the parameter type. Text accepts at most 4096 UTF-8 bytes without NUL. A choice accepts one listed value.",
             "type": [
               "number",
               "integer",

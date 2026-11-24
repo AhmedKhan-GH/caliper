@@ -984,7 +984,7 @@ def test_free_text_parameter_round_trip_and_utf8_bounds(ctl):
     assert prompt.value == text and prompt.pending == "next"
     ctl.step(2)
     assert prompt.value == "next"
-    for value in ("é" * 513, "\ud800", "a\0b"):
+    for value in ("é" * 2049, "\ud800", "a\0b"):
         with pytest.raises(ValueError):
             caliper.param("invalid", value)
         with pytest.raises(w.MessageError):

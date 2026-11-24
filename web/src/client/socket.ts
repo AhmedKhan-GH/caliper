@@ -217,7 +217,7 @@ export class SocketClient implements StreamClient {
       this.lastInput = performance.now();
       // 3.1: this viewer shows controls and draws linked selections.
       // 3.2 draft: scenes, so that the producer lists its scene views; the WebAssembly views draw them.
-      this.send({ type: 'hello', role: 'viewer', capabilities: [CAP.controls, CAP.selection, CAP_SCENES], software: { name: 'caliper-view', version: VERSION } });
+      this.send({ type: 'hello', role: 'viewer', capabilities: [CAP.controls, CAP.selection, CAP.textParams, CAP_SCENES], software: { name: 'caliper-view', version: VERSION } });
       this.startTimers();
     };
     ws.onmessage = (ev) => {

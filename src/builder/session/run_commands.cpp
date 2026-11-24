@@ -97,9 +97,9 @@ Error check_value(const RunParam& param, const json& value) {
         return {};
     }
     if (param.type == "text") {
-        if (!value.is_string() || value.get_ref<const std::string&>().size() > 1024 ||
+        if (!value.is_string() || value.get_ref<const std::string&>().size() > 4096 ||
             value.get_ref<const std::string&>().find('\0') != std::string::npos)
-            return fail(kRunBadValue, "The text parameter accepts at most 1024 UTF-8 bytes.", where);
+            return fail(kRunBadValue, "The text parameter accepts at most 4096 UTF-8 bytes without NUL.", where);
         try { (void)value.dump(); } catch (...) { return fail(kRunBadValue, "The text is not valid UTF-8.", where); }
         return {};
     }

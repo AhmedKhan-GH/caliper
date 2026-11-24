@@ -23,7 +23,10 @@ export const MAGIC = 0x574c4143; // "CALW" read as a little-endian uint32
 export const HEADER_BYTES = 24;
 export const SECTION_ALIGN = 8;
 
+import { isParamText } from './param-text.js';
+
 const LITTLE = new Uint8Array(new Uint16Array([1]).buffer)[0] === 1;
+
 const utf8 = new TextEncoder();
 const utf8Strict = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true });
 
@@ -267,12 +270,13 @@ const fitsType = (p: ParamInfo, v: unknown) => {
   if (p.type === 'number') return isFinite(v);
   if (p.type === 'integer') return isInt(v) && Math.abs(v) <= INT_EXACT;
   if (p.type === 'boolean') return isBool(v);
+  if (p.type === 'text') return isParamText(v);
   return typeof v === 'string' && !!p.choices?.includes(v);
 };
 const isParam = (v: unknown) => {
   if (!isObj(v)) return false;
   const p = v as ParamInfo;
-  if (!isName(p.name) || !['number', 'integer', 'boolean', 'choice'].includes(p.type)) return false;
+  if (!isName(p.name) || !['number', 'integer', 'boolean', 'choice', 'text'].includes(p.type)) return false;
   if (p.type === 'number' || p.type === 'integer') {
     const bound = p.type === 'number' ? isFinite : (x: unknown) => isInt(x) && Math.abs(x) <= INT_EXACT;
     for (const x of [p.min, p.max]) if (x !== undefined && x !== null && !bound(x)) return false;
@@ -297,7 +301,7 @@ const isRun = (v: unknown) => {
   return RUN_STATES.includes(r.state) && (r.step == null || isUint(r.step)) && (r.steps_left == null || isUint(r.steps_left));
 };
 const uniqueNames = (v: { name: string }[]) => new Set(v.map((x) => x.name)).size === v.length;
-const isSetValue = (v: unknown) => isFinite(v) || isBool(v) || isName(v);
+const isSetValue = (v: unknown) => isFinite(v) || isBool(v) || isParamText(v);
 const isAscending = (v: number[]) => v.every((x, i) => i === 0 || v[i - 1] < x);
 const isCell = (v: unknown) => v === null || isBool(v) || isFinite(v) || (typeof v === 'string' && utf8.encode(v).length <= LIMITS_31.detailTextMax);
 const isDetails = (v: unknown) => {
@@ -556,7 +560,7 @@ export function decode(buf: ArrayBuffer | Uint8Array): Message | UnknownMsg {
         request_id: req(f, 'request_id', isU32, 'a uint32'),
         op,
         name: op === 'set' || op === 'run' ? name : undefined,
-        value: op === 'set' ? req<ParamValue>(f, 'value', isSetValue, 'a number, a boolean or a choice') : undefined,
+        value: op === 'set' ? req<ParamValue>(f, 'value', isSetValue, 'a number, a boolean or bounded text') : undefined,
         count: op === 'step' ? opt<number | undefined>(f, 'count', (v) => isU32(v) && (v as number) >= 1, 'a positive uint32', undefined) : undefined,
         intervene,
       };
@@ -574,7 +578,7 @@ export function decode(buf: ArrayBuffer | Uint8Array): Message | UnknownMsg {
         op,
         status,
         name: opt(f, 'name', isName, 'a parameter or action name', undefined),
-        value: opt(f, 'value', isSetValue, 'a number, a boolean or a choice', undefined),
+        value: opt(f, 'value', isSetValue, 'a number, a boolean or bounded text', undefined),
         message: opt(f, 'message', isText, `a string of at most ${LIMITS_31.textMax} bytes`, undefined),
         error,
       };
@@ -694,10 +698,13 @@ export function encode(msg: Message, minor: number = PROTOCOL_MINOR): Uint8Array
       }), sections);
     }
     case 'controls':
+      if (msg.params.some((p) => p.type === 'text' && (!isParamText(p.value) || (p.pending != null && !isParamText(p.pending))))) bad(id, 'invalid text parameter');
       return encodeFrame(id, drop({ run: msg.run, params: msg.params, actions: msg.actions, interventions: msg.interventions }), msg.stamp ? [stampSection('stamp', msg.stamp, [msg.stamp.length])] : []);
     case 'control':
+      if (msg.op === 'set' && !isSetValue(msg.value)) bad(id, 'invalid parameter value');
       return encodeFrame(id, drop({ request_id: msg.request_id, op: msg.op, name: msg.name, value: msg.value, count: msg.count, intervene: msg.intervene }));
     case 'control_reply':
+      if (msg.value != null && !isSetValue(msg.value)) bad(id, 'invalid parameter value');
       return encodeFrame(id, drop({
         request_id: msg.request_id, op: msg.op, status: msg.status, name: msg.name, value: msg.value, message: msg.message, error: msg.error,
       }));

@@ -120,6 +120,7 @@ MAX_PARAMS = 64
 MAX_ACTIONS = 64
 MAX_CHOICES = 64
 TEXT_MAX = 1024
+PARAM_TEXT_MAX = 4096
 MAX_ITEM_SPACES = 16
 MAX_SELECTION = 32768                  # CALIPER_NET_MAX_EVENT_INDICES
 MAX_DETAIL_ITEMS = 32
@@ -347,8 +348,8 @@ def _param_spec(name, value, lo, hi, log, choices, help):
         return "boolean", value, None, None, False, None, help
     if isinstance(value, str):
         from ._interpret_protocol import text
-        if not text(value, TEXT_MAX):
-            raise ValueError(f"parameter {name!r}: text must be valid UTF-8 within {TEXT_MAX} bytes")
+        if not text(value, PARAM_TEXT_MAX):
+            raise ValueError(f"parameter {name!r}: text must be valid UTF-8 without NUL within {PARAM_TEXT_MAX} bytes")
         if lo is not None or hi is not None or log:
             raise ValueError(f"parameter {name!r}: text takes no min, max or log")
         return "text", value, None, None, False, None, help
