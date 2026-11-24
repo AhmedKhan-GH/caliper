@@ -805,6 +805,28 @@ def test_publication_wait_rejects_a_stale_step():
     session.ready_programs.assert_called_once_with(["probabilities"])
 
 
+@pytest.mark.parametrize("page", [0, 1])
+def test_example_page_waits_for_page_identity_and_one_resource_step(page):
+    from unittest.mock import Mock
+    session = driver.Session.__new__(driver.Session)
+    old = {"step": 8, "elements": [[i, (1 - page) * 8 + i, i, 25] for i in range(8)]}
+    current = {"step": 9, "elements": [[i, page * 8 + i, i, 25] for i in range(8)]}
+    latest = dict(current, step=10)
+    cells = {"step": 10, "elements": [[0] * 8 for _ in range(200)]}
+    session.read = Mock(side_effect=[old, current, cells, latest, cells])
+    session.ready_programs = Mock()
+    session.events = Mock()
+    def until(description, read):
+        assert read() is False
+        assert read() is False
+        return read()
+    session.events.until.side_effect = until
+    assert session.example_page(page, minimum_step=7) == (latest, cells)
+    session.ready_programs.assert_called_once_with(["example_tokens"])
+    assert session.read.call_count == 5
+    assert all(call.kwargs["minimum_step"] >= 7 for call in session.read.call_args_list)
+
+
 @pytest.mark.parametrize("status", ["ok", "error"])
 def test_run_action_waits_for_its_fresh_completion(status):
     from unittest.mock import Mock
@@ -956,6 +978,7 @@ def test_acceptance_uses_explicit_ablation_and_retains_selection_gate(tmp_path, 
     after_reply = dict(before_reply, step=14)
     session = Mock(out=tmp_path, run_id="circuit-trace", program_evidence={"before": {}}, quality_override=None)
     session.read.return_value = before_reply
+    session.example_page.return_value = before_reply, before_reply
     session.ablate_selected.return_value = after_reply, after
     def complete(method, **args):
         if method == "trace.run": return {"step": 1, "seconds": 0}

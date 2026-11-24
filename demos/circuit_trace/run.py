@@ -206,6 +206,20 @@ class Session:
             return False
         return self.events.until(f"published {program}/{resource}", published)
 
+    def example_page(self, page, *, minimum_step=0):
+        def published():
+            rows = self.read("example_tokens", "rows", minimum_step=minimum_step)
+            records = rows.get("elements", [])
+            if len(records) != 8 or any(len(row) != 4 or row[1:3] != [page * 8 + i, i]
+                                        for i, row in enumerate(records)):
+                self.ready_programs(["example_tokens"])
+                return False
+            cells = self.read("example_tokens", "cells", minimum_step=rows["step"])
+            if cells["step"] != rows["step"]:
+                return False
+            return rows, cells
+        return self.events.until(f"published example page {page + 1}", published)
+
     def ready_programs(self, identifiers):
         def compiled():
             statuses = self.mcp.body("program.status")["programs"]
@@ -528,8 +542,7 @@ def acceptance(session, args, result):
     s.bridge = bridge
     examples = bridge.select(selected["index"])
     s.events.complete("feature.examples", node=selected["index"], limit=16)
-    first_page = s.read("example_tokens", "rows")
-    first_cells = s.read("example_tokens", "cells", minimum_step=first_page["step"])
+    first_page, first_cells = s.example_page(0)
     before_reply = s.read("probabilities", "cells")
     before = bar_rows(before_reply)
     before_comparison = comparison_evidence(s.events.complete("trace.status"), args.prompt, before)
@@ -544,8 +557,7 @@ def acceptance(session, args, result):
                             for gate in program_budget_checks(s.program_evidence["before"]))
     s.mcp.body("control.set", id="page", value=1)
     s.events.complete("feature.examples", node=selected["index"], limit=16)
-    page = s.read("example_tokens", "rows", minimum_step=first_page["step"] + 1)
-    page_cells = s.read("example_tokens", "cells", minimum_step=page["step"])
+    page, page_cells = s.example_page(1, minimum_step=first_page["step"] + 1)
     expected_steps["example_tokens"] = page["step"]
     from _checks import example_page_check
     result["checks"].extend([example_page_check(examples, first_page, first_cells, 0),
@@ -555,7 +567,7 @@ def acceptance(session, args, result):
     page_png, page_meta = s.capture("examples-page-2", dict(expected_steps))
     s.mcp.body("control.set", id="page", value=0)
     s.events.complete("feature.examples", node=selected["index"], limit=16)
-    restored_page = s.read("example_tokens", "rows", minimum_step=page["step"] + 1)
+    restored_page, _ = s.example_page(0, minimum_step=page["step"] + 1)
     expected_steps["example_tokens"] = restored_page["step"]
     prior_output = s.read("probabilities", "cells")
     started = time.monotonic()
