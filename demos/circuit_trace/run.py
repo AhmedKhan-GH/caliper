@@ -414,6 +414,7 @@ class Bridge:
         self.last_examples = None
         self.last_selection = None
         self.examples_present = False
+        self.details_expanded = False
 
     def clear_examples(self):
         if self.examples_present:
@@ -458,6 +459,7 @@ class Bridge:
             s.events.complete("feature.examples", node=self.last_selection, limit=16)
         elif event["kind"] == "control" and event.get("control") == "method_details":
             instrument_layout(s, expanded=bool(event["value"]))
+            self.details_expanded = bool(event["value"])
 
     def consume(self, *, tolerate_refusals=False):
         s = self.session
@@ -477,6 +479,13 @@ class Bridge:
             self.consume()
             return self.last_examples if self.last_selection == row else False
         return self.session.events.until("feature pick bridge", selected)
+
+    def details(self, expanded):
+        self.session.mcp.body("control.set", id="method_details", value=expanded)
+        def applied():
+            self.consume()
+            return self.details_expanded == expanded
+        self.session.events.until("method disclosure layout", applied)
 
     def keep_alive(self):
         while self.session.live():
@@ -588,6 +597,14 @@ def acceptance(session, args, result):
                                      fixture=args.model == "tiny-lm",
                                      argmax_token_ids=after_comparison["argmax_token_ids"])
     save(s.out.parent / "result.json", result)
+    if not s.show:
+        bridge.details(True)
+        expanded_png, expanded_meta = s.capture("methods-expanded", dict(expected_steps))
+        result["method_details_capture"] = expanded_png.name
+        bridge.details(False)
+        result["checks"].append(check("method_details_toggle", not bridge.details_expanded,
+                                       {"expanded_capture": expanded_png.name, "restored": True},
+                                       "expanded capture and restored compact layout"))
     # Generate while the selected feature clamp remains active.
     prior_generation = generation_baseline(s.events.complete("trace.status"), args.prompt)
     s.mcp.body("run.action", run=s.run_id, name="generate")

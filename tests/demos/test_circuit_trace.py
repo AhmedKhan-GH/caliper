@@ -1172,6 +1172,7 @@ def test_bridge_expands_and_collapses_method_details():
         for value in (True, False):
             bridge.handle({"kind": "control", "control": "method_details", "value": value})
             layout.assert_called_with(session, expanded=value)
+            assert bridge.details_expanded is value
     assert layout.call_count == 2
 
 
