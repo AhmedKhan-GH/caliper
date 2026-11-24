@@ -151,6 +151,27 @@ def test_empty_index_and_zero_features(tmp_path):
     assert len(index.documents) == len(index.tokens) == 0
 
 
+@pytest.mark.parametrize("stop", [False, True])
+def test_empty_document_refuses_before_the_stream_advances(tmp_path, stop):
+    from caliper.interp._memory import CleanStop
+    model, _ = write_fixture(tmp_path)
+    stages = []
+    def documents():
+        yield "empty", []
+        pytest.fail("the builder consumed another empty document")
+    def check(stage):
+        stages.append(stage)
+        if stop and stage == "document":
+            raise CleanStop("fixture document stop")
+    error = CleanStop if stop else ValueError
+    message = "document stop" if stop else "must not be empty"
+    with pytest.raises(error, match=message):
+        build_index(tmp_path, documents(), model=model, tokenizer=TinyTokenizer(),
+                    provenance={"partition": "fixture"}, max_tokens=1, memory_guard=check)
+    assert stages[-1] == "document"
+    assert not (tmp_path / "index" / "index.json").exists()
+
+
 def test_one_token_document_and_budget_edge(tmp_path):
     model, _ = write_fixture(tmp_path)
     build_index(tmp_path, [("one", [65]), ("cut", [66, 67, 68])], model=model,
@@ -340,6 +361,8 @@ def test_cli_fixture_build_and_query(tmp_path, monkeypatch, capsys):
         peak = 0
         def __init__(self, gb, device):
             assert gb == 12 and device == "cpu"
+            self.limit = int(gb * 1_000_000_000)
+            self.device = torch.device(device)
         def check(self, stage, **kwargs):
             stages.append(stage)
     monkeypatch.setattr(command, "MemoryGuard", Memory)
@@ -544,6 +567,39 @@ def test_text_scan_observes_resource_stops():
             raise RuntimeError("fixture scan stop")
     with pytest.raises(RuntimeError, match="fixture scan stop"):
         list(stream_documents(stream, check=check))
+
+
+def test_index_identity_checks_the_supplied_memory_limit_before_export_and_open(tmp_path):
+    from caliper.interp._memory import CleanStop, MemoryGuard
+
+    model, _ = write_fixture(tmp_path)
+    dictionary = load_dictionary(tmp_path, model=model)
+    tokenizer = TinyTokenizer()
+    memory = MemoryGuard(.001, "cpu", resident=lambda: 0, footprint=lambda: 0,
+                         peak=lambda: 0, driver=lambda: 0, pressure=lambda: 50)
+    arguments = dict(model=model, tokenizer=tokenizer, dictionary=dictionary,
+                     provenance={"partition": "fixture-examples"})
+    with pytest.raises(CleanStop, match="identity allocation"):
+        build_index(tmp_path, [("first", [65, 66])], memory=memory, **arguments)
+    assert not (tmp_path / "index").exists()
+    build_index(tmp_path, [("first", [65, 66])], **arguments)
+    with pytest.raises(CleanStop, match="identity allocation"):
+        FeatureIndex(tmp_path, model=model, tokenizer=tokenizer, dictionary=dictionary, memory=memory)
+
+
+@pytest.mark.skipif(not torch.backends.mps.is_available(), reason="device dictionary identity requires MPS")
+def test_device_dictionary_hash_retains_cpu_identity(tmp_path):
+    from caliper.interp._index import _dictionary_hash
+    from caliper.interp._memory import MemoryGuard, autorelease_scope
+
+    model, _ = write_fixture(tmp_path)
+    dictionary = load_dictionary(tmp_path, model=model, dtype=torch.float32)
+    expected = _dictionary_hash(dictionary)
+    memory = MemoryGuard(12, "mps")
+    with autorelease_scope("mps"):
+        dictionary.to("mps")
+        assert _dictionary_hash(dictionary, memory=memory) == expected
+        assert _dictionary_hash(dictionary) == expected
 
 
 def test_cli_local_parquet_preserves_source_and_closes_stream(tmp_path, monkeypatch):

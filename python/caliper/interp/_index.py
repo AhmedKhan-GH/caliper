@@ -37,10 +37,12 @@ def _hash_file(path):
     return digest.hexdigest()
 
 
-def _dictionary_hash(dictionary):
+def _dictionary_hash(dictionary, *, memory=None):
+    device = next(dictionary.parameters()).device
+    memory = memory if memory is not None else MemoryGuard(12, device)
     digest = hashlib.sha256(_json(dictionary.metadata).encode())
-    with _device_scope(next(dictionary.parameters()).device):
-        digest.update(weights_hash(dictionary).encode())
+    with _device_scope(device):
+        digest.update(weights_hash(dictionary, memory=memory).encode())
     return digest.hexdigest()
 
 
@@ -177,10 +179,11 @@ def _forward(model, input_ids, attention_mask):
 
 
 def build_index(dictionary_path, documents, *, model, tokenizer, provenance,
-                dictionary=None, max_tokens=MAX_TOKENS, context_length=256, memory_guard=None):
+                dictionary=None, max_tokens=MAX_TOKENS, context_length=256, memory_guard=None,
+                memory=None):
     """Index ``(document_id, token_ids)`` pairs in source order.
 
-    IDs must be unique UTF-8 strings of at most 128 bytes. Each pair is one document.
+    IDs must be unique UTF-8 strings of at most 128 bytes. Each pair is one nonempty document.
     Context blocks reset within each document. The last document can end at the token cap.
     The caller supplies disjoint partition provenance. The tool validates T2 partitions.
     An existing index is never overwritten. A failed build has no completion manifest.
@@ -195,7 +198,7 @@ def build_index(dictionary_path, documents, *, model, tokenizer, provenance,
     dictionary = dictionary if dictionary is not None else load_dictionary(root, model=model)
     data = _compatible(model, dictionary)
     check("dictionary")
-    identity = _dictionary_hash(dictionary)
+    identity = _dictionary_hash(dictionary, memory=memory)
     source_hash = _source_hash(root, data["layers"])
     vocab = model.get_output_embeddings().weight.shape[0]
     tokenizer_hash = _tokenizer_hash(tokenizer, vocab)
@@ -207,18 +210,19 @@ def build_index(dictionary_path, documents, *, model, tokenizer, provenance,
     seen = set()
     with table, (folder / "tokens.bin").open("wb") as token_file, (folder / "documents.bin").open("wb") as doc_file:
         for document_id, token_ids in documents:
+            check("document")
             if not isinstance(document_id, str) or not document_id or len(document_id.encode()) > 128 or "\0" in document_id:
                 raise ValueError("invalid document ID")
             if document_id in seen:
                 raise ValueError("duplicate document ID")
-            seen.add(document_id)
             tokens = np.asarray(token_ids)
             if tokens.ndim != 1 or (tokens.size and (tokens.dtype.kind not in "iu" or
                                                     tokens.min() < 0 or tokens.max() >= min(vocab, 2**32))):
                 raise ValueError("invalid document token IDs")
             length = min(len(tokens), max_tokens - total)
             if not length:
-                continue
+                raise ValueError("document token IDs must not be empty")
+            seen.add(document_id)
             truncated = length < len(tokens)
             tokens = tokens[:length].astype("<u4", copy=False)
             token_file.write(tokens.tobytes())
@@ -293,7 +297,7 @@ class FeatureIndex:
                     manifest["top_examples"] != TOP_EXAMPLES or manifest["window_tokens"] != WINDOW_TOKENS):
                 raise ValueError("incomplete or unsupported index")
             if (manifest["dictionary_source_hash"] != _source_hash(self.root, data["layers"]) or
-                    manifest["dictionary_hash"] != _dictionary_hash(self.dictionary) or
+                    manifest["dictionary_hash"] != _dictionary_hash(self.dictionary, memory=self.memory) or
                     manifest["model_hash"] != data["model_hash"]):
                 raise ValueError("index dictionary identity mismatch")
             vocab = model.get_output_embeddings().weight.shape[0]

@@ -143,7 +143,8 @@ def main(argv=None):
             dictionary = load_dictionary(args.dictionary, model=model, memory_limit_gb=args.memory_gb)
             memory.check("dictionary")
             if args.query is not None:
-                with FeatureIndex(args.dictionary, model=model, tokenizer=tokenizer, dictionary=dictionary) as index:
+                with FeatureIndex(args.dictionary, model=model, tokenizer=tokenizer,
+                                  dictionary=dictionary, memory=memory) as index:
                     memory.check("index")
                     layer, feature = args.query
                     response = {"show": index.show(layer, feature), "examples": index.examples(layer, feature, args.limit)}
@@ -172,7 +173,7 @@ def main(argv=None):
                 manifest = build_index(
                     args.dictionary, stream_documents(stream, check=check), model=model, tokenizer=tokenizer,
                     dictionary=dictionary, provenance=provenance, max_tokens=args.tokens,
-                    context_length=args.context, memory_guard=check,
+                    context_length=args.context, memory_guard=check, memory=memory,
                 )
             memory.check("complete")
             print(json.dumps({"stage": "index_ready", "tokens": manifest["tokens"],
