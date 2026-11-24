@@ -383,7 +383,13 @@ def main(argv=None):
             stop.check()
             memory.check("after_dictionary_load")
             stop.check()
-            source = fineweb_documents(cache_dir=args.dataset_cache, local_manifest=args.local_dataset_manifest)
+
+            def source_health():
+                stop.check()
+                memory.check("evaluation_source", force=False)
+
+            source = fineweb_documents(cache_dir=args.dataset_cache, local_manifest=args.local_dataset_manifest,
+                                       health=source_health)
             if hasattr(source, "close"):
                 resources.callback(source.close)
             stream = resources.enter_context(TextStream(source, tokenizer, "quality"))
