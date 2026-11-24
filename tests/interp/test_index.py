@@ -151,6 +151,27 @@ def test_empty_index_and_zero_features(tmp_path):
     assert len(index.documents) == len(index.tokens) == 0
 
 
+@pytest.mark.parametrize("stop", [False, True])
+def test_empty_document_refuses_before_the_stream_advances(tmp_path, stop):
+    from caliper.interp._memory import CleanStop
+    model, _ = write_fixture(tmp_path)
+    stages = []
+    def documents():
+        yield "empty", []
+        pytest.fail("the builder consumed another empty document")
+    def check(stage):
+        stages.append(stage)
+        if stop and stage == "document":
+            raise CleanStop("fixture document stop")
+    error = CleanStop if stop else ValueError
+    message = "document stop" if stop else "must not be empty"
+    with pytest.raises(error, match=message):
+        build_index(tmp_path, documents(), model=model, tokenizer=TinyTokenizer(),
+                    provenance={"partition": "fixture"}, max_tokens=1, memory_guard=check)
+    assert stages[-1] == "document"
+    assert not (tmp_path / "index" / "index.json").exists()
+
+
 def test_one_token_document_and_budget_edge(tmp_path):
     model, _ = write_fixture(tmp_path)
     build_index(tmp_path, [("one", [65]), ("cut", [66, 67, 68])], model=model,

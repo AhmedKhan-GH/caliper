@@ -183,7 +183,7 @@ def build_index(dictionary_path, documents, *, model, tokenizer, provenance,
                 memory=None):
     """Index ``(document_id, token_ids)`` pairs in source order.
 
-    IDs must be unique UTF-8 strings of at most 128 bytes. Each pair is one document.
+    IDs must be unique UTF-8 strings of at most 128 bytes. Each pair is one nonempty document.
     Context blocks reset within each document. The last document can end at the token cap.
     The caller supplies disjoint partition provenance. The tool validates T2 partitions.
     An existing index is never overwritten. A failed build has no completion manifest.
@@ -210,18 +210,19 @@ def build_index(dictionary_path, documents, *, model, tokenizer, provenance,
     seen = set()
     with table, (folder / "tokens.bin").open("wb") as token_file, (folder / "documents.bin").open("wb") as doc_file:
         for document_id, token_ids in documents:
+            check("document")
             if not isinstance(document_id, str) or not document_id or len(document_id.encode()) > 128 or "\0" in document_id:
                 raise ValueError("invalid document ID")
             if document_id in seen:
                 raise ValueError("duplicate document ID")
-            seen.add(document_id)
             tokens = np.asarray(token_ids)
             if tokens.ndim != 1 or (tokens.size and (tokens.dtype.kind not in "iu" or
                                                     tokens.min() < 0 or tokens.max() >= min(vocab, 2**32))):
                 raise ValueError("invalid document token IDs")
             length = min(len(tokens), max_tokens - total)
             if not length:
-                continue
+                raise ValueError("document token IDs must not be empty")
+            seen.add(document_id)
             truncated = length < len(tokens)
             tokens = tokens[:length].astype("<u4", copy=False)
             token_file.write(tokens.tobytes())
