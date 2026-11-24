@@ -6,6 +6,7 @@ import threading
 import time
 
 from .. import _interpret_protocol as protocol
+from ._labels import pack_labels
 
 
 class Refused(ValueError):
@@ -212,23 +213,14 @@ class InterpretationService:
             for col, j in enumerate(slots):
                 tokens[i, col] = row["token_ids"][j]
                 activations[i, col] = row["activations"][j]
-                raw = row["tokens"][j].encode("utf-8")[:63].decode("utf-8", errors="ignore").encode("utf-8")
-                raw = raw.ljust(64, b"\0")
-                labels[i * 25 + col] = torch.tensor([int.from_bytes(raw[k:k + 4], "little") for k in range(0, 64, 4)], dtype=torch.uint32)
+                labels[i * 25 + col] = pack_labels([row["tokens"][j]], 1)[0]
         for name, value in zip(("tokens", "activations", "example_ids", "valid_tokens", "label_text"),
                                (tokens, activations, ids, valid, labels)):
             publish("examples." + name, value.to(device))
 
     @staticmethod
     def _pack_labels(values, count):
-        import torch
-        labels = torch.zeros((count, 16), dtype=torch.uint32)
-        for i, value in enumerate(values):
-            raw = str(value).encode("utf-8")[:63].decode("utf-8", errors="ignore").encode("utf-8")
-            raw = raw.ljust(64, b"\0")
-            labels[i] = torch.tensor([int.from_bytes(raw[j:j + 4], "little") for j in range(0, 64, 4)],
-                                     dtype=torch.uint32)
-        return labels
+        return pack_labels(values, count)
 
     def _publish_trace_panels(self, graph):
         """Publish display labels and the existing traced probabilities without a forward."""
