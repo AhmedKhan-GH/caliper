@@ -2139,8 +2139,8 @@ class Controls:
     def _apply_interventions(self, controllers=None) -> bool:
         """Prepare boundary effects outside the lock and commit one unchanged revision.
 
-        Concurrent requests cancel this attempt and remain queued for the next boundary.
-        Existing hooks stay installed until commit. A failed attempt removes only its hooks.
+        Due lifecycle work completes first. Concurrent requests cancel speculative
+        additions and remain queued. A failed preparation removes only its new hooks.
         """
         from copy import copy
         if not self._iv_due:
@@ -2152,6 +2152,9 @@ class Controls:
         if m._operation_owner is not None or self._iv_attaching:
             return False
         with m._operation("boundary"):
+            completed, traffic = self._complete_due_interventions(m, self._next_step())
+            if traffic or self._iv_model is not m:
+                return completed
             revision = self._iv_revision
             originals = dict(self._ivs)
             records = {key: copy(iv) for key, iv in originals.items()}
@@ -2189,10 +2192,10 @@ class Controls:
                     if prepared is None:
                         for message in reports:
                             warnings.warn(message, RuntimeWarning, stacklevel=2)
-                        return points_changed
+                        return points_changed or completed
                     changed = prepared or changed
                 if self._iv_model is not m or self._iv_revision != revision:
-                    return points_changed
+                    return points_changed or completed
                 self._check_metadata_budget(ivs=records)
                 for key, iv in originals.items():
                     if key not in records:
@@ -2207,7 +2210,7 @@ class Controls:
                 if lingered:
                     self._alone_since = None
                 committed = True
-                return changed
+                return changed or completed
             finally:
                 with self._outside_lock():
                     if committed:
@@ -2227,6 +2230,109 @@ class Controls:
                         m.executor._cache.update(cache)
                         m.executor._cache_identity = identity
 
+    def _complete_due_interventions(self, m, step):
+        """Complete expirations, clears, and scheduled starts in one bounded pass.
+
+        Source callbacks may queue requests. Only lifecycle fields from this pass
+        commit, so later requests retain their specification and clear flag.
+        """
+        from copy import copy
+        from .interp._intervene import InterventionError
+
+        removed = []
+        changed = False
+        for key, iv in list(self._ivs.items()):
+            expired = iv.until_step is not None and iv.until_step <= step
+            applied_until = (iv.applied_spec or {}).get("until_step")
+            applied_expired = applied_until is not None and applied_until <= step
+            if not iv.clear and not (iv.state != IV_ENDED and (expired or applied_expired)):
+                continue
+            removed.append(copy(iv))
+            if iv.clear:
+                del self._ivs[key]
+            else:
+                iv.hook, iv.applied_spec, iv.replace = None, None, False
+                iv.state = IV_ENDED if expired else IV_PENDING
+                if not expired:
+                    iv.since_step = None
+            changed = True
+        if changed:
+            self._iv_revision += 1
+            with self._outside_lock():
+                for iv in removed:
+                    self._unhook(iv)
+        if self._iv_model is not m:
+            return changed, True
+
+        scheduled = {key for key, iv in self._ivs.items()
+                     if (iv.state != IV_ENDED and not iv.clear and iv.hook is None
+                         and iv.from_step is not None and iv.from_step <= step)}
+        if not scheduled:
+            return changed, False
+        revision = self._iv_revision
+        originals = dict(self._ivs)
+        previous = {key: copy(iv) for key, iv in originals.items()
+                    if iv.hook is not None or key in scheduled}
+        records = {key: copy(iv) for key, iv in previous.items()}
+        for iv in records.values():
+            if iv.hook is not None:
+                # Reorder existing effects with their applied specification. A
+                # replacement request belongs to the later speculative phase.
+                iv.spec = iv.applied_spec
+                iv.from_step, iv.until_step = iv.spec.get("from_step"), iv.spec.get("until_step")
+                iv.replace, iv.clear = False, False
+        cache, identity = m.executor._cache.copy(), m.executor._cache_identity
+        committed = False
+        reports = []
+        try:
+            with (self._outside_lock(), m.executor._retire_sources(
+                    self._boundary_retirements(records, step))):
+                prepared, reports = self._prepare_interventions(m, records, originals, step)
+            if self._iv_model is not m:
+                return changed, True
+            if prepared is None:
+                raise InterventionError("scheduled intervention preparation failed", ERR_NOT_SUPPORTED)
+            prospective = {key: copy(iv) for key, iv in self._ivs.items()}
+            for key, prepared in records.items():
+                current = prospective.get(key)
+                if (self._ivs.get(key) is not originals[key]
+                        or current.hook is not previous[key].hook):
+                    raise InterventionError("scheduled intervention ownership changed", ERR_NOT_SUPPORTED)
+                current.hook, current.applied_spec = prepared.hook, prepared.applied_spec
+                if key in scheduled or prepared.state != previous[key].state:
+                    current.state, current.since_step = prepared.state, prepared.since_step
+                    current.error, current.error_code = prepared.error, prepared.error_code
+                    if prepared.state == IV_ENDED and current.spec != previous[key].spec:
+                        # A newer request survives a failure of the captured schedule.
+                        current.state, current.since_step = IV_PENDING, None
+                        current.error, current.error_code = None, None
+                current.replace = current.applied_spec is not None and current.spec != current.applied_spec
+            self._check_metadata_budget(ivs=prospective)
+            traffic = self._iv_revision != revision
+            for key in records:
+                iv = originals[key]
+                for field in _Intervention.__slots__:
+                    setattr(iv, field, getattr(prospective[key], field))
+            self._iv_revision += 1
+            committed = True
+            return True, traffic
+        finally:
+            with self._outside_lock():
+                if committed:
+                    for key, iv in previous.items():
+                        if iv.hook is not records[key].hook:
+                            self._unhook(iv, retain_source=True)
+                    m.executor._discard_unused_sources()
+                    for message in reports:
+                        warnings.warn(message, RuntimeWarning, stacklevel=2)
+                else:
+                    for key, iv in records.items():
+                        if iv.hook is not previous[key].hook:
+                            self._unhook(iv, retain_source=True)
+                    m.executor._cache.clear()
+                    m.executor._cache.update(cache)
+                    m.executor._cache_identity = identity
+
     @staticmethod
     def _boundary_retirements(records, step):
         """Identify old hooks that a successful boundary removes or replaces."""
@@ -2244,6 +2350,8 @@ class Controls:
 
     def _prepare_interventions(self, m, records, originals, s):
         """Build the next hook sequence without changes to the published records."""
+        from .interp._memory import CleanStop
+
         changed = False
         reinstall = False
         reports = []
@@ -2277,7 +2385,7 @@ class Controls:
                     self._install_intervention(m, iv, iv.spec, owner=originals[key])
                     reinstall = True
                 except Exception as e:
-                    if self._resource_stop(e):
+                    if isinstance(e, CleanStop) or self._resource_stop(e):
                         raise
                     iv.error = self._stop_message(f"{type(e).__name__}: {e}")
                     iv.error_code = "intervene.hook_failed"

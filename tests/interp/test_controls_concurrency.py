@@ -449,7 +449,7 @@ def test_restore_rechecks_metadata_after_concurrent_parameter_admission(controll
 
 
 @isolated_test("controlled")
-def test_cancelled_late_activation_retains_overlap_order_at_next_boundary(controlled):
+def test_due_activation_retains_overlap_order_before_conflicting_replacement(controlled):
     model, tokenizer, ctl, service = controlled
     ablation = {"kind": "ablate", "point": "layers.0.mlp_out", "from_step": 10}
     service.set(ablation)
@@ -460,18 +460,27 @@ def test_cancelled_late_activation_retains_overlap_order_at_next_boundary(contro
     with source_gate(model, lambda: ctl.step(9)) as job:
         other_thread(lambda: service.set(add_spec(coefficient=2)))
     job.success()
-    assert not old.removed
-    assert ctl._ivs[("layers.0.mlp_out", "ablate")].state == "pending"
-    ctl.step(9)
     assert old.removed
-    values = []
-    observer = model.layers[0].mlp.register_forward_hook(lambda m, a, y: values.append(y.detach().clone()))
-    try:
-        model(**tokenizer("ABC"))
-    finally:
-        observer.remove()
-    assert len(values) == 1
-    torch.testing.assert_close(values[0], torch.full_like(values[0], 0.2), rtol=0, atol=0)
+    ablation = ctl._ivs[("layers.0.mlp_out", "ablate")]
+    addition = ctl._ivs[("layers.0.mlp_out", "add")]
+    assert ablation.state == "active" and ablation.since_step == 10
+    assert addition.applied_spec["coefficient"] == 1 and addition.spec["coefficient"] == 2
+
+    def observed_output():
+        values = []
+        observer = model.layers[0].mlp.register_forward_hook(lambda m, a, y: values.append(y.detach().clone()))
+        try:
+            model(**tokenizer("ABC"))
+        finally:
+            observer.remove()
+        assert len(values) == 1
+        return values[0]
+
+    current = observed_output()
+    torch.testing.assert_close(current, torch.full_like(current, 0.1), rtol=0, atol=0)
+    ctl.step(9)
+    current = observed_output()
+    torch.testing.assert_close(current, torch.full_like(current, 0.2), rtol=0, atol=0)
 
 
 def test_boundary_source_failure_ends_only_failed_record(controlled):
