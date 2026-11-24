@@ -1,6 +1,8 @@
 """Bounded CPU evidence for graph labels from immutable feature indexes."""
 from collections import Counter
+from copy import deepcopy
 from itertools import repeat
+import json
 from types import SimpleNamespace
 
 import numpy as np
@@ -9,10 +11,13 @@ import torch
 
 from caliper.interp import load_dictionary
 from caliper.interp import _index
+from caliper.interp._feature_labels import label_graph_nodes
+from caliper.interp._graph import Graph, TOKEN_CAP
 from caliper.interp._index import FeatureIndex, LABEL_FEATURES, build_index
 from caliper.interp._memory import CleanStop, MemoryGuard
 from .fixture import TinyLM, TinyTokenizer
 from .test_dictionary import write_fixture
+from .test_token_labels import unpack_label
 
 
 @pytest.fixture
@@ -124,8 +129,10 @@ def test_full_label_batch_cache_bound_and_window_independence(label_index, monke
     assert keys[0] in index._summaries and keys[1] not in index._summaries
     assert len(index._summaries) == LABEL_FEATURES
     assert index._cache == window_cache
+    identity = index.label_identity
     index.clear_cache()
     assert index._cache == index._summaries == {}
+    assert index.label_identity == identity
 
 
 @pytest.mark.parametrize("features", [[(-1, 0)], [(0, -1)], [(2, 0)], [(0, 300)],
@@ -185,3 +192,72 @@ def test_nonfinite_promoted_batch_refuses_cache(label_index, bad):
     with pytest.raises(ValueError, match="finite"):
         index.labels([(0, 0), (1, 0)])
     assert index._summaries == {}
+
+
+def display_nodes():
+    common = {"activation": 1., "influence": .5, "effect": .25}
+    return [
+        dict(common, kind="token", id="t:0", layer=-1, position=0, token_id=65, label="A"),
+        dict(common, kind="feature", id="f:0:0:0", layer=0, position=0, feature=0, label="L0 F0"),
+        dict(common, kind="feature", id="f:0:1:0", layer=0, position=1, feature=0, label="L0 F0"),
+        dict(common, kind="error", id="e:0:0", layer=0, position=0, label="L0 error"),
+        dict(common, kind="logit", id="l:66", layer=2, position=1, token_id=66, label="B", probability=.75),
+    ]
+
+
+def test_graph_json_and_publication_share_decorated_labels(label_index, monkeypatch):
+    index = label_index
+    nodes = display_nodes()
+    original = deepcopy(nodes)
+    labeled = label_graph_nodes(nodes, index)
+    expected = index.show(0, 0)["label"]
+    assert labeled[1]["label"] == labeled[2]["label"] == expected
+    assert labeled[0] == nodes[0] and labeled[3:] == nodes[3:]
+    assert nodes == original
+    assert all(left is not right for left, right in zip(nodes, labeled))
+    assert [{k: v for k, v in n.items() if k != "label"} for n in labeled] == [
+        {k: v for k, v in n.items() if k != "label"} for n in original]
+    published = {}
+    monkeypatch.setattr("caliper.interp.publish", lambda name, tensor: published.update({name: tensor.clone()}))
+    graph = Graph.build(nodes=labeled, edges=[{"source": 0, "target": 1, "weight": .25}],
+                        tokens=[{"position": 0, "token_id": 65, "text": "A"}], layers=2,
+                        completeness={}, omitted_influence=0., error_share=.1, feature_share=.9,
+                        trace_id="fixture-labels", device="cpu")
+    graph.publish()
+    assert graph.read()["nodes"] == labeled
+    assert json.loads(graph.to_json())["nodes"][1]["label"] == expected
+    packed = expected.encode("utf-8")[:63].decode("utf-8", errors="ignore")
+    assert unpack_label(published["trace.label_text"][TOKEN_CAP + 1]) == packed
+    assert unpack_label(published["trace.label_text"][TOKEN_CAP + 2]) == packed
+    assert unpack_label(published["trace.label_text"][0]) == "A"
+    assert unpack_label(published["trace.label_text"][TOKEN_CAP + 3]) == "L0 error"
+    assert unpack_label(published["trace.logit_label_text"][0]) == "B"
+    first = {name: value.clone() for name, value in published.items()}
+    monkeypatch.setattr(index, "labels", refuse)
+    graph.publish()  # A cached graph already owns its labels.
+    assert all(torch.equal(first[name], value) for name, value in published.items())
+
+
+def test_graph_label_decoration_is_atomic_and_bounded():
+    nodes = display_nodes()
+    original = deepcopy(nodes)
+    calls = []
+    def labels(features, **kwargs):
+        calls.append(features)
+        raise CleanStop("fixture graph cancellation")
+    index = SimpleNamespace(labels=labels)
+    with pytest.raises(CleanStop, match="graph cancellation"):
+        label_graph_nodes(nodes, index)
+    assert calls == [[(0, 0), (0, 0)]]
+    assert nodes == original
+    with pytest.raises(ValueError, match="label nodes"):
+        label_graph_nodes([nodes[1]] * 513, index)
+    assert len(calls) == 1
+
+
+def test_indexless_graph_keeps_explicit_feature_ids():
+    nodes = display_nodes()
+    nodes[1]["label"] = None
+    labeled = label_graph_nodes(nodes)
+    assert labeled[1]["label"] == labeled[2]["label"] == "L0 F0"
+    assert nodes[1]["label"] is None
