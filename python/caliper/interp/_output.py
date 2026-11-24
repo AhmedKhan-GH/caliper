@@ -5,6 +5,7 @@ from contextvars import ContextVar
 import torch
 
 from .._interpret_protocol import MAX_STRING, text
+from ._labels import display_text, token_label
 from ._memory import autorelease_scope
 
 _INTERNAL = ContextVar("caliper_inference_forward", default=False)
@@ -68,8 +69,8 @@ def forward_logits(model, inputs, *, last_token=True, guard=None):
 
 
 def bounded_text(text, limit=1024):
-    """Keep complete UTF-8 characters and remove embedded NUL characters."""
-    return str(text).replace("\0", "").encode("utf-8", errors="replace")[:limit].decode("utf-8", errors="ignore")
+    """Keep complete UTF-8 characters and the shared NUL display escape."""
+    return display_text(text).encode("utf-8")[:limit].decode("utf-8", errors="ignore")
 
 
 def packed_labels(labels, device):
@@ -115,7 +116,7 @@ class Output:
                     replace = next(i for i in range(9, -1, -1) if int(ids[i]) not in winners)
                     ids[replace] = winner
             values = probabilities[:, ids].to(torch.float32)
-            labels = [bounded_text(self.tokenizer.convert_ids_to_tokens(i), 63) for i in ids.tolist()]
+            labels = [bounded_text(token_label(self.tokenizer, i), 63) for i in ids.tolist()]
             publish("output.probs", values)
             publish("output.tokens", ids.to(torch.int32))
             publish("output.label_text", packed_labels(labels, ids.device))
