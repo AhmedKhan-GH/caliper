@@ -9,7 +9,7 @@ from tools.interp import checkpoint_state, eval_dictionary as evaluation, train_
 from tools.interp.memory_limits import CleanStop
 from tools.interp.text_stream import TextStream
 from .fixture import TinyTokenizer
-from .test_dictionary import write_fixture
+from .test_dictionary import memory_readers, write_fixture
 from .test_training_stream import documents
 from .test_upper_half import fallback_manifest, tiny_model, upper_trainer
 
