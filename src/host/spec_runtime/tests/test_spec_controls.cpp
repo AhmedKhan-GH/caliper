@@ -33,6 +33,7 @@
 #include <cstdlib>
 #include <functional>
 #include <limits>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -125,6 +126,7 @@ struct Ui {
     ImGuiContext* ctx;
     Ui() {
         ctx = ImGui::CreateContext();
+        ImGui::SetCurrentContext(ctx);
         ImGuiIO& io = ImGui::GetIO();
         io.IniFilename = nullptr;
         io.LogFilename = nullptr;
@@ -138,6 +140,7 @@ struct Ui {
     ~Ui() { ImGui::DestroyContext(ctx); }
     // One frame that draws `inside` in a window over the display.
     void frame(const std::function<void()>& inside) {
+        ImGui::SetCurrentContext(ctx);
         ImGui::NewFrame();
         ImGui::SetNextWindowPos(ImVec2(0, 0));
         ImGui::SetNextWindowSize(ImVec2(800, 200));
@@ -149,6 +152,7 @@ struct Ui {
     // A click at (x, y): the move, the press and the release in three frames;
     // returns how many frames reported a change.
     int click(float x, float y, const std::function<bool()>& draw) {
+        ImGui::SetCurrentContext(ctx);
         int changes = 0;
         ImGuiIO& io = ImGui::GetIO();
         io.AddMousePosEvent(x, y);
@@ -163,6 +167,33 @@ struct Ui {
 };
 
 const ImRect kRow(0, 0, 400, 30);
+
+// This owner precedes function-static draft storage and outlives it at exit.
+// A context shutdown callback must not depend on that storage.
+std::unique_ptr<Ui> exit_ui;
+
+// Count context allocations, including the draft store owned by a hook.
+struct ImGuiAllocations {
+    ImGuiMemAllocFunc allocate;
+    ImGuiMemFreeFunc release;
+    void* user_data;
+    int live = 0;
+
+    ImGuiAllocations() {
+        ImGui::GetAllocatorFunctions(&allocate, &release, &user_data);
+        ImGui::SetAllocatorFunctions([](std::size_t size, void* data) -> void* {
+            auto& self = *static_cast<ImGuiAllocations*>(data);
+            void* ptr = self.allocate(size, self.user_data);
+            if (ptr) ++self.live;
+            return ptr;
+        }, [](void* ptr, void* data) {
+            auto& self = *static_cast<ImGuiAllocations*>(data);
+            if (ptr) --self.live;
+            self.release(ptr, self.user_data);
+        }, this);
+    }
+    ~ImGuiAllocations() { ImGui::SetAllocatorFunctions(allocate, release, user_data); }
+};
 
 }  // namespace
 
@@ -1111,4 +1142,89 @@ TEST_CASE("spec controls: session teardown discards an active text draft") {
     ui.click(180, 15, draw);
     REQUIRE(ImGui::GetCurrentContext()->InputTextState.TextA.Data);
     CHECK(std::string(ImGui::GetCurrentContext()->InputTextState.TextA.Data) == "new prompt");
+}
+
+TEST_CASE("spec controls: a text context survives until process exit") {
+    const auto previous = ImGui::GetCurrentContext();
+    exit_ui = std::make_unique<Ui>();
+    FakeRun run;
+    run.run = training();
+    cb::RunParam prompt;
+    prompt.name = "prompt";
+    prompt.type = "text";
+    prompt.value = "";
+    run.run.params.push_back(prompt);
+    auto control = make("exit_prompt", spec::ControlKind::text, "param:prompt");
+    control.options.max_length = 4;
+    SpecInstrumentHost host{nullptr, &run};
+    const SpecLook look;
+    auto draw = [&] { return caliper_host::draw_spec_control(control, kRow, look, host); };
+    exit_ui->click(180, 15, draw);
+    ImGui::GetIO().AddInputCharactersUTF8("retained draft");
+    exit_ui->frame([&] { draw(); });
+    press(*exit_ui, ImGuiKey_Enter, [&] { draw(); });
+    CHECK(run.sent.empty());
+    CHECK(std::string(exit_ui->ctx->InputTextState.TextA.Data) == "retained draft");
+    // The process exit status covers shutdown after all test cases finish.
+    // The draft must also release without access to the run or host.
+    ImGui::SetCurrentContext(previous);
+}
+
+TEST_CASE("spec controls: context destruction releases isolated text drafts") {
+    ImGuiAllocations allocations;
+    FakeRun run;
+    run.run = training();
+    cb::RunParam prompt;
+    prompt.name = "prompt";
+    prompt.type = "text";
+    prompt.value = "base";
+    run.run.params.push_back(prompt);
+    auto control = make("context_prompt", spec::ControlKind::text, "param:prompt");
+    control.options.max_length = 4;
+    SpecInstrumentHost host{nullptr, &run};
+    const SpecLook look;
+    auto draw = [&] { return caliper_host::draw_spec_control(control, kRow, look, host); };
+    auto draft = [&](Ui& ui, const char* text) {
+        ui.click(180, 15, draw);
+        auto& input = ui.ctx->InputTextState;
+        REQUIRE(input.TextA.Data);
+        CHECK(std::string(input.TextA.Data) == "base");
+        input.SelectAll();
+        ImGui::GetIO().AddInputCharactersUTF8(text);
+        ui.frame([&] { draw(); });
+        press(ui, ImGuiKey_Enter, [&] { draw(); });
+        ui.click(500, 100, draw);
+    };
+    {
+        auto first = std::make_unique<Ui>();
+        draft(*first, "first draft");
+        auto second = std::make_unique<Ui>();
+        draft(*second, "second draft");
+        Ui* survivor = nullptr;
+        std::string expected;
+        SUBCASE("first context closes first") {
+            first.reset();
+            survivor = second.get();
+            expected = "second draft";
+        }
+        SUBCASE("second context closes first") {
+            second.reset();
+            survivor = first.get();
+            expected = "first draft";
+        }
+        REQUIRE(survivor);
+        survivor->click(180, 15, draw);
+        REQUIRE(survivor->ctx->InputTextState.TextA.Data);
+        CHECK(std::string(survivor->ctx->InputTextState.TextA.Data) == expected);
+        CHECK(run.sent.empty());
+    }
+    CHECK(allocations.live == 0);
+    // A new context starts with the producer value after both drafts close.
+    {
+        Ui fresh;
+        fresh.click(180, 15, draw);
+        REQUIRE(fresh.ctx->InputTextState.TextA.Data);
+        CHECK(std::string(fresh.ctx->InputTextState.TextA.Data) == "base");
+    }
+    CHECK(allocations.live == 0);
 }

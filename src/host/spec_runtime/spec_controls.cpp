@@ -752,17 +752,27 @@ struct TextEdit {
     bool retained = false;
 };
 
-// A context owns its drafts. Context shutdown is a deliberate teardown.
-std::map<std::string, TextEdit>& text_edits() {
-    static std::map<ImGuiContext*, std::map<std::string, TextEdit>> contexts;
-    auto [it, added] = contexts.try_emplace(ImGui::GetCurrentContext());
-    if (added) {
-        ImGuiContextHook hook;
-        hook.Type = ImGuiContextHookType_Shutdown;
-        hook.Callback = [](ImGuiContext* context, ImGuiContextHook*) { contexts.erase(context); };
-        ImGui::AddContextHook(ImGui::GetCurrentContext(), &hook);
-    }
-    return it->second;
+using TextEdits = std::map<std::string, TextEdit>;
+
+void destroy_text_edits(ImGuiContext*, ImGuiContextHook* hook) {
+    IM_DELETE(static_cast<TextEdits*>(hook->UserData));
+    hook->UserData = nullptr;
+}
+
+// The context hook owns its drafts. A static context owner can outlive
+// function-static storage, so shutdown must not access a static registry.
+TextEdits& text_edits() {
+    ImGuiContext* context = ImGui::GetCurrentContext();
+    for (const auto& hook : context->Hooks)
+        if (hook.Type == ImGuiContextHookType_Shutdown && hook.Callback == destroy_text_edits)
+            return *static_cast<TextEdits*>(hook.UserData);
+
+    ImGuiContextHook hook;
+    hook.Type = ImGuiContextHookType_Shutdown;
+    hook.Callback = destroy_text_edits;
+    hook.UserData = IM_NEW(TextEdits)();
+    ImGui::AddContextHook(context, &hook);
+    return *static_cast<TextEdits*>(hook.UserData);
 }
 
 // A text field: the person's edit applies on Return or when the field loses
