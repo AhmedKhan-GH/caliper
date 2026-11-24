@@ -105,6 +105,21 @@ def test_fixture_display_copies_only_fixed_tensors_within_the_aggregate_cap(monk
     assert _resolve("trace.arbitrary").data_ptr() == arbitrary.data_ptr()
 
 
+@pytest.mark.parametrize("device,accepted", [("mps:0", True), ("mps:1", False)])
+def test_fixture_display_recognizes_the_concrete_mps_device(monkeypatch, device, accepted):
+    from caliper.interp import _publish
+    tensor = SimpleNamespace(dtype=torch.float32, ndim=2, shape=(2, 10),
+                             device=torch.device(device), numel=lambda: 20, element_size=lambda: 4)
+    monkeypatch.setattr(_publish, "_resolve", lambda name: tensor if name == "output.probs" else None)
+    display = _hosted._FixtureDisplay(None)
+    assert display.device == torch.device("mps:0")
+    if accepted:
+        assert display.publish() == 0
+    else:
+        with pytest.raises(ValueError, match="invalid device"):
+            display.publish()
+
+
 @pytest.mark.parametrize("name,tensor", [
     ("trace.node_f", torch.zeros(513, 4)),
     ("output.probs", torch.zeros(2, 10, dtype=torch.float64)),

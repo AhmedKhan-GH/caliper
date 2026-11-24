@@ -139,6 +139,8 @@ class _FixtureDisplay:
     def __init__(self, guard, *, device="mps"):
         # The private device seam permits CPU tests without an MPS operation.
         self.guard, self.device = guard, torch.device(device)
+        if self.device.type == "mps" and self.device.index is None:
+            self.device = torch.device("mps:0")
 
     def _transfer(self, tensor):
         return tensor.detach().contiguous().to(device=self.device, copy=True)
