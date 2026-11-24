@@ -222,7 +222,7 @@ They contain no model weights or executable objects.
 
 M8 output bars use the sources below.
 Row zero is the baseline, and row one is the steered distribution.
-Both rows share ten token IDs, including the baseline top token.
+Both rows share ten token IDs, including both actual top tokens.
 
 | Source | Type | Shape |
 |---|---|---|
@@ -234,7 +234,7 @@ Both rows share ten token IDs, including the baseline top token.
 
 The driver is `demos/circuit_trace/run.py` in the source checkout.
 It requires the built app, `caliper-mcp`, and the native Python sender and producer modules.
-The fixture comparison also requires `caliper_circuit_parity`, the browser WebAssembly files, and local headless Chromium from the web test setup.
+The fixture comparison also requires `caliper_circuit_parity`, the browser WebAssembly files, and the local Chromium headless shell from the web test setup.
 `CALIPER_APP_EXE`, `CALIPER_MCP_EXE`, `CALIPER_CIRCUIT_PARITY_EXE`, and `CALIPER_WASM_DIR` can override the corresponding resource paths.
 
 The selected interpreter needs an installed or editable Caliper package because inference launch ignores `PYTHONPATH`.
@@ -299,12 +299,26 @@ The visible result records that hidden pixel evidence was not collected and make
 
 ## Acceptance Evidence
 
-The driver saves `result.json` and each available graph, command log, event log, example page, validation result, generated text, and instrument specification.
+The driver saves `result.json` with the graph, command log, event log, example pages, validation result, generated text, and instrument specification.
 Hidden runs also save `before.png`, `after.png`, and the second example page capture under the acceptance folder.
-A bounded hidden diagnostic reads actual renderer IDs, color pixels, panel rectangles, generations, and text anchors from those captures.
+A bounded hidden diagnostic reads actual renderer IDs, color pixels, panel image quads, clips, generations, and font references from those captures.
+
+The pixel oracle applies the window origin, framebuffer scale, linear texture samples, and text alpha composition.
+It compares the resulting panel pixels with the window PNG and requires visible geometry for every source item.
+The PNG/raw equality check establishes only capture consistency.
+
+An independent text reference uses the actual font atlas and expected glyph quads for the prompt and selected labels.
+Each required label needs visible ink and pixels within two channel levels of that reference.
+Synthetic captures test failures in this oracle. They do not supply application acceptance evidence.
+
 The fixture comparison uses the actual published graph resources with the existing native and browser parity harness.
 It exports those resources, closes the hidden app and run, then starts the native and browser comparisons in sequence.
 The process exits with code one when a required check fails.
+
+The driver reads optional inference metadata from `trace.status` before and after Generate.
+A completion must advance its identity and supply exactly two rows of 24 integer token IDs.
+Prompt and intervention hashes must match the current state, and both output texts must match their completion hashes.
+The semantic steering check uses the actual comparison argmax IDs from this metadata.
 
 Each capture also saves actual `program.status` values and the declared piece limits after the resource barrier.
 Derive passes have limits of 50 ms and 64 MiB, while draw frames have limits of 4 ms and 64 MiB.
@@ -324,7 +338,12 @@ Missing high-water measurements fail acceptance, and the native parity process h
 Pixel checks require all visible node IDs and bar heights within two pixels of probability times scale.
 The top bar must become shorter after the Qwen clamp.
 Fixture parity requires exact interior IDs, at most two color levels of interior difference, and at most one percent differing edge pixels.
-Full native captures also retain prompt and selected labels for inspection.
+App/browser parity applies to the fixture graph. Qwen retains both its semantic steering check and its strict shorter-bar check.
+
+The macOS and Windows fixture workflows also run isolated inference entry checks.
+These checks use the production entry helper with a harmless hosted substitute.
+They establish argument and environment transfer, including fork metadata and prompt removal from process arguments.
+They do not establish production package attachment, checkpoint restoration, shutdown, or native Windows inference.
 
 Fixture results separate mathematical and display checks from learned-model semantics.
 The unchanged fixture requires a positive measured clamp effect and records the stricter steering result without a Qwen acceptance claim.

@@ -8,6 +8,7 @@ import numpy as np
 from PIL import Image
 
 from _mcp import Failure
+from _composition import panel_composition, read_rgba, required_text, MAX_PIXELS, MAX_ATLAS_PIXELS
 
 FIXTURE_HASH = "2464295694bd3690f156dcc7248882f0ad289f55972caafbbd7bd23f4e3d109e"
 FIXTURE_PROMPT = "The red cube is beside a tree."
@@ -79,16 +80,19 @@ def program_budget_checks(snapshot):
     return checks
 
 
-def math_checks(graph, examples, before, after, validation, trace_seconds, steering_seconds, *, fixture):
+def math_checks(graph, examples, before, after, validation, trace_seconds, steering_seconds, *, fixture,
+                argmax_token_ids):
     rows = examples["examples"]
     strengths = [r["activation"] for r in rows]
     ids = [r["example_id"] for r in rows]
-    top = max(before, key=lambda r: r["baseline"])
+    baseline_top, new_top = argmax_token_ids
+    top = next((r for r in before if r["token"] == baseline_top), None)
+    if top is None:
+        raise Failure("The baseline bars omit the actual baseline top token.")
     changed = next((r for r in after if r["token"] == top["token"]), None)
     if changed is None:
         raise Failure("The steered bars omit the baseline top token.")
     fall = top["baseline"] - changed["probability"]
-    new_top = max(after, key=lambda r: r["probability"])["token"]
     semantic = not fixture
     residual = graph["completeness"]["max_absolute_residual"]
     tolerance = 1e-9 if fixture else 0.02
@@ -146,11 +150,13 @@ def example_page_check(examples, rows, cells, page):
 def raw_panel(folder, metadata, name):
     panel = metadata["panels"][name]
     width, height = panel["width"], panel["height"]
-    if not 0 < width * height <= 8_388_608:
+    if type(width) is not int or type(height) is not int or min(width, height) <= 0 or width * height > MAX_PIXELS:
         raise Failure("The diagnostic exceeds the pixel limit.")
     root = Path(folder)
+    if (root / panel["ids"]).stat().st_size != width * height * 8:
+        raise Failure("The capture ID target has incomplete bytes.")
     ids = np.fromfile(root / panel["ids"], dtype="<u4").reshape(height, width, 2)
-    color = np.fromfile(root / panel["color"], dtype=np.uint8).reshape(height, width, 4)
+    color = read_rgba(root, panel, "color")
     return panel, ids, color
 
 
@@ -159,51 +165,52 @@ def capture_checks(folder, metadata, png, graph, bars, *, selected):
     root = Path(folder)
     if metadata.get("error"):
         raise Failure(metadata["error"])
-    window = np.asarray(Image.open(png).convert("RGBA"))
-    raw = np.fromfile(root / metadata["window"], dtype=np.uint8).reshape(window.shape)
+    with Image.open(png) as image:
+        if image.size != (metadata["width"], metadata["height"]) or image.width * image.height > MAX_PIXELS:
+            raise Failure("The captured window size is invalid.")
+        window = np.asarray(image.convert("RGBA"))
+    raw = read_rgba(root, metadata, "window")
     same = np.array_equal(window, raw)
+    atlas = read_rgba(root, metadata["font_atlas"], "file", limit=MAX_ATLAS_PIXELS)
+    compositions = {}
+    for name in ("graph", "examples", "output"):
+        target, target_ids, target_color = raw_panel(root, metadata, name)
+        compositions[name] = panel_composition(window, target, target_color, target_ids, atlas, metadata)
     panel, ids, _ = raw_panel(root, metadata, "graph")
     pick = panel["programs"][0]["pick_id"]
     node_ids = sorted(int(i) for i in np.unique(ids[:, :, 1][ids[:, :, 0] == pick]))
-    label_text = [label["text"] for label in panel["labels"]]
     required_labels = [t["text"] for t in graph["tokens"] if t["text"].strip()]
     required_labels.append(selected["label"])
-    # The diagnostic records placed host labels. Nonuniform pixels in each box
-    # establish that host text reached the full PNG, beside the geometry target.
-    scale = metadata["pixel_scale"]
-    origin = metadata["origin"]
-    drawn = []
-    for label in panel["labels"]:
-        x0, y0, x1, y1 = label["box"]
-        x0, x1 = [max(0, min(window.shape[1], round((x-origin[0])*scale[0]))) for x in (x0, x1)]
-        y0, y1 = [max(0, min(window.shape[0], round((y-origin[1])*scale[1]))) for y in (y0, y1)]
-        region = window[y0:y1, x0:x1, :3]
-        if region.size and np.any(region.max(axis=(0, 1)) != region.min(axis=(0, 1))):
-            drawn.append(label["text"])
     ep, ei, _ = raw_panel(root, metadata, "examples")
     example_pick = ep["programs"][0]["pick_id"]
     row_ids = sorted(int(i) for i in np.unique(ei[:, :, 1][ei[:, :, 0] == example_pick]))
-    bp, bi, bc = raw_panel(root, metadata, "output")
+    bp = metadata["panels"]["output"]
+    output = compositions["output"]
+    bi, bc = output["ids"], output["actual"].astype(np.float32)
     bar_pick = bp["programs"][0]["pick_id"]
     top = max(bars, key=lambda row: row["baseline"])
     # Teal comes from the actual current bar, while ghost-only sides remain distinct.
-    mask = ((bi[:, :, 0] == bar_pick) & (bi[:, :, 1] == top["index"])
+    mask = (output["geometry"] & (bi[:, :, 0] == bar_pick) & (bi[:, :, 1] == top["index"])
             & (bc[:, :, 1] > bc[:, :, 0] * 1.5) & (bc[:, :, 2] > bc[:, :, 0] * 1.5)
             & (bc[:, :, 1] > 100))
     ys = np.flatnonzero(mask.any(axis=1))
     measured = int(ys[-1] - ys[0] + 1) if len(ys) else 0
     # The last frame's clip matrix includes the real pan/zoom camera.
-    bar_scale = abs(bp["clip_from_world"][5]) * bp["height"] * 0.72
+    bar_scale = abs(bp["clip_from_world"][5]) * output["height_scale"] * 0.72
     expected = top["probability"] * bar_scale
     gates = [
         check("capture_generation", same, metadata["capture"], "PNG equals diagnostic window pixels"),
         check("rendered_nodes", node_ids == list(range(len(graph["nodes"]))), node_ids, len(graph["nodes"])),
-        check("host_labels", all(t in label_text and t in drawn for t in required_labels),
-              {"required": required_labels, "placed": label_text, "pixel_boxes": drawn}, "prompt and selected labels"),
+        check("host_labels", required_text(compositions["graph"]["labels"], required_labels),
+              {"required": required_labels, "glyphs": compositions["graph"]["labels"]},
+              "expected prompt and selected glyph pixels within two channel levels"),
         check("example_page", len(row_ids) == 8, row_ids, "8 actual row IDs"),
         check("bar_height", abs(measured - expected) <= 2,
               {"pixels": measured, "expected": expected, "scale": bar_scale}, "within 2 pixels"),
     ]
+    for name, composition in compositions.items():
+        gates.append(check(name + "_composition", composition["passed"], composition["summary"],
+                           "two channel levels in interiors, at most one percent differing edges, every item visible"))
     for name, target in metadata["panels"].items():
         for program in target["programs"]:
             minimum = metadata["expected_steps"][program["id"]]

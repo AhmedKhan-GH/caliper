@@ -1176,13 +1176,13 @@ bool SpecPage::pick_scene(const std::string& panel_id, float u, float v) {
 }
 
 void SpecPage::circuit_capture_begin(const char* folder) {
-    if (impl_->hidden) impl_->circuit_capture.begin(*impl_->runtime, folder);
+    if (impl_->hidden && impl_->runtime) impl_->circuit_capture.begin(*impl_->runtime, folder);
 }
 void SpecPage::circuit_capture_window(uint32_t w, uint32_t h, const std::vector<uint8_t>& rgba) {
     if (impl_->hidden) impl_->circuit_capture.window(w, h, rgba);
 }
 void SpecPage::circuit_capture_poll() {
-    if (impl_->hidden) impl_->circuit_capture.poll(*impl_->runtime);
+    if (impl_->hidden && impl_->runtime) impl_->circuit_capture.poll(*impl_->runtime);
 }
 
 bool SpecPage::scene_ready(const std::string& panel_id) {
@@ -1288,6 +1288,7 @@ const std::string& SpecPage::focused_panel() const { return impl_->focused; }
 void SpecPage::focus_panel(const std::string& panel_id) { impl_->focused = panel_id; }
 
 void SpecPage::leave() {
+    impl_->circuit_capture.cancel();
     // An open prompt closes with the page: its preview is discarded. The page
     // opens again out of build mode.
     if (impl_->widget) impl_->widget->surface().close();
@@ -1334,6 +1335,7 @@ bool SpecPage::facts(const std::string& spec_path, SpecAppletFacts* out) {
 }
 
 void SpecPage::shutdown() {
+    impl_->circuit_capture.cancel();
     // The app has closed the builder session by now (main.cpp closes it
     // before the renderer, and the page's textures need the renderer gone
     // first): the inline surface forgets its preview without a command,

@@ -135,6 +135,12 @@ struct ScenePress {
 struct DrawnLabel {
     std::string text;
     float x0 = 0, y0 = 0, x1 = 0, y1 = 0;
+    // Font and paint state for same-frame independent capture references.
+    ImFont* font = nullptr;
+    float font_size = 0, font_density = 1;
+    ImU32 ink = 0, shade = 0;
+    ImVec4 clip;
+    ImDrawListFlags draw_flags = 0;
 };
 
 // What a scene drawn into a rectangle keeps between frames: the gesture in progress, a click's

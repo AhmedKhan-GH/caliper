@@ -136,7 +136,9 @@ void draw_scene_overlays(const SceneOverlayInput& in) {
         in.draw->AddText(at, in.ink, text.c_str());
         if (in.drawn) {
             const ImVec2 size = ImGui::CalcTextSize(text.c_str());
-            in.drawn->push_back({text, at.x, at.y, at.x + size.x + 1.0f, at.y + size.y + 1.0f});
+            in.drawn->push_back({text, at.x, at.y, at.x + size.x + 1.0f, at.y + size.y + 1.0f,
+                ImGui::GetFont(), ImGui::GetFontSize(), ImGui::GetFont()->CurrentRasterizerDensity,
+                in.ink, in.shade, in.draw->_CmdHeader.ClipRect, in.draw->Flags});
         }
     }
 }

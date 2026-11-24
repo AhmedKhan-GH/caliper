@@ -242,7 +242,21 @@ Steering must reduce the top probability by 0.05 or change the top token.
 Validation needs at least eight correct signs and a Spearman correlation of at least 0.6.
 
 The trace budget is 20 seconds, the steering budget is one second, and the demo memory limit is 12 GB.
-The driver checks node IDs, bar heights within two pixels, and app/browser parity with existing draw tolerances.
+The driver checks node IDs and window bar heights within two pixels. The Qwen top bar must also become shorter after the clamp.
+App/browser parity applies to the fixture graph, with the existing draw tolerances.
+
+The driver ties graph, example, and bar targets to the window through the actual image quads, clips, and framebuffer scale.
+An independent CPU reference uses the actual font atlas and expected glyph quads to check prompt and selected labels.
+The reference permits two channel levels of interior difference and at most one percent differing edge pixels.
+Each required label also needs visible ink and glyph pixels within two channel levels.
+Synthetic failure injections check these oracles. They do not establish application acceptance.
+
+Hosted `trace.status` supplies optional inference evidence with current prompt and intervention hashes.
+Its comparison evidence supplies both actual argmax token IDs. The driver does not infer them from the ten bars.
+Before Generate, the driver records the prior completion identity.
+A fresh completion must bind two rows of 24 token IDs and both text hashes to the current prompt and interventions.
+Both the semantic steering gate and the shorter-bar gate remain required for Qwen.
+
 Only the founder uses `--show`. Every automated run remains hidden.
 The demo states the per-layer dictionary, frozen routing, feature-label heuristic, prompt cap, and lack of global weight analysis.
 Fallbacks follow the outline, and every fallback records its effect on coverage and acceptance.

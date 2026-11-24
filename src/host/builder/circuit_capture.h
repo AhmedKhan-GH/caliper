@@ -4,6 +4,7 @@
 #include "live/live_scene.h"
 #include "live/live_views_scene.h"
 #include "draw/draw_runtime.h"
+#include "circuit_reference.h"
 #include <nlohmann/json.hpp>
 #include <chrono>
 #include <filesystem>
@@ -17,7 +18,7 @@ class CircuitCapture {
         std::string name;
         caliper_live_views::SceneView* view = nullptr;
         uint64_t serial = 0;
-        caliper_gfx::Readback ids, color;
+        std::shared_ptr<caliper_live_views::SceneView::CaptureReadback> ids, color;
         std::vector<uint8_t> id_bytes, color_bytes;
         uint64_t pixels = 0;
     };
@@ -28,6 +29,7 @@ class CircuitCapture {
     Json metadata_;
     std::vector<Panel> panels_;
     std::chrono::steady_clock::time_point started_;
+    static constexpr uint64_t max_atlas_pixels = 16 * 1024 * 1024;
 
     void bytes(const std::string& name, const std::vector<uint8_t>& value) {
         std::ofstream file(root_ / name, std::ios::binary);
@@ -37,6 +39,11 @@ class CircuitCapture {
     std::string prefix() const { return "capture-" + std::to_string(sequence_); }
     void error(const std::string& value) { metadata_["error"] = value; }
 public:
+    CircuitCapture() = default;
+    CircuitCapture(const CircuitCapture&) = delete;
+    CircuitCapture& operator=(const CircuitCapture&) = delete;
+    ~CircuitCapture() = default; // Panel leases release pending reads, even after view cancellation.
+    void cancel() { panels_.clear(); active_ = false; window_ready_ = false; }
     // The caller permits this option only for an owned hidden window.
     void begin(SpecRuntime& runtime, const char* folder) {
         if (!folder || !*folder || active_) return;
@@ -54,6 +61,8 @@ public:
         try {
             std::filesystem::create_directories(root_);
             // Validate the entire readback size before the first allocation.
+            ImFontAtlas* atlas = nullptr;
+            size_t glyph_quads = 0;
             for (const char* name : {"graph", "examples", "output"}) {
                 auto* view = runtime.scene_view_of(name);
                 float rect[4];
@@ -70,8 +79,13 @@ public:
                 panels_.push_back(std::move(panel));
                 Json labels = Json::array(), programs = Json::array(), clip = Json::array();
                 for (const auto& label : runtime.scene_labels(name)) {
-                    if (labels.size() >= 512) break;
-                    labels.push_back({{"text", label.text}, {"box", {label.x0, label.y0, label.x1, label.y1}}});
+                    if (labels.size() >= 512) throw std::runtime_error("The capture exceeds 512 labels per panel.");
+                    if (!label.font || (atlas && label.font->OwnerAtlas != atlas))
+                        throw std::runtime_error("The capture requires one label font atlas.");
+                    atlas = label.font->OwnerAtlas;
+                    labels.push_back(CircuitReference::text(label));
+                    glyph_quads += labels.back()["quads"].size();
+                    if (glyph_quads > 65536) throw std::runtime_error("The capture exceeds 65536 reference glyph quads.");
                 }
                 for (const auto* program : view->draw_runtimes())
                     programs.push_back({{"id", program->instance().program}, {"pick_id", program->pick_id()},
@@ -80,17 +94,26 @@ public:
                 metadata_["panels"][name] = {{"width", view->width()}, {"height", view->height()},
                     {"view_serial", panel.serial}, {"generation", view->generation()}, {"step", view->program_step()},
                     {"rect", {rect[0], rect[1], rect[2], rect[3]}}, {"clip_from_world", clip},
+                    {"composition", CircuitReference::image(ImTextureID(view->imgui_texture()))},
                     {"labels", labels}, {"programs", programs},
                     {"ids", prefix() + "-" + name + ".id"}, {"color", prefix() + "-" + name + ".rgba"}};
             }
+            const ImTextureData* font = atlas ? atlas->TexData : nullptr;
+            if (!font || !font->Pixels || uint64_t(font->Width) * font->Height > max_atlas_pixels ||
+                font->Format != ImTextureFormat_RGBA32)
+                throw std::runtime_error("No bounded RGBA font atlas is available.");
+            metadata_["font_atlas"] = {{"width", font->Width}, {"height", font->Height}, {"file", prefix() + "-font.rgba"}};
+            bytes(prefix() + "-font.rgba", std::vector<uint8_t>(font->Pixels, font->Pixels + uint64_t(font->Width) * font->Height * 4));
             for (auto& panel : panels_) {
-                auto& backend = panel.view->backend();
                 // Metal's read_texture implementation owns an autorelease scope.
-                panel.ids = backend.read_texture(panel.view->id_target(), 0, 0, panel.view->width(), panel.view->height());
-                panel.color = backend.read_texture(panel.view->color(), 0, 0, panel.view->width(), panel.view->height());
+                panel.ids = panel.view->capture_readback(panel.view->id_target());
+                panel.color = panel.view->capture_readback(panel.view->color());
                 if (!panel.ids || !panel.color) throw std::runtime_error("The circuit target readback was refused.");
             }
-        } catch (const std::exception& e) { error(e.what()); }
+        } catch (const std::exception& e) {
+            error(e.what());
+            for (auto& panel : panels_) { panel.ids.reset(); panel.color.reset(); }
+        }
     }
     void window(uint32_t width, uint32_t height, const std::vector<uint8_t>& rgba) {
         if (!active_ || window_ready_) return;
@@ -115,18 +138,15 @@ public:
                 error("The captured panel changed before readback completion.");
                 continue;
             }
-            if (panel.ids && current->backend().take_readback(panel.ids, &panel.id_bytes)) panel.ids = {};
-            if (panel.color && current->backend().take_readback(panel.color, &panel.color_bytes)) panel.color = {};
+            if (panel.ids && panel.ids->take(&panel.id_bytes)) panel.ids.reset();
+            if (panel.color && panel.color->take(&panel.color_bytes)) panel.color.reset();
             ready = ready && !panel.ids && !panel.color;
         }
         if (!ready && !metadata_.contains("error")) return;
         try {
             for (auto& panel : panels_) {
-                auto* current = runtime.scene_view_of(panel.name);
-                if (current && current == panel.view && current->serial() == panel.serial) {
-                    if (panel.ids) current->backend().release(panel.ids);
-                    if (panel.color) current->backend().release(panel.color);
-                }
+                panel.ids.reset();
+                panel.color.reset();
                 if (panel.id_bytes.size() != panel.pixels * 8 || panel.color_bytes.size() != panel.pixels * 4) {
                     error("The circuit readback has incomplete target bytes.");
                     continue;

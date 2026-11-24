@@ -10,6 +10,7 @@
 // Every method runs on the frame thread. The view never waits for the GPU except in
 // read_pixels(), which tests call.
 #pragma once
+#include "live/scene_readbacks.h"
 
 #include "gfx/gfx.h"
 #include "net/wire.h"
@@ -297,6 +298,10 @@ public:
     // The camera of the last frame the view submitted, in the same words (the UI driver's drags).
     std::string drawn_camera_text() const;
     caliper_gfx::Backend& backend() { return gfx_; }
+    using CaptureReadback = SceneReadbacks<caliper_gfx::Backend>::Lease;
+    std::shared_ptr<CaptureReadback> capture_readback(caliper_gfx::Texture texture) {
+        return capture_readbacks_.read(gfx_, texture, width_, height_);
+    }
 
 private:
     // One layer of one part: its batch and CPU arrays by role.
@@ -330,6 +335,7 @@ private:
     void changed() { dirty_ = true; }
 
     caliper_gfx::Backend& gfx_;
+    SceneReadbacks<caliper_gfx::Backend> capture_readbacks_;
     caliper_scene::SceneTree tree_;
     caliper_scene::ViewCamera camera_ = caliper_scene::Orbit{};
     std::string through_;              // the camera entity looked through, or ""

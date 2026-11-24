@@ -17,6 +17,7 @@ import time
 from _mcp import Events, Failure, MCP, attempt, stop, wait_file
 from _checks import (FIXTURE_HASH, FIXTURE_PROMPT, QWEN_PROMPT, bar_rows, capture_checks,
                      check, finish, math_checks, program_budget_checks, selected_feature)
+from _inference_evidence import comparison_evidence, generation_baseline, generation_evidence
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -434,6 +435,7 @@ def acceptance(session, args, result):
     first_cells = s.read("example_tokens", "cells", minimum_step=first_page["step"])
     before_reply = s.read("probabilities", "cells")
     before = bar_rows(before_reply)
+    before_comparison = comparison_evidence(s.events.complete("trace.status"), args.prompt, before)
     # A resource barrier confirms selected-label derivation before the capture.
     labels = s.read("attribution", "labels", minimum_step=before_reply["step"])
     expected_steps = {"attribution": labels["step"], "example_tokens": first_page["step"],
@@ -464,6 +466,11 @@ def acceptance(session, args, result):
     after_reply = s.read("probabilities", "cells", minimum_step=prior_output["step"] + 1)
     steering_seconds = time.monotonic() - started
     after = bar_rows(after_reply)
+    after_comparison = comparison_evidence(s.events.complete("trace.status"), args.prompt, after)
+    if (after_comparison["completed_step"] <= before_comparison["completed_step"]
+            or after_comparison["argmax_token_ids"][0] != before_comparison["argmax_token_ids"][0]):
+        raise Failure("The steered comparison is stale or changed its baseline identity.")
+    result["comparison"] = {"before": before_comparison, "after": after_comparison}
     expected_steps["probabilities"] = after_reply["step"]
     after_png, after_meta = s.capture("after", dict(expected_steps))
     result["checks"].extend(dict(gate, name="after." + gate["name"])
@@ -471,7 +478,8 @@ def acceptance(session, args, result):
     validation = s.events.complete("trace.validate")
     save(s.out / "validation.json", validation)
     result["checks"] += math_checks(graph, examples, before, after, validation, trace["seconds"], steering_seconds,
-                                     fixture=args.model == "tiny-lm")
+                                     fixture=args.model == "tiny-lm",
+                                     argmax_token_ids=after_comparison["argmax_token_ids"])
     result.update(before=before, after=after, validation=validation)
     result["pixel_evidence_collected"] = before_meta is not None
     if before_meta is not None:
@@ -493,12 +501,16 @@ def acceptance(session, args, result):
         result["checks"].append(check("hidden_capture_evidence", False, "not collected in the visible invocation",
                                        "required for hidden acceptance", required=not s.show))
     # Generate while the selected feature clamp remains active.
+    prior_generation = generation_baseline(s.events.complete("trace.status"), args.prompt)
     s.mcp.body("run.action", run=s.run_id, name="generate")
     def generated():
+        status = s.events.complete("trace.status")
         state = s.mcp.body("run.state", run=s.run_id)
         params = {p["name"]: p["value"] for p in state["params"]}
-        return params if params.get("output.baseline") and params.get("output.steered") else None
-    save(s.out / "generation.json", s.events.until("24-token generation", generated))
+        return generation_evidence(prior_generation, status, params, args.prompt)
+    generation = s.events.until("fresh 24-token generation", generated)
+    save(s.out / "generation.json", generation)
+    result["checks"].append(check("generation", True, generation["completion"], "fresh completion, 2x24 token IDs, matching texts and state"))
     # Reset tests the real control and preserves unrelated intervention kinds in the runtime.
     previous = s.read("probabilities", "cells")["step"]
     s.mcp.body("run.action", run=s.run_id, name="reset")

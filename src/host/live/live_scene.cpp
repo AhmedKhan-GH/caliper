@@ -151,6 +151,7 @@ struct SceneView::ProgramSlot {
 };
 
 SceneView::~SceneView() {
+    capture_readbacks_.cancel();
     program_pick_.reset();   // its readbacks go back to the layer with the view
     shape_pick_.reset();
     draws_.clear();
