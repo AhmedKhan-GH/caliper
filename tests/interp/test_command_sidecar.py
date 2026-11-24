@@ -134,7 +134,10 @@ def test_offline_command_sidecar(actual, tmp_path, monkeypatch):
         assert _resolve("examples.label_text").shape == (400, 16)
         assert _resolve("trace.node_i").shape == (512, 4)
         assert tool("trace.read", {"node_limit": 257})["isError"]
+        # Remove every owner of the dictionary before the missing-resource query.
         actual.dictionary = None
+        actual.index = None
+        actual.tracer = None
         reply = tool("feature.dictionary", {})
         deadline = time.monotonic() + 30
         while not reply.get("isError"):

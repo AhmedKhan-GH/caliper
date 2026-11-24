@@ -69,7 +69,7 @@ jobs:
       - name: Make the instrument test Python
         run: |
           python3 -m venv "$RUNNER_TEMP/acceptance-py"
-          "$RUNNER_TEMP/acceptance-py/bin/pip" install "torch==$ACCEPTANCE_TORCH_VERSION" numpy Pillow websockets nanobind pytest
+          "$RUNNER_TEMP/acceptance-py/bin/pip" install "torch==$ACCEPTANCE_TORCH_VERSION" numpy Pillow websockets nanobind pytest safetensors
           "$RUNNER_TEMP/acceptance-py/bin/python" scripts/build_netio.py
           PYTHONPATH=python "$RUNNER_TEMP/acceptance-py/bin/python" -c "import torch, caliper, caliper._netio; print('Instrument test Python ready, torch', torch.__version__)"
       # The runtime WGSL compiler (tools/shaders/caliper-wgsl) is built from source in this job
@@ -300,6 +300,22 @@ jobs:
           --deselect "python/tests/test_watch.py::test_watch_is_free_when_nothing_is_attached"
           --deselect "python/tests/test_controls.py::test_a_flood_of_values_from_several_threads"
           --deselect "python/tests/test_programs.py::test_outputs_pass_the_argument_checks_of_the_real_scene_calls"
+      - name: Interpretation Command Sidecar
+        env:
+          CALIPER_AGENT_OFFLINE: '1'
+          CALIPER_TEST_RUN: '1'
+          CALIPER_DATA_DIR: ${{ runner.temp }}/interpretation-sidecar/data
+          TMPDIR: ${{ runner.temp }}/interpretation-sidecar/temp
+          CALIPER_INTERPRET_HOST: ${{ github.workspace }}/cmake-build-release/caliper_interpret_command_host
+          CALIPER_MCP_EXE: ${{ github.workspace }}/cmake-build-release/src/builder/mcp/caliper-mcp
+          PYTHONPATH: python
+          OMP_NUM_THREADS: '2'
+          VECLIB_MAXIMUM_THREADS: '2'
+        run: |
+          mkdir -p "$TMPDIR" "$CALIPER_DATA_DIR"
+          test -x "$CALIPER_INTERPRET_HOST"
+          test -x "$CALIPER_MCP_EXE"
+          "$RUNNER_TEMP/acceptance-py/bin/python" -m pytest -q -p no:cacheprovider tests/interp/test_command_sidecar.py
       # The pixel comparison of programmable graphics: the app's draw runtime on Metal and the browser
       # module's on WebGPU draw the same fixture of pieces (tests/draw_parity/), and
       # web/test/draw_parity.spec.ts compares the color and ID targets within the plan's tolerances.
