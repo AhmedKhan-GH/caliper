@@ -339,7 +339,7 @@ def test_gemma_threshold_alias_mutation_invalidates_intervention_identity(gemma_
     service = InterventionService(model)
     service.configure(dictionary=dictionary)
     service._prepare_dictionary_identity()
-    assert service._dictionary_snapshot is None
+    assert service._dictionary_snapshot is not None
     dictionary.layers[0].threshold.data[0] += .2
     try:
         with pytest.raises(InterventionError, match="content changed"):

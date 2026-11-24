@@ -45,6 +45,22 @@ def test_snapshot_checks_every_byte_without_hash_or_cpu_copy(controlled, monkeyp
     assert sizes == expected
 
 
+def test_snapshot_bounds_comparisons_and_checks_the_last_byte(controlled, monkeypatch):
+    monkeypatch.setattr(_intervene, "_SNAPSHOT_COMPARE_BYTES", 128)
+    dictionary, service = prepare(controlled)
+    equal, sizes = torch.equal, []
+    def compare(left, right):
+        sizes.append(left.numel())
+        return equal(left, right)
+    monkeypatch.setattr(torch, "equal", compare)
+    service.executor.validate(feature_spec())
+    assert max(sizes) <= 128
+    assert sum(sizes) == sum(t.numel() * t.element_size() for t in dictionary.state_dict().values())
+    dictionary.layers[-1].W_dec.data[-1, -1].add_(.125)
+    with pytest.raises(InterventionError, match="dictionary content changed"):
+        service.executor.validate(feature_spec())
+
+
 @pytest.mark.parametrize("write", ["normal", "data", "numpy", "replacement", "topk", "metadata", "signed_zero"])
 def test_snapshot_refuses_mutation_before_installation(controlled, write):
     dictionary, service = prepare(controlled)

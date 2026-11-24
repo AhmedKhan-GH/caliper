@@ -24,6 +24,7 @@ MAX_VECTOR = 16384
 MAX_PROMPT_BYTES = 4096
 MAX_SOURCE_BYTES = 16 * 1024 * 1024
 MAX_SOURCE_ENTRIES = 64
+_SNAPSHOT_COMPARE_BYTES = 16 * 1024 * 1024
 KINDS = ("ablate", "add", "scale", "clamp", "patch")
 _SUSPENDED = ContextVar("caliper_interventions_suspended", default=frozenset())
 _ROWS = ContextVar("caliper_intervention_rows", default={})
@@ -124,17 +125,12 @@ class _DictionarySnapshot:
     def create(cls, dictionary, identifier, guard):
         from ._dictionary import _dense_state, _HASH_CHUNK_BYTES, _UNVERIFIED_CPU_BYTES
         from ._memory import autorelease_scope
-        from ._admission import GEMMA_ID
-        # The imported dictionary already occupies most of Gemma's headroom.
-        # Keep full byte hashes on each check without a second retained copy.
-        if dictionary.metadata.get("model_id") == GEMMA_ID:
-            return None
         state = _dense_state(dictionary.state_dict())
         sizes = [tensor.numel() * tensor.element_size() for tensor in state.values()]
         total, largest = sum(sizes), max(sizes, default=0)
         memory = cls._memory(state, guard)
         # Account for the retained copy, hash chunks, and comparison workspace.
-        scratch = max(4 * largest, 4 * _HASH_CHUNK_BYTES)
+        scratch = max(4 * min(largest, _SNAPSHOT_COMPARE_BYTES), 4 * _HASH_CHUNK_BYTES)
         if memory is None:
             if any(t.device.type != "cpu" for t in state.values()) or total + scratch > _UNVERIFIED_CPU_BYTES:
                 return None
@@ -171,13 +167,15 @@ class _DictionarySnapshot:
             saved = self.state[name]
             if (tensor.shape != saved.shape or tensor.dtype != saved.dtype or tensor.device != saved.device):
                 return False
-            self._admit(memory, 4 * tensor.numel() * tensor.element_size())
-            with autorelease_scope(tensor.device):
-                # Byte views also distinguish signed zero and preserve NaN bits.
-                current = tensor.detach().reshape(-1).view(torch.uint8)
-                original = saved.reshape(-1).view(torch.uint8)
-                if not torch.equal(current, original):
-                    return False
+            # Byte views also distinguish signed zero and preserve NaN bits.
+            current = tensor.detach().reshape(-1).view(torch.uint8)
+            original = saved.reshape(-1).view(torch.uint8)
+            for start in range(0, current.numel(), _SNAPSHOT_COMPARE_BYTES):
+                stop = min(start + _SNAPSHOT_COMPARE_BYTES, current.numel())
+                self._admit(memory, 4 * (stop - start))
+                with autorelease_scope(tensor.device):
+                    if not torch.equal(current[start:stop], original[start:stop]):
+                        return False
         return True
 
 
