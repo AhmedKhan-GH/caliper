@@ -84,6 +84,8 @@ test('Interpretation Capabilities and Methods', () => {
     { version: 1, method: 'feature.examples', params: { layer: 4095, feature: 2147483647, limit: 16 } },
     { version: 1, method: 'feature.examples', params: { node: 0, limit: 0 } },
     { version: 1, method: 'trace.status', params: {} },
+    { version: 1, method: 'trace.validate', params: {} },
+    { version: 1, method: 'patch.sweep', params: { clean_prompt: 'AB', corrupted_prompt: 'AC', metric: { positive_token: 1, negative_token: 2 } } },
     { version: 1, method: 'trace.run', params: { prompt: 'The capital', max_targets: 512, max_nodes: 512, max_edges: 8192 } },
     { version: 1, method: 'trace.read', params: {} },
     { version: 1, method: 'trace.read', params: { node_offset: 512, node_limit: 256, edge_offset: 8192, edge_limit: 256 } },
@@ -92,7 +94,7 @@ test('Interpretation Capabilities and Methods', () => {
     const message: Message = { type: 'control', request_id: 1, op: 'interpret', interpretation };
     assert.deepEqual(plain(decode(encode(message))), message);
   }
-  for (const method of ['unknown', 'toString', '__proto__', 'trace.validate', 'patch.sweep']) refuses(MSG.control, request(method));
+  for (const method of ['unknown', 'toString', '__proto__', 'patch.sweep']) refuses(MSG.control, request(method));
   for (const extra of [{ version: true }, { version: 2 }, { version: null }, { extra: 1 }]) refuses(MSG.control, request('trace.status', {}, extra));
   for (const params of [null, [], true, { unknown: 1 }]) refuses(MSG.control, request('trace.status', params));
   for (const method of ['feature.show', 'feature.examples'])
@@ -241,4 +243,89 @@ test('Legacy Control Bounds', () => {
   for (const op of ['set', 'run']) refuses(MSG.control, { request_id: 1, op, value: 1 });
   for (const op of ['unknown', 'clamp', 'patch']) refuses(MSG.control, { request_id: 1, op });
   refuses(MSG.control, { request_id: 1, op: 'intervene', intervene: { set: { point: 'layer', kind: 'clamp', value: 0 } } });
+});
+
+test('Native M8 Interpretation Literals', () => {
+  const source = readFileSync(join(fixtures, '../../test_net_wire.cpp'), 'utf8');
+  const cases = [...source.matchAll(/CHECK(_FALSE)?\(accepted\(R"\(([^\n]+)\)"\)\);/g)];
+  assert.equal(cases.length, 5);
+  for (const [, invalid, json] of cases) {
+    const interpretation = JSON.parse(json);
+    const message = { type: 'control', request_id: 1, op: 'interpret', interpretation } as Message;
+    const bytes = rawFrame(MSG.control, canonicalJson({ request_id: 1, op: 'interpret', interpretation }));
+    if (invalid) {
+      assert.throws(() => decode(bytes), MessageError);
+      assert.throws(() => encode(message), MessageError);
+    } else {
+      assert.deepEqual(plain(decode(bytes)), message);
+      assert.deepEqual(encode(decode(bytes) as Message), bytes);
+      assert.deepEqual(encode(message), bytes);
+    }
+  }
+});
+
+test('M8 Interpretation Command Fields', () => {
+  const sweep = { clean_prompt: 'AB', corrupted_prompt: 'AC', metric: { positive_token: 1, negative_token: 2 } };
+  const invalid = (method: string, params: unknown) => {
+    const meta = request(method, params);
+    refuses(MSG.control, meta);
+    assert.throws(() => encode({ type: 'control', ...meta } as Message), MessageError);
+  };
+  for (const params of [null, [], true, { prompt: 'AB' }, { max_targets: 10 }, { limit: 10 }, { metric: sweep.metric }]) invalid('trace.validate', params);
+  for (const key of Object.keys(sweep)) {
+    const params = { ...sweep } as Record<string, unknown>;
+    delete params[key];
+    invalid('patch.sweep', params);
+  }
+  for (const key of ['prompt', 'positions', 'batch_size', 'layer', 'max_nodes', '__proto__']) invalid('patch.sweep', { ...sweep, [key]: 1 });
+  for (const metric of [null, [], true, {}, { positive_token: 1 }, { negative_token: 2 },
+    { positive_token: 1, negative_token: 2, extra: 0 }, { positive_token: 1, unknown: 2 },
+    { positive_token: 1, negative_token: 1 }]) invalid('patch.sweep', { ...sweep, metric });
+  for (const key of ['positive_token', 'negative_token']) {
+    const other = key === 'positive_token' ? 'negative_token' : 'positive_token';
+    for (const value of [0, 2147483647]) accepts(MSG.control, request('patch.sweep', { ...sweep, metric: { [key]: value, [other]: 1 } }));
+    for (const value of [-1, 2147483648, 2 ** 53, null, true, '1', 0.5]) invalid('patch.sweep', { ...sweep, metric: { [key]: value, [other]: 2 } });
+    for (const token of ['1.0', '1e0', '1.0000000000000001', '1e309']) {
+      const meta = request('patch.sweep', { ...sweep, metric: { [key]: 'NUMBER', [other]: 2 } });
+      assert.throws(() => decode(rawFrame(MSG.control, canonicalJson(meta).replace('"NUMBER"', token))), MessageError);
+    }
+  }
+  for (const key of ['clean_prompt', 'corrupted_prompt']) {
+    for (const value of ['x'.repeat(4096), 'é'.repeat(2048), '😀'.repeat(1024), '\ufeffAB\n']) {
+      const message = { type: 'control', ...request('patch.sweep', { ...sweep, [key]: value }) } as Message;
+      assert.deepEqual(plain(decode(encode(message))), message);
+    }
+    for (const value of ['', 'x'.repeat(4097), 'é'.repeat(2048) + 'x', 'a\0b', '\ud800', '\udc00', null, 1]) invalid('patch.sweep', { ...sweep, [key]: value });
+  }
+  // Token counts belong to execution. The wire contract accepts bounded text.
+  accepts(MSG.control, request('patch.sweep', { ...sweep, clean_prompt: 'A', corrupted_prompt: 'A longer prompt' }));
+});
+
+test('M8 Interpretation Result Contracts', () => {
+  // These field names follow _validate.py and _sweep.py. Wire results share the M7 object bounds.
+  const results = [
+    { trace_id: 'fixture', token: 1, position: 2, baseline_centered_logit: 0.5, count: 1, required: 10,
+      spearman: null, sign_agreement: 1, correct_signs: 1, passed: false,
+      reasons: ['insufficient_active_features', 'zero_variance', 'fewer_than_eight_correct_signs'],
+      measurements: [{ layer: 0, position: 1, feature: 2, predicted: -0.25, measured: -0.125, sign_match: true }] },
+    { clean_metric: 0.75, corrupted_metric: -0.25, normalizer: 1, recovery: [[0, -1.5], [1, 2.25]],
+      layers: 2, positions: 2, binding: 'live:patch.grid' },
+    {},
+  ];
+  for (const result of results) {
+    const message = { type: 'control_reply', ...reply(result) } as Message;
+    assert.deepEqual(plain(decode(encode(message))), message);
+  }
+  for (const status of ['queued', 'error'] as const) {
+    const message: Message = { type: 'control_reply', request_id: 1, op: 'interpret', status,
+      ...(status === 'error' ? { error: { code: 'interpret.unsupported', message: 'No execution handler.' } } : {}) };
+    assert.deepEqual(plain(decode(encode(message))), message);
+  }
+  // No command-specific result cap can replace the shared native bounds.
+  accepts(MSG.control_reply, reply({ recovery: [Array(512).fill(0)] }));
+  refuses(MSG.control_reply, reply({ recovery: [Array(513).fill(0)] }));
+  for (const value of [NaN, Infinity, -Infinity]) {
+    assert.throws(() => encode({ type: 'control_reply', ...reply({ spearman: value }) } as Message), MessageError);
+    assert.throws(() => encode({ type: 'control_reply', ...reply({ recovery: [[value]] }) } as Message), MessageError);
+  }
 });
