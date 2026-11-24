@@ -309,7 +309,7 @@ features:
 
   - id: INT-35
     title: Model Probes
-    status: built
+    status: shipped
     scope: core
     summary: Model probes expose residual streams, MLP inputs and outputs, and attention patterns without a CPU copy.
     depends_on: [INT-34]
@@ -318,7 +318,7 @@ features:
 
   - id: INT-36
     title: Feature Dictionaries
-    status: built
+    status: shipped
     scope: core
     summary: Per-layer transcoder dictionaries reconstruct MLP outputs through sparse features and refuse incompatible model identities.
     depends_on: [INT-35]
@@ -327,7 +327,7 @@ features:
 
   - id: INT-37
     title: Example Index
-    status: built
+    status: shipped
     scope: core
     summary: The dataset index retains each feature's top 16 activations and supplies token windows with real activation values.
     depends_on: [INT-36]
@@ -336,7 +336,7 @@ features:
 
   - id: INT-38
     title: Attribution Graphs
-    status: built
+    status: shipped
     scope: core
     summary: The tracer calculates direct effects through a local replacement model and publishes bounded graphs with completeness diagnostics.
     depends_on: [INT-35, INT-36]
@@ -345,7 +345,7 @@ features:
 
   - id: INT-39
     title: Graph Pieces
-    status: built
+    status: shipped
     scope: core
     summary: Library pieces draw attribution graphs, feature examples, and next-token probabilities from the same sources in the app and browser.
     depends_on: [INT-38]

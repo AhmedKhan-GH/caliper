@@ -13,7 +13,7 @@ This page lists the milestones of Caliper's current trajectory, Agent-Built Play
 | M4, Hosted Runs | Start, fork and stop a model's run from Caliper and over MCP | Done | [#26](https://github.com/AhmedKhan-GH/caliper/pull/26) |
 | M5, Programmable Graphics | Pieces with a derive half in the run and a draw half in the viewer, written by the agent, in the app and the browser | Done | [#34](https://github.com/AhmedKhan-GH/caliper/pull/34) |
 | M6, Graphics Consolidation | Library scene pieces, typed resources, dashboard parity, and removal of the built-in draw route | Done | [#42](https://github.com/AhmedKhan-GH/caliper/pull/42) |
-| M7, Derivation Catalog | Model probes, feature dictionaries, a dataset index of top examples, and attribution graphs with their layout as library pieces and commands | Planned | |
+| M7, Derivation Catalog | Model probes, feature dictionaries, a dataset index of top examples, and attribution graphs with their layout as library pieces and commands | Done | [#45](https://github.com/AhmedKhan-GH/caliper/pull/45) |
 | M8, Steering and Intervention | Steer, scale, clamp and patch on a live model, with a traced and steered circuit on a 0.8B language model as the acceptance demo | Planned | |
 | M9, Saved and Editable Instruments | Saved instruments with their pieces, and the node editor | Planned | |
 | M10, Browser Parity | The rest of an instrument in the browser | Planned | |

@@ -177,12 +177,6 @@ candidates:
     serves: "Feature reading scales beyond what a person can review."
     origin: field
     depends_on: [INT-05, AGT-01]
-  - key: feature-steering
-    title: "Feature Steering"
-    summary: "A control clamps or scales one dictionary feature during generation and compares the outputs."
-    serves: "A person tests a feature's causal role."
-    origin: field
-    depends_on: [INT-13]
   - key: feature-raster
     title: "Feature Activations Along a Prompt"
     summary: "Chosen features are drawn token by token along a prompt as a raster."
