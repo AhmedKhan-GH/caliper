@@ -1,6 +1,7 @@
 """Atomic safe-tensor checkpoints with one parameter copy at a time."""
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -37,6 +38,17 @@ def write_json(path, value):
 
 def _tuples(value):
     return tuple(_tuples(v) for v in value) if isinstance(value, list) else value
+
+
+def dictionary_fingerprint(folder, metadata):
+    """Hash stable metadata and every layer file, with no mutable quality report."""
+    digest = hashlib.sha256(json.dumps({k: v for k, v in metadata.items() if k != "quality"},
+                                     sort_keys=True, allow_nan=False).encode())
+    for i in range(metadata["layers"]):
+        with (Path(folder) / f"layer_{i:02d}.safetensors").open("rb") as source:
+            for chunk in iter(lambda: source.read(8 * 1024 * 1024), b""):
+                digest.update(chunk)
+    return digest.hexdigest()
 
 
 def save_checkpoint(root, trainer, stream, progress, *, elapsed=None):
@@ -120,6 +132,20 @@ def validate_checkpoint(record, settings, metadata, source_id):
                      or record["stream"]["source_id"] != source_id
                      or source_id != fallback["source_id"]):
         raise ValueError("checkpoint fallback settings or text source differ")
+    if fallback:
+        progress = record["progress"]
+        pending, next_layer = progress["pending_ids"], progress["next_layer"]
+        valid_next = {0, *(index + 1 for index in fallback["active_layers"])}
+        if (type(next_layer) is not int or next_layer not in valid_next
+                or (pending is None and next_layer != 0)
+                or type(progress["tokens"]) is not int or not 0 <= progress["tokens"] <= fallback["token_budget"]
+                or (pending is not None and (not isinstance(pending, list) or not pending
+                    or len(pending) > settings["batch_tokens"]
+                    or progress["tokens"] + len(pending) > fallback["token_budget"]
+                    or any(type(token) is not int or token < 0 for token in pending)))
+                or len(record["initialized"]) != metadata["layers"]
+                or any(record["initialized"][i] is not True for i in fallback["active_layers"])):
+            raise ValueError("invalid fallback checkpoint progress or upper initialization")
 
 
 def restore_checkpoint(root, trainer, stream):
@@ -154,7 +180,10 @@ def restore_checkpoint(root, trainer, stream):
                 if optimizer is not None:
                     optimizer.state[parameter] = state
         with autorelease_scope(trainer.device), safe_open(folder / f"activity_{i:02d}.safetensors", framework="pt") as source:
-            trainer.last_active[i].copy_(source.get_tensor("last_active"))
+            activity = source.get_tensor("last_active")
+            if optimizer is None and not _zero(activity):
+                raise ValueError("inactive checkpoint layer has feature activity")
+            trainer.last_active[i].copy_(activity)
     trainer.initialized = record["initialized"]
     trainer.metadata = record["metadata"]
     stream.load_state_dict(record["stream"])

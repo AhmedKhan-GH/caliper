@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import argparse
 from contextlib import contextmanager
-import hashlib
 import json
 import math
 from pathlib import Path
@@ -14,7 +13,7 @@ from torch.nn import functional as F
 from safetensors.torch import load_file, save_file
 
 from caliper.interp import capture, load_dictionary
-from .checkpoint_state import write_json
+from .checkpoint_state import dictionary_fingerprint, write_json
 from .memory_limits import CleanStop, MemoryGuard, StopControl, autorelease_scope
 from .model_load import hidden_forward, load_text_model
 from .text_stream import TextStream, fineweb_documents, partition_metadata
@@ -154,17 +153,6 @@ def _evaluate_batch(model, dictionary, ids, count, *, chunk_tokens, health):
     finally:
         if captured is not None:
             captured.close(clear=True)
-
-
-def dictionary_fingerprint(folder, metadata):
-    """Bind evaluation resume to exact dictionary weights and fixed metadata."""
-    digest = hashlib.sha256(json.dumps({k: v for k, v in metadata.items() if k != "quality"},
-                                     sort_keys=True, allow_nan=False).encode())
-    for i in range(metadata["layers"]):
-        with (Path(folder) / f"layer_{i:02d}.safetensors").open("rb") as source:
-            for chunk in iter(lambda: source.read(8 * 1024 * 1024), b""):
-                digest.update(chunk)
-    return digest.hexdigest()
 
 
 def save_evaluation(folder, stats, stream, pending, identity, settings, elapsed):
