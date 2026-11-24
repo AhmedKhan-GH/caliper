@@ -308,6 +308,7 @@ jobs:
           TMPDIR: ${{ runner.temp }}/interpretation-sidecar/temp
           CALIPER_INTERPRET_HOST: ${{ github.workspace }}/cmake-build-release/caliper_interpret_command_host
           CALIPER_MCP_EXE: ${{ github.workspace }}/cmake-build-release/src/builder/mcp/caliper-mcp
+          CALIPER_PROMPT_MCP: ${{ github.workspace }}/cmake-build-release/src/builder/mcp/caliper-mcp
           PYTHONPATH: python
           OMP_NUM_THREADS: '2'
           VECLIB_MAXIMUM_THREADS: '2'
@@ -315,7 +316,7 @@ jobs:
           mkdir -p "$TMPDIR" "$CALIPER_DATA_DIR"
           test -x "$CALIPER_INTERPRET_HOST"
           test -x "$CALIPER_MCP_EXE"
-          "$RUNNER_TEMP/acceptance-py/bin/python" -m pytest -q -p no:cacheprovider tests/interp/test_command_sidecar.py
+          "$RUNNER_TEMP/acceptance-py/bin/python" -m pytest -q -p no:cacheprovider tests/interp/test_command_sidecar.py tests/interp/test_prompt_contract.py::test_local_mcp_transport_preserves_prompt_bytes
       # The pixel comparison of programmable graphics: the app's draw runtime on Metal and the browser
       # module's on WebGPU draw the same fixture of pieces (tests/draw_parity/), and
       # web/test/draw_parity.spec.ts compares the color and ID targets within the plan's tolerances.

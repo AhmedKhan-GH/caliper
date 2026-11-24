@@ -4,6 +4,7 @@ from contextvars import ContextVar
 
 import torch
 
+from .._interpret_protocol import MAX_STRING, text
 from ._memory import autorelease_scope
 
 _INTERNAL = ContextVar("caliper_inference_forward", default=False)
@@ -25,8 +26,8 @@ def is_internal_forward():
 
 def prompt_inputs(model, tokenizer, prompt):
     """Encode one bounded prompt without truncation or a device change."""
-    if not isinstance(prompt, str) or not 1 <= len(prompt.encode("utf-8")) <= 4096:
-        raise ValueError("prompt must contain 1 to 4096 UTF-8 bytes")
+    if not text(prompt, MAX_STRING, empty=False):
+        raise ValueError(f"prompt must contain 1 to {MAX_STRING} valid UTF-8 bytes without NUL")
     encoded = tokenizer(prompt, return_tensors="pt", truncation=False)
     ids = encoded["input_ids"]
     if (ids.ndim != 2 or ids.shape[0] != 1 or not 1 <= ids.shape[1] <= 32
