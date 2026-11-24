@@ -15,6 +15,7 @@ from safetensors.torch import load_file, save_file
 from caliper.interp import capture, load_dictionary
 from caliper.interp._dictionary import fallback_metadata
 from .checkpoint_state import dictionary_fingerprint, write_json
+from .evaluation_binding import EvaluationBinding
 from .memory_limits import CleanStop, MemoryGuard, StopControl, autorelease_scope
 from .model_load import hidden_forward, load_text_model
 from .text_stream import TextStream, fineweb_documents, partition_metadata
@@ -183,8 +184,10 @@ def _evaluate_batch(model, dictionary, ids, count, *, chunk_tokens, health):
             captured.close(clear=True)
 
 
-def save_evaluation(folder, stats, stream, pending, identity, settings, elapsed):
+def save_evaluation(folder, stats, stream, pending, identity, settings, elapsed, binding):
     """Atomically publish small statistics and an exact quality cursor."""
+    stream_state = stream.state_dict()
+    binding.check()
     folder = Path(folder)
     folder.mkdir(exist_ok=True, parents=True)
     # Two alternating files prevent a partial update from corrupting the old state.
@@ -192,16 +195,19 @@ def save_evaluation(folder, stats, stream, pending, identity, settings, elapsed)
     name = "stats-b.safetensors" if prior.get("tensors") == "stats-a.safetensors" else "stats-a.safetensors"
     save_file({"mean": stats.mean, "variance_sum": stats.variance_sum,
                "error_sum": stats.error_sum, "hits": stats.hits}, folder / name)
+    binding.verify()
     write_json(folder / "state.json", {"version": 1, "identity": identity, "settings": settings,
-               "tensors": name, "stream": stream.state_dict(), "pending_ids": pending,
+               "tensor_binding": binding.evidence,
+               "tensors": name, "stream": stream_state, "pending_ids": pending,
                "count": stats.count, "original_ce": stats.original_ce,
                "replaced_ce": stats.replaced_ce, "ce_tokens": stats.ce_tokens, "elapsed_seconds": elapsed})
 
 
-def restore_evaluation(folder, stats, stream, identity, settings):
+def restore_evaluation(folder, stats, stream, identity, settings, binding):
     folder = Path(folder)
     state = json.loads((folder / "state.json").read_text())
-    if state.get("version") != 1 or state["identity"] != identity or state["settings"] != settings:
+    if (state.get("version") != 1 or state["identity"] != identity or state["settings"] != settings
+            or state.get("tensor_binding") != binding.evidence):
         raise ValueError("evaluation dictionary or settings changed across resume")
     if state["tensors"] not in ("stats-a.safetensors", "stats-b.safetensors"):
         raise ValueError("invalid evaluation tensor path")
@@ -228,7 +234,8 @@ def evaluate(model, dictionary, stream, folder, *, tokens=200_000, context=256,
     if metadata["training"]["dataset_id"] != "fixture" and metadata["training"]["partitions"] != partition_metadata():
         raise ValueError("dictionary text partitions differ from this evaluator")
     folder = Path(folder)
-    identity = dictionary_fingerprint(folder, metadata)
+    identity = dictionary_fingerprint(folder, metadata, memory=memory)
+    binding = EvaluationBinding(folder, dictionary, identity, memory=memory)
     state_folder = folder / "evaluation"
     stats = quality_stats(metadata)
     settings = {"tokens": tokens, "context": context, "batch_tokens": batch_tokens, "chunk_tokens": chunk_tokens}
@@ -249,13 +256,16 @@ def evaluate(model, dictionary, stream, folder, *, tokens=200_000, context=256,
 
     reason = "complete"
     ready = False
+    # Admission ends after artifact binding. Earlier startup stops preserve quality.
+    # A stop in this block records partial quality for the admitted artifact.
     try:
         health()
         if resume:
-            pending, elapsed_before = restore_evaluation(state_folder, stats, stream, identity, settings)
+            pending, elapsed_before = restore_evaluation(state_folder, stats, stream, identity, settings, binding)
         ready = True
         while stats.count < tokens:
             health()
+            binding.check()
             if pending is None:
                 batch = stream.next_tokens(min(batch_tokens, tokens - stats.count), health=health)
                 if not len(batch):
@@ -264,12 +274,14 @@ def evaluate(model, dictionary, stream, folder, *, tokens=200_000, context=256,
             count = len(pending)
             ids = torch.tensor(pending, dtype=torch.int64, device=device)
             ids = F.pad(ids, (0, (-count) % context)).reshape(-1, context)
+            binding.check()
             result = evaluate_batch(model, dictionary, ids, count, chunk_tokens=chunk_tokens, health=health)
+            binding.check()
             stats.merge(result)
             pending = None
             if time.monotonic() - last_save >= 240:
                 save_evaluation(state_folder, stats, stream, pending, identity, settings,
-                                elapsed_before + time.monotonic() - started)
+                                elapsed_before + time.monotonic() - started, binding)
                 last_save = time.monotonic()
             print(json.dumps({"stage": "quality_batch", "tokens": stats.count, "target": tokens}), flush=True)
     except CleanStop as error:
@@ -277,8 +289,6 @@ def evaluate(model, dictionary, stream, folder, *, tokens=200_000, context=256,
         if not ready:
             # A partial restore must not replace the last complete evaluation cursor.
             stats = quality_stats(metadata)
-    if ready:
-        save_evaluation(state_folder, stats, stream, pending, identity, settings, elapsed_before + time.monotonic() - started)
     if stats.count >= 2 and stats.ce_tokens:
         quality = stats.metrics()
     else:
@@ -296,6 +306,10 @@ def evaluate(model, dictionary, stream, folder, *, tokens=200_000, context=256,
         quality.update(all_mlps_replaced=len(dictionary.layers))
     if memory:
         quality["peak_memory_bytes"] = memory.peak
+    if ready:
+        save_evaluation(state_folder, stats, stream, pending, identity, settings,
+                        elapsed_before + time.monotonic() - started, binding)
+    binding.verify()
     metadata["quality"] = quality
     write_json(folder / "dictionary.json", metadata)
     print(json.dumps({"stage": "quality_end", **quality}), flush=True)

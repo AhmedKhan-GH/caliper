@@ -46,9 +46,11 @@ def startup(monkeypatch, command, model, target, *, signal_only=False):
             return function(*args, **kwargs)
         return call
 
-    def guard(*_):
+    def guard(limit, device):
+        assert str(device) == "cpu"
         stage("guard")
-        return SimpleNamespace(peak=0, check=lambda name, **_: stage(name))
+        return SimpleNamespace(peak=0, limit=int(limit * 1e9), device=device,
+                               check=lambda name, **_: stage(name))
 
     class Source(list):
         closed = False
@@ -131,8 +133,8 @@ def test_fallback_startup_stop_leaves_output_absent(tmp_path, monkeypatch, capsy
 
 
 @pytest.mark.parametrize("target", ["guard", "start", "model", "dictionary", "after_dictionary_load",
-                                   "source", "stream", "fingerprint"])
-def test_evaluator_startup_stop_preserves_artifacts(tmp_path, monkeypatch, capsys, target):
+                                   "source", "stream", "fingerprint", "binding"])
+def test_evaluator_stop_before_artifact_admission_preserves_prior_report(tmp_path, monkeypatch, capsys, target):
     model, _, _ = synthetic_source(tmp_path)
     before = snapshot(tmp_path)
     _, wrap, _, streams, sources = startup(monkeypatch, evaluation, model, target)
@@ -141,10 +143,27 @@ def test_evaluator_startup_stop_preserves_artifacts(tmp_path, monkeypatch, capsy
     dictionary = load_dictionary(tmp_path, model=model)
     monkeypatch.setattr(evaluation, "load_dictionary", wrap("dictionary", lambda *a, **k: dictionary))
     monkeypatch.setattr(evaluation, "dictionary_fingerprint", wrap("fingerprint", evaluation.dictionary_fingerprint))
+    monkeypatch.setattr(evaluation, "EvaluationBinding", wrap("binding", evaluation.EvaluationBinding))
     assert evaluation.main(["--dictionary", str(tmp_path), "--resume", "--device", "cpu"]) == 2
     assert snapshot(tmp_path) == before
     assert all(stream.closed for stream in streams)
     assert all(source.closed for source in sources)
+    assert_clean_stop(capsys)
+
+
+def test_signal_after_stream_creation_preserves_prior_report_before_admission(tmp_path, monkeypatch, capsys):
+    model, _, _ = synthetic_source(tmp_path)
+    before = snapshot(tmp_path)
+    _, _, seen, streams, sources = startup(monkeypatch, evaluation, model, "stream", signal_only=True)
+    from caliper.interp import load_dictionary
+    dictionary = load_dictionary(tmp_path, model=model, device="cpu")
+    monkeypatch.setattr(evaluation, "load_dictionary", lambda *a, **k: dictionary)
+    # Stream creation does not admit evaluation. The prior complete report remains valid.
+    monkeypatch.setattr(evaluation, "evaluate", lambda *a, **k: pytest.fail("evaluation admission ran"))
+    assert evaluation.main(["--dictionary", str(tmp_path), "--resume", "--device", "cpu"]) == 2
+    assert "stream" in seen and streams and all(stream.closed for stream in streams)
+    assert all(source.closed for source in sources)
+    assert snapshot(tmp_path) == before
     assert_clean_stop(capsys)
 
 

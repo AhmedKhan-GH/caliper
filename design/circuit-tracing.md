@@ -137,8 +137,12 @@ The stream uses the fixed revision and document partitions in the training metad
 
 Quality uses 200,000 held-out tokens. Mean unexplained variance must not exceed 0.30.
 Dead latents must not exceed 15 percent. Full MLP replacement must increase cross-entropy by at most 0.5 nats.
-An incomplete evaluation records `partial` and the current dictionary fingerprint, even before two tokens complete.
-It emits `quality_end` and replaces any earlier passed quality report.
+Evaluation admission compares runtime tensor bytes with the artifact after the loader dtype conversion.
+The cursor binds those bytes, the dictionary fingerprint, and evaluation settings. Resume refuses a cursor without that tensor evidence.
+A stop before admission preserves the prior quality report and cursor. Stream creation alone does not admit evaluation.
+After admission, an incomplete evaluation records `partial` and the current dictionary fingerprint, even before two tokens complete.
+It emits `quality_end` and replaces any earlier passed report only when the final artifact verification succeeds.
+If memory admission prevents that verification, the evaluator preserves the prior published evidence.
 
 Section 7 of the approved M7 and M8 outline authorizes an upper-half fallback after complete training and failed full quality evaluation.
 The fallback trains the upper half with its full token budget and represents the lower half through error nodes.
