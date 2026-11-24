@@ -15,6 +15,38 @@ from ._points import _architecture, capture
 from ._memory import MemoryGuard as ProcessMemoryGuard, CleanStop, free_percent, autorelease_scope
 
 
+# Mixed storage precision needs at most this many converted encoder elements,
+# or one row when the residual width exceeds the block limit.
+_ENCODER_BLOCK_ELEMENTS = 1_048_576
+
+
+def _trace_features(layer, x, guard):
+    """Evaluate TopK in model precision without a converted dictionary copy."""
+    if layer.W_enc.dtype == x.dtype and layer.b_enc.dtype == x.dtype:
+        return layer.encode(x).detach()
+    latents, width = layer.W_enc.shape
+    rows = max(1, _ENCODER_BLOCK_ELEMENTS // width)
+    preactivation = x.new_empty(*x.shape[:-1], latents)
+    for start in range(0, latents, rows):
+        with autorelease_scope(x.device):
+            guard.check("dictionary encoder block")
+            stop = min(start + rows, latents)
+            preactivation[..., start:stop] = F.linear(
+                x, layer.W_enc.detach()[start:stop].to(x.dtype),
+                layer.b_enc.detach()[start:stop].to(x.dtype))
+    values, indices = preactivation.relu_().topk(layer.k, dim=-1)
+    return torch.zeros_like(preactivation).scatter_(-1, indices, values)
+
+
+def _trace_reconstruction(layer, features):
+    """Decode in model precision with copies of only the selected TopK rows."""
+    if layer.W_dec.dtype == features.dtype and layer.b_dec.dtype == features.dtype:
+        return layer.decode(features)
+    values, indices = features[0].topk(layer.k, dim=-1)
+    decoders = layer.W_dec.detach()[indices].to(features.dtype)
+    return torch.einsum("tk,tkw->tw", values, decoders)[None] + layer.b_dec.detach().to(features.dtype)
+
+
 def _validate_dictionary(model, dictionary):
     """Check identity, dimensions, and probes before any model forward."""
     data = dictionary.metadata
@@ -382,9 +414,9 @@ class FrozenPath:
                     layer = dictionary.layers[i]
                     output_mask = torch.tensor(bool({f"{base}.mlp", f"{base}.mlp_out"} & ablated),
                                                device=self.device)
-                    a = dictionary.encode(i, x.to(layer.W_enc.dtype)).detach()
+                    a = _trace_features(layer, x, self.guard)
                     a = a.masked_fill(output_mask, 0)
-                    reconstruction = dictionary.decode(i, a).to(self.dtype).masked_fill(output_mask, 0)
+                    reconstruction = _trace_reconstruction(layer, a).masked_fill(output_mask, 0)
                     self.inputs.append(x)
                     self.outputs.append(y)
                     self.features.append(a.to(self.dtype))
