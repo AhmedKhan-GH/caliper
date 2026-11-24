@@ -4,6 +4,7 @@ from __future__ import annotations
 from collections import deque
 from contextlib import ExitStack
 import json
+import sys
 import time
 
 import torch
@@ -82,7 +83,7 @@ class MemoryGuard:
                   "limit_bytes": self.limit}
         self.records.append(record)
         if self.device.type == "mps":
-            print("caliper.trace.memory " + json.dumps(record), flush=True)
+            print("caliper.trace.memory " + json.dumps(record), file=sys.stderr, flush=True)
         if max(current, self._guard.peak) > self.limit:
             raise CleanStop("trace exceeded the 12 GB process or MPS memory limit")
         return current
@@ -177,6 +178,41 @@ def _attention_output(model, name, projection_name, interventions, recorded=None
             result.transforms.append(FrozenInput(recorded[point + ".before"],
                                                   recorded[point + ".after"], specifications))
     return result
+
+
+def _validate_ablation_points(model, interventions):
+    """Refuse ablations outside the frozen path before a model forward."""
+    ablations = [spec["point"] for spec in interventions
+                 if spec.get("op", spec.get("kind")) == "ablate"]
+    if not ablations:
+        return
+    from .._ablate import _find
+    probes = _architecture(model)
+    supported, attention = set(), {}
+    for point in probes:
+        if not point.endswith(".mlp_in"):
+            continue
+        base = point.rsplit(".", 1)[0]
+        block = model.get_submodule(base)
+        delta = getattr(block, "block_type", None) == "linear_attention"
+        name = f"{base}.linear_attn" if delta else f"{base}.self_attn"
+        projection = "out_proj" if delta else "o_proj"
+        supported.update((f"{base}.mlp", f"{base}.mlp_out", f"{base}.mlp_in",
+                          f"{base}.resid_pre", name, f"{name}.{projection}"))
+        attention[name] = getattr(model.get_submodule(name), projection)
+    for point in ablations:
+        if point in supported:
+            continue
+        name, separator, _ = point.rpartition("#")
+        if separator and name in attention:
+            try:
+                target, head = _find(model, point)
+            except KeyError:
+                pass
+            else:
+                if target is attention[name] and head is not None:
+                    continue
+        raise ValueError(f"trace does not support ablation point: {point}")
 
 
 class FrozenAttention:
@@ -357,6 +393,7 @@ class FrozenPath:
     """
 
     def __init__(self, model, input_ids, dictionary, *, guard=None, interventions=()):
+        _validate_ablation_points(model, interventions)
         probes = _validate_dictionary(model, dictionary)
         parameter = next(model.parameters())
         self.device, self.dtype = parameter.device, parameter.dtype

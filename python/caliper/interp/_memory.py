@@ -144,7 +144,8 @@ class MemoryGuard:
         print(json.dumps({"stage": stage, "process_bytes": process, "rss_bytes": rss,
                           "physical_footprint_bytes": footprint, "peak_memory_bytes": self.peak,
                           "driver_bytes": driver, "free_percent": free,
-                          "measurement": "physical_footprint" if footprint is not None else "rss_plus_driver_fallback"}), flush=True)
+                          "measurement": "physical_footprint" if footprint is not None else "rss_plus_driver_fallback"}),
+              file=sys.stderr, flush=True)
         if self.peak > self.limit:
             raise CleanStop("process or MPS allocation exceeds the memory limit")
         if free < 15 or self.low >= 2:

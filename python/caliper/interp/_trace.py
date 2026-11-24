@@ -9,7 +9,7 @@ import json
 import torch
 
 from ._dictionary import weights_hash
-from ._frozen import FrozenPath, MemoryGuard, _validate_dictionary
+from ._frozen import FrozenPath, MemoryGuard, _validate_dictionary, _validate_ablation_points
 from ._memory import autorelease_scope
 from ._graph import Graph, bounded_integer
 from ._influence import influence
@@ -322,6 +322,11 @@ class Tracer:
     @torch.inference_mode(False)
     def trace(self, prompt, max_targets=512, max_nodes=512, max_edges=8192):
         """Publish and return one graph without truncation or model downloads."""
+        state = self._intervention_state()
+        specifications = state["specifications"] if isinstance(state, dict) else state
+        if isinstance(state, dict) and state["rows"] is not None and 0 not in state["rows"]:
+            specifications = []
+        _validate_ablation_points(self.model, specifications)
         with autorelease_scope(next(self.model.parameters()).device):
             if self.model.training:
                 raise ValueError("trace requires an evaluation model")
@@ -349,9 +354,9 @@ class Tracer:
                         "dictionary_content": weights_hash(self.dictionary, memory=self.guard._guard),
                         "dictionary_metadata": self.dictionary.metadata,
                         "tokenizer": id(self.tokenizer), "prompt": prompt, "tokens": ids.tolist(),
-                        "interventions": self._intervention_state()}
+                        "interventions": state}
             state_key = hashlib.sha256(json.dumps(identity, sort_keys=True, allow_nan=False).encode()).hexdigest()
-            cache_key = (state_key, max_targets, max_nodes, max_edges)
+            cache_key = (state_key, max_targets, max_nodes, max_edges, self.target_batch_size)
             if cache_key in self._cache:
                 graph = self._cache.pop(cache_key)
                 self._cache[cache_key] = graph
@@ -361,10 +366,6 @@ class Tracer:
                 path = self._forward_cache[1]
             else:
                 self._forward_cache = None
-                state = identity["interventions"]
-                specifications = state["specifications"] if isinstance(state, dict) else state
-                if isinstance(state, dict) and state["rows"] is not None and 0 not in state["rows"]:
-                    specifications = []
                 path = FrozenPath(self.model, ids.to(self.guard.device), self.dictionary,
                                   guard=self.guard, interventions=specifications)
                 if self._intervention_state() != identity["interventions"]:
@@ -377,7 +378,7 @@ class Tracer:
             seeds = path.embedding.new_zeros(len(effects.nodes))
             for index in effects.logit_nodes:
                 seeds[index] = effects.nodes[index]["probability"]
-            diagnostics = []
+            diagnostics, batch_sizes = [], []
             visited = torch.zeros(len(effects.nodes), dtype=torch.bool, device=path.device)
             feature_mask = visited.clone()
             feature_mask[effects.feature_nodes] = True
@@ -397,6 +398,7 @@ class Tracer:
                         batch = ranked[:count].tolist()
                         target_indices.extend(batch)
                     incoming, accounting = effects.backward(batch)
+                    batch_sizes.append(len(batch))
                     weights[:, completed:completed + len(batch)] = incoming
                     diagnostics.extend(accounting)
                     visited[batch] = True
@@ -426,10 +428,17 @@ class Tracer:
             tolerance = 1e-9 if path.dtype == torch.float64 else 2e-2
             if completeness["max_absolute_residual"] > tolerance:
                 raise ValueError(f"direct-effect completeness residual exceeds {tolerance}")
-            graph = Graph.build(nodes=display_nodes, edges=display_edges, tokens=effects.tokens,
-                                layers=path.layers, completeness=completeness, omitted_influence=omitted,
-                                error_share=error_share, feature_share=feature_share, trace_id=state_key,
-                                device=path.device, logits=[effects.nodes[index] for index in effects.logit_nodes])
+            graph_data = dict(nodes=display_nodes, edges=display_edges, tokens=effects.tokens,
+                              layers=path.layers, completeness=completeness, omitted_influence=omitted,
+                              error_share=error_share, feature_share=feature_share,
+                              logits=[effects.nodes[index] for index in effects.logit_nodes])
+            # Resource admission can change batch boundaries and thus visited targets.
+            # Hash the request and the actual result without changing target selection.
+            trace_identity = {"format": "caliper.trace.v2", "request": cache_key,
+                              "targets": [effects.nodes[index]["id"] for index in target_indices],
+                              "batches": batch_sizes, "graph": graph_data}
+            trace_id = hashlib.sha256(json.dumps(trace_identity, sort_keys=True, allow_nan=False).encode()).hexdigest()
+            graph = Graph.build(**graph_data, trace_id=trace_id, device=path.device)
             self.guard.check("graph publication")
             if self._intervention_state() != identity["interventions"]:
                 self._forward_cache = None

@@ -168,7 +168,7 @@ def test_unsupported_module_forms_refuse_before_forward(point, monkeypatch):
         def forbidden(*args, **kwargs):
             raise AssertionError("unsupported intervention must fail before a forward")
         monkeypatch.setattr(model, "forward", forbidden)
-        with pytest.raises(NotImplementedError, match="no exact affine intervention path"):
+        with pytest.raises(ValueError, match="trace does not support ablation point"):
             Tracer(model, tokenizer, dictionary, controls=owner).trace("AB", max_targets=0)
 
 

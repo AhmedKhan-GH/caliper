@@ -3,7 +3,7 @@
 The package imports each implementation only when its API is used.
 """
 
-__all__ = ["points", "capture", "publish", "load_dictionary", "Tracer", "Graph"]
+__all__ = ["points", "capture", "publish", "load_dictionary", "verify_hf_model", "Tracer", "Graph"]
 
 
 def points(model):
@@ -30,6 +30,19 @@ def load_dictionary(path, *, model=None, model_hash=None, device=None, dtype=Non
     from ._dictionary import load_dictionary as implementation
     return implementation(path, model=model, model_hash=model_hash, device=device, dtype=dtype,
                           memory_limit_gb=memory_limit_gb)
+
+
+def verify_hf_model(model, snapshot, *, key_mapping=None, checkpoint_subset=None, memory_limit_gb=12):
+    """Verify model weights against trusted local snapshot data, without a download.
+
+    Literal ``key_mapping`` prefixes rename checkpoint keys. The named subset
+    ``qwen3.5-0.8b-text`` supplies the mapping for the pinned text checkpoint and
+    declares its exact non-text keys. The default requires the full checkpoint.
+    This check does not authenticate the snapshot against a remote source.
+    """
+    from ._dictionary import verify_hf_model as implementation
+    return implementation(model, snapshot, key_mapping=key_mapping,
+                          checkpoint_subset=checkpoint_subset, memory_limit_gb=memory_limit_gb)
 
 
 def __getattr__(name):

@@ -373,8 +373,10 @@ def test_cli_fixture_build_and_query(tmp_path, monkeypatch, capsys):
     assert index.metadata["provenance"]["partition"] == "index"
     assert index.metadata["provenance"]["source_kind"] == "staged_jsonl"
     assert "before batch" in stages and "model batch" in stages and "table" in stages
+    capsys.readouterr()
     assert command.main([*args, "--query", "0", "0", "--limit", "1"]) == 0
-    response = json.loads(capsys.readouterr().out.splitlines()[-1])
+    # The query emits one JSON result. Library diagnostics use stderr.
+    response = json.loads(capsys.readouterr().out)
     assert response["show"]["feature"] == 0
     assert len(response["examples"]) <= 1
     with pytest.raises(ValueError, match="already has an index"):
