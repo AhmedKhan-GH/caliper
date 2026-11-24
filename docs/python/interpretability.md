@@ -83,7 +83,8 @@ The local snapshot must contain the checkpoint tensors and `config.json` for the
 Verification compares weights and forward settings with that trusted snapshot, including normalization epsilon, activation functions, rotary settings, and layer types.
 The local snapshot is trusted input. Verification does not authenticate its files against the remote repository.
 The model must use evaluation mode.
-Eager and SDPA attention are supported backend choices and preserve the checkpoint identity.
+Qwen permits eager and SDPA attention with the same checkpoint identity.
+Gemma requires eager attention because the supported SDPA backend cannot apply its attention softcap.
 Later identity checks refuse changes to weights or forward settings, including changes before dictionary admission or tracer construction.
 
 For default Qwen3.5 text and Gemma 2 RoPE, the verifier reconstructs buffers within a fixed CPU allocation limit.

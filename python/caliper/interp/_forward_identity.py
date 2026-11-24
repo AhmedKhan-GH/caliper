@@ -39,8 +39,8 @@ def _type_name(value):
 def forward_settings(model, *, tensor_hash):
     """Record effective settings with stable callable names and tensor contents.
 
-    Eager and SDPA attention are supported backend choices. They share checkpoint
-    identity. Cache outputs and placement are absent from this signature.
+    Qwen permits eager and SDPA attention. Gemma requires eager attention for
+    its softcap. Cache outputs and placement are absent from this signature.
     """
     settings = {}
 
@@ -61,6 +61,8 @@ def forward_settings(model, *, tensor_hash):
                    else function.__module__ + "." + function.__qualname__)
         config = getattr(module, "config", None)
         backend = getattr(config, "_attn_implementation", None)
+        if getattr(config, "model_type", None) == "gemma2" and backend not in (None, "eager"):
+            raise ValueError("Gemma checkpoint identity requires eager attention for its softcap")
         if backend not in (None, "eager", "sdpa"):
             raise ValueError("checkpoint identity supports eager or sdpa attention")
         for field in _CONFIG_FIELDS:
