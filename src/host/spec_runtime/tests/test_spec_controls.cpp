@@ -1063,7 +1063,10 @@ TEST_CASE("spec controls: session teardown discards an active text draft") {
 }
 
 TEST_CASE("spec controls: a text context survives until process exit") {
-    const auto previous = ImGui::GetCurrentContext();
+    struct RestoreContext {
+        ImGuiContext* previous = ImGui::GetCurrentContext();
+        ~RestoreContext() { ImGui::SetCurrentContext(previous); }
+    } restore;
     exit_ui = std::make_unique<Ui>();
     FakeRun run;
     run.run = training();
@@ -1082,10 +1085,10 @@ TEST_CASE("spec controls: a text context survives until process exit") {
     exit_ui->frame([&] { draw(); });
     press(*exit_ui, ImGuiKey_Enter, [&] { draw(); });
     CHECK(run.sent.empty());
+    REQUIRE(exit_ui->ctx->InputTextState.TextA.Data);
     CHECK(std::string(exit_ui->ctx->InputTextState.TextA.Data) == "retained draft");
     // The process exit status covers shutdown after all test cases finish.
     // The draft must also release without access to the run or host.
-    ImGui::SetCurrentContext(previous);
 }
 
 TEST_CASE("spec controls: context destruction releases isolated text drafts") {
