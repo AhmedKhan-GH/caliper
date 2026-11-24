@@ -25,9 +25,10 @@ fn token_cells(@builtin(global_invocation_id) id: vec3<u32>) {
     let valid = col<row.token_count && shapes.tokens.z==16u && shapes.tokens.w==25u &&
                 shapes.activations.z==16u && shapes.activations.w==25u &&
                 arrayLength(&tokens)>=400u && arrayLength(&activations)>=400u;
-    let x = -0.95+f32(col)*1.9/25.0;
+    let cell_width = 1.9/f32(max(row.token_count,1u));
+    let x = -0.95+f32(col)*cell_width;
     let y = 0.9-f32(i/25u)*1.8/8.0;
-    let rect = vec4<f32>(x,y-0.18,x+1.9/25.0-0.004,y);
+    let rect = vec4<f32>(x,y-0.18,x+cell_width-0.004,y);
     cells[i] = Cell(rect,0.0,-1,i/25u,0u);
     labels[i] = Label(vec4<f32>((rect.xy+rect.zw)*0.5,0.0,1.0),0xffffffffu);
     if (!valid) { return; }

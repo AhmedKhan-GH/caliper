@@ -480,6 +480,10 @@ TEST_CASE("example padding keeps valid token values and page-local row identitie
             const unsigned count=unsigned(std::clamp(page_counts[row],0,25));
             visible+=count;
             CHECK(scalar<unsigned>(rows,row,12,16)==count);
+            if (count) {
+                CHECK(scalar<float>(cells,row*25,0,32)==doctest::Approx(-0.95f));
+                CHECK(scalar<float>(cells,row*25+count-1,8,32)==doctest::Approx(0.946f));
+            }
             for (unsigned col=0;col<25;++col) {
                 const unsigned i=row*25+col;
                 const bool valid=col<count;
