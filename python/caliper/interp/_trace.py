@@ -8,6 +8,7 @@ import json
 
 import torch
 
+from ._dictionary import weights_hash
 from ._frozen import FrozenPath, MemoryGuard, _validate_dictionary
 from ._memory import autorelease_scope
 from ._graph import Graph, bounded_integer
@@ -328,6 +329,7 @@ class Tracer:
             self._new_prompt(prompt)
             identity = {"model": id(self.model), "model_weights": _versions(self.model),
                         "dictionary": id(self.dictionary), "dictionary_weights": _versions(self.dictionary),
+                        "dictionary_content": weights_hash(self.dictionary, memory=self.guard._guard),
                         "dictionary_metadata": self.dictionary.metadata,
                         "tokenizer": id(self.tokenizer), "prompt": prompt, "tokens": ids.tolist(),
                         "interventions": self._intervention_state()}

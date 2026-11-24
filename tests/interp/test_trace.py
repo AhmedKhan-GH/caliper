@@ -480,6 +480,29 @@ def test_trace_cache_identity_full_state_and_lru(monkeypatch):
     assert initial not in tracer._cache.values()
 
 
+@pytest.mark.parametrize("new_limits", [False, True])
+def test_dictionary_alias_write_invalidates_graph_and_frozen_caches(new_limits):
+    from caliper.interp import Tracer
+    from .fixture import TinyLM, TinyTokenizer
+
+    model = TinyLM(layers=2, width=8, heads=2, latents=8, k=2)
+    dictionary = exact_dictionary(model)
+    tracer = Tracer(model, TinyTokenizer(), dictionary)
+    first = tracer.trace("AB", max_targets=8, max_nodes=32)
+    path = tracer._forward_cache[1]
+    weight = dictionary.layers[0].W_dec
+    version = weight._version
+    weight.data.zero_()
+    assert weight._version == version
+    options = {"max_targets": 4 if new_limits else 8, "max_nodes": 24 if new_limits else 32}
+    changed = tracer.trace("AB", **options)
+    assert changed is not first and tracer._forward_cache[1] is not path
+    fresh = Tracer(model, TinyTokenizer(), dictionary).trace("AB", **options)
+    assert changed.completeness == fresh.completeness
+    for name, tensor in fresh.tensors.items():
+        torch.testing.assert_close(changed.tensors[name], tensor, rtol=0, atol=0)
+
+
 @pytest.mark.parametrize("real_qwen", [False, True])
 def test_full_replacement_keeps_active_masks_and_constant_errors(real_qwen):
     from caliper.interp._frozen import FrozenPath
