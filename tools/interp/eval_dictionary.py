@@ -389,7 +389,7 @@ def main(argv=None):
                 memory.check("evaluation_source", force=False)
 
             source = fineweb_documents(cache_dir=args.dataset_cache, local_manifest=args.local_dataset_manifest,
-                                       health=source_health)
+                                       health=source_health, memory=memory)
             if hasattr(source, "close"):
                 resources.callback(source.close)
             stream = resources.enter_context(TextStream(source, tokenizer, "quality"))

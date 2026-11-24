@@ -608,7 +608,7 @@ def _run(args, started, stop, resources):
     stream, prepared = None, None
     if fallback:
         # Source identity is established before the model, with no token consumption.
-        stream = _training_stream(args, None, resources, health=health)
+        stream = _training_stream(args, None, resources, health=health, memory=memory)
         health()
         prepared = prepare_upper_half(args, source_id=stream.source_id, record=record)
         health()
@@ -631,7 +631,7 @@ def _run(args, started, stop, resources):
         trainer.initialize_upper(args.upper_half_from)
         health("after warm start", force=True)
     if stream is None:
-        stream = _training_stream(args, tokenizer, resources, health=health)
+        stream = _training_stream(args, tokenizer, resources, health=health, memory=memory)
     else:
         stream.tokenizer = tokenizer
     health()
@@ -646,8 +646,9 @@ def _run(args, started, stop, resources):
     return 0 if result["tokens"] == args.tokens and result["dictionary_export"] == "complete" else 2
 
 
-def _training_stream(args, tokenizer, resources, *, health=None):
-    source = fineweb_documents(cache_dir=args.dataset_cache, local_manifest=args.local_dataset_manifest, health=health)
+def _training_stream(args, tokenizer, resources, *, health=None, memory=None):
+    source = fineweb_documents(cache_dir=args.dataset_cache, local_manifest=args.local_dataset_manifest,
+                               health=health, memory=memory)
     if hasattr(source, "close"):
         resources.callback(source.close)
     return resources.enter_context(TextStream(source, tokenizer, "train"))
