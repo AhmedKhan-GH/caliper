@@ -181,7 +181,7 @@ def test_padded_rows_keep_exact_scores_ids_and_example_labels(tmp_path, monkeypa
                 dictionary=dictionary, provenance={"partition": "fixture"})
     contents = {file.name: file.read_bytes() for file in (tmp_path / "index").iterdir()}
     published = {}
-    monkeypatch.setattr("caliper.interp.publish", lambda name, tensor: published.update({name: tensor}))
+    monkeypatch.setattr("caliper.interp._publish._TENSORS", published)
     with FeatureIndex(tmp_path, model=model, tokenizer=tokenizer, dictionary=dictionary) as index:
         assert index.metadata["tokenizer_hash"] == "24fd05bebf61119419a0067190c0ae2d8c6c1df1c7e400665154aa064b2a907e"
         service = InterpretationService(model=model, dictionary=dictionary, index=index)
@@ -262,7 +262,7 @@ def test_dead_feature_show_and_examples_keep_zero_token_id(tmp_path, monkeypatch
     build_index(tmp_path, [("fixture", [0, 65, 0, 66])], model=model, tokenizer=tokenizer,
                 dictionary=dictionary, provenance={"partition": "fixture"})
     published = {}
-    monkeypatch.setattr("caliper.interp.publish", lambda name, tensor: published.update({name: tensor}))
+    monkeypatch.setattr("caliper.interp._publish._TENSORS", published)
     with FeatureIndex(tmp_path, model=model, tokenizer=tokenizer, dictionary=dictionary) as index:
         service = InterpretationService(model=model, dictionary=dictionary, index=index)
         shown = execute(service, "feature.show", {"layer": 0, "feature": 0})
@@ -283,7 +283,7 @@ def test_trace_read_escapes_nul_without_changing_prompt_ids(monkeypatch):
     with torch.no_grad():
         model.lm_head.weight.zero_()
     dictionary = exact_dictionary(model)
-    monkeypatch.setattr("caliper.interp.publish", lambda *args: None)
+    monkeypatch.setattr("caliper.interp._publish._TENSORS", {})
     tracer = Tracer(model, tokenizer, dictionary)
     prompt = "A\0B"
     graph = tracer.trace(prompt, max_targets=0, max_nodes=32, max_edges=0)
@@ -319,7 +319,7 @@ def test_trace_axes_nodes_and_bars_use_decoded_text(byte_level_tokenizer, monkey
     tokenizer = Tokenizer()
     dictionary = exact_dictionary(model)
     published = {}
-    monkeypatch.setattr("caliper.interp.publish", lambda name, tensor: published.update({name: tensor}))
+    monkeypatch.setattr("caliper.interp._publish._TENSORS", published)
     graph = Tracer(model, tokenizer, dictionary).trace("display fixture", max_targets=8)
     labels = expected + ["[unmapped token 11]"]
     assert [token["token_id"] for token in graph.tokens] == source_ids

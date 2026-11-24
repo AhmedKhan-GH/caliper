@@ -57,9 +57,8 @@ def actual(tmp_path, request):
 
 
 def test_real_service_all_m7_operations(actual, monkeypatch):
-    import caliper.interp
     published = {}
-    monkeypatch.setattr(caliper.interp, "publish", lambda name, tensor: published.update({name: tensor}))
+    monkeypatch.setattr("caliper.interp._publish._TENSORS", published)
     controls, transport = _controls.Controls(), Transport()
     route = controls.attach(transport)
     register_service(actual, controls=controls)
@@ -127,13 +126,12 @@ def test_index_registration_binds_resources_and_qualifies_dictionary(actual, laz
 
 
 def test_resource_only_examples_publish_on_model_device(actual, monkeypatch):
-    import caliper.interp
     import torch
     service = InterpretationService(index=actual.index)
     published = {}
     # The meta device tests placement without an accelerator allocation.
     monkeypatch.setattr(actual.model, "parameters", lambda: iter((torch.empty(1, device="meta"),)))
-    monkeypatch.setattr(caliper.interp, "publish", lambda name, tensor: published.update({name: tensor}))
+    monkeypatch.setattr("caliper.interp._publish._TENSORS", published)
     service._publish_examples([])
     assert len(published) == 5
     assert all(value.device.type == "meta" for value in published.values())
@@ -299,7 +297,7 @@ def test_legacy_ablation_refuses_before_index_access(actual, monkeypatch, method
 @pytest.mark.parametrize("method", ["feature.examples", "trace.run"])
 @pytest.mark.parametrize("replace", [False, True])
 def test_service_close_waits_for_real_work_and_publication(actual, monkeypatch, method, replace):
-    import caliper.interp
+    from caliper.interp import _publish
     controls = _controls.Controls()
     register_service(actual, controls=controls)
     index = actual.index
@@ -316,10 +314,13 @@ def test_service_close_waits_for_real_work_and_publication(actual, monkeypatch, 
         assert not index._closed
         return resource
 
-    def publish(name, tensor):
+    publish_many = _publish._publish_many
+
+    def publish(values):
         assert controls.interpretation_service is actual
         assert not finished.is_set()
-        publications.append(name)
+        publications.extend(values)
+        publish_many(values)
 
     wait = actual.idle.wait
 
@@ -340,7 +341,7 @@ def test_service_close_waits_for_real_work_and_publication(actual, monkeypatch, 
 
     actual.factories[name] = factory
     monkeypatch.setattr(actual.idle, "wait", close_wait)
-    monkeypatch.setattr(caliper.interp, "publish", publish)
+    monkeypatch.setattr(_publish, "_publish_many", publish)
     params = {"layer": 1, "feature": int(index.counts[1].argmax())} if name == "index" else {
         "prompt": "AB", "max_targets": 4, "max_nodes": 64, "max_edges": 128}
     actual.submit({"version": 1, "method": method, "params": params}, lambda *args: replies.append(args))

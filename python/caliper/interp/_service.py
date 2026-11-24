@@ -153,6 +153,12 @@ class InterpretationService:
         return nullcontext()
 
     def _execute(self, method, params, step):
+        from ._publish import _publication_scope
+        scope = _publication_scope(self.model) if method in ("trace.run", "feature.examples") else nullcontext()
+        with scope:
+            return self._execute_request(method, params, step)
+
+    def _execute_request(self, method, params, step):
         if method == "feature.dictionary":
             dictionary = self._resource("dictionary")
             if self.index is None and self.factories["index"] is not None:
@@ -281,8 +287,13 @@ class InterpretationService:
                 pass  # A disconnected waiter must not prevent resource cleanup.
 
     def _publish_examples(self, rows):
+        from ._publish import _publication_scope
+        with _publication_scope(self.model):
+            self._publish_example_tensors(rows)
+
+    def _publish_example_tensors(self, rows):
         import torch
-        from . import publish
+        from ._publish import _publish_many
         device = next(self.model.parameters()).device if self.model is not None else "cpu"
         tokens = torch.zeros((16, 25), dtype=torch.int32)
         activations = torch.zeros((16, 25), dtype=torch.float32)
@@ -298,9 +309,9 @@ class InterpretationService:
                 tokens[i, col] = row["token_ids"][j]
                 activations[i, col] = row["activations"][j]
                 labels[i * 25 + col] = pack_labels([row["tokens"][j]], 1)[0]
-        for name, value in zip(("tokens", "activations", "example_ids", "valid_tokens", "label_text"),
-                               (tokens, activations, ids, valid, labels)):
-            publish("examples." + name, value.to(device))
+        _publish_many({"examples." + name: value.to(device) for name, value in zip(
+            ("tokens", "activations", "example_ids", "valid_tokens", "label_text"),
+            (tokens, activations, ids, valid, labels))})
 
 
 def _refresh_native_capability(controls):
