@@ -463,3 +463,19 @@ def test_active_patch_sources_do_not_thrash_and_refill_once_per_prompt(controlle
         assert len(service.executor._cache) == len(specs)
     finally:
         handle.remove()
+
+
+def test_nested_source_refill_preserves_outer_probe_capture(controlled):
+    from caliper.interp import capture
+    model, tokenizer, ctl, service = controlled
+    service.set(patch_spec(point="layers.3.mlp_in", source_prompt="AC"))
+    ctl.step()
+    points = ["layers.0.mlp_in", "layers.0.mlp_out", "layers.3.mlp_in", "layers.3.mlp_out"]
+    with capture(model, points) as warm:
+        expected = model(**tokenizer("AB")).logits
+    service.invalidate_source_cache()
+    with capture(model, points) as cold:
+        actual = model(**tokenizer("AB")).logits
+    torch.testing.assert_close(actual, expected, rtol=0, atol=0)
+    for point in points:
+        torch.testing.assert_close(cold[point], warm[point], rtol=0, atol=0)

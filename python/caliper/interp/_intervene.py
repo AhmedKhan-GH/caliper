@@ -91,6 +91,25 @@ def suspend(model):
 
 
 @contextmanager
+def _preserve_captures(model):
+    """Keep an internal source forward out of existing probe capture maps."""
+    from ._points import _ACTIVE
+    saved = [(values, dict(values), {key: dict(part) for key, part in values._pending.items()})
+             for values in list(_ACTIVE.get(model, {}).values())]
+    try:
+        yield
+    finally:
+        for values, tensors, pending in saved:
+            if values._closed:
+                continue
+            values.clear()
+            values.update(tensors)
+            for key, part in values._pending.items():
+                part.clear()
+                part.update(pending[key])
+
+
+@contextmanager
 def rows(model, indices):
     """Restrict interventions to batch rows, intersected with any outer scope."""
     chosen = _indices(indices, "rows")
@@ -386,7 +405,8 @@ class InterventionService:
                 kwargs["logits_to_keep"] = 1
             self.preparing_source = True
             try:
-                with internal_forward(), self.suspend(), torch.no_grad(), autorelease_scope(device):
+                with (internal_forward(), self.suspend(), torch.no_grad(), autorelease_scope(device),
+                      _preserve_captures(self.model)):
                     with capture(self.model, sorted(item[1] for item in missing)) as values:
                         if self.resource_guard is not None:
                             self.resource_guard.check("patch source forward start")
