@@ -70,6 +70,7 @@ Its `metadata` contains the manifest, and its `layers` contain the weights.
 An external HF model requires `caliper.interp.verify_hf_model(model, snapshot)` before admission against a pinned HF dictionary.
 The local snapshot must contain the checkpoint tensors and `config.json` for the same repository and commit.
 Verification compares weights and forward settings with that trusted snapshot, including normalization epsilon, activation functions, rotary settings, and layer types.
+The local snapshot is trusted input. Verification does not authenticate its files against the remote repository.
 The model must use evaluation mode.
 Eager and SDPA attention are supported backend choices and preserve the checkpoint identity.
 Later identity checks refuse changes to weights or forward settings, including changes before dictionary admission or tracer construction.
@@ -433,7 +434,8 @@ macOS process checks use the peak memory footprint from `/usr/bin/time`, which i
 Linux checks use maximum resident set size.
 Missing high-water measurements fail acceptance, and the native parity process has the same 12 GB limit.
 
-Pixel checks require all visible node IDs and bar heights within two pixels of probability times scale.
+Pixel checks require all visible node IDs and the original top token's bar height in each capture.
+That height must match its current probability times scale within two pixels.
 The original top token's bar must change in the predicted direction after the Qwen clamp.
 The `bar_change_matches_prediction` check records both pixel heights, their signed change, the prediction, and both directions.
 Fixture parity requires exact interior IDs, at most two color levels of interior difference, and at most one percent differing edge pixels.

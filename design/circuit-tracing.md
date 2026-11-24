@@ -290,7 +290,8 @@ The driver finds that token's exact probability by its ID, even when the bar ord
 Validation needs at least eight correct signs among ten features and a Spearman correlation of at least 0.6.
 
 The trace budget is 20 seconds, the steering budget is one second, and the demo memory limit is 12 GB.
-The driver checks node IDs and window bar heights within two pixels of probability times scale.
+The driver checks graph node IDs and the original top token's bar height in each capture.
+The bar height must match that token's current probability times scale within two pixels.
 The original top token's bar must also change in the predicted direction after the Qwen clamp.
 App/browser parity applies to the fixture graph, with the existing draw tolerances.
 
