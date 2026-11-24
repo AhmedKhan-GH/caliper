@@ -301,6 +301,7 @@ class InterventionService:
         self._cache_identity = None
         self.preparing_source = False
         self._hooks = weakref.WeakSet()
+        self._retiring_sources = frozenset()
 
     def suspend(self):
         return suspend(self.model)
@@ -545,7 +546,18 @@ class InterventionService:
 
     def _source_keys(self):
         return {(hook.spec["source_prompt"], hook.spec["point"]) for hook in self._hooks
-                if isinstance(hook, Intervention) and not hook.removed and hook.spec["op"] == "patch"}
+                if (isinstance(hook, Intervention) and not hook.removed and hook.spec["op"] == "patch"
+                    and hook not in self._retiring_sources)}
+
+    @contextmanager
+    def _retire_sources(self, hooks):
+        """Count final sources while the caller retains old hooks and cache for rollback."""
+        previous = self._retiring_sources
+        self._retiring_sources = previous.union(hook for hook in hooks if hook is not None)
+        try:
+            yield
+        finally:
+            self._retiring_sources = previous
 
     def _discard_unused_sources(self):
         required = self._source_keys()

@@ -1041,9 +1041,10 @@ class Interventions:
         except ValueError as error:
             raise InterventionError(str(error), _w().ERR_LIMIT) from None
         cache, identity = self.executor._cache.copy(), self.executor._cache_identity
+        retiring = [iv.hook for iv in self._ctl._ivs.values()]
         try:
             if restore_active:
-                with self._ctl._outside_lock():
+                with self._ctl._outside_lock(), self.executor._retire_sources(retiring):
                     for iv in restored.values():
                         if iv.applied_spec is not None:
                             self._ctl._install_intervention(self, iv, iv.applied_spec)
@@ -2182,8 +2183,13 @@ class Controls:
                     except Exception:
                         _log.debug("the shapes of the points failed", exc_info=True)
                     changed = True
-                with self._outside_lock():
+                with (self._outside_lock(), m.executor._retire_sources(
+                        self._boundary_retirements(records, step))):
                     prepared, reports = self._prepare_interventions(m, records, originals, step)
+                    if prepared is None:
+                        for message in reports:
+                            warnings.warn(message, RuntimeWarning, stacklevel=2)
+                        return points_changed
                     changed = prepared or changed
                 if self._iv_model is not m or self._iv_revision != revision:
                     return points_changed
@@ -2220,6 +2226,21 @@ class Controls:
                         m.executor._cache.clear()
                         m.executor._cache.update(cache)
                         m.executor._cache_identity = identity
+
+    @staticmethod
+    def _boundary_retirements(records, step):
+        """Identify old hooks that a successful boundary removes or replaces."""
+        reinstall = False
+        retired = []
+        for iv in records.values():
+            ended = (iv.state == IV_ENDED or iv.clear
+                     or (iv.until_step is not None and iv.until_step <= step)
+                     or (iv.hook is not None and getattr(iv.hook, "errors", 0)))
+            on = not ended and (iv.from_step is None or iv.from_step <= step)
+            reinstall = reinstall or (on and (iv.hook is None or iv.replace))
+            if iv.hook is not None and (not on or iv.replace or reinstall):
+                retired.append(iv.hook)
+        return retired
 
     def _prepare_interventions(self, m, records, originals, s):
         """Build the next hook sequence without changes to the published records."""
@@ -2262,6 +2283,9 @@ class Controls:
                     iv.error_code = "intervene.hook_failed"
                     ended, on = True, False
                     reports.append(f"caliper: the intervention at {iv.point!r} failed: {iv.error}")
+                    if originals[key].hook is not None:
+                        # A replacement failure rolls back the complete hook sequence.
+                        return None, reports
             if not on:
                 iv.hook, iv.applied_spec = None, None
             state = IV_ACTIVE if on else IV_ENDED if ended else IV_PENDING
