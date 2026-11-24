@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+from functools import partial
 
 import torch
 
@@ -36,6 +37,64 @@ def _type_name(value):
     return type(value).__module__ + "." + type(value).__qualname__
 
 
+def _activation_callable(function, owner=None):
+    """Bind supported callables and options without process-specific addresses."""
+    from transformers.activations import GELUActivation, GELUTanh, MishActivation
+
+    functions = (
+        (torch.nn.functional.gelu, {"approximate": ("none", "tanh")}),
+        (torch.nn.functional.relu, {"inplace": (False, True)}),
+        (torch.nn.functional.silu, {"inplace": (False, True)}),
+        (torch.nn.functional.mish, {"inplace": (False, True)}),
+        (torch.tanh, {}), (torch.sigmoid, {}),
+    )
+    base = function.func if type(function) is partial else function
+    for supported, options in functions:
+        if base is not supported:
+            continue
+        name = supported.__module__ + "." + supported.__qualname__
+        if type(function) is not partial:
+            return name
+        if (function.args or any(key not in options or
+                not any(type(value) is type(choice) and value == choice for choice in options[key])
+                for key, value in function.keywords.items())):
+            raise ValueError("unsupported effective activation callable options")
+        return {"function": name, "keywords": dict(function.keywords)}
+    for cls, name in ((GELUTanh, "_gelu_tanh_python"), (GELUActivation, "_gelu_python"),
+                      (MishActivation, "_mish_python")):
+        if (type(owner) is cls and getattr(function, "__self__", None) is owner
+                and getattr(function, "__func__", None) is getattr(cls, name)):
+            return cls.__module__ + "." + cls.__qualname__ + "." + name
+    raise ValueError("unsupported effective activation callable")
+
+
+def _activation_settings(function, prefix, record):
+    if not isinstance(function, torch.nn.Module):
+        record(prefix, _activation_callable(function))
+        return
+    from transformers import activations
+
+    # Known activation modules use public scalar options or a supported `act`.
+    # The stateful kernel module requires a separate implementation contract.
+    supported = {value[0] if isinstance(value, tuple) else value
+                 for key, value in activations.ACT2CLS.items() if key != "xielu"}
+    supported.update((torch.nn.GELU, torch.nn.Identity))
+    if type(function) not in supported:
+        raise ValueError("unsupported effective activation module")
+    if any(key in vars(function) for key in ("forward", "_call_impl", "_compiled_call_impl")):
+        raise ValueError("unsupported effective activation callable override")
+    record(prefix, _type_name(function))
+    if hasattr(function, "act"):
+        record(prefix + ".act", _activation_callable(function.act, owner=function))
+    for key, value in vars(function).items():
+        if key.startswith("_") or key in ("training", "act"):
+            continue
+        if type(value) in (type(None), bool, int, float, str):
+            record(prefix + "." + key, value)
+        else:
+            raise ValueError("unsupported effective activation option")
+
+
 def forward_settings(model, *, tensor_hash):
     """Record effective settings with stable callable names and tensor contents.
 
@@ -56,9 +115,7 @@ def forward_settings(model, *, tensor_hash):
             if hasattr(module, field):
                 record(prefix + field, getattr(module, field))
         if hasattr(module, "act_fn"):
-            function = module.act_fn
-            record(prefix + "act_fn", _type_name(function) if isinstance(function, torch.nn.Module)
-                   else function.__module__ + "." + function.__qualname__)
+            _activation_settings(module.act_fn, prefix + "act_fn", record)
         config = getattr(module, "config", None)
         backend = getattr(config, "_attn_implementation", None)
         if getattr(config, "model_type", None) == "gemma2" and backend != "eager":
