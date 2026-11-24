@@ -256,6 +256,17 @@ class InterpretationService:
             publish("trace." + name, value.to(device))
 
 
+def _refresh_native_capability(controls):
+    # Registration does not load an unused native extension or start a server.
+    import sys
+    from .._controls import CONTROLS
+    if controls is not CONTROLS:
+        return
+    native = sys.modules.get("caliper._net_native")
+    if native is not None:
+        native.refresh_interpretation()
+
+
 def register_service(service=None, *, controls=None, **resources):
     """Register one service; Controls checkpoints call its step after interventions."""
     if controls is None:
@@ -278,6 +289,7 @@ def register_service(service=None, *, controls=None, **resources):
             controls.interpretation_service = service
             service.controls = controls
             controls.busy = True
+        _refresh_native_capability(controls)
     return service
 
 
@@ -291,3 +303,4 @@ def unregister_service(service, *, controls=None):
         with controls.lock:
             if controls.interpretation_service is service:
                 controls.interpretation_service = None
+        _refresh_native_capability(controls)
