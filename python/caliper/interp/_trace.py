@@ -261,7 +261,13 @@ class Tracer:
         service = self._service()
         if service is not None:
             from ._intervene import selected_rows
-            return {"specifications": service.specifications(), "rows": selected_rows(self.model)}
+            specifications = service.specifications()
+            feature_effect = any(spec.get("op", spec.get("kind")) in ("scale", "clamp") for spec in specifications)
+            patch_effect = any(spec.get("op", spec.get("kind")) == "patch" for spec in specifications)
+            bound = service.dictionary if feature_effect else None
+            return {"specifications": specifications, "rows": selected_rows(self.model),
+                    "dictionary": None if bound is None else (id(bound), _versions(bound)),
+                    "tokenizer": id(service.executor.tokenizer) if patch_effect else None}
         from .._controls import CONTROLS
         with CONTROLS.lock:
             watched = CONTROLS._iv_model
