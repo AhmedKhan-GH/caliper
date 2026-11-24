@@ -496,11 +496,13 @@ class HostedInference:
         self._restore_generation(0)
         self.selection = None
         self._owned_clamp = None
+        self._clamp_selection = None
         self._selection_graph = None
         self.traced_prompt = None
         self.traced_specifications = None
         self.traced_state = None
         self._output_key = None
+        self._output_action_id = None
         self._clamp_version = None
         self._selected_version = None
         self._retrace = False
@@ -648,11 +650,13 @@ class HostedInference:
             self.prompt = param("prompt", self.initial_prompt)
             self.selected = param("selected_node", -1, min=-1, max=511)
             self.clamp = param("clamp", 0., min=-4., max=4.)
+            self.clamp_status = param("clamp.status", "No feature selected. No slider clamp.")
             self.retrace = param("retrace", False)
             self.baseline_text = param("output.baseline", "")
             self.steered_text = param("output.steered", "")
             self.status = param("output.status", "ready")
-            self.actions = [caliper.action("generate", self.generate), caliper.action("reset", self.reset)]
+            self.actions = [caliper.action("generate", self.generate), caliper.action("reset", self.reset),
+                            caliper.action("apply_clamp", self.apply_clamp)]
             self.service = register_service(HostedService(self), controls=self.controls)
             if self.restored is not None:
                 self.interventions.load_state_dict(self.restored["interventions"])
@@ -707,31 +711,91 @@ class HostedInference:
             self.selection = {k: record[k] for k in ("layer", "feature", "position")}
 
     def update_controls(self):
-        prompt_inputs(self.model, self.tokenizer, self.prompt.value)
-        self._update_selection()
-        if self.clamp._version != self._clamp_version:
-            if self.selection is None:
-                raise ValueError("clamp requires a selected feature")
-            layer, feature, position = (self.selection[k] for k in ("layer", "feature", "position"))
-            maximum = float(self.index.show(layer, feature)["maximum"])
-            if not torch.isfinite(torch.tensor(maximum)) or maximum <= 0:
-                raise ValueError("selected feature has no positive indexed maximum")
-            point = self.dictionary.metadata["write_points"][layer]
-            with self.controls.lock:
-                refused = self.controls._intervene({"set": {"kind": "clamp", "point": point, "feature": feature,
-                    "positions": [position], "value": self.clamp.value * maximum}})
-                if refused is not None:
-                    raise ValueError(refused[1])
-                self._discard_owned_clamp()
-                self.controls._update_busy()
-                self._owned_clamp = self.controls._ivs[(point, "clamp")].spec
-            self._apply()
-            self._clamp_version = self.clamp._version
+        clamp_changed = self.clamp._version != self._clamp_version
+        # Consume the edit even when prompt, selection, or clamp validation fails.
+        self._clamp_version = self.clamp._version
+        try:
+            prompt_inputs(self.model, self.tokenizer, self.prompt.value)
+            self._update_selection()
+            if clamp_changed:
+                self._set_clamp()
+        finally:
+            self._sync_clamp_control(preserve_edit=clamp_changed)
 
-    def update_output(self):
+    def _set_clamp(self):
+        self._check_stop()
+        if self.selection is None:
+            raise ValueError("clamp requires a selected feature")
+        layer, feature, position = (self.selection[k] for k in ("layer", "feature", "position"))
+        maximum = float(self.index.show(layer, feature)["maximum"])
+        if not torch.isfinite(torch.tensor(maximum)) or maximum <= 0:
+            raise ValueError("selected feature has no positive indexed maximum")
+        point = self.dictionary.metadata["write_points"][layer]
+        with self.controls.lock:
+            spec = self.interventions.executor.validate({"kind": "clamp", "point": point, "feature": feature,
+                "positions": [position], "value": self.clamp.value * maximum})
+            owned = self._owned_record()
+            if (owned is not None and owned.state == "active" and owned.hook is not None
+                    and not owned.replace and owned.spec == owned.applied_spec == spec):
+                return
+            refused = self.controls._intervene({"set": spec})
+            if refused is not None:
+                raise ValueError(refused[1])
+            self._discard_owned_clamp()
+            self.controls._update_busy()
+            self._owned_clamp = self.controls._ivs[(point, "clamp")].spec
+        self._apply()
+
+    def _sync_clamp_control(self, *, preserve_edit=False):
+        reset_input = False
+        if self.selection != self._clamp_selection:
+            self._clamp_selection = deepcopy(self.selection)
+            with self.controls.lock:
+                if (not preserve_edit and self.clamp._version == self._clamp_version
+                        and self.clamp.pending is None):
+                    # Preserve a viewer edit that arrived after this boundary began.
+                    self.clamp._value = 0.
+                    self.clamp._version += 1
+                    self._clamp_version = self.clamp._version
+                    reset_input = True
+            if reset_input:
+                self.controls._publish()
+        selected = "No feature selected."
+        if self.selection is not None:
+            selected = (f"Selected layer {self.selection['layer']}, feature {self.selection['feature']}, "
+                        f"position {self.selection['position']}.")
+        live = "No slider clamp."
+        with self.controls.lock:
+            owned = self._owned_record()
+            if owned is not None:
+                spec = owned.spec
+                live = (f"Live slider clamp: {spec['point']}, feature {spec['feature']}, "
+                        f"position {spec['positions'][0]}, value {spec['value']:g}.")
+        text = bounded_text(f"{selected} Clamp input: {self.clamp.value:g} times the indexed maximum. {live}")
+        if self.clamp_status.value != text:
+            self.clamp_status.set(text)
+
+    def apply_clamp(self):
+        self._check_stop()
+        with internal_forward():
+            self.update_controls()
+            try:
+                self._set_clamp()
+            finally:
+                self._sync_clamp_control()
+            with self.controls.lock:
+                action = self.controls.actions["apply_clamp"]
+                refresh = not action.running or self._output_action_id != action.run_id
+            self.update_output(force=refresh)
+        return "The selected feature clamp is applied."
+
+    def update_output(self, *, force=False):
         key = self._input_state()
         changed = self._output_key != key
-        if changed:
+        if changed or force:
+            with self.controls.lock:
+                # A later request must not reuse a comparison that already began.
+                action_id = self.controls.actions["apply_clamp"].run_id
             comparison = self.output.compare(key[0])
             if self._input_state() != key:
                 raise ValueError("inference state changed during the output comparison")
@@ -739,11 +803,13 @@ class HostedInference:
                 self._comparison = dict(self._input_hashes(key), argmax_token_ids=comparison["argmax_token_ids"],
                                         completed_step=self.controls.n)
             self._output_key = deepcopy(key)
+            self._output_action_id = action_id
             self.status.set("ready")
         if self.retrace.value and (changed or not self._retrace):
             if (self.traced_prompt, self.traced_specifications) != key:
                 self.service._execute("trace.run", {"prompt": self.prompt.value}, self.controls.n)
         self._retrace = self.retrace.value
+        self._sync_clamp_control()
         if self.guard is not None:
             self.guard.check("inference boundary", force=False)
         if self.fixture_display is not None:

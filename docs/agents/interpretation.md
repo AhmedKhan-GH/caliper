@@ -184,6 +184,36 @@ Numeric, Boolean, and choice parameters retain their original types and behavior
 
 ## M8 Command Schemas
 
+### Hosted Clamp Controls
+
+The hosted inference run exposes the `clamp` parameter and the `apply_clamp` action.
+The parameter ranges from minus four through four times the selected feature's indexed maximum.
+A slider edit applies at the next step boundary, at the selected feature's traced token position.
+The run consumes each edit even if validation refuses it. A later selection cannot apply a refused edit.
+
+Bind a button to `action:apply_clamp` to apply the current numeric value explicitly.
+The equivalent wire request uses `op = "run"` and `name = "apply_clamp"`, with no action arguments.
+The action uses the selection and slider value at its step boundary.
+It permits zero ablation when the initial or reset slider value is already zero.
+It requires a selected feature and a finite, positive indexed maximum.
+A successful action publishes a fresh output comparison, even when the owned clamp value remains unchanged.
+The comparison records the current step in `comparison.completed_step` in the `trace.status` inference evidence.
+An edit and action for the same clamp at one boundary share one application and one comparison.
+The action reuses an identical active owned clamp after validation. The existing `retrace` option also applies.
+
+Selection alone never changes model output or removes a clamp.
+A selection change resets the slider input to zero unless an explicit edit arrives at the same boundary.
+If feature A owns a clamp, that clamp remains active after selection of feature B.
+A later slider edit or `apply_clamp` action replaces the slider-owned clamp with the selected feature's clamp.
+The `reset` action removes only the slider-owned clamp and returns the input to zero.
+
+Bind text to `param:clamp.status` to show the selection, slider input, and live slider-owned clamp.
+The text identifies the clamp point, feature, token position, and absolute value.
+The input can differ from the live clamp after a selection change or refused edit.
+The existing intervention list describes other interventions.
+
+### Intervention Schemas
+
 The command table also describes the M8 operations.
 `intervene.set` and each `run.fork` intervention accept the same specification.
 Supply `point` and either `op` or `kind`. When both discriminators are present, their values must match.

@@ -1,0 +1,310 @@
+"""CPU checks for hosted clamp edits and explicit actions."""
+from copy import deepcopy
+from types import SimpleNamespace
+
+import pytest
+import torch
+
+from caliper import _wire
+from caliper.interp._publish import _resolve
+from .test_hosted import hosted_run, _trace_at_boundary
+
+
+@pytest.mark.parametrize("refusal", ["selection", "maximum", "intervention", "row", "prompt"])
+def test_refused_slider_edit_cannot_clamp_a_later_selection(hosted_run, monkeypatch, refusal):
+    run, route = hosted_run
+    graph = _trace_at_boundary(run, prompt="AB", max_targets=32)
+    rows = [i for i, node in enumerate(graph.nodes) if node["kind"] == "feature"]
+    assert len(rows) >= 2
+    run.selected.set(rows[0])
+    run.boundary()
+    baseline = _resolve("output.probs").clone()
+    comparison = deepcopy(run.inference_status()["comparison"])
+    with monkeypatch.context() as patch:
+        if refusal == "selection":
+            run.selected.set(-1)
+        elif refusal == "maximum":
+            patch.setattr(run.index, "show", lambda *args: {"maximum": 0.})
+        elif refusal == "intervention":
+            patch.setattr(run.controls, "_intervene", lambda *args: ("refused", "test clamp refusal"))
+        elif refusal == "row":
+            run.selected.set(511)
+        else:
+            run.prompt.set("A" * 33)
+        reply = route.on_control(None, _wire.Control(1, "set", name="clamp", value=2.).to_meta())
+        assert reply["status"] == "ok"
+        run.boundary()
+        assert not run.interventions.specifications()
+        assert run.clamp._version == run._clamp_version
+        assert run.status.value != "ready"
+    run.prompt.set("AB")
+    run.selected.set(rows[1])
+    run.boundary()
+    assert not run.interventions.specifications()
+    assert run.inference_status()["comparison"] == comparison
+    assert torch.equal(_resolve("output.probs"), baseline)
+
+
+def _feature_rows(run):
+    graph = _trace_at_boundary(run, prompt="AB", max_targets=32)
+    return [i for i, node in enumerate(graph.nodes) if node["kind"] == "feature"]
+
+
+def _queue_action(route, name, request_id):
+    reply = route.on_control(None, _wire.Control(request_id, "run", name=name).to_meta())
+    assert reply["status"] == "queued"
+
+
+def _count_clamp_work(run, monkeypatch):
+    calls = {"requests": [], "installations": [], "comparisons": []}
+    intervene = run.controls._intervene
+    install = run.interventions.executor.install
+    compare = run.output.compare
+
+    def requested(request):
+        calls["requests"].append(deepcopy(request))
+        return intervene(request)
+
+    def installed(request, **kwargs):
+        calls["installations"].append(deepcopy(request))
+        return install(request, **kwargs)
+
+    def compared(prompt):
+        calls["comparisons"].append(prompt)
+        return compare(prompt)
+
+    monkeypatch.setattr(run.controls, "_intervene", requested)
+    monkeypatch.setattr(run.interventions.executor, "install", installed)
+    monkeypatch.setattr(run.output, "compare", compared)
+    return calls
+
+
+def _assert_action_completion(run, route, request_id, previous):
+    reply, = [reply for reply in route.transport.replies if reply.request_id == request_id]
+    assert reply.op == "run" and reply.name == "apply_clamp" and reply.status == "ok"
+    status = route.on_control(None, _wire.Control(request_id + 100, "interpret", interpretation={
+        "version": 1, "method": "trace.status", "params": {}}).to_meta())
+    assert status["status"] == "ok"
+    evidence = status["result"]["inference"]
+    assert evidence["comparison"]["completed_step"] == run.controls.n
+    assert evidence["comparison"]["completed_step"] > previous["completed_step"]
+    assert evidence["comparison"]["prompt_hash"] == evidence["prompt_hash"]
+    assert evidence["comparison"]["interventions_hash"] == evidence["interventions_hash"]
+
+
+@pytest.mark.parametrize("value", [0., 2.])
+def test_pending_edit_and_action_share_one_clamp_and_comparison(hosted_run, monkeypatch, value):
+    run, route = hosted_run
+    run.selected.set(_feature_rows(run)[0])
+    run.boundary()
+    previous = deepcopy(run.inference_status()["comparison"])
+    calls = _count_clamp_work(run, monkeypatch)
+    reply = route.on_control(None, _wire.Control(1, "set", name="clamp", value=value).to_meta())
+    assert reply["status"] == "ok" and run.clamp.pending == value
+    _queue_action(route, "apply_clamp", 2)
+    assert not any(calls.values())
+    run.boundary()
+    assert len(calls["requests"]) == len(calls["installations"]) == 1
+    assert calls["comparisons"] == ["AB"]
+    assert run.interventions.specifications() == [run._owned_clamp]
+    _assert_action_completion(run, route, 2, previous)
+
+
+def test_repeated_zero_action_publishes_one_fresh_comparison(hosted_run, monkeypatch):
+    run, route = hosted_run
+    run.selected.set(_feature_rows(run)[0])
+    run.boundary()
+    _queue_action(route, "apply_clamp", 1)
+    run.boundary()
+    owned = run._owned_clamp
+    previous = deepcopy(run.inference_status()["comparison"])
+    published = _resolve("output.probs")
+    calls = _count_clamp_work(run, monkeypatch)
+    _queue_action(route, "apply_clamp", 2)
+    run.boundary()
+    assert calls == {"requests": [], "installations": [], "comparisons": ["AB"]}
+    assert run._owned_clamp is owned
+    assert run.interventions.specifications() == [owned] and owned["value"] == 0.
+    assert _resolve("output.probs") is not published
+    assert torch.equal(_resolve("output.probs"), published)
+    _assert_action_completion(run, route, 2, previous)
+
+
+@pytest.mark.parametrize("edit", [False, True])
+@pytest.mark.parametrize("refusal", ["prompt", "selection", "row", "maximum", "nonfinite"])
+def test_repeated_action_refusal_preserves_owner_and_consumes_edit(hosted_run, monkeypatch, edit, refusal):
+    run, route = hosted_run
+    rows = _feature_rows(run)
+    run.selected.set(rows[0])
+    run.boundary()
+    _queue_action(route, "apply_clamp", 1)
+    run.boundary()
+    owned = run._owned_clamp
+    previous = deepcopy(run.inference_status()["comparison"])
+    published = _resolve("output.probs")
+    with monkeypatch.context() as patch:
+        if refusal == "prompt":
+            run.prompt.set("A" * 33)
+        elif refusal == "selection":
+            run.selected.set(-1)
+        elif refusal == "row":
+            run.selected.set(511)
+        else:
+            maximum = float("nan") if refusal == "nonfinite" else 0.
+            patch.setattr(run.index, "show", lambda *args: {"maximum": maximum})
+        if edit:
+            reply = route.on_control(None, _wire.Control(2, "set", name="clamp", value=2.).to_meta())
+            assert reply["status"] == "ok"
+        _queue_action(route, "apply_clamp", 3)
+        with pytest.warns(RuntimeWarning, match="action 'apply_clamp' raised ValueError"):
+            run.boundary()
+        reply, = [reply for reply in route.transport.replies if reply.request_id == 3]
+        assert reply.status == "error" and reply.error["code"] == _wire.ERR_ACTION_FAILED
+        assert run.clamp._version == run._clamp_version
+        assert run._owned_clamp is owned
+        assert run.inference_status()["comparison"] == previous
+        assert _resolve("output.probs") is published
+    run.prompt.set("AB")
+    run.selected.set(rows[1])
+    run.boundary()
+    assert run.interventions.specifications() == [owned]
+    assert run.inference_status()["comparison"] == previous
+    assert _resolve("output.probs") is published
+
+
+@pytest.mark.parametrize("origin", ["prior", "comparison"])
+def test_repeated_action_resource_stop_has_no_success_evidence(hosted_run, monkeypatch, origin):
+    from caliper.interp._memory import CleanStop
+    run, route = hosted_run
+    run.selected.set(_feature_rows(run)[0])
+    run.boundary()
+    _queue_action(route, "apply_clamp", 1)
+    run.boundary()
+    previous = deepcopy(run.inference_status()["comparison"])
+    published = _resolve("output.probs")
+    owned = run._owned_clamp
+    calls = _count_clamp_work(run, monkeypatch)
+    failure = CleanStop("clamp resource stop")
+
+    def stop(*args, **kwargs):
+        raise failure
+
+    monkeypatch.setattr(run.output, "guard", SimpleNamespace(check=stop))
+    monkeypatch.setattr(run.output, "generate", lambda *args: pytest.fail("later action ran"))
+    _queue_action(route, "apply_clamp", 2)
+    _queue_action(route, "generate", 3)
+    if origin == "prior":
+        run._latch_failure(failure)
+    with pytest.raises(CleanStop) as caught:
+        run.boundary()
+    assert caught.value is failure
+    assert sorted((reply.request_id, reply.status) for reply in route.transport.replies
+                  if reply.request_id in (2, 3)) == [(2, "error"), (3, "error")]
+    assert not run.controls.queue and run._owned_clamp is owned
+    assert run.inference_status()["comparison"] == previous
+    assert _resolve("output.probs") is published
+    assert calls["requests"] == calls["installations"] == []
+    assert calls["comparisons"] == ([] if origin == "prior" else ["AB"])
+
+
+def test_apply_clamp_ablates_initial_and_reset_zero_at_the_boundary(hosted_run, monkeypatch):
+    run, route = hosted_run
+    run.selected.set(_feature_rows(run)[0])
+    run.boundary()
+    baseline = _resolve("output.probs").clone()
+    replies = []
+    monkeypatch.setattr(route, "_reply", lambda conn, metadata: replies.append(metadata))
+    assert run.clamp.value == 0.
+    version = run.clamp._version
+    _queue_action(route, "apply_clamp", 1)
+    assert not run.interventions.specifications()
+    run.boundary()
+    assert run.clamp._version == version
+    assert run.interventions.specifications()[0]["value"] == 0.
+    assert replies[-1]["status"] == "ok"
+    assert not torch.equal(_resolve("output.probs"), baseline)
+    assert run.inference_status()["comparison"]["completed_step"] == run.controls.n
+    _queue_action(route, "reset", 2)
+    run.boundary()
+    assert run.clamp.value == 0. and not run.interventions.specifications()
+    assert "No slider clamp." in run.clamp_status.value
+    assert torch.equal(_resolve("output.probs"), baseline)
+    version = run.clamp._version
+    _queue_action(route, "apply_clamp", 3)
+    run.boundary()
+    assert run.clamp._version == version
+    assert run.interventions.specifications()[0]["value"] == 0.
+    assert replies[-1]["status"] == "ok"
+    assert not torch.equal(_resolve("output.probs"), baseline)
+
+
+@pytest.mark.parametrize("same_point", [False, True])
+def test_feature_switch_keeps_owner_and_explicit_apply_moves_clamp(hosted_run, same_point):
+    run, route = hosted_run
+    rows = _feature_rows(run)
+    first = run.service.graph.nodes[rows[0]]
+    second = next(i for i in rows[1:]
+                  if (run.service.graph.nodes[i]["layer"] == first["layer"]) == same_point)
+    run.selected.set(rows[0])
+    run.clamp.set(2.)
+    run.boundary()
+    owned = deepcopy(run._owned_clamp)
+    before = _resolve("output.probs").clone()
+    comparison = deepcopy(run.inference_status()["comparison"])
+    run.selected.set(second)
+    run.boundary()
+    assert run.clamp.value == 0.
+    assert run.interventions.specifications() == [owned]
+    assert torch.equal(_resolve("output.probs"), before)
+    assert run.inference_status()["comparison"] == comparison
+    selection = run.selection
+    assert (f"Selected layer {selection['layer']}, feature {selection['feature']}, "
+            f"position {selection['position']}.") in run.clamp_status.value
+    assert (f"Live slider clamp: {owned['point']}, feature {owned['feature']}, "
+            f"position {owned['positions'][0]}, value {owned['value']:g}.") in run.clamp_status.value
+    assert "Clamp input: 0 times" in run.clamp_status.value
+    _queue_action(route, "apply_clamp", 1)
+    run.boundary()
+    spec, = run.interventions.specifications()
+    assert spec["feature"] == selection["feature"] and spec["positions"] == [selection["position"]]
+    assert spec["point"] == run.dictionary.metadata["write_points"][selection["layer"]]
+    assert spec["value"] == 0.
+    assert spec != owned
+
+
+def test_selection_preserves_slider_edit_received_during_boundary(hosted_run, monkeypatch):
+    run, route = hosted_run
+    rows = _feature_rows(run)
+    run.selected.set(rows[0])
+    run.clamp.set(2.)
+    run.boundary()
+    owned = deepcopy(run._owned_clamp)
+    run.selected.set(rows[1])
+    update_selection = run._update_selection
+    def select_and_receive():
+        update_selection()
+        reply = route.on_control(None, _wire.Control(1, "set", name="clamp", value=1.).to_meta())
+        assert reply["status"] == "ok"
+    with monkeypatch.context() as patch:
+        patch.setattr(run, "_update_selection", select_and_receive)
+        run.boundary()
+    assert run.clamp.pending == 1.
+    assert run.interventions.specifications() == [owned]
+    run.boundary()
+    assert run.clamp.value == 1. and run.clamp.pending is None
+    assert run._owned_clamp != owned
+
+
+def test_apply_clamp_refusal_has_final_reply_and_no_later_effect(hosted_run, monkeypatch):
+    run, route = hosted_run
+    rows = _feature_rows(run)
+    replies = []
+    monkeypatch.setattr(route, "_reply", lambda conn, metadata: replies.append(metadata))
+    _queue_action(route, "apply_clamp", 1)
+    with pytest.warns(RuntimeWarning, match="clamp requires a selected feature"):
+        run.boundary()
+    assert replies[-1]["status"] == "error"
+    assert replies[-1]["error"]["code"] == _wire.ERR_ACTION_FAILED
+    run.selected.set(rows[0])
+    run.boundary()
+    assert not run.interventions.specifications()
