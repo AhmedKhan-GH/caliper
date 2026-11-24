@@ -1608,12 +1608,12 @@ struct Hub::Impl {
             refuse(CALIPER_NET_ERR_UNSUPPORTED, "session " + s->id + " has ended");
             return;
         }
-        if (!s->controls_cap) {
-            refuse(CALIPER_NET_ERR_UNSUPPORTED, "the producer of session " + s->id + " does not take controls");
+        if (ctl.op == CALIPER_NET_OP_INTERPRET && !(p.cap_interpretation && s->interpretation_cap)) {
+            refuse("interpret.unsupported", "Both peers must announce interpretation.");
             return;
         }
-        if (ctl.op == CALIPER_NET_OP_INTERPRET && !(p.cap_interpretation && s->interpretation_cap)) {
-            refuse(CALIPER_NET_ERR_UNSUPPORTED, "Both peers must announce interpretation.");
+        if (!s->controls_cap) {
+            refuse(CALIPER_NET_ERR_UNSUPPORTED, "the producer of session " + s->id + " does not take controls");
             return;
         }
         if (ctl.op == "intervene" && !(p.cap_interventions && s->interventions_cap)) {

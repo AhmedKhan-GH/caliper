@@ -143,7 +143,10 @@ def test_offline_command_sidecar(actual, tmp_path, monkeypatch):
                 assert time.monotonic() < deadline and reply["structuredContent"]["pending"]
                 reply = tool(name, {"request_id": reply["structuredContent"]["request_id"]})
             assert json.loads(reply["content"][0]["text"])["error"]["code"] == "interpret.unsupported"
+        # Remove every owner of the dictionary before the missing-resource query.
         actual.dictionary = None
+        actual.index = None
+        actual.tracer = None
         reply = tool("feature.dictionary", {})
         deadline = time.monotonic() + 30
         while not reply.get("isError"):
