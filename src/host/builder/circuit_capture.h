@@ -16,6 +16,7 @@ class CircuitCapture {
     struct Panel {
         std::string name;
         caliper_live_views::SceneView* view = nullptr;
+        uint64_t serial = 0;
         caliper_gfx::Readback ids, color;
         std::vector<uint8_t> id_bytes, color_bytes;
         uint64_t pixels = 0;
@@ -64,6 +65,7 @@ public:
                 Panel panel;
                 panel.name = name;
                 panel.view = view;
+                panel.serial = view->serial();
                 panel.pixels = pixels;
                 panels_.push_back(std::move(panel));
                 Json labels = Json::array(), programs = Json::array(), clip = Json::array();
@@ -76,7 +78,7 @@ public:
                                         {"step", program->status().resource_step}});
                 for (unsigned i = 0; i < 16; ++i) clip.push_back(view->program_clip().m[i]);
                 metadata_["panels"][name] = {{"width", view->width()}, {"height", view->height()},
-                    {"generation", view->generation()}, {"step", view->program_step()},
+                    {"view_serial", panel.serial}, {"generation", view->generation()}, {"step", view->program_step()},
                     {"rect", {rect[0], rect[1], rect[2], rect[3]}}, {"clip_from_world", clip},
                     {"labels", labels}, {"programs", programs},
                     {"ids", prefix() + "-" + name + ".id"}, {"color", prefix() + "-" + name + ".rgba"}};
@@ -109,7 +111,10 @@ public:
         bool ready = window_ready_;
         for (auto& panel : panels_) {
             auto* current = runtime.scene_view_of(panel.name);
-            if (current != panel.view) { error("The captured panel closed before readback completion."); continue; }
+            if (!current || current != panel.view || current->serial() != panel.serial) {
+                error("The captured panel changed before readback completion.");
+                continue;
+            }
             if (panel.ids && current->backend().take_readback(panel.ids, &panel.id_bytes)) panel.ids = {};
             if (panel.color && current->backend().take_readback(panel.color, &panel.color_bytes)) panel.color = {};
             ready = ready && !panel.ids && !panel.color;
@@ -118,7 +123,7 @@ public:
         try {
             for (auto& panel : panels_) {
                 auto* current = runtime.scene_view_of(panel.name);
-                if (current == panel.view) {
+                if (current && current == panel.view && current->serial() == panel.serial) {
                     if (panel.ids) current->backend().release(panel.ids);
                     if (panel.color) current->backend().release(panel.color);
                 }
