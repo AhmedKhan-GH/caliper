@@ -61,6 +61,32 @@ def check(name, passed, measured, threshold, *, required=True):
             "threshold": threshold, "required": required}
 
 
+def effect_direction(value):
+    """Return a direction only for a finite, nonzero effect."""
+    if not math.isfinite(value) or value == 0:
+        return None
+    return "increase" if value > 0 else "decrease"
+
+
+def direction_evidence(predicted_ablation_effect, measured_change):
+    """Compare an intervention prediction with an observed change."""
+    predicted = effect_direction(predicted_ablation_effect)
+    measured = effect_direction(measured_change)
+    return {"predicted_ablation_effect": predicted_ablation_effect if math.isfinite(predicted_ablation_effect) else None,
+            "prediction_finite": math.isfinite(predicted_ablation_effect),
+            "prediction_units": "centered original-top-token logits",
+            "predicted_direction": predicted, "measured_direction": measured,
+            "direction_matches": predicted is not None and predicted == measured}
+
+
+def bar_direction_check(before_height, after_height, *, predicted_ablation_effect, fixture):
+    change = after_height - before_height
+    evidence = direction_evidence(predicted_ablation_effect, change)
+    return check("bar_change_matches_prediction", evidence["direction_matches"],
+                 {**evidence, "before_pixels": before_height, "after_pixels": after_height,
+                  "pixel_change": change}, "nonzero pixel change in the predicted direction", required=not fixture)
+
+
 def program_budget_checks(snapshot):
     """Keep absent GPU measurements unverified and enforce the declared budgets."""
     by_id = {program["id"]: program for program in snapshot["status"]["programs"]}
@@ -99,7 +125,7 @@ def program_budget_checks(snapshot):
 
 
 def math_checks(graph, examples, before, after, validation, trace_seconds, steering_seconds, *, fixture,
-                argmax_token_ids):
+                argmax_token_ids, predicted_ablation_effect):
     rows = examples["examples"]
     strengths = [r["activation"] for r in rows]
     ids = [r["example_id"] for r in rows]
@@ -110,7 +136,8 @@ def math_checks(graph, examples, before, after, validation, trace_seconds, steer
     changed = next((r for r in after if r["token"] == top["token"]), None)
     if changed is None:
         raise Failure("The steered bars omit the baseline top token.")
-    fall = top["baseline"] - changed["probability"]
+    change = changed["probability"] - top["baseline"]
+    direction = direction_evidence(predicted_ablation_effect, change)
     semantic = not fixture
     residual = graph["completeness"]["max_absolute_residual"]
     tolerance = 1e-9 if fixture else 0.02
@@ -122,10 +149,14 @@ def math_checks(graph, examples, before, after, validation, trace_seconds, steer
         check("examples", len(rows) == 16 and ids == list(range(16)) and all(a > 0 for a in strengths)
               and strengths == sorted(strengths, reverse=True),
               {"ids": ids, "activations": strengths}, "16 positive examples in indexed order"),
-        check("fixture_output_effect", fall > 0, fall, ">0", required=fixture),
-        check("steering", fall >= 0.05 or new_top != top["token"],
-              {"probability_fall": fall, "baseline_top": top["token"], "steered_top": new_top},
-              "fall >=0.05 or top-token change", required=semantic),
+        check("fixture_output_effect", -change > 0, -change, ">0", required=fixture),
+        check("steering_change_matches_prediction",
+              direction["direction_matches"] and (abs(change) >= 0.05 or new_top != top["token"]),
+              {**direction, "probability_change": change, "absolute_probability_change": abs(change),
+               "baseline_probability": top["baseline"], "steered_probability": changed["probability"],
+               "baseline_top": top["token"], "steered_top": new_top},
+              "(absolute probability change >=0.05 or top-token change) and direction matches prediction",
+              required=semantic),
         check("validation", validation.get("count") == 10 and validation.get("correct_signs", 0) >= 8
               and validation.get("spearman") is not None and validation["spearman"] >= 0.6,
               validation, "10 features, >=8 correct signs, Spearman >=0.6"),

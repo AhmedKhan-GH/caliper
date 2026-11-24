@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import math
 from copy import deepcopy
 import os
 from pathlib import Path
@@ -15,7 +16,8 @@ DEMO = ROOT / "demos" / "circuit_trace"
 if str(DEMO) not in sys.path:
     sys.path.insert(0, str(DEMO))
 import run as driver
-from _checks import check, finish, math_checks, program_budget_checks, secondary_selection, selected_feature, token_path, FIXTURE_PROMPT
+from _checks import (bar_direction_check, check, finish, math_checks, program_budget_checks,
+                     secondary_selection, selected_feature, token_path, FIXTURE_PROMPT)
 from _mcp import Failure
 from _qualification import dictionary_qualification, MODEL_ID, MODEL_REVISION, MODEL_HASH
 
@@ -83,18 +85,20 @@ def test_actual_fixture_selection_and_graph(measured):
 
 def test_actual_fixture_gates_keep_semantics_separate(measured):
     gates = math_checks(measured["graph"], measured["examples"], measured["before"], measured["after"],
-                        measured["validation"], 0, 0, fixture=True, argmax_token_ids=measured["argmax_token_ids"])
+                        measured["validation"], 0, 0, fixture=True, argmax_token_ids=measured["argmax_token_ids"],
+                        predicted_ablation_effect=-measured["selected"]["effect"])
     # Zero durations here exercise the pure gate function. They are not timing evidence.
     by_name = {g["name"]: g for g in gates}
     assert all(g["passed"] for g in gates if g["required"])
     assert by_name["examples"]["passed"]
     assert by_name["fixture_output_effect"]["passed"]
-    assert not by_name["steering"]["required"]
+    assert not by_name["steering_change_matches_prediction"]["required"]
     assert by_name["validation"]["required"]
     semantic = math_checks(measured["graph"], measured["examples"], measured["before"], measured["after"],
-                           measured["validation"], 21, 2, fixture=False, argmax_token_ids=measured["argmax_token_ids"])
+                           measured["validation"], 21, 2, fixture=False, argmax_token_ids=measured["argmax_token_ids"],
+                           predicted_ablation_effect=-measured["selected"]["effect"])
     by_name = {g["name"]: g for g in semantic}
-    assert by_name["steering"]["required"] and by_name["validation"]["required"]
+    assert by_name["steering_change_matches_prediction"]["required"] and by_name["validation"]["required"]
     assert not by_name["trace_time"]["passed"]
     assert not by_name["steering_time"]["passed"]
 
@@ -126,7 +130,8 @@ def test_missing_top_bar_is_a_failure(measured):
     after = [r for r in measured["after"] if r["token"] != top]
     with pytest.raises(Failure, match="omit the baseline"):
         math_checks(measured["graph"], measured["examples"], measured["before"], after,
-                    measured["validation"], 0, 0, fixture=True, argmax_token_ids=measured["argmax_token_ids"])
+                    measured["validation"], 0, 0, fixture=True, argmax_token_ids=measured["argmax_token_ids"],
+                    predicted_ablation_effect=-measured["selected"]["effect"])
 
 
 def test_finish_refuses_missing_evidence():
@@ -481,14 +486,80 @@ def test_comparison_uses_true_argmax_and_rejects_stale_metadata():
         comparison_evidence(status, prompt, bars)
 
 
-def test_semantic_token_change_uses_metadata_without_relaxing_shorter_bar(measured):
-    # A pure oracle case. The separate strict Qwen shorter-bar gate remains in the driver.
+def test_semantic_token_change_requires_a_probability_direction(measured):
     old = measured["argmax_token_ids"][0]
     other = next(row["token"] for row in measured["after"] if row["token"] != old)
     gates = math_checks(measured["graph"], measured["examples"], measured["before"], measured["before"],
-                        measured["validation"], 0, 0, fixture=False, argmax_token_ids=[old, other])
-    steering = next(g for g in gates if g["name"] == "steering")
-    assert steering["passed"] and steering["measured"]["probability_fall"] == 0
+                        measured["validation"], 0, 0, fixture=False, argmax_token_ids=[old, other],
+                        predicted_ablation_effect=-measured["selected"]["effect"])
+    steering = next(g for g in gates if g["name"] == "steering_change_matches_prediction")
+    assert not steering["passed"] and steering["measured"]["probability_change"] == 0
+
+
+@pytest.fixture
+def steering_case():
+    """Supply CPU gate inputs without a model or application process."""
+    graph = {"counts": {"layers": 3}, "completeness": {"max_absolute_residual": 0.}, "feature_share": .3,
+             "nodes": [{"kind": "token", "index": 0},
+                       {"kind": "feature", "index": 1, "layer": 0, "position": 0, "feature": 4,
+                        "effect": -4.64, "influence": .2},
+                       {"kind": "feature", "index": 2, "layer": 1, "position": 0, "feature": 5,
+                        "effect": 1., "influence": .8},
+                       {"kind": "logit", "index": 3, "probability": .5}],
+             "edges": [{"source": 0, "target": 3, "weight": 1.}]}
+    examples = {"examples": [{"example_id": i, "activation": 16 - i} for i in range(16)]}
+    before = [{"token": token, "baseline": .5 if token == 1 else .05, "probability": .5 if token == 1 else .05}
+              for token in range(1, 11)]
+    return dict(graph=graph, examples=examples, before=before, after=deepcopy(before),
+                validation={"count": 10, "correct_signs": 8, "spearman": .6},
+                trace_seconds=0, steering_seconds=0, fixture=False, argmax_token_ids=[1, 1],
+                predicted_ablation_effect=4.64)
+
+
+@pytest.mark.parametrize("prediction", [0., -0., float("nan"), float("inf"), -float("inf")])
+@pytest.mark.parametrize("probability", [.1, .9])
+@pytest.mark.parametrize("new_top", [1, 2])
+def test_steering_requires_finite_nonzero_prediction(steering_case, prediction, probability, new_top):
+    steering_case.update(predicted_ablation_effect=prediction, argmax_token_ids=[1, new_top])
+    steering_case["after"][0]["probability"] = probability
+    gates = math_checks(**steering_case)
+    steering = next(g for g in gates if g["name"] == "steering_change_matches_prediction")
+    pixels = bar_direction_check(50, int(probability * 100), predicted_ablation_effect=prediction, fixture=False)
+    for gate in (steering, pixels):
+        assert gate["required"] and not gate["passed"]
+        assert gate["measured"]["predicted_direction"] is None
+        assert gate["measured"]["prediction_finite"] is math.isfinite(prediction)
+        assert not gate["measured"]["direction_matches"]
+        json.dumps(gate, allow_nan=False)
+
+
+@pytest.mark.parametrize("before,after,prediction,passed", [
+    (.05, .1, 1., True), (.05, 0., -1., True),
+    (.05, .099, 1., False), (.05, .001, -1., False),
+])
+def test_steering_probability_threshold(steering_case, before, after, prediction, passed):
+    steering_case["before"][0]["baseline"] = before
+    steering_case["after"][0]["probability"] = after
+    steering_case["predicted_ablation_effect"] = prediction
+    steering = next(g for g in math_checks(**steering_case) if g["name"] == "steering_change_matches_prediction")
+    assert steering["passed"] is passed
+
+
+@pytest.mark.parametrize("missing", ["before", "after"])
+def test_steering_requires_exact_original_token(steering_case, missing):
+    steering_case[missing] = steering_case[missing][1:]
+    steering_case["argmax_token_ids"] = [1, 2]
+    with pytest.raises(Failure, match="omit.*baseline.*top token"):
+        math_checks(**steering_case)
+
+
+@pytest.mark.parametrize("count,signs,spearman,passed", [
+    (10, 8, .6, True), (10, 7, 1., False), (10, 10, .599, False), (9, 9, 1., False),
+])
+def test_steering_correction_preserves_graph_thresholds(steering_case, count, signs, spearman, passed):
+    steering_case["validation"] = dict(count=count, correct_signs=signs, spearman=spearman)
+    gate = next(g for g in math_checks(**steering_case) if g["name"] == "validation")
+    assert gate["required"] and gate["passed"] is passed
 
 
 def synthetic_capture(tmp_path, *, missing_panel=None, text_fault=None):
@@ -584,6 +655,18 @@ def test_composition_oracle_handles_dpi_clip_scaled_targets_and_glyphs(tmp_path)
         evidence = gates[name + "_composition"]["measured"]
         assert evidence["pixels"] == 60 * 62
         assert evidence["source_items"] == evidence["window_items"]
+
+
+@pytest.mark.parametrize("offset,passed", [(-2.01, False), (-1.99, True), (0., True), (1.99, True), (2.01, False)])
+def test_bar_height_preserves_two_pixel_tolerance(tmp_path, offset, passed):
+    from _checks import capture_checks
+    metadata, graph, bars = synthetic_capture(tmp_path)
+    bars[0]["probability"] = (32 + offset) / 64
+    gates, measured = capture_checks(tmp_path, metadata, tmp_path / "capture.png", graph, bars, selected={"label": "B"})
+    gate = next(g for g in gates if g["name"] == "bar_height")
+    assert gate["passed"] is passed
+    assert measured["height"] == 32
+    assert gate["threshold"] == "within 2 pixels"
 
 
 @pytest.mark.parametrize("panel", ["graph", "examples", "output"])
@@ -1006,6 +1089,106 @@ def test_acceptance_uses_explicit_ablation_and_retains_selection_gate(tmp_path, 
     selection = next(gate for gate in result["checks"] if gate.get("name") == "selection_only")
     assert selection["required"] is True and selection["passed"] is (not selection_changed)
     assert result["comparison"] == {"before": prior, "after": after}
+
+
+@pytest.mark.parametrize("effect,probability,new_top,height,steering_passed,pixels_passed", [
+    (-4.64, .5, 1, 50, True, True),
+    (4.64, .1, 1, 10, True, True),
+    (-4.64, .1, 1, 10, False, False),
+    (4.64, .5, 1, 50, False, False),
+    (-4.64, .32, 1, 32, False, True),
+    (4.64, .28, 1, 28, False, True),
+    (-4.64, .32, 2, 32, True, True),
+    (4.64, .28, 2, 28, True, True),
+    (-4.64, .28, 2, 28, False, False),
+    (4.64, .32, 2, 32, False, False),
+    (-4.64, .3, 2, 30, False, False),
+    (4.64, .3, 2, 30, False, False),
+    (-4.64, .5, 1, 10, True, False),
+    (4.64, .1, 1, 50, True, False),
+    (-4.64, .32, 2, 30, True, False),
+    (4.64, .28, 2, 30, True, False),
+    (0., .5, 1, 50, False, False),
+    (0., .32, 2, 32, False, False),
+])
+def test_acceptance_wires_zero_clamp_prediction_to_probability_and_pixels(
+        tmp_path, monkeypatch, steering_case, effect, probability, new_top, height, steering_passed, pixels_passed):
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+    prompt, _, status, _ = inference_fixture()
+    binding = {key: status["inference"][key] for key in ("prompt_hash", "interventions_hash")}
+    prior = dict(binding, argmax_token_ids=[1, 1], completed_step=9)
+    after = dict(prior, argmax_token_ids=[1, new_top], completed_step=14)
+    graph = steering_case["graph"]
+    selected = graph["nodes"][1]
+    selected["effect"] = effect
+    # The secondary feature has the opposite prediction and greater influence.
+    graph["nodes"][2]["effect"] = -effect / 2
+    status.update(state="done", counts={"nodes": len(graph["nodes"])})
+    status["inference"]["comparison"] = prior
+    before_rows = [[0, 0, 0, 0, .3 if token == 1 else .02, .3 if token == 1 else .02, token, token - 1]
+                   for token in range(1, 11)]
+    after_rows = deepcopy(before_rows)
+    after_rows[0][5] = probability
+    if new_top == 2:
+        after_rows[1][5] = .4
+    # The original token moves to the last row, separate from the new top token.
+    before_reply = {"step": 9, "elements": before_rows}
+    after_reply = {"step": 14, "elements": list(reversed(after_rows))}
+    folder = tmp_path / "acceptance"
+    folder.mkdir()
+    session = Mock(out=folder, run_id="circuit-trace", show=False, quality_override=None,
+                   program_evidence={"before": {}, "after": {}})
+    session.read.return_value = before_reply
+    session.example_page.return_value = before_reply, before_reply
+    session.ablate_selected.return_value = after_reply, after
+    def complete(method, **args):
+        if method == "trace.run": return {"step": 1, "seconds": 0}
+        if method == "trace.status": return status
+        if method == "trace.validate": return steering_case["validation"]
+        return {}
+    session.events.complete.side_effect = complete
+    def capture(name, steps):
+        if name == "methods-expanded":
+            raise Failure("steering checks recorded")
+        return folder / (name + ".png"), {"name": name}
+    session.capture.side_effect = capture
+    def capture_checks(folder, metadata, png, graph, bars, *, selected):
+        return [], {"row_ids": list(range(8)), "height": height if metadata["name"] == "after" else 30}
+    monkeypatch.setattr(driver, "instrument", Mock())
+    monkeypatch.setattr(driver, "read_graph", lambda s: graph)
+    monkeypatch.setattr(driver, "programs", Mock())
+    monkeypatch.setattr(driver.Bridge, "select", lambda bridge, row: steering_case["examples"])
+    monkeypatch.setattr(driver.Bridge, "details", Mock())
+    monkeypatch.setattr(driver, "program_budget_checks", lambda snapshot: [])
+    monkeypatch.setattr(driver, "capture_checks", capture_checks)
+    monkeypatch.setattr(driver, "time", SimpleNamespace(monotonic=lambda: 0))
+    import _checks
+    monkeypatch.setattr(_checks, "example_page_check", lambda *args: {})
+    result = {"checks": []}
+    with pytest.raises(Failure, match="steering checks recorded"):
+        driver.acceptance(session, SimpleNamespace(prompt=prompt, model="local-qwen"), result)
+    session.ablate_selected.assert_called_once_with(prompt, minimum_step=10)
+    saved = json.loads((tmp_path / "result.json").read_text())
+    assert saved["selected_feature"] == selected
+    assert saved["secondary_selection"]["feature"] == graph["nodes"][2]
+    gates = {gate["name"]: gate for gate in saved["checks"] if "name" in gate}
+    steering = gates["steering_change_matches_prediction"]
+    pixels = gates["bar_change_matches_prediction"]
+    assert steering["required"] and steering["passed"] is steering_passed
+    assert pixels["required"] and pixels["passed"] is pixels_passed
+    for gate in (steering, pixels):
+        assert gate["measured"]["predicted_ablation_effect"] == -effect
+        expected_direction = "increase" if effect < 0 else "decrease" if effect > 0 else None
+        assert gate["measured"]["predicted_direction"] == expected_direction
+    assert steering["measured"]["baseline_top"] == 1
+    assert steering["measured"]["steered_top"] == new_top
+    assert steering["measured"]["baseline_probability"] == .3
+    assert steering["measured"]["steered_probability"] == probability
+    assert steering["measured"]["probability_change"] == pytest.approx(probability - .3)
+    assert steering["measured"]["absolute_probability_change"] == pytest.approx(abs(probability - .3))
+    assert pixels["measured"]["pixel_change"] == height - 30
+    assert gates["validation"]["passed"]
 
 
 @pytest.mark.parametrize("platform,text,expected", [

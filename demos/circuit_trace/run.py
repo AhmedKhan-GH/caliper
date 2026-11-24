@@ -15,7 +15,7 @@ import sys
 import time
 
 from _mcp import Events, Failure, MCP, attempt, stop, wait_file
-from _checks import (FIXTURE_HASH, FIXTURE_PROMPT, QWEN_PROMPT, bar_rows, capture_checks,
+from _checks import (FIXTURE_HASH, FIXTURE_PROMPT, QWEN_PROMPT, bar_direction_check, bar_rows, capture_checks,
                      check, finish, math_checks, program_budget_checks, secondary_selection, selected_feature)
 from _inference_evidence import (bound_completion, comparison_evidence, generation_baseline,
                                  generation_evidence, inference_state)
@@ -531,6 +531,8 @@ def acceptance(session, args, result):
     result["checks"].append(check("trace_count", status["counts"]["nodes"] == len(graph["nodes"]),
                                    status["counts"]["nodes"], len(graph["nodes"])))
     selected = selected_feature(graph)
+    # A zero clamp removes the feature's direct contribution to the original top logit.
+    predicted_ablation_effect = -selected["effect"]
     result["selected_feature"] = selected
     result["selection_rule"] = "largest absolute top-logit effect before the last layer"
     result["secondary_selection"] = secondary_selection(graph)
@@ -597,8 +599,9 @@ def acceptance(session, args, result):
         # ID items address eight row records. The real records supply stable global IDs.
         result["checks"].append(check("example_ids", rows == list(range(8)) * 2,
                                        {"id_items": rows, "second_page_records": page["elements"]}, "two actual pages of eight rows"))
-        result["checks"].append(check("shorter_bar", reports[2]["height"] < reports[0]["height"],
-                                       [reports[0]["height"], reports[2]["height"]], "after < before", required=args.model != "tiny-lm"))
+        result["checks"].append(bar_direction_check(reports[0]["height"], reports[2]["height"],
+                                                    predicted_ablation_effect=predicted_ablation_effect,
+                                                    fixture=args.model == "tiny-lm"))
     else:
         result["checks"].append(check("hidden_capture_evidence", False, "not collected in the visible invocation",
                                        "required for hidden acceptance", required=not s.show))
@@ -611,7 +614,8 @@ def acceptance(session, args, result):
     result["secondary_selection"] = secondary_selection(graph, validation)
     result["checks"] += math_checks(graph, examples, before, after, validation, trace["seconds"], steering_seconds,
                                      fixture=args.model == "tiny-lm",
-                                     argmax_token_ids=after_comparison["argmax_token_ids"])
+                                     argmax_token_ids=after_comparison["argmax_token_ids"],
+                                     predicted_ablation_effect=predicted_ablation_effect)
     save(s.out.parent / "result.json", result)
     if not s.show:
         bridge.details(True)

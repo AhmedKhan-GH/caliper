@@ -410,7 +410,9 @@ The semantic steering check uses the actual comparison argmax IDs from this meta
 The demo selects the feature with the largest absolute effect on the top logit before the last layer.
 The result also records the original influence-based selection and its zero-ablation measurement from `trace.validate`.
 Validation retains the ten most influential active features and reports every prediction and measurement.
-A positive zero-ablation effect raises the centered logit. The probability-fall and shorter-bar checks still require a decrease.
+The zero clamp predicts a centered-logit change equal to the negative of the selected feature's direct effect.
+An inhibitory feature predicts an increase, and an excitatory feature predicts a decrease.
+A zero or nonfinite prediction establishes no direction and cannot pass either direction check.
 
 Each capture also saves actual `program.status` values and the declared piece limits after the resource barrier.
 Derive passes have limits of 50 ms and 64 MiB, while draw frames have limits of 4 ms and 64 MiB.
@@ -419,18 +421,26 @@ Missing GPU times remain unverified and fail the required check.
 
 Qwen acceptance requires feature share of at least 0.30, between 20 and 512 nodes, and a token path to the top logit.
 It also requires 16 positive sorted examples, at least eight correct signs among ten features, and Spearman correlation of at least 0.6.
-The top-token probability must fall by at least 0.05, or the top token must change.
 Every target residual must remain at most 0.02.
 The trace limit is 20 seconds, the steering limit is one second, and the process limit is 12 GB.
+
+The absolute probability change for the original top token must reach 0.05, or the top token must change.
+Both alternatives require the original token's probability to change in the predicted direction.
+The driver finds that token's exact probability by its ID, even when the bar order or top token changes.
+The `steering_change_matches_prediction` check records both token IDs, both probabilities, the signed change, the prediction, and both directions in `result.json`.
 
 macOS process checks use the peak memory footprint from `/usr/bin/time`, which includes unified memory.
 Linux checks use maximum resident set size.
 Missing high-water measurements fail acceptance, and the native parity process has the same 12 GB limit.
 
 Pixel checks require all visible node IDs and bar heights within two pixels of probability times scale.
-The top bar must become shorter after the Qwen clamp.
+The original top token's bar must change in the predicted direction after the Qwen clamp.
+The `bar_change_matches_prediction` check records both pixel heights, their signed change, the prediction, and both directions.
 Fixture parity requires exact interior IDs, at most two color levels of interior difference, and at most one percent differing edge pixels.
-App/browser parity applies to the fixture graph. Qwen retains both its semantic steering check and its strict shorter-bar check.
+App/browser parity applies to the fixture graph. Qwen requires both the semantic steering check and the bar direction check.
+
+M8 remains open and held until a better dictionary passes the graph check.
+This check requires at least eight of ten signs and Spearman correlation of at least 0.6.
 
 The macOS and Windows fixture workflows also run isolated inference entry checks.
 These checks use the production entry helper with a harmless hosted substitute.
