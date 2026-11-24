@@ -185,3 +185,14 @@ def test_wall_limit_and_periodic_saves_preserve_pending_batch(tmp_path, monkeypa
     assert len(times) >= 3 and max(b - a for a, b in zip(times, times[1:])) <= 2
     _, saved = checkpoint_record(tmp_path / "checkpoints")
     assert saved["progress"]["pending_ids"] == progress["pending_ids"]
+
+
+@pytest.mark.parametrize("arguments", [
+    ["--latents", "1000000"], ["--microbatch-tokens", "8192"], ["--batch-tokens", "8192"],
+    ["--context", "1024"], ["--save-seconds", "301"], ["--max-wall-seconds", "36001"],
+])
+def test_cli_refuses_unbounded_work_before_model_load(tmp_path, monkeypatch, arguments):
+    from tools.interp import train_transcoders
+    monkeypatch.setattr(train_transcoders, "load_text_model", lambda **_: pytest.fail("model load ran"))
+    with pytest.raises(ValueError):
+        train_transcoders.main(["--output", str(tmp_path), *arguments])

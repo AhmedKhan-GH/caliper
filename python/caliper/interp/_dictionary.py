@@ -170,6 +170,7 @@ def _reject_constant(value):
 def load_dictionary(path, *, model=None, model_hash=None, device=None, dtype=None):
     """Load safe tensors after an independent model identity matches the manifest."""
     from safetensors import safe_open
+    from ._memory import autorelease_scope
 
     if model is None and model_hash is None:
         from .. import _programs
@@ -205,7 +206,9 @@ def load_dictionary(path, *, model=None, model_hash=None, device=None, dtype=Non
     for index in range(data["layers"]):
         tensors = {}
         # Validate the header before tensor allocation. Never unpickle a checkpoint.
-        with safe_open(folder / f"layer_{index:02d}.safetensors", framework="pt", device="cpu") as source:
+        with autorelease_scope(device or "cpu"), safe_open(
+            folder / f"layer_{index:02d}.safetensors", framework="pt", device="cpu",
+        ) as source:
             if set(source.keys()) != set(_WEIGHTS):
                 raise ValueError(f"dictionary layer {index} has unexpected tensor names")
             for name, shape in shapes.items():

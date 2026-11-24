@@ -200,7 +200,8 @@ def restore_evaluation(folder, stats, stream, identity, settings):
 
 def evaluate(model, dictionary, stream, folder, *, tokens=200_000, context=256,
              batch_tokens=512, chunk_tokens=64, memory=None, stop=None, resume=False):
-    if tokens < 2 or context < 2 or batch_tokens < context or chunk_tokens < 1:
+    if (not 2 <= tokens <= 200_000 or not 2 <= context <= 256
+            or not context <= batch_tokens <= 4096 or not 1 <= chunk_tokens <= 128):
         raise ValueError("invalid evaluation dimensions")
     if stream.partition != "quality":
         raise ValueError("quality evaluation requires the quality partition")
@@ -275,7 +276,10 @@ def main(argv=None):
     parser.add_argument("--dataset-cache", type=Path)
     parser.add_argument("--resume", action="store_true")
     args = parser.parse_args(argv)
-    if args.memory_gb > 12:
+    if (not 2 <= args.tokens <= 200_000 or not 2 <= args.context <= 256
+            or not args.context <= args.batch_tokens <= 4096 or not 1 <= args.chunk_tokens <= 128):
+        raise ValueError("requested dimensions exceed the bounded evaluator allocations")
+    if not 0 < args.memory_gb <= 12:
         raise ValueError("the evaluator memory limit is at most 12 GB")
     memory = MemoryGuard(args.memory_gb, args.device)
     memory.check("start")

@@ -63,13 +63,14 @@ class Trainer:
         width, latents = metadata["width"], metadata["latents"]
         for _ in range(metadata["layers"]):
             # Separate random encoder and decoder directions. No teacher weights enter here.
-            encoder = torch.randn(latents, width, device=self.device) / math.sqrt(width)
-            decoder = 0.1 * F.normalize(torch.randn(latents, width, device=self.device), dim=-1)
-            layer = TopKTranscoder(encoder, torch.zeros(latents, device=self.device), decoder,
-                                  torch.zeros(width, device=self.device), metadata["k"], trainable=True)
-            self.layers.append(layer)
-            self.optimizers.append(torch.optim.Adam(layer.parameters(), lr=learning_rate, foreach=False))
-            self.last_active.append(torch.zeros(latents, dtype=torch.int64, device=self.device))
+            with autorelease_scope(self.device):
+                encoder = torch.randn(latents, width, device=self.device) / math.sqrt(width)
+                decoder = 0.1 * F.normalize(torch.randn(latents, width, device=self.device), dim=-1)
+                layer = TopKTranscoder(encoder, torch.zeros(latents, device=self.device), decoder,
+                                      torch.zeros(width, device=self.device), metadata["k"], trainable=True)
+                self.layers.append(layer)
+                self.optimizers.append(torch.optim.Adam(layer.parameters(), lr=learning_rate, foreach=False))
+                self.last_active.append(torch.zeros(latents, dtype=torch.int64, device=self.device))
 
     def step_layer(self, index, x, y, tokens_before, *, health=None):
         """Accumulate microbatch gradients, then update one layer once."""
@@ -272,6 +273,13 @@ def parser():
 def main(argv=None):
     args = parser().parse_args(argv)
     started = time.monotonic()
+    if (not 1 <= args.latents <= 16_384 or not 1 <= args.k <= args.latents
+            or not 2 <= args.context <= 256 or not args.context <= args.batch_tokens <= 4096
+            or not 1 <= args.microbatch_tokens <= 256):
+        raise ValueError("requested dimensions exceed the bounded trainer allocations")
+    if (not 0 < args.save_seconds <= 240 or not 0 < args.max_wall_seconds <= 36_000
+            or args.tokens < 1 or (args.run_seconds is not None and not 0 < args.run_seconds <= 36_000)):
+        raise ValueError("invalid token, checkpoint, or wall-time budget")
     if args.output.exists() and (args.output / "checkpoints" / "latest.json").exists() and not args.resume:
         raise ValueError("output has a checkpoint; use --resume or a new output folder")
     random.seed(args.seed)

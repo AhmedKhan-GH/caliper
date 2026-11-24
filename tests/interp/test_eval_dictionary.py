@@ -88,3 +88,11 @@ def test_evaluation_resume_keeps_pending_partition_batch(tmp_path, monkeypatch):
                                   chunk_tokens=4, resume=True)
     for name in ("evaluated_tokens", "fvu", "dead_fraction", "cross_entropy_delta", "cross_entropy_tokens"):
         assert resumed[name] == expected[name]
+
+
+@pytest.mark.parametrize("arguments", [["--chunk-tokens", "4096"], ["--memory-gb", "24"],
+                                       ["--context", "1024"], ["--tokens", "200001"]])
+def test_evaluator_refuses_unbounded_work_before_model_load(tmp_path, monkeypatch, arguments):
+    monkeypatch.setattr(evaluation, "load_text_model", lambda **_: pytest.fail("model load ran"))
+    with pytest.raises(ValueError):
+        evaluation.main(["--dictionary", str(tmp_path), *arguments])

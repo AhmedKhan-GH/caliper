@@ -125,7 +125,7 @@ def restore_checkpoint(root, trainer, stream):
                         raise ValueError("invalid Adam checkpoint tensor")
                     state[key] = value.to("cpu" if key == "step" else parameter.device)
                 optimizer.state[parameter] = state
-        with safe_open(folder / f"activity_{i:02d}.safetensors", framework="pt") as source:
+        with autorelease_scope(trainer.device), safe_open(folder / f"activity_{i:02d}.safetensors", framework="pt") as source:
             trainer.last_active[i].copy_(source.get_tensor("last_active"))
     trainer.initialized = record["initialized"]
     trainer.metadata = record["metadata"]
