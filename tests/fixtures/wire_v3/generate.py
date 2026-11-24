@@ -273,6 +273,90 @@ def _json(obj) -> bytes:
     return (json.dumps(obj, indent=2, sort_keys=True, ensure_ascii=False) + "\n").encode("utf-8")
 
 
+def intervention_cases():
+    """Shared accepted and refused M8 intervention specifications."""
+    return [{'name': 'legacy', 'accepted': True, 'specification': {'point': 'layers.0.mlp', 'op': 'ablate'}},
+     {'name': 'kind', 'accepted': True, 'specification': {'point': 'layers.0.mlp', 'kind': 'ablate'}},
+     {'name': 'both',
+      'accepted': True,
+      'specification': {'point': 'layers.0.mlp', 'op': 'ablate', 'kind': 'ablate'}},
+     {'name': 'add',
+      'accepted': True,
+      'specification': {'point': 'layers.0.mlp_out',
+                        'kind': 'add',
+                        'vector': [1.0, -1.0],
+                        'coefficient': 0.5,
+                        'positions': [0, 31]}},
+     {'name': 'scale',
+      'accepted': True,
+      'specification': {'point': 'layers.0.mlp_out',
+                        'kind': 'scale',
+                        'feature': 0,
+                        'multiplier': -2.0,
+                        'dictionary': 'fixture'}},
+     {'name': 'clamp',
+      'accepted': True,
+      'specification': {'point': 'layers.0.mlp_out', 'op': 'clamp', 'feature': 1, 'value': 0.0, 'positions': []}},
+     {'name': 'patch',
+      'accepted': True,
+      'specification': {'point': 'layers.0.mlp_out',
+                        'kind': 'patch',
+                        'source_prompt': 'A café',
+                        'source_position': 1}},
+     {'name': 'reserved', 'accepted': True, 'specification': {'point': 'layers.0.mlp', 'op': 'steer'}},
+     {'name': 'missing discriminator', 'accepted': False, 'specification': {'point': 'layers.0.mlp'}},
+     {'name': 'conflicting discriminators',
+      'accepted': False,
+      'specification': {'point': 'layers.0.mlp', 'op': 'ablate', 'kind': 'add'}},
+     {'name': 'unknown kind', 'accepted': False, 'specification': {'point': 'layers.0.mlp', 'kind': 'multiply'}},
+     {'name': 'extra field',
+      'accepted': False,
+      'specification': {'point': 'layers.0.mlp', 'kind': 'ablate', 'value': 1}},
+     {'name': 'bool feature',
+      'accepted': False,
+      'specification': {'point': 'layers.0.mlp_out', 'kind': 'scale', 'feature': True, 'multiplier': 1}},
+     {'name': 'missing vector',
+      'accepted': False,
+      'specification': {'point': 'layers.0.mlp_out', 'kind': 'add', 'coefficient': 1}},
+     {'name': 'bool coefficient',
+      'accepted': False,
+      'specification': {'point': 'layers.0.mlp_out', 'kind': 'add', 'vector': [1], 'coefficient': True}},
+     {'name': 'empty vector',
+      'accepted': False,
+      'specification': {'point': 'layers.0.mlp_out', 'kind': 'add', 'vector': [], 'coefficient': 1}},
+     {'name': 'duplicate positions',
+      'accepted': False,
+      'specification': {'point': 'layers.0.mlp_out',
+                        'kind': 'patch',
+                        'source_prompt': 'AB',
+                        'positions': [0, 0]}},
+     {'name': 'position out of range',
+      'accepted': False,
+      'specification': {'point': 'layers.0.mlp_out', 'kind': 'patch', 'source_prompt': 'AB', 'positions': [32]}},
+     {'name': 'bool source position',
+      'accepted': False,
+      'specification': {'point': 'layers.0.mlp_out',
+                        'kind': 'patch',
+                        'source_prompt': 'AB',
+                        'source_position': True}},
+     {'name': 'empty prompt',
+      'accepted': False,
+      'specification': {'point': 'layers.0.mlp_out', 'kind': 'patch', 'source_prompt': ''}},
+     {'name': 'empty dictionary',
+      'accepted': False,
+      'specification': {'point': 'layers.0.mlp_out',
+                        'kind': 'clamp',
+                        'feature': 1,
+                        'value': 0,
+                        'dictionary': ''}},
+     {'name': 'bad schedule',
+      'accepted': False,
+      'specification': {'point': 'layers.0.mlp', 'kind': 'ablate', 'from_step': 10, 'until_step': 10}},
+     {'name': 'bool schedule',
+      'accepted': False,
+      'specification': {'point': 'layers.0.mlp', 'kind': 'ablate', 'from_step': True}}]
+
+
 def render() -> dict[str, bytes]:
     """Every file of the fixture folder, by path relative to it."""
     files = {}
@@ -298,6 +382,7 @@ def render() -> dict[str, bytes]:
         files[f"v3_2/invalid/{name}.bin"] = buf
         expect_32[f"{name}.bin"] = want
     files["v3_2/invalid/expect.json"] = _json(expect_32)
+    files["m8_interventions.json"] = (json.dumps(intervention_cases(), indent=2, ensure_ascii=False) + "\n").encode("utf-8")
     return files
 
 
