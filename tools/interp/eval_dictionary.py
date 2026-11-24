@@ -96,30 +96,36 @@ class QualityStats:
 
     def metrics(self):
         active = list(self.active_layers)
-        if not self.count or not self.ce_tokens or (self.variance_sum[active] <= 0).any():
-            raise ValueError("quality needs nonzero target variance and next-token targets")
-        fvu = self.error_sum[active] / self.variance_sum[active]
+        if not self.count or not self.ce_tokens:
+            raise ValueError("quality needs observations and next-token targets")
+        variance, error = self.variance_sum[active], self.error_sum[active]
+        if (variance < 0).any() or not all(torch.isfinite(x).all().item() for x in (variance, error)):
+            raise ValueError("quality variance or error is invalid")
+        fvu = [float(e / v) if v > 0 else None for e, v in zip(error, variance)]
+        mean_fvu = sum(fvu) / len(fvu) if all(v is not None for v in fvu) else None
         dead = (self.hits[active] == 0).double().mean(-1)
         delta = (self.replaced_ce - self.original_ce) / self.ce_tokens
-        values = {"fvu": float(fvu.mean()), "dead_fraction": float(dead.mean()),
+        values = {"fvu": mean_fvu, "dead_fraction": float(dead.mean()),
                   "cross_entropy_delta": delta, "evaluated_tokens": self.count,
                   "cross_entropy_tokens": self.ce_tokens,
                   "original_cross_entropy": self.original_ce / self.ce_tokens,
                   "replaced_cross_entropy": self.replaced_ce / self.ce_tokens,
-                  "per_layer_fvu": fvu.tolist(), "per_layer_dead_fraction": dead.tolist(),
+                  "per_layer_fvu": fvu, "per_layer_dead_fraction": dead.tolist(),
                   "thresholds": {"fvu": 0.40, "dead_fraction": 0.15, "cross_entropy_delta": 0.5,
                                  "evaluated_tokens": 200_000}}
-        finite = all(torch.isfinite(x).all().item() for x in (fvu, dead)) and math.isfinite(delta)
+        finite = (all(math.isfinite(v) for v in fvu if v is not None)
+                  and torch.isfinite(dead).all().item() and math.isfinite(delta))
         if not finite:
             raise ValueError("quality metrics are nonfinite")
-        passed = values["fvu"] <= 0.40 and values["dead_fraction"] <= 0.15 and delta <= 0.5
-        values["status"] = ("passed" if passed else "failed") if self.count == 200_000 else "partial"
+        passed = mean_fvu is not None and mean_fvu <= 0.40 and values["dead_fraction"] <= 0.15 and delta <= 0.5
+        complete = self.count == 200_000 and mean_fvu is not None
+        values["status"] = ("passed" if passed else "failed") if complete else "partial"
         if self.scope == "upper_half":
             values["status"] = "fallback_" + values["status"]
             values.update(self.scope_fields())
-            for key, tensor in (("per_layer_fvu", fvu), ("per_layer_dead_fraction", dead)):
+            for key, per_layer in (("per_layer_fvu", fvu), ("per_layer_dead_fraction", dead.tolist())):
                 values[key] = [None] * len(self.hits)
-                for index, value in zip(active, tensor.tolist()):
+                for index, value in zip(active, per_layer):
                     values[key][index] = value
         return values
 
@@ -136,13 +142,14 @@ def quality_stats(metadata):
 
 
 @torch.no_grad()
-def evaluate_batch(model, dictionary, ids, count, *, chunk_tokens=64, health=None):
+def evaluate_batch(model, dictionary, ids, count, *, chunk_tokens=64, health=None, check_binding=None):
     """Commit no statistics until both complete model forwards succeed."""
     with autorelease_scope(ids.device):
-        return _evaluate_batch(model, dictionary, ids, count, chunk_tokens=chunk_tokens, health=health)
+        return _evaluate_batch(model, dictionary, ids, count, chunk_tokens=chunk_tokens,
+                               health=health, check_binding=check_binding)
 
 
-def _evaluate_batch(model, dictionary, ids, count, *, chunk_tokens, health):
+def _evaluate_batch(model, dictionary, ids, count, *, chunk_tokens, health, check_binding):
     metadata = dictionary.metadata
     result = quality_stats(metadata)
     requested = [metadata[field][i] for field in ("read_points", "write_points") for i in result.active_layers]
@@ -150,6 +157,8 @@ def _evaluate_batch(model, dictionary, ids, count, *, chunk_tokens, health):
     try:
         with capture(model, requested) as captured:
             original = hidden_forward(model, ids)
+        if check_binding:
+            check_binding()
         result.original_ce, result.ce_tokens = cross_entropy_sum(model, original, ids, count,
                                                                 chunk_tokens=chunk_tokens, health=health)
         del original
@@ -172,8 +181,13 @@ def _evaluate_batch(model, dictionary, ids, count, *, chunk_tokens, health):
             captured.pop(metadata["read_points"][i])
             captured.pop(metadata["write_points"][i])
         captured.close(clear=True)
+        if check_binding:
+            check_binding()
         with replace_all_mlps(model, dictionary):
             replaced = hidden_forward(model, ids)
+        # Check only after the original MLP modules are restored.
+        if check_binding:
+            check_binding()
         result.replaced_ce, replaced_count = cross_entropy_sum(model, replaced, ids, count,
                                                               chunk_tokens=chunk_tokens, health=health)
         if replaced_count != result.ce_tokens:
@@ -283,7 +297,8 @@ def evaluate(model, dictionary, stream, folder, *, tokens=200_000, context=256,
             ids = torch.tensor(pending, dtype=torch.int64, device=device)
             ids = F.pad(ids, (0, (-count) % context)).reshape(-1, context)
             binding.check()
-            result = evaluate_batch(model, dictionary, ids, count, chunk_tokens=chunk_tokens, health=health)
+            result = evaluate_batch(model, dictionary, ids, count, chunk_tokens=chunk_tokens,
+                                    health=health, check_binding=binding.check)
             binding.check()
             stats.merge(result)
             pending = None

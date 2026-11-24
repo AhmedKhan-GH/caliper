@@ -111,6 +111,75 @@ def test_completed_quality_thresholds(metric, value, status):
                                     "cross_entropy_delta": .5, "evaluated_tokens": 200_000}
 
 
+@pytest.mark.parametrize("active_layers", [None, [1, 2]])
+def test_zero_variance_cannot_pass_at_token_budget(active_layers):
+    stats = evaluation.QualityStats(3, 2, 2, active_layers=active_layers)
+    stats.count, stats.ce_tokens = 200_000, 100_000
+    stats.variance_sum[:] = torch.tensor([10, 0, 10])
+    stats.error_sum[:] = torch.tensor([1, 0, 2])
+    stats.hits.fill_(1)
+    stats.original_ce = stats.replaced_ce = 100_000
+    quality = stats.metrics()
+    assert quality["status"] == ("partial" if active_layers is None else "fallback_partial")
+    assert quality["fvu"] is None
+    assert quality["per_layer_fvu"] == ([.1, None, .2] if active_layers is None else [None, None, .2])
+    assert quality["dead_fraction"] == quality["cross_entropy_delta"] == 0
+    assert quality["original_cross_entropy"] == quality["replaced_cross_entropy"] == 1
+
+
+def test_zero_variance_stop_saves_partial_cursor_and_resumes(tmp_path, capsys):
+    from safetensors.torch import load_file
+    from tools.interp.checkpoint_state import dictionary_fingerprint, write_json
+
+    class Tokenizer(TinyTokenizer):
+        def encode(self, *args, **kwargs):
+            return [1, 1, 2, 3]
+
+    model = TinyLM(layers=2, width=4, heads=2, latents=8, k=2)
+    for name in ("full", "partial"):
+        write_fixture(tmp_path / name, model)
+
+    def run(name, *, interrupt=False, **kwargs):
+        class Stream(TextStream):
+            def next_tokens(self, *args, **kwargs):
+                if interrupt and self.emitted == 2:
+                    raise CleanStop("zero variance batch complete")
+                return super().next_tokens(*args, **kwargs)
+
+        folder = tmp_path / name
+        dictionary = load_dictionary(folder, model=model)
+        stream = Stream(documents(), Tokenizer(), "quality")
+        return evaluation.evaluate(model, dictionary, stream, folder, tokens=4,
+                                   context=2, batch_tokens=2, chunk_tokens=2, **kwargs)
+
+    expected = run("full")
+    folder = tmp_path / "partial"
+    metadata = json.loads((folder / "dictionary.json").read_text())
+    identity = dictionary_fingerprint(folder, metadata)
+    metadata["quality"].update(status="passed", fvu=.1, dead_fraction=.1,
+                               cross_entropy_delta=.1, evaluated_tokens=200_000)
+    write_json(folder / "dictionary.json", metadata)
+    partial = run("partial", interrupt=True)
+    assert partial["status"] == "partial" and partial["evaluated_tokens"] == 2
+    assert partial["fvu"] is None and partial["per_layer_fvu"] == [None, None]
+    assert partial["cross_entropy_tokens"] == 1 and partial["cross_entropy_delta"] == 0
+    assert partial["dead_fraction"] is not None
+    assert partial["dictionary_hash"] == identity
+    assert partial["stop_reason"] == "zero variance batch complete"
+    assert json.loads((folder / "dictionary.json").read_text())["quality"] == partial
+    end = json.loads(capsys.readouterr().out.splitlines()[-1])
+    assert end == {"stage": "quality_end", **partial}
+    cursor = json.loads((folder / "evaluation" / "state.json").read_text())
+    assert cursor["count"] == cursor["stream"]["emitted"] == 2
+    assert cursor["ce_tokens"] == 1 and cursor["pending_ids"] is None
+    tensors = load_file(folder / "evaluation" / cursor["tensors"])
+    assert torch.equal(tensors["variance_sum"], torch.zeros(2, dtype=torch.float64))
+    resumed = run("partial", resume=True)
+    for key in ("fvu", "dead_fraction", "cross_entropy_delta", "evaluated_tokens", "cross_entropy_tokens"):
+        assert resumed[key] == expected[key]
+    assert dictionary_fingerprint(folder, metadata) == identity
+
+
 def test_chunked_cross_entropy_matches_full_logits():
     model = TinyLM()
     ids = torch.tensor([[1, 2, 3, 4], [5, 6, 0, 0]])

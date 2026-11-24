@@ -310,7 +310,7 @@ def test_model_mismatch_preserves_evidence_before_batches_or_restore(tmp_path, m
     assert publications(tmp_path) == before
 
 
-@pytest.mark.parametrize("change", ["missing", "hash", "version", "runtime"])
+@pytest.mark.parametrize("change", ["missing", "hash", "version", "runtime", "settings", "legacy_settings"])
 def test_cursor_model_evidence_precedes_statistics_restore(tmp_path, monkeypatch, change):
     model, dictionary = fixture(tmp_path)
     evaluate(tmp_path, model, dictionary)
@@ -322,6 +322,11 @@ def test_cursor_model_evidence_precedes_statistics_restore(tmp_path, monkeypatch
         state["model_binding"]["model_hash"] = "sha256:" + "0" * 64
     elif change == "version":
         state["model_binding"]["version"] += 1
+    elif change == "settings":
+        state["model_binding"]["forward_settings_hash"] = "0" * 64
+    elif change == "legacy_settings":
+        state["model_binding"].pop("forward_settings_hash")
+        state["model_binding"]["version"] = 1
     else:
         state["model_binding"]["tensor_hash"] = "0" * 64
     write_json(path, state)
@@ -345,7 +350,7 @@ def test_same_model_resume_keeps_artifact_fingerprint(tmp_path):
 
 
 @pytest.mark.parametrize("boundary", ["batch", "stop", "metrics", "statistics", "cursor"])
-@pytest.mark.parametrize("kind", ["version", "alias", "replacement", "buffer"])
+@pytest.mark.parametrize("kind", ["version", "alias", "replacement", "buffer", "forward"])
 def test_model_drift_refuses_cursor_and_quality(tmp_path, monkeypatch, boundary, kind):
     model, dictionary = fixture(tmp_path)
     model.register_buffer("evaluation_buffer", torch.zeros(1), persistent=False)
@@ -361,6 +366,8 @@ def test_model_drift_refuses_cursor_and_quality(tmp_path, monkeypatch, boundary,
             assert model.lm_head.weight._version == version
         elif kind == "replacement":
             model.lm_head = copy.deepcopy(model.lm_head)
+        elif kind == "forward":
+            model.norm.eps = 1.0
         else:
             model.evaluation_buffer.data.add_(1)
 
