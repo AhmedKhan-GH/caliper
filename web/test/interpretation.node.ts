@@ -290,3 +290,14 @@ test('Fresh Legacy Integer Control Endpoints', () => {
     }
   }
 });
+
+
+test('Fresh Interpretation Negative Zero', () => {
+  const message = { type: 'control_reply', ...reply({ value: -0 }) } as Message;
+  const frame = encode(message);
+  assert.ok(new TextDecoder().decode(frame.subarray(HEADER_BYTES)).includes('"value":-0.0'));
+  const decoded = decode(frame);
+  assert.equal(decoded.type, 'control_reply');
+  if (decoded.type === 'control_reply') assert.ok(Object.is(decoded.result?.value, -0));
+  assert.deepEqual(encode(decoded), frame);
+});
