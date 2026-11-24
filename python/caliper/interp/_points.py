@@ -6,6 +6,8 @@ from dataclasses import dataclass
 import threading
 import weakref
 
+from ._families import model_family
+
 
 @dataclass(frozen=True)
 class Probe:
@@ -25,38 +27,17 @@ _LIFECYCLE_LOCK = threading.RLock()
 
 
 def _architecture(model):
-    config = getattr(model, "config", None)
-    family = getattr(config, "model_type", None)
+    family = model_family(model)
     modules = dict(model.named_modules())
-    if family == "caliper_tiny":
-        prefix = "layers"
-    elif family == "qwen3_5_text":
-        from transformers.models.qwen3_5.modeling_qwen3_5 import (
-            Qwen3_5DecoderLayer, Qwen3_5TextModel,
-        )
-        decoders = [(name, mod) for name, mod in modules.items() if isinstance(mod, Qwen3_5TextModel)]
-        if len(decoders) != 1:
-            raise ValueError("Qwen probes require exactly one text decoder")
-        prefix = f"{decoders[0][0]}.layers".lstrip(".")
-    else:
-        raise NotImplementedError(f"semantic probes do not support decoder {family or type(model).__name__!r}")
-    layers = modules.get(prefix)
-    if layers is None or len(layers) != config.num_hidden_layers:
-        raise ValueError("decoder layer paths do not match the model config")
+    _, prefix, layers = family.locate(model)
     probes = {}
     for index, block in enumerate(layers):
         base = f"{prefix}.{index}"
-        if family == "qwen3_5_text":
-            if not isinstance(block, Qwen3_5DecoderLayer):
-                raise ValueError(f"unsupported Qwen decoder block at {base}")
-            mixer = "linear_attn" if block.block_type == "linear_attention" else "self_attn"
-            pattern_family = "delta" if mixer == "linear_attn" else "qwen_full"
-        else:
-            mixer, pattern_family = "self_attn", "fixture"
+        mixer, pattern_family = family.mixer(block)
         for suffix, path, event in (
             ("resid_pre", base, "input"),
             ("mlp_in", f"{base}.mlp", "input"),
-            ("mlp_out", f"{base}.mlp", "output"),
+            ("mlp_out", f"{base}.{family.mlp_write_module}", "output"),
             ("attn_pattern", f"{base}.{mixer}", "pattern"),
         ):
             if path not in modules:
@@ -161,7 +142,7 @@ class Capture(dict):
     Exit removes hooks and retains results. An error or watch removal also clears results.
     ``close(clear=True)`` releases captured tensors explicitly. Contexts are single-use.
 
-    Qwen full-attention patterns temporarily select eager attention on the shared config.
+    Full-attention patterns temporarily select eager attention on the shared config.
     The last capture restores the original backend. Model parameters stay unchanged.
     Evaluation bindings still observe the actual backend and can refuse this temporary change.
     Lifecycle operations serialize, but model forwards do not. Callers must coordinate forwards,
