@@ -155,7 +155,6 @@ def test_due_removal_completes_before_conflicting_addition(controlled, transitio
 
     def request(*args):
         assert_unlocked(ctl)
-        assert old.removed
         service.set(add_spec(point="layers.3.mlp_out"))
         queued.append(service.state_dict())
 
@@ -165,7 +164,11 @@ def test_due_removal_completes_before_conflicting_addition(controlled, transitio
     finally:
         observer.remove()
     assert len(queued) == 1 and service.state_dict() == queued[0]
-    assert record.state == "ended" if transition == "expire" else (record.point, record.op) not in ctl._ivs
+    assert old.removed
+    if transition == "expire":
+        assert record.state == "ended"
+    else:
+        assert (record.point, record.op) not in ctl._ivs
     assert service.specifications() == [] and service.executor._cache == {}
     assert len(service.specifications(active_only=False)) == 2
     torch.testing.assert_close(model(**tokenizer("ABC")).logits, baseline, rtol=0, atol=0)
@@ -326,3 +329,32 @@ def test_scheduled_reorder_failure_retains_old_hooks_without_retry(controlled, m
     assert calls == [True]
     assert service.state_dict() == state and hook_objects(model) == hooks
     assert service._operation_owner is None and not service.executor._retiring_sources
+
+
+@pytest.mark.parametrize("point", ["layers.0.resid_pre", "layers.0.mlp_out"])
+def test_patch_refresh_stop_escapes_input_and_output_hooks(controlled, point):
+    model, tokenizer, ctl, service = controlled
+    service.set(dict(PATCH, point=point))
+    ctl.step()
+    record = ctl._ivs[(point, "patch")]
+    hook = record.hook
+    service.invalidate_source_cache()
+    stop = CleanStop("patch refresh stop")
+
+    class Guard:
+        def check(self, stage):
+            if stage == "patch source forward start":
+                raise stop
+
+    service.executor.resource_guard = Guard()
+    downstream = []
+    observer = model.layers[1].register_forward_pre_hook(lambda *args: downstream.append(True))
+    try:
+        with pytest.raises(CleanStop) as caught:
+            model(**tokenizer("abc"))
+        assert caught.value is stop and downstream == []
+        assert hook.removed and hook.errors == 1
+        assert record.state == "ended" and record.hook is None
+        assert not service.executor._cache and not service.executor.preparing_source
+    finally:
+        observer.remove()

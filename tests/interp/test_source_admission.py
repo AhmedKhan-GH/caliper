@@ -251,7 +251,8 @@ def test_patch_replacement_counts_final_sources_at_full_capacity(monkeypatch, op
 
 
 @pytest.mark.parametrize("operation", ["boundary", "restore", "override"])
-def test_patch_registration_failure_restores_exact_cache_and_hooks(monkeypatch, operation):
+@pytest.mark.parametrize("failure_index", [0, 1])
+def test_patch_registration_failure_restores_exact_cache_and_hooks(monkeypatch, operation, failure_index):
     from caliper.interp import _intervene
     from tests.interp.test_intervention_replay import hook_objects
 
@@ -265,7 +266,8 @@ def test_patch_registration_failure_restores_exact_cache_and_hooks(monkeypatch, 
         call = patch_replace(ctl, service, specs, operation)
         state = service.state_dict()
         records = list(ctl._ivs.items())
-        register = model.layers[0].register_forward_pre_hook
+        module = model.layers[0] if failure_index == 0 else model.layers[0].mlp
+        register = module.register_forward_pre_hook
         reached = []
 
         def fail(hook, **kwargs):
@@ -276,7 +278,7 @@ def test_patch_registration_failure_restores_exact_cache_and_hooks(monkeypatch, 
                 raise RuntimeError("patch registration refused")
             return register(hook, **kwargs)
 
-        monkeypatch.setattr(model.layers[0], "register_forward_pre_hook", fail)
+        monkeypatch.setattr(module, "register_forward_pre_hook", fail)
         if operation == "boundary":
             with pytest.warns(RuntimeWarning, match="registration refused"):
                 call()
