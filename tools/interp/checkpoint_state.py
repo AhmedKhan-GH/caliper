@@ -147,9 +147,11 @@ def restore_checkpoint(root, trainer, stream):
 
 
 def export_dictionary(root, trainer, progress):
-    """Write one layer at a time and publish the manifest last."""
+    """Invalidate the prior manifest, then publish it after all layers succeed."""
     root = Path(root)
     root.mkdir(parents=True, exist_ok=True)
+    # A partial export must not retain quality metrics for the prior weights.
+    (root / "dictionary.json").unlink(missing_ok=True)
     for i, layer in enumerate(trainer.layers):
         path = root / f"layer_{i:02d}.safetensors"
         with autorelease_scope(trainer.device):

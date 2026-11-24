@@ -153,3 +153,51 @@ def test_hf_identity_requires_resolved_checkpoint():
     model.config._commit_hash = "b" * 40
     with pytest.raises(ValueError, match="conflicts"):
         model_identity(model)
+
+
+def test_partial_export_refuses_load_and_retry_resets_quality(tmp_path, monkeypatch):
+    from copy import deepcopy
+    from safetensors.torch import load_file
+    from tools.interp import checkpoint_state
+
+    model, data = write_fixture(tmp_path, TinyLM(layers=2, width=8, heads=2, latents=16, k=2))
+    data["quality"].update(fvu=0.01, dead_fraction=0, cross_entropy_delta=0,
+                           evaluated_tokens=200_000, status="passed")
+    (tmp_path / "dictionary.json").write_text(json.dumps(data))
+    assert load_dictionary(tmp_path, model=model).metadata["quality"]["status"] == "passed"
+    trainer = SimpleNamespace(metadata=deepcopy(data), device="cpu",
+                              layers=deepcopy([block.mlp for block in model.layers]))
+    with torch.no_grad():
+        for layer in trainer.layers:
+            layer.W_enc.add_(1)
+    progress = {"tokens": 32, "elapsed_seconds": 1}
+    save = checkpoint_state._save_tensors
+    calls = []
+
+    def fail_second(values, path):
+        assert not (tmp_path / "dictionary.json").exists()
+        calls.append(path)
+        if len(calls) == 2:
+            raise OSError("fixture export failure")
+        save(values, path)
+
+    monkeypatch.setattr(checkpoint_state, "_save_tensors", fail_second)
+    with pytest.raises(OSError, match="export failure"):
+        checkpoint_state.export_dictionary(tmp_path, trainer, progress)
+    assert len(calls) == 2
+    assert torch.equal(load_file(tmp_path / "layer_00.safetensors")["W_enc"], trainer.layers[0].W_enc)
+    assert torch.equal(load_file(tmp_path / "layer_01.safetensors")["W_enc"], model.layers[1].mlp.W_enc)
+    with pytest.raises(FileNotFoundError):
+        load_dictionary(tmp_path, model=model)
+
+    monkeypatch.setattr(checkpoint_state, "_save_tensors", save)
+    checkpoint_state.export_dictionary(tmp_path, trainer, progress)
+    dictionary = load_dictionary(tmp_path, model=model)
+    assert dictionary.metadata["training"]["tokens"] == 32
+    assert dictionary.metadata["quality"] == {
+        "fvu": None, "dead_fraction": None, "cross_entropy_delta": None,
+        "evaluated_tokens": 0, "status": "not_evaluated",
+    }
+    for actual, expected in zip(dictionary.layers, trainer.layers):
+        for name, value in expected.named_parameters():
+            assert torch.equal(getattr(actual, name), value)
