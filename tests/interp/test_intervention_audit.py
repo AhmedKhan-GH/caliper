@@ -5,6 +5,7 @@ import pytest
 import torch
 
 from caliper import _wire as wire
+from caliper._controls import Controls
 from caliper.interp._intervene import InterventionError
 from tests.interp.test_intervene import add_spec, controlled
 
@@ -24,6 +25,79 @@ def test_local_requests_obey_wire_metadata_before_conversion(controlled, spec):
         service.set(spec)
     assert service.state_dict() == before
     wire.decode(wire.encode_frame(wire.MsgType.CONTROLS, ctl.controls_meta()))
+
+
+def test_adapter_only_ablation_point_preserves_legacy_execution():
+    class Model:
+        active = False
+
+        def __call__(self):
+            return 0 if self.active else 7
+
+    class Adapter:
+        def points(self, model):
+            return [{"point": "adapter.output", "kind": "module", "module": "adapter.output",
+                     "head": None, "type": "Fixture", "shape": None}]
+
+        def ablate(self, model, point):
+            assert point == "adapter.output"
+            model.active = True
+
+            def remove():
+                model.active = False
+
+            return remove
+
+    model, ctl = Model(), Controls()
+    service = ctl.interventions_on(model, adapter=Adapter())
+    try:
+        service.set({"op": "ablate", "point": "adapter.output"})
+        assert model() == 7
+        ctl.step()
+        assert model() == 0
+        saved = service.state_dict()
+        service.load_state_dict(saved)
+        assert model() == 7
+        ctl.step()
+        assert model() == 0
+        service.clear("adapter.output")
+        assert model() == 0
+        ctl.step()
+        assert model() == 7
+        with pytest.raises(InterventionError, match="unknown intervention point"):
+            service.set({"op": "ablate", "point": "other.output"})
+    finally:
+        service.remove()
+
+
+def test_adapter_alias_uses_adapter_in_replay(controlled):
+    from caliper._ablate import ablate
+    model, tokenizer, ctl, _ = controlled
+
+    class Adapter:
+        def points(self, model):
+            return [{"point": "adapter.output", "kind": "module", "module": "layers.0.mlp",
+                     "head": None, "type": "Fixture", "shape": None}]
+
+        def ablate(self, model, point):
+            assert point == "adapter.output"
+            return ablate(model, "layers.0.mlp")
+
+    inputs = tokenizer("AB")
+    baseline = model(**inputs).logits
+    service = ctl.interventions_on(model, adapter=Adapter())
+    try:
+        service.set({"kind": "ablate", "point": "adapter.output"})
+        ctl.step()
+        active = model(**inputs).logits
+        assert not torch.equal(active, baseline)
+        with service.temporary_state(service.specifications()):
+            torch.testing.assert_close(model(**inputs).logits, active, rtol=0, atol=0)
+        service.clear()
+        ctl.step()
+        torch.testing.assert_close(model(**inputs).logits, baseline, rtol=0, atol=0)
+    finally:
+        service.remove()
 
 
 def test_retired_dictionary_records_restore_and_replay(controlled):

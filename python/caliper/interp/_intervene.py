@@ -123,8 +123,10 @@ class InterventionService:
     Clean patch sources use a separate forward pass under ``suspend()``.
     """
 
-    def __init__(self, model):
+    def __init__(self, model, *, adapter=None):
         self.model = model
+        self.adapter = adapter
+        self._ablation_points = None
         self.dictionary = None
         self.dictionary_id = None
         self.tokenizer = None
@@ -248,7 +250,14 @@ class InterventionService:
             return spec
         if kind == "ablate":
             from .._ablate import points
-            if point not in {p["point"] for p in points(self.model)}:
+            names = self._ablation_points
+            if names is None:
+                try:
+                    listed = points(self.model) if self.adapter is None else self.adapter.points(self.model)
+                    names = {p["point"] for p in listed}
+                except Exception as error:
+                    raise InterventionError("cannot enumerate intervention points", "intervene.unknown_point") from error
+            if point not in names:
                 raise InterventionError("unknown intervention point", "intervene.unknown_point")
             if point.endswith(".attn_pattern"):
                 raise InterventionError("attention patterns are read-only points")
@@ -354,8 +363,10 @@ class InterventionService:
         spec = self.validate(request)
         if spec["op"] == "ablate":
             from .._ablate import ablate
-            hook = ablate(self.model, spec["point"])
-            hook.on_error = on_error
+            apply = ablate if self.adapter is None else self.adapter.ablate
+            hook = apply(self.model, spec["point"])
+            if hasattr(hook, "on_error"):
+                hook.on_error = on_error
         else:
             module, event, width, probe = self._target(spec["point"])
             if spec["op"] == "patch":
@@ -382,7 +393,8 @@ class _InterventionReplay:
 
     def __init__(self, executor):
         self.model = executor.model
-        self.executor = InterventionService(self.model)
+        self.executor = InterventionService(self.model, adapter=executor.adapter)
+        self.executor._ablation_points = executor._ablation_points
         self.executor.dictionary = executor.dictionary
         self.executor.dictionary_id = executor.dictionary_id
         self.executor.tokenizer = executor.tokenizer
@@ -398,7 +410,7 @@ class _InterventionReplay:
 
     def specifications(self):
         """Return detached specifications for effects that remain installed."""
-        return [deepcopy(spec) for spec, hook in self._effects if not hook.removed]
+        return [deepcopy(spec) for spec, hook in self._effects if not getattr(hook, "removed", False)]
 
     @contextmanager
     def _scope(self, live_hooks, specifications):
@@ -412,7 +424,7 @@ class _InterventionReplay:
                     self._effects.append((spec, self.executor.install(spec)))
                 yield self
                 for _, hook in self._effects:
-                    if hook.error is not None:
+                    if getattr(hook, "error", None) is not None:
                         raise InterventionError("snapshot hook failed: " + hook.error,
                                                 "intervene.hook_failed")
             finally:

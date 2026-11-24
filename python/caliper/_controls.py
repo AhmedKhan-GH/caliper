@@ -733,7 +733,7 @@ class Interventions:
         self.names: frozenset = frozenset()
         self._shapes_off = None           # removes the shape hooks at the next step
         from .interp._intervene import InterventionService
-        self.executor = InterventionService(model)
+        self.executor = InterventionService(model, adapter=adapter)
 
     @property
     def dictionary(self):
@@ -1630,6 +1630,7 @@ class Controls:
         pts = list(adapter.points(model))
         m.points = pts[:MAX_POINTS_LISTED]
         m.names = frozenset(p["point"] for p in pts)
+        m.executor._ablation_points = m.names
         old = self._iv_model
         if old is not None:
             self._interventions_off(old)
