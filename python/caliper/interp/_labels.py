@@ -30,7 +30,7 @@ def token_label(tokenizer, token_id):
                                      (Parameter.POSITIONAL_OR_KEYWORD, Parameter.KEYWORD_ONLY))}
     # Select supported options before the call. Decoder errors must propagate.
     decoded = display_text(decode([token_id], **options))
-    return decoded if decoded else f"[empty token {token_id}]"
+    return decoded if decoded else f"#{token_id}"
 
 
 def pack_labels(values, count):
