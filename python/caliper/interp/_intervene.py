@@ -16,6 +16,7 @@ import torch
 
 from .. import _intervention_protocol as metadata
 from ._frozen import _trace_features
+from ._memory import CleanStop
 from ._points import _architecture, _input, capture
 
 MAX_POSITIONS = 32
@@ -727,6 +728,8 @@ class Intervention:
         if callback is not None:
             try:
                 callback(self.error)
+            except CleanStop:
+                raise
             except Exception:
                 pass  # Error reporting must never escape into the model forward.
 
@@ -786,6 +789,8 @@ class Intervention:
             return args, dict(kwargs, **{key: value})
         except Exception as error:
             self._failed(error)
+            if isinstance(error, CleanStop):
+                raise
             return None
 
     def post(self, module, args, kwargs, output):
@@ -796,4 +801,6 @@ class Intervention:
             return self._apply(output, _input(args, kwargs))
         except Exception as error:
             self._failed(error)
+            if isinstance(error, CleanStop):
+                raise
             return None
