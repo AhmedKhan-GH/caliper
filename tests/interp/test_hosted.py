@@ -716,12 +716,22 @@ def _trace_at_boundary(run, **params):
     return run.service.graph
 
 
-@pytest.mark.parametrize("arrival", ["preparation", "comparison"])
-def test_hosted_fork_matches_generation_after_late_intervention_requests(hosted_run, monkeypatch, arrival):
+@pytest.fixture
+def action_order_run(monkeypatch, request):
+    # These boundary checks use only the in-process control transport.
+    monkeypatch.setattr("caliper.serve", lambda: SimpleNamespace(url="in-process"))
+    return request.getfixturevalue("hosted_run")
+
+
+@pytest.mark.parametrize("arrival,waiters", [
+    ("preparation", "late"), ("comparison", "late"),
+    ("preparation", "queued"), ("preparation", "joined"), ("comparison", "joined"),
+])
+def test_hosted_fork_matches_generation_after_late_intervention_requests(action_order_run, monkeypatch, arrival, waiters):
     from caliper.interp._output import Output
     from .test_intervene import explicit_forward
 
-    run, route = hosted_run
+    run, route = action_order_run
     _trace_at_boundary(run, prompt="AB", max_targets=16)
     _, activations = explicit_forward(run.model, run.tokenizer("AB")["input_ids"])
     point = "layers.3.mlp_out"
@@ -737,16 +747,33 @@ def test_hosted_fork_matches_generation_after_late_intervention_requests(hosted_
         dict(ablation, until_step=100),
     ]
     injected = []
+    completed = []
+    earlier = [] if waiters == "late" else [10] if waiters == "queued" else [10, 11]
+    joined = [] if waiters == "queued" else [3, 4]
+    after = run.controls.action("after_generate", lambda: completed.append(run.inference_status()["generation"]["id"]))
+
+    def queue(request_id, name):
+        reply = route.on_control(None, wire.Control(request_id, "run", name=name).to_meta())
+        assert reply["status"] == "queued", reply
+
+    for request_id in earlier:
+        queue(request_id, "generate")
+    if earlier:
+        queue(12, "after_generate")
 
     def enqueue():
         if injected:
             return
         injected.append(arrival)
+        reply = route.on_control(None, wire.Control(5, "set", name="prompt", value="AC").to_meta())
+        assert reply["status"] == "ok", reply
         for request_id, specification in enumerate(requests, 1):
             reply = route.on_control(None, wire.Control(request_id, "intervene", intervene={"set": specification}).to_meta())
             assert reply["status"] == "ok", reply
-        reply = route.on_control(None, wire.Control(3, "run", name="generate").to_meta())
-        assert reply["status"] == "queued", reply
+        for request_id in joined:
+            queue(request_id, "generate")
+        if not earlier:
+            queue(12, "after_generate")
 
     # Inject once at an exact boundary phase, without a clock or thread race.
     if arrival == "preparation":
@@ -771,15 +798,25 @@ def test_hosted_fork_matches_generation_after_late_intervention_requests(hosted_
     assert injected == [arrival]
     assert run.controls.actions["generate"].queued
     assert run.inference_status()["generation"]["id"] == 0
-    assert not any(reply.request_id == 3 for reply in route.transport.replies)
+    assert run.prompt.value == "AB" and run.prompt.pending == "AC"
+    assert not route.transport.replies and not completed
+    if arrival == "preparation":
+        assert [spec["op"] for spec in run.interventions.specifications()] == ["clamp"]
     run.boundary()
-    reply, = [reply for reply in route.transport.replies if reply.request_id == 3]
-    assert reply.status == "ok", reply.error
+    assert [reply.request_id for reply in route.transport.replies] == [*earlier, *joined, 12]
+    assert all(reply.status == "ok" for reply in route.transport.replies)
+    assert completed == [1]
+    assert not run.controls.queue
+    after.remove()
     saved = json.loads(Path(run.managed.checkpoint(run.model, None)).read_bytes())
     generation = run.inference_status()["generation"]
-    assert generation["counts"] == [24, 24]
+    assert saved["params"]["prompt"] == "AC"
+    assert generation["id"] == 1 and generation["counts"] == [24, 24]
+    assert generation["completed_step"] == run.controls.n
     assert [record["specification"]["op"] for record in saved["interventions"]["interventions"]] == ["clamp", "ablate", "add"]
     assert all(record["state"] == "active" for record in saved["interventions"]["interventions"])
+    assert all(record["applied_specification"] == record["specification"]
+               for record in saved["interventions"]["interventions"])
     fork_model = ReferenceLM()
     fork_model.load_state_dict(run.model.state_dict())
     controls = _controls.Controls()
@@ -795,6 +832,7 @@ def test_hosted_fork_matches_generation_after_late_intervention_requests(hosted_
             assert generated["token_ids"][row] == generation["token_ids"][row], name
             assert generated[name] == saved["params"]["output." + name], name
         assert generation["interventions_hash"] == run.inference_status()["interventions_hash"]
+        assert generation["prompt_hash"] == run.inference_status()["prompt_hash"]
     finally:
         service.remove()
 

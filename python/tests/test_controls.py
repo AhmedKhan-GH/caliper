@@ -663,6 +663,47 @@ def test_late_actions_observe_prior_parameter_edits_at_the_next_pass(ctl, same_a
     assert not ctl.actions["evaluate"].queued
 
 
+@pytest.mark.parametrize("edit", [False, True])
+def test_late_waiters_defer_the_coalesced_action_and_its_followers(ctl, edit):
+    transport = Fake()
+    route = ctl.attach(transport)
+    value = caliper.param("value", 0)
+    observed, joined = [], []
+
+    def enqueue():
+        observed.append(("enqueue", value.value))
+        for new_value in (3, 7):
+            if edit:
+                assert control(route, "set", name="value", value=new_value)["status"] == "ok"
+            joined.append(control(route, "run", name="evaluate"))
+
+    caliper.action("enqueue", enqueue)
+    evaluate = caliper.action("evaluate", lambda: observed.append(("evaluate", value.value)))
+    caliper.action("after", lambda: observed.append(("after", value.value)))
+    caliper.step()
+    first = control(route, "run", name="enqueue")
+    earlier = [control(route, "run", name="evaluate") for _ in range(2)]
+    last = control(route, "run", name="after")
+    run_id = evaluate.run_id
+
+    caliper.step()
+    assert observed == [("enqueue", 0)]
+    assert [reply["request_id"] for _, reply in transport.replies] == [first["request_id"]]
+    assert evaluate.queued and evaluate.run_id == run_id
+    assert len(evaluate.waiters) == 4
+    assert value.value == 0
+
+    caliper.step()
+    expected = 7 if edit else 0
+    assert observed == [("enqueue", 0), ("evaluate", expected), ("after", expected)]
+    assert [reply["request_id"] for _, reply in transport.replies] == [
+        request["request_id"] for request in [first, *earlier, *joined, last]]
+    assert all(reply["status"] == "ok" for _, reply in transport.replies)
+    assert not ctl.queue and not evaluate.waiters
+    caliper.step()
+    assert ctl.counters["actions_run"] == 3
+
+
 def test_an_action_that_raises(ctl):
     t = Fake()
     r = ctl.attach(t)
