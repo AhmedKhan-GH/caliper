@@ -1,4 +1,5 @@
 """Actual offline MCP commands through the native run connection and fixture service."""
+from contextlib import ExitStack
 import json
 import os
 from pathlib import Path
@@ -23,10 +24,10 @@ def test_offline_command_sidecar(actual, tmp_path, monkeypatch):
     assert os.environ.get("CALIPER_AGENT_OFFLINE") == "1"
     monkeypatch.setenv("CALIPER_SESSION", "0")
     monkeypatch.setenv("CALIPER_NETIO", "1")
+    monkeypatch.setenv("CALIPER_DATA_DIR", str(tmp_path / "data"))
     controls = _controls.Controls()
     monkeypatch.setattr(_controls, "CONTROLS", controls)
     monkeypatch.setattr(caliper, "_CTL", controls)
-    register_service(actual, controls=controls)
     done = threading.Event()
     failures = []
 
@@ -40,14 +41,45 @@ def test_offline_command_sidecar(actual, tmp_path, monkeypatch):
         except BaseException as exc:
             failures.append(exc)
 
-    worker = threading.Thread(target=boundary)
-    worker.start()
-    server = caliper.serve(port=0, control=True)
-    log = (tmp_path / "host.log").open("w")
-    host_process = subprocess.Popen([host, server.stream_url, str(tmp_path / "workspace"), str(tmp_path / "api")],
-                                    stdout=subprocess.PIPE, stderr=log, text=True)
-    sidecar = None
-    try:
+    worker = threading.Thread(target=boundary, name="interpret-fixture-boundary")
+
+    def stop_worker():
+        done.set()
+        with controls.cond:
+            controls.cond.notify_all()
+        if worker.ident is not None:
+            worker.join(10)
+            assert not worker.is_alive(), "The fixture boundary thread did not stop."
+
+    def stop_process(process):
+        if process.poll() is None:
+            process.terminate()
+        try:
+            process.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait(timeout=10)
+
+    from caliper._net import current_server
+    assert current_server() is None, "The fixture requires an isolated server."
+
+    def close_server():
+        # serve() can create the server before a later stream-file failure.
+        server = current_server()
+        if server is not None:
+            server.close()
+
+    with ExitStack() as cleanup:
+        register_service(actual, controls=controls)
+        cleanup.callback(unregister_service, actual, controls=controls)
+        cleanup.callback(stop_worker)
+        cleanup.callback(close_server)
+        server = caliper.serve(port=0, control=True)
+        worker.start()
+        log = cleanup.enter_context((tmp_path / "host.log").open("w"))
+        host_process = subprocess.Popen([host, server.stream_url, str(tmp_path / "workspace"), str(tmp_path / "api")],
+                                        stdout=subprocess.PIPE, stderr=log, text=True)
+        cleanup.callback(stop_process, host_process)
         def line_from(process):
             with selectors.DefaultSelector() as selector:
                 selector.register(process.stdout, selectors.EVENT_READ)
@@ -57,6 +89,7 @@ def test_offline_command_sidecar(actual, tmp_path, monkeypatch):
         assert line_from(host_process).strip() == "ready"
         sidecar = subprocess.Popen([mcp, "--api-file", str(tmp_path / "api" / "api.json")],
                                    stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=log, text=True)
+        cleanup.callback(stop_process, sidecar)
         counter = 0
 
         def tool(name, params):
@@ -111,16 +144,23 @@ def test_offline_command_sidecar(actual, tmp_path, monkeypatch):
         error = json.loads(reply["content"][0]["text"])["error"]
         assert error["code"] == "interpret.missing_dictionary"
         assert not failures
-    finally:
-        if sidecar:
-            sidecar.terminate()
-            sidecar.wait(timeout=10)
-        host_process.terminate()
-        host_process.wait(timeout=10)
-        done.set()
-        with controls.cond:
-            controls.cond.notify_all()
-        worker.join(10)
-        server.close()
-        unregister_service(actual, controls=controls)
-        log.close()
+
+
+@pytest.mark.parametrize("stage", ["serve", "process"])
+def test_sidecar_start_failure_releases_resources(actual, tmp_path, monkeypatch, stage):
+    from caliper._net import current_server
+    if stage == "serve":
+        original = caliper.serve
+        def fail(*args, **kwargs):
+            original(*args, **kwargs)
+            raise RuntimeError("fixture startup failure")
+        monkeypatch.setattr(caliper, "serve", fail)
+    else:
+        def fail(*args, **kwargs):
+            raise RuntimeError("fixture startup failure")
+        monkeypatch.setattr(subprocess, "Popen", fail)
+    with pytest.raises(RuntimeError, match="fixture startup failure"):
+        test_offline_command_sidecar(actual, tmp_path, monkeypatch)
+    assert current_server() is None
+    assert not any(t.name == "interpret-fixture-boundary" and t.is_alive() for t in threading.enumerate())
+    assert actual.closed
