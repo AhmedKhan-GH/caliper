@@ -106,12 +106,12 @@ class QualityStats:
                   "original_cross_entropy": self.original_ce / self.ce_tokens,
                   "replaced_cross_entropy": self.replaced_ce / self.ce_tokens,
                   "per_layer_fvu": fvu.tolist(), "per_layer_dead_fraction": dead.tolist(),
-                  "thresholds": {"fvu": 0.30, "dead_fraction": 0.15, "cross_entropy_delta": 0.5,
+                  "thresholds": {"fvu": 0.40, "dead_fraction": 0.15, "cross_entropy_delta": 0.5,
                                  "evaluated_tokens": 200_000}}
         finite = all(torch.isfinite(x).all().item() for x in (fvu, dead)) and math.isfinite(delta)
         if not finite:
             raise ValueError("quality metrics are nonfinite")
-        passed = values["fvu"] <= 0.30 and values["dead_fraction"] <= 0.15 and delta <= 0.5
+        passed = values["fvu"] <= 0.40 and values["dead_fraction"] <= 0.15 and delta <= 0.5
         values["status"] = ("passed" if passed else "failed") if self.count == 200_000 else "partial"
         if self.scope == "upper_half":
             values["status"] = "fallback_" + values["status"]

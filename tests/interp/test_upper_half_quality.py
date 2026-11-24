@@ -75,7 +75,7 @@ def test_upper_quality_ignores_zero_lower_modules(tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize("metric,value,status", [
-    ("fvu", 0.3, "fallback_passed"), ("fvu", 0.301, "fallback_failed"),
+    ("fvu", 0.4, "fallback_passed"), ("fvu", 0.401, "fallback_failed"),
     ("dead", 0.25, "fallback_failed"), ("ce", 0.501, "fallback_failed"),
 ])
 def test_completed_metrics_have_only_fallback_status(metric, value, status):

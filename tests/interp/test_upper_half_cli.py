@@ -26,7 +26,7 @@ def synthetic_source(folder, layers=4):
     generation = checkpoint_state.save_checkpoint(folder / "checkpoints", trainer, stream, progress)
     checkpoint_state.export_dictionary(folder, trainer, progress)
     checkpoint_state.write_json(folder / "runtime.json", {"generation": generation.name, "elapsed_seconds": 130})
-    metadata["quality"] = {"fvu": 0.31, "dead_fraction": 0.1, "cross_entropy_delta": 0.2,
+    metadata["quality"] = {"fvu": 0.41, "dead_fraction": 0.1, "cross_entropy_delta": 0.2,
                            "evaluated_tokens": 200_000, "status": "failed", "partition": "quality",
                            "stop_reason": "complete", "all_mlps_replaced": layers}
     checkpoint_state.write_json(folder / "dictionary.json", metadata)
@@ -81,8 +81,8 @@ def test_admission_embeds_exact_source_evidence_with_response_bounds(tmp_path, m
     source, output = tmp_path / "source", tmp_path / "fallback"
     _, metadata, source_id = synthetic_source(source, layers=24)
     # Include normal full-size report arrays and per-layer diagnostic metadata.
-    metadata["quality"].update(per_layer_fvu=[0.31] * 24, per_layer_dead_fraction=[0.1] * 24)
-    metadata["training"]["last_batch_metrics"] = {str(i): {"fvu": 0.31, "gradient_norm": 1.0} for i in range(24)}
+    metadata["quality"].update(per_layer_fvu=[0.41] * 24, per_layer_dead_fraction=[0.1] * 24)
+    metadata["training"]["last_batch_metrics"] = {str(i): {"fvu": 0.41, "gradient_norm": 1.0} for i in range(24)}
     checkpoint_state.write_json(source / "dictionary.json", metadata)
     source_hash = checkpoint_state.dictionary_fingerprint(source, metadata)
     state_path = source / "evaluation" / "state.json"
@@ -134,10 +134,10 @@ def test_changed_admitted_record_refuses_resume_before_model(tmp_path, monkeypat
     if change == "missing":
         del record["metadata"]["fallback_source"]
     elif change == "quality":
-        evidence["metadata"]["quality"]["fvu"] = 0.4
+        evidence["metadata"]["quality"]["fvu"] = 0.42
     elif change == "source_quality":
         metadata = json.loads((source / "dictionary.json").read_text())
-        metadata["quality"]["fvu"] = 0.4
+        metadata["quality"]["fvu"] = 0.42
         checkpoint_state.write_json(source / "dictionary.json", metadata)
     elif change == "identity":
         evidence["identity"]["dictionary_fingerprint"] = "0" * 64

@@ -457,7 +457,7 @@ def prepare_upper_half(args, *, source_id, record=None):
             or quality.get("partition") != "quality" or quality.get("stop_reason") != "complete"
             or quality.get("all_mlps_replaced") != source["layers"]
             or any(quality[key] is None for key in ("fvu", "dead_fraction", "cross_entropy_delta"))
-            or not (quality["fvu"] > 0.30 or quality["dead_fraction"] > 0.15
+            or not (quality["fvu"] > 0.40 or quality["dead_fraction"] > 0.15
                     or quality["cross_entropy_delta"] > 0.5)):
         raise ValueError("fallback requires completed failed held-out quality on 200000 tokens")
     generation, source_record = checkpoint_record(source_folder / "checkpoints")

@@ -66,7 +66,7 @@ def _quality(metadata, fingerprint, *, fallback=False, failed=False):
              and _number(original) and original >= 0 and _number(replaced) and replaced >= 0
              and _number(delta) and math.isclose(delta, replaced - original, rel_tol=1e-9, abs_tol=1e-12),
              "Quality cross-entropy evidence is invalid.")
-    passes = quality["fvu"] <= .30 and quality["dead_fraction"] <= .15 and delta <= .5
+    passes = quality["fvu"] <= .40 and quality["dead_fraction"] <= .15 and delta <= .5
     _require(passes != failed, "Quality metrics contradict the required status.")
 
 

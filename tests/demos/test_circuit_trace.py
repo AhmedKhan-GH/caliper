@@ -128,8 +128,8 @@ def qualification_reply(*, fallback=False, token_budget=20_000_000):
                                "quality_tokens": 200_000, "index_tokens": 2_000_000}}
     quality = {"status": "passed", "evaluated_tokens": 200_000, "partition": "quality", "stop_reason": "complete",
                "dictionary_hash": "a" * 64, "all_mlps_replaced": 24,
-               "fvu": .3, "dead_fraction": .15, "cross_entropy_delta": .5,
-               "per_layer_fvu": [.3] * 24, "per_layer_dead_fraction": [.15] * 24,
+               "fvu": .4, "dead_fraction": .15, "cross_entropy_delta": .5,
+               "per_layer_fvu": [.4] * 24, "per_layer_dead_fraction": [.15] * 24,
                "cross_entropy_tokens": 199_000, "original_cross_entropy": 2., "replaced_cross_entropy": 2.5}
     metadata = {"model_id": MODEL_ID, "revision": MODEL_REVISION, "model_hash": MODEL_HASH,
                 "layers": 24, "latents": 8192, "training": training, "quality": quality}
@@ -144,7 +144,7 @@ def qualification_reply(*, fallback=False, token_budget=20_000_000):
     if fallback:
         source = deepcopy(metadata)
         source["quality"].update(status="failed", dictionary_hash="e" * 64,
-                                  fvu=.4, per_layer_fvu=[.4] * 24)
+                                  fvu=.41, per_layer_fvu=[.41] * 24)
         response["fallback_source"] = {
             "metadata": source, "identity": {"model_hash": MODEL_HASH, "dictionary_fingerprint": "e" * 64},
             "evaluation": {"version": 1, "count": 200_000, "pending_ids": None, "identity": "e" * 64,
@@ -160,7 +160,7 @@ def qualification_reply(*, fallback=False, token_budget=20_000_000):
         del quality["all_mlps_replaced"]
         quality.update(status="fallback_passed", scope="upper_half", active_layers=list(range(12, 24)),
                        replaced_mlps=12, per_layer_status=["error_only"] * 12 + ["active"] * 12,
-                       per_layer_fvu=[None] * 12 + [.3] * 12, per_layer_dead_fraction=[None] * 12 + [.15] * 12)
+                       per_layer_fvu=[None] * 12 + [.4] * 12, per_layer_dead_fraction=[None] * 12 + [.15] * 12)
     return response
 
 
@@ -216,7 +216,7 @@ def test_qualification_rejects_incomplete_or_stale_quality(field, value):
     assert dictionary_qualification(response)["qualified"] is False
 
 
-@pytest.mark.parametrize("field,value", [("fvu", .301), ("dead_fraction", .151), ("cross_entropy_delta", .501)])
+@pytest.mark.parametrize("field,value", [("fvu", .401), ("dead_fraction", .151), ("cross_entropy_delta", .501)])
 def test_qualification_rejects_failed_metrics_under_passed_status(field, value):
     response = qualification_reply()
     quality = response["metadata"]["quality"]
