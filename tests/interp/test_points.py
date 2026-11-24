@@ -1,6 +1,7 @@
 """Probe identities, actual architecture paths, and capture lifecycle checks."""
 import gc
 import weakref
+from contextlib import ExitStack
 
 import pytest
 import torch
@@ -243,6 +244,71 @@ def test_qwen_error_restores_attention_config():
             raise RuntimeError("failure")
     assert hooks(model) == 0 and not values
     assert model.config._attn_implementation == implementation
+
+
+@pytest.mark.parametrize("capture_first", [False, True])
+def test_qwen_full_pattern_precedes_module_ablation(capture_first):
+    model = qwen()
+    attention = model.model.layers[3].self_attn
+    point = "model.layers.3.attn_pattern"
+    ids = torch.tensor([[1, 2, 3], [3, 2, 1]])
+    implementation = model.config._attn_implementation
+    with torch.no_grad(), interp.capture(model, [point]) as baseline:
+        original = model(ids, use_cache=False).logits
+    with torch.no_grad(), ExitStack() as stack:
+        if capture_first:
+            values = stack.enter_context(interp.capture(model, [point]))
+        ablation = TORCH.ablate(model, "model.layers.3.self_attn")
+        stack.callback(ablation)
+        if not capture_first:
+            values = stack.enter_context(interp.capture(model, [point]))
+        output = []
+        stack.callback(attention.register_forward_hook(
+            lambda module, args, result: output.append(result)).remove)
+        actual = model(ids, use_cache=False).logits
+        assert ablation.calls == 1 and ablation.errors == 0
+        assert all(t.count_nonzero() == 0 for t in output[-1])
+        torch.testing.assert_close(values[point], baseline[point], atol=0, rtol=0)
+        torch.testing.assert_close(values[point].sum(-1), torch.ones(2, 2, 3))
+        assert values[point].triu(1).count_nonzero() == 0
+        assert not values[point].requires_grad
+        assert values[point].device == ids.device
+        values.close()
+        expected = model(ids, use_cache=False).logits
+        torch.testing.assert_close(actual, expected, atol=1e-6, rtol=1e-5)
+        assert not torch.equal(actual, original)
+        assert ablation.calls == 2 and ablation.errors == 0
+    assert model.config._attn_implementation == implementation
+    assert hooks(model) == 0
+
+
+def test_qwen_full_pattern_precedes_selected_row_output_hook():
+    model = qwen()
+    attention = model.model.layers[3].self_attn
+    point = "model.layers.3.attn_pattern"
+    ids = torch.tensor([[1, 2, 3], [3, 2, 1]])
+    implementation = model.config._attn_implementation
+    with torch.no_grad(), interp.capture(model, [point]) as baseline:
+        original = model(ids, use_cache=False).logits
+    # A small output hook represents a scoped ablation without an M8 dependency.
+    def ablate_row(module, args, output):
+        return tuple(t.masked_fill(torch.tensor([False, True]).reshape(
+            2, *([1] * (t.ndim - 1))), 0) for t in output)
+
+    with torch.no_grad(), ExitStack() as stack:
+        stack.callback(attention.register_forward_hook(ablate_row).remove)
+        with interp.capture(model, [point]) as values:
+            actual = model(ids, use_cache=False).logits
+        torch.testing.assert_close(values[point], baseline[point], atol=0, rtol=0)
+        torch.testing.assert_close(actual[0], original[0], atol=0, rtol=0)
+        assert not torch.equal(actual[1], original[1])
+        # Keep eager weights in the tuple for the synthetic scoped output hook.
+        stack.callback(setattr, model.config, "_attn_implementation", implementation)
+        model.config._attn_implementation = "eager"
+        expected = model(ids, use_cache=False).logits
+        torch.testing.assert_close(actual, expected, atol=0, rtol=0)
+    assert model.config._attn_implementation == implementation
+    assert hooks(model) == 0
 
 
 def test_overlapping_capture_cleanup_preserves_existing_hooks():
