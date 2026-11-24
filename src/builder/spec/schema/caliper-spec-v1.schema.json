@@ -681,7 +681,7 @@
         },
         {
           "if": { "properties": { "kind": { "const": "text" } }, "required": ["kind"] },
-          "then": { "properties": { "bind": { "pattern": "^(value|state:.+)$" } }, "required": ["bind"] }
+          "then": { "properties": { "bind": { "pattern": "^(param:.+|value|state:.+)$" } }, "required": ["bind"] }
         },
         {
           "if": { "properties": { "kind": { "const": "segmented" } }, "required": ["kind"] },

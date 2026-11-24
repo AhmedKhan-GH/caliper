@@ -57,7 +57,7 @@ An intervention changes a module of the model at a step boundary while the run t
 
 | Command | Arguments | Result |
 |---|---|---|
-| `intervene.points` | `match`, a glob over the point names | `points`, each with `point`, `kind` (`module` or `head`), `module`, `head`, `type` and `shape` |
+| `intervene.points` | `match`, a glob over the point names | `points`, each with `point`, `kind` (`module` or `head`), `module`, `head`, `type` and `shape`, plus optional `probe`, `layer` and `pattern` |
 | `intervene.set` | `point`, `op`, `from_step`, `until_step` | `point`, `op`, `pending: true` |
 | `intervene.clear` | `point`, or `all: true` | `cleared` (the points) and `pending: true` |
 | `intervene.list` | None | `interventions`, each with `point`, `op`, `from_step`, `until_step`, `since_step` and `state` (`pending`, `active` or `ended`) |
@@ -74,6 +74,8 @@ Each module of `model.named_modules()` is a point, with its dotted name, such as
 | `intervene.not_supported` | The attached script did not announce `interventions` |
 
 The run command errors above also apply, such as `run.not_attached`.
+
+Semantic probes keep `kind: "module"` and add `probe`, `layer` and `pattern` metadata. The `probe` value is `resid_pre`, `mlp_in`, `mlp_out` or `attn_pattern`. The `layer` value is the decoder layer index, from zero. The read-only `attn_pattern` probe uses `softmax` for full attention or `signed_value_mixing` for DeltaNet. Other semantic probes set `pattern` to null. Legacy module and head points omit these fields, and the MCP tool `intervene_points` preserves the same fields.
 
 ## Toggle Control
 

@@ -68,8 +68,12 @@ json opt_json(const std::optional<std::int64_t>& v) { return v ? json(*v) : json
 json point_json(const InterventionPoint& p) {
     json shape = json();
     if (p.shape) shape = *p.shape;
-    return json{{"point", p.point}, {"kind", p.kind},       {"module", p.module},
-                {"head", opt_json(p.head)}, {"type", p.type}, {"shape", std::move(shape)}};
+    json out{{"point", p.point}, {"kind", p.kind},       {"module", p.module},
+             {"head", opt_json(p.head)}, {"type", p.type}, {"shape", std::move(shape)}};
+    if (p.probe) out["probe"] = *p.probe;
+    if (p.layer) out["layer"] = *p.layer;
+    if (p.pattern) out["pattern"] = *p.pattern ? json(**p.pattern) : json();
+    return out;
 }
 
 json intervention_json(const Intervention& i) {

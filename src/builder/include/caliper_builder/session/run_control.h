@@ -104,6 +104,10 @@ struct InterventionPoint {
     std::optional<std::int64_t> head;          // a head's index
     std::string type;                          // the module's class name
     std::optional<std::vector<std::int64_t>> shape;   // the last output's shape; null before the first step
+    std::optional<std::string> probe;           // semantic form; kind stays "module"
+    std::optional<std::int64_t> layer;          // decoder layer index
+    // The outer optional preserves absence. The inner optional preserves JSON null.
+    std::optional<std::optional<std::string>> pattern;
 };
 
 // One intervention, as intervene.set sends it and as CONTROLS key

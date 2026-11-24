@@ -3460,6 +3460,92 @@ TEST_CASE("live/controls: protocol errors complete interpretation requests by ID
     CHECK(controls.interpret("trace.status", Json::object(), id) == final);
 }
 
+TEST_CASE("live/controls: protocol errors complete parameter and action requests by ID") {
+    ScriptedSource source;
+    source.controls_now(CALIPER_NET_RUN_RUNNING, 0.001);
+    caliper_live::RunControls controls;
+    controls.update(&source, 0);
+    REQUIRE(controls.set("lr", Json(0.02)));
+    REQUIRE(controls.run("save"));
+    const auto queued = controls.interpret("trace.status", Json::object(), 0);
+    const auto interpretation_id = static_cast<uint32_t>(queued.find("request_id")->as_double());
+    source.reply(2, CALIPER_NET_STATUS_QUEUED);
+    controls.update(&source, 1);
+    REQUIRE(controls.param_waiting(controls.state().params[0]));
+    REQUIRE(controls.action_busy(controls.state().actions[0]));
+    source.reply(2, CALIPER_NET_STATUS_ERROR, Json(), CALIPER_NET_ERR_ACTION_FAILED);
+    source.replies.back().op.clear();
+    source.replies.back().name.clear();
+    controls.update(&source, 2);
+    CHECK_FALSE(controls.action_busy(controls.state().actions[0]));
+    REQUIRE(controls.action_result("save"));
+    CHECK(controls.action_result("save")->error);
+    CHECK(controls.action_result("save")->text == "action_failed: refused");
+    CHECK(controls.param_waiting(controls.state().params[0]));
+    CHECK(controls.interpret("trace.status", Json::object(), interpretation_id) == queued);
+    source.reply(1, CALIPER_NET_STATUS_ERROR, Json(), CALIPER_NET_ERR_BAD_VALUE);
+    source.replies.back().op.clear();
+    source.replies.back().name.clear();
+    controls.update(&source, 3);
+    CHECK_FALSE(controls.param_waiting(controls.state().params[0]));
+    CHECK(controls.shown_value(controls.state().params[0]).as_double() == 0.001);
+    CHECK(controls.notice().text == "set lr: bad_value: refused");
+    CHECK(controls.counts().replies == 3);
+    CHECK(controls.counts().refused == 2);
+    CHECK(controls.interpret("trace.status", Json::object(), interpretation_id) == queued);
+}
+
+TEST_CASE("live/controls: protocol errors preserve newer parameter edits") {
+    ScriptedSource source;
+    source.controls_now(CALIPER_NET_RUN_RUNNING, 0.001);
+    caliper_live::RunControls controls;
+    controls.update(&source, 0);
+    REQUIRE(controls.set("lr", Json(0.02)));
+    controls.update(&source, kMs);
+    REQUIRE(controls.set("lr", Json(0.03)));
+    REQUIRE(source.sent.size() == 1);
+    source.reply(1, CALIPER_NET_STATUS_ERROR, Json(), CALIPER_NET_ERR_BAD_VALUE);
+    source.replies.back().op.clear();
+    controls.update(&source, 2 * kMs);
+    CHECK(controls.param_waiting(controls.state().params[0]));
+    CHECK(controls.shown_value(controls.state().params[0]).as_double() == 0.03);
+    controls.update(&source, 40 * kMs);
+    REQUIRE(source.sent.size() == 2);
+    CHECK(source.sent.back().value.as_double() == 0.03);
+    source.reply(1, CALIPER_NET_STATUS_ERROR, Json(), CALIPER_NET_ERR_BAD_VALUE);
+    source.replies.back().op.clear();
+    controls.update(&source, 41 * kMs);
+    CHECK(controls.param_waiting(controls.state().params[0]));
+    source.reply(2, CALIPER_NET_STATUS_OK, Json(0.03));
+    controls.update(&source, 42 * kMs);
+    source.controls_now(CALIPER_NET_RUN_RUNNING, 0.03);
+    controls.update(&source, 43 * kMs);
+    CHECK_FALSE(controls.param_waiting(controls.state().params[0]));
+    CHECK(controls.shown_value(controls.state().params[0]).as_double() == 0.03);
+}
+
+TEST_CASE("live/controls: protocol errors retain transport operation names") {
+    ScriptedSource source;
+    source.controls_now(CALIPER_NET_RUN_RUNNING, 0.001);
+    caliper_live::RunControls controls;
+    controls.update(&source, 0);
+    REQUIRE(controls.pause());
+    REQUIRE(controls.resume());
+    REQUIRE(controls.step(1));
+    Json body = Json::object();
+    body.set("clear", "head");
+    REQUIRE(controls.intervene(body));
+    const char* expected[] = {"pause", "resume", "step", "intervene head"};
+    for (uint32_t id = 1; id <= 4; ++id) {
+        source.reply(id, CALIPER_NET_STATUS_ERROR, Json(), CALIPER_NET_ERR_FORBIDDEN);
+        source.replies.back().op.clear();
+        controls.update(&source, id);
+        CHECK(controls.notice().text == std::string(expected[id - 1]) + ": forbidden: refused");
+        CHECK(controls.notice().error);
+    }
+    CHECK(controls.counts().refused == 4);
+}
+
 TEST_CASE("live/controls: text drafts submit once on Return or focus loss") {
     ControlsUi ui;
     ui.focus();
