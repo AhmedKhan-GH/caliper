@@ -18,6 +18,8 @@ INDEX_VERSION = 1
 TOP_EXAMPLES = 16
 WINDOW_TOKENS = 33
 CACHE_FEATURES = 256
+LABEL_FEATURES = 512
+LABEL_VOCAB_CHUNK = 4096
 MAX_TOKENS = 2_000_000
 _TABLE = np.dtype([("activation", "<f8"), ("offset", "<i8")])
 _DOCUMENT = np.dtype([("id", "S128"), ("start", "<i8"), ("length", "<i8"),
@@ -266,19 +268,22 @@ def build_index(dictionary_path, documents, *, model, tokenizer, provenance,
 
 
 class FeatureIndex:
-    """Read an index with an LRU cache of 256 feature results.
+    """Read an index with 256 cached windows and 512 cached feature summaries.
 
     ``show(layer, feature)`` returns JSON data with label, count, maximum, and token lists.
     ``examples(layer, feature, limit=16)`` returns rows sorted by indexed activation.
     Each row has 33 token slots. Missing document-edge slots contain null values.
     The first query recomputes all retained windows in one real forward pass.
     A window has fresh context, thus its center value can differ from the indexed maximum.
-    Model and dictionary weights must remain fixed for the lifetime of this object.
+    Model weights, dictionary weights, tokenizer, and forward settings must remain fixed.
+    Admission verifies identity once. Queries do not hash these immutable resources again.
+    Close and reopen the index after a resource change. Cache clearance does not admit changes.
     """
 
     def __init__(self, dictionary_path, *, model, tokenizer, dictionary=None, memory=None):
         self._closed = False
         self._cache = OrderedDict()
+        self._summaries = OrderedDict()
         self.root = Path(dictionary_path)
         self.model, self.tokenizer = model, tokenizer
         self.memory = memory if memory is not None else MemoryGuard(12, next(model.parameters()).device)
@@ -334,11 +339,13 @@ class FeatureIndex:
             self.close()
             raise
         self.metadata = manifest
+        self._label_identity = ("caliper.feature-labels.v1", claimed)
 
     def close(self):
         """Release memory maps and cached results. Repeated calls are safe."""
         self._closed = True
         self._cache.clear()
+        self._summaries.clear()
         for name in ("table", "counts", "tokens", "documents"):
             value = getattr(self, name, None)
             setattr(self, name, None)
@@ -364,14 +371,20 @@ class FeatureIndex:
             raise ValueError("index token or document layout mismatch")
         return np.memmap(path, mode="r", dtype=dtype, shape=(count,)) if count else np.empty(0, dtype=dtype)
 
-    def _entry(self, layer, feature):
+    def _check_open(self):
         if self._closed:
             raise ValueError("feature index is closed")
         if self.model.training:
             raise ValueError("index requires a model in eval mode")
+
+    def _feature_key(self, layer, feature):
+        self._check_open()
         _positive_integer(layer, "layer", self.metadata["layers"] - 1, minimum=0)
         _positive_integer(feature, "feature", self.metadata["features"] - 1, minimum=0)
-        key = (layer, feature)
+        return layer, feature
+
+    def _entry(self, layer, feature):
+        key = self._feature_key(layer, feature)
         if key not in self._cache:
             self._cache[key] = {}
             if len(self._cache) > CACHE_FEATURES:
@@ -382,10 +395,26 @@ class FeatureIndex:
     def clear_cache(self):
         """Discard feature summaries and window activations."""
         self._cache.clear()
+        self._summaries.clear()
+
+    @property
+    def label_identity(self):
+        """Return the admitted index identity and label version without a weight scan."""
+        self._check_open()
+        return self._label_identity
 
     def _token(self, token_id):
         from ._labels import token_label
         return token_label(self.tokenizer, token_id)
+
+    def _window_bounds(self, offset):
+        document_row = int(np.searchsorted(self.documents["start"], offset, side="right") - 1)
+        if document_row < 0 or offset >= len(self.tokens):
+            raise ValueError("index example offset outside token store")
+        doc = self.documents[document_row]
+        position = offset - int(doc["start"])
+        begin, end = max(0, position - 16), min(int(doc["length"]), position + 17)
+        return doc, position, begin, end
 
     def _windows(self, layer, feature):
         rows = []
@@ -393,12 +422,7 @@ class FeatureIndex:
             if item["activation"] <= 0:
                 break
             offset = int(item["offset"])
-            document_row = int(np.searchsorted(self.documents["start"], offset, side="right") - 1)
-            if document_row < 0 or offset >= len(self.tokens):
-                raise ValueError("index example offset outside token store")
-            doc = self.documents[document_row]
-            position = offset - int(doc["start"])
-            begin, end = max(0, position - 16), min(int(doc["length"]), position + 17)
+            doc, position, begin, end = self._window_bounds(offset)
             left = 16 - (position - begin)
             ids = self.tokens[int(doc["start"]) + begin:int(doc["start"]) + end].astype(np.int64).tolist()
             slots = [None] * WINDOW_TOKENS
@@ -413,33 +437,101 @@ class FeatureIndex:
                          "document_truncated": bool(doc["truncated"])})
         return rows
 
-    def _promoted(self, layer, feature, chunk_size=4096):
+    def _promoted(self, layer, feature, chunk_size=LABEL_VOCAB_CHUNK):
+        return FeatureIndex._promoted_many(self, [(layer, feature)], chunk_size=chunk_size)[0]
+
+    def _promoted_many(self, features, *, chunk_size=LABEL_VOCAB_CHUNK, check=None):
+        """Scan vocabulary chunks once for all requested decoder directions."""
         output = self.model.get_output_embeddings().weight
-        direction = self.dictionary.layers[layer].W_dec[feature].to(device=output.device, dtype=output.dtype)
-        best, ids = np.empty((1, 0)), np.empty((1, 0), dtype=np.int64)
+        best, ids = np.empty((len(features), 0)), np.empty((len(features), 0), dtype=np.int64)
         with _device_scope(output.device), torch.inference_mode():
+            # Copy selected decoder rows only. The vocabulary stays on its original device.
+            directions = torch.stack([self.dictionary.layers[layer].W_dec[feature].to(
+                device=output.device, dtype=output.dtype) for layer, feature in features])
             for start in range(0, output.shape[0], chunk_size):
-                values = (output[start:start + chunk_size] @ direction).unsqueeze(0)
-                positions = torch.arange(start, start + values.shape[1], device=output.device)
-                values, positions = _stable_topk(values, positions, k=3)
+                if check is not None:
+                    check("feature label chunk")
+                with _device_scope(output.device):
+                    chunk = output[start:start + chunk_size]
+                    values = ((chunk @ directions[0]).unsqueeze(0) if len(features) == 1
+                              else (chunk @ directions.T).T)
+                    positions = torch.arange(start, start + values.shape[1], device=output.device)
+                    values, positions = _stable_topk(values, positions, k=3)
                 best, ids = _stable_topk(torch.from_numpy(np.concatenate((best, values), axis=1)),
                                         torch.from_numpy(np.concatenate((ids, positions), axis=1)), k=3)
-        return [{"token_id": int(i), "token": self._token(i), "score": float(v)} for i, v in zip(ids[0], best[0])]
+        return [[{"token_id": int(i), "token": self._token(i), "score": float(v)}
+                 for i, v in zip(row_ids, row_values)] for row_ids, row_values in zip(ids, best)]
+
+    def _summary(self, layer, feature, promoted):
+        frequency = Counter()
+        for item in self.table[layer, feature]:
+            if item["activation"] <= 0:
+                break
+            doc, _, begin, end = self._window_bounds(int(item["offset"]))
+            start = int(doc["start"])
+            frequency.update(self.tokens[start + begin:start + end].tolist())
+        common = [{"token_id": i, "token": self._token(i), "count": count}
+                  for i, count in sorted(frequency.items(), key=lambda item: (-item[1], item[0]))[:3]]
+        label = "Output: " + " | ".join(t["token"] for t in promoted)
+        label += " / Examples: " + (" | ".join(t["token"] for t in common) or "none")
+        return {"layer": layer, "feature": feature, "label": label,
+                "count": int(self.counts[layer, feature]),
+                "maximum": float(self.table[layer, feature, 0]["activation"]),
+                "promoted_tokens": promoted, "example_tokens": common}
+
+    def _label_summaries(self, features, check=None):
+        self._check_open()
+        keys = {}
+        for count, item in enumerate(features, 1):
+            if count > LABEL_FEATURES:
+                raise ValueError("feature labels accept at most 512 requests")
+            if not isinstance(item, (tuple, list)) or len(item) != 2:
+                raise ValueError("feature labels require layer and feature pairs")
+            keys[self._feature_key(*item)] = None
+        result = {key: self._summaries[key] for key in keys if key in self._summaries}
+        missing = [key for key in keys if key not in result]
+        if missing:
+            output = self.model.get_output_embeddings().weight
+            # Bound directions, score matrices, tie repair, host candidates, and allocator reserve.
+            size = max(8, output.element_size())
+            workspace = (len(missing) * (4 * output.shape[1] + 16 * min(
+                LABEL_VOCAB_CHUNK, output.shape[0])) * size + 64_000_000)
+            self.memory.check("feature labels admission")
+            if self.memory.peak + workspace > self.memory.limit:
+                raise CleanStop("feature label allocation exceeds the process memory limit")
+
+            def progress(stage):
+                self.memory.check(stage, force=False)
+                if check is not None:
+                    check(stage)
+
+            promoted = self._promoted_many(missing, check=progress)
+            for (layer, feature), tokens in zip(missing, promoted):
+                progress("feature label examples")
+                result[layer, feature] = self._summary(layer, feature, tokens)
+            self.memory.check("feature labels complete")
+        if check is not None:
+            check("feature labels complete")
+        # Commit summaries only after all work succeeds. A label batch never evicts windows.
+        for key in keys:
+            self._summaries[key] = result[key]
+            self._summaries.move_to_end(key)
+            if len(self._summaries) > LABEL_FEATURES:
+                self._summaries.popitem(last=False)
+        return result
+
+    def labels(self, features, *, check=None):
+        """Return labels by ``(layer, feature)`` for at most 512 displayed nodes.
+
+        Repeated features share one projection. At most six candidates per feature
+        cross to the CPU per vocabulary chunk. Example tokens come from mapped windows.
+        This method needs no model forward pass and no full identity hash.
+        ``check(stage)`` can enforce the caller's deadline or cancellation request.
+        """
+        return {key: value["label"] for key, value in self._label_summaries(features, check).items()}
 
     def show(self, layer, feature):
-        entry = self._entry(layer, feature)
-        if "show" not in entry:
-            promoted = self._promoted(layer, feature)
-            frequency = Counter(i for row in self._windows(layer, feature) for i in row["token_ids"] if i is not None)
-            common = [{"token_id": i, "token": self._token(i), "count": count}
-                      for i, count in sorted(frequency.items(), key=lambda item: (-item[1], item[0]))[:3]]
-            label = "Output: " + " | ".join(t["token"] for t in promoted)
-            label += " / Examples: " + (" | ".join(t["token"] for t in common) or "none")
-            entry["show"] = {"layer": layer, "feature": feature, "label": label,
-                             "count": int(self.counts[layer, feature]),
-                             "maximum": float(self.table[layer, feature, 0]["activation"]),
-                             "promoted_tokens": promoted, "example_tokens": common}
-        return deepcopy(entry["show"])
+        return deepcopy(self._label_summaries([(layer, feature)])[layer, feature])
 
     def _example_bytes(self, rows):
         """Bound one no-gradient layer, retained probes, and dictionary encode work."""
