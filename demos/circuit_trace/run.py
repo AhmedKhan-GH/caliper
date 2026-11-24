@@ -317,27 +317,60 @@ class Bridge:
         self.session = session
         self.last_examples = None
         self.last_selection = None
+        self.examples_present = None
 
-    def consume(self):
+    def clear_examples(self):
+        if self.examples_present:
+            self.session.mcp.body("program.remove", id="example_tokens")
+            self.examples_present = False
+        self.last_selection = self.last_examples = None
+
+    def fill_examples(self, index):
+        s = self.session
+        feature = s.events.complete("feature.show", node=index)
+        self.last_examples = s.events.complete("feature.examples", node=index, limit=16)
+        s.mcp.body("state.set", id="activation_max", value=max(1e-6, feature["maximum"]))
+        if self.examples_present is False:
+            programs(s, examples=True)
+            s.ready_programs(["example_tokens"])
+            s.events.complete("feature.examples", node=index, limit=16)
+            self.examples_present = True
+        self.last_selection = index
+        save(s.out / "selected-examples.json", self.last_examples)
+
+    def handle(self, event):
+        s = self.session
+        if event["kind"] == "pick" and event.get("panel") == "graph":
+            fields = event.get("fields") or {}
+            index = fields.get("index", event.get("index"))
+            if fields.get("kind") != 1:
+                s.parameter("selected_node", -1)
+                self.clear_examples()
+                return
+            s.parameter("selected_node", int(index))
+            self.fill_examples(int(index))
+        elif event["kind"] == "run" and event.get("change") == "param" and event.get("name") == "selected_node":
+            index = int(event["value"])
+            if (index if index >= 0 else None) != self.last_selection:
+                s.mcp.body("state.set", id="selected_node", value=index)
+                if index < 0:
+                    self.clear_examples()
+                else:
+                    self.fill_examples(index)
+        elif event["kind"] == "control" and event.get("control") == "page" and self.last_selection is not None:
+            s.events.complete("feature.examples", node=self.last_selection, limit=16)
+
+    def consume(self, *, tolerate_refusals=False):
         s = self.session
         queued, s.events.pending = s.events.pending, []
         for event in queued:
-            if event["kind"] == "pick" and event.get("panel") == "graph":
-                fields = event.get("fields") or {}
-                index = fields.get("index", event.get("index"))
-                if fields.get("kind") != 1:
-                    s.parameter("selected_node", -1)
-                    self.last_selection = None
-                    continue
-                s.parameter("selected_node", int(index))
-                feature = s.events.complete("feature.show", node=int(index))
-                self.last_examples = s.events.complete("feature.examples", node=int(index), limit=16)
-                s.mcp.body("state.set", id="activation_max", value=max(1e-6, feature["maximum"]))
-                self.last_selection = int(index)
-                save(s.out / "selected-examples.json", self.last_examples)
-            elif event["kind"] == "control" and event.get("control") == "page":
-                # A boundary republishes the derive resources after the app's page state changes.
-                s.events.complete("feature.examples", node=self.last_selection, limit=16) if self.last_selection is not None else None
+            try:
+                self.handle(event)
+            except Failure as exc:
+                if not tolerate_refusals:
+                    raise
+                with (s.out / "bridge-errors.jsonl").open("a", encoding="utf-8") as log:
+                    log.write(json.dumps({"event": event, "error": str(exc)}) + "\n")
 
     def select(self, row):
         self.session.mcp.body("selection.set", panel="graph", program="attribution", item=row)
@@ -350,7 +383,7 @@ class Bridge:
         while self.session.live():
             try:
                 self.session.events.wait(1)
-                self.consume()
+                self.consume(tolerate_refusals=True)
             except Failure:
                 if not self.session.live():
                     return
@@ -379,6 +412,7 @@ def acceptance(session, args, result):
     s.bridge = bridge
     examples = bridge.select(selected["index"])
     programs(s, examples=True)
+    bridge.examples_present = True
     s.ready_programs(["example_tokens"])
     s.events.complete("feature.examples", node=selected["index"], limit=16)
     first_page = s.read("example_tokens", "rows")

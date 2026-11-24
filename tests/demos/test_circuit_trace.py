@@ -153,6 +153,39 @@ def test_visible_bridge_continues_after_first_event():
     assert bridge.consume.call_count == 2
 
 
+def test_bridge_reconciles_run_selection_without_parameter_feedback(tmp_path):
+    from unittest.mock import Mock, patch
+    session = Mock(out=tmp_path)
+    bridge = driver.Bridge(session)
+    bridge.last_selection = 10
+    bridge.examples_present = True
+    session.events.pending = [{"kind": "run", "change": "param", "name": "selected_node", "value": -1}]
+    bridge.consume()
+    session.mcp.body.assert_any_call("state.set", id="selected_node", value=-1)
+    session.mcp.body.assert_any_call("program.remove", id="example_tokens")
+    assert bridge.last_selection is None and bridge.examples_present is False
+    session.events.pending = [{"kind": "run", "change": "param", "name": "selected_node", "value": 12}]
+    session.events.complete.side_effect = [{"maximum": 2}, {"examples": []}, {"examples": []}]
+    with patch.object(driver, "programs") as programs:
+        bridge.consume()
+    session.parameter.assert_not_called()
+    programs.assert_called_once_with(session, examples=True)
+    session.ready_programs.assert_called_once_with(["example_tokens"])
+    session.mcp.body.assert_any_call("state.set", id="selected_node", value=12)
+    assert bridge.last_selection == 12 and bridge.examples_present is True
+
+
+def test_visible_bridge_records_refusal_and_consumes_next_event(tmp_path):
+    from unittest.mock import Mock
+    session = Mock(out=tmp_path)
+    session.events.pending = [{"kind": "pick", "panel": "graph"}, {"kind": "control", "control": "page"}]
+    bridge = driver.Bridge(session)
+    bridge.handle = Mock(side_effect=[Failure("stale feature"), None])
+    bridge.consume(tolerate_refusals=True)
+    assert bridge.handle.call_count == 2
+    assert json.loads((tmp_path / "bridge-errors.jsonl").read_text())["error"] == "stale feature"
+
+
 def test_publication_wait_rejects_a_stale_step():
     from unittest.mock import Mock
     session = driver.Session.__new__(driver.Session)
