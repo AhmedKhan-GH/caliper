@@ -140,6 +140,9 @@ public:
     // Sends {op: "set", name, value}. The value applies at the script's next
     // step; until then state() lists it as the parameter's pending value.
     virtual Error set_param(const std::string& name, const nlohmann::json& value) = 0;
+    // Text drafts read refusals and session changes without another request.
+    virtual std::string param_error(const std::string&) const { return {}; }
+    virtual std::string control_session() const { return {}; }
     // Sends {op: "run", name}. The script runs the action at its next step.
     virtual Error run_action(const std::string& name) = 0;
     // Sends {op: "pause"}, {op: "resume"} or {op: "step", count}.

@@ -239,7 +239,9 @@ std::string run_state_text(const Controls& c) {
 
 // ---- RunControls ------------------------------------------------------------------------------
 void RunControls::reset() {
+    const uint32_t epoch = text_epoch_ + 1;
     *this = RunControls();
+    text_epoch_ = epoch;
 }
 
 void RunControls::sync_interpretation_session(Source* src) {
@@ -247,12 +249,17 @@ void RunControls::sync_interpretation_session(Source* src) {
     const std::string session = src ? src->label() : std::string();
     const uint64_t start = src ? src->start_unix_ms() : 0;
     const int32_t pid = src ? src->producer_pid() : 0;
-    if (src != src_ || session.empty() || session != interpretation_session_ ||
+    if (src != src_ || session != interpretation_session_ ||
         start != interpretation_start_ || pid != interpretation_pid_) {
         interpretations_.clear();
         text_edits_.clear();
+        param_errors_.clear();
+        locals_.clear();
+        have_ = false;
+        controls_ = Controls{};
         ++text_epoch_;
     }
+    if (session.empty()) interpretations_.clear();
     interpretation_session_ = session;
     interpretation_start_ = start;
     interpretation_pid_ = pid;
@@ -312,7 +319,10 @@ void RunControls::update(Source* src, uint64_t now_ns) {
     // A value is confirmed by a CONTROLS that arrived after its `ok`.
     for (auto it = locals_.begin(); it != locals_.end();) {
         Local& l = it->second;
-        if (l.unsent && now_ns_ - l.sent_ns >= kSetIntervalNs) send_set(it->first, l);
+        if (l.unsent && now_ns_ - l.sent_ns >= kSetIntervalNs && !send_set(it->first, l)) {
+            it = locals_.erase(it);
+            continue;
+        }
         if (!l.unsent && l.replied && controls_.version > l.reply_controls) it = locals_.erase(it);
         else ++it;
     }
@@ -441,6 +451,7 @@ bool RunControls::set(const std::string& name, const Json& value) {
     const std::string why = why_not(CALIPER_NET_OP_SET);
     if (!why.empty()) {
         refuse("set " + name, why);
+        param_errors_[name] = notice_.text;
         return false;
     }
     // The value the control already shows (a slider held still, the edit
@@ -448,30 +459,34 @@ bool RunControls::set(const std::string& name, const Json& value) {
     const auto it = locals_.find(name);
     if (it == locals_.end()) {
         for (const ControlParam& p : controls_.params)
-            if (p.name == name && same_value(shown_value(p), value)) return true;
+            if (p.name == name && same_value(shown_value(p), value) && !param_errors_.count(name)) return true;
     } else if (!it->second.unsent && same_value(it->second.value, value)) {
         return true;
     }
     Local& l = locals_[name];
     l.value = value;
     l.unsent = true;
-    if (now_ns_ - l.sent_ns >= kSetIntervalNs || l.request == 0) send_set(name, l);
+    param_errors_.erase(name);
+    if ((now_ns_ - l.sent_ns >= kSetIntervalNs || l.request == 0) && !send_set(name, l)) {
+        locals_.erase(name);
+        return false;
+    }
     return true;
 }
 
-void RunControls::send_set(const std::string& name, Local& l) {
+bool RunControls::send_set(const std::string& name, Local& l) {
     const uint32_t id = send(CALIPER_NET_OP_SET, name, l.value, 0);
     l.unsent = false;
     l.sent_ns = now_ns_;
     if (!id) {
-        l.replied = true;   // dropped at the next update
-        l.reply_controls = 0;
-        l.request = 0;
-        return;
+        param_errors_[name] = notice_.text;
+        return false;
     }
+    param_errors_.erase(name);
     ++counts_.sets;
     l.request = id;
     l.replied = false;
+    return true;
 }
 
 caliper_net::Json RunControls::interpret(const std::string& method, const Json& params, uint32_t request) {
@@ -561,7 +576,10 @@ void RunControls::on_reply(const ControlReply& r) {
             if (l.request != r.request_id) continue;
             if (r.status == CALIPER_NET_STATUS_ERROR) {
                 refuse("set " + it->first, reply_error(r));
-                if (!l.unsent) locals_.erase(it);
+                if (!l.unsent) {
+                    param_errors_[it->first] = notice_.text;
+                    locals_.erase(it);
+                }
                 return;
             }
             if (!r.value.is_null()) l.value = r.value;   // the clamped value
@@ -600,6 +618,11 @@ Json RunControls::shown_value(const ControlParam& p) const {
     return p.value;
 }
 
+std::string RunControls::param_error(const std::string& name) const {
+    const auto it = param_errors_.find(name);
+    return it == param_errors_.end() ? std::string() : it->second;
+}
+
 void RunControls::draw_text_param(const ControlParam& p) {
     ImGui::PushID(static_cast<int>(text_epoch_));
     const ImGuiID key = ImGui::GetID("##v");
@@ -623,9 +646,11 @@ void RunControls::draw_text_param(const ControlParam& p) {
     if (done && !valid) refuse("set " + p.name, "Text accepts at most 4096 UTF-8 bytes. The draft was retained.");
     if (done && valid && why_not(CALIPER_NET_OP_SET).empty()) {
         const Json value{buffer};
-        if (value != shown) set(p.name, value);
+        if (value != shown || !param_error(p.name).empty()) set(p.name, value);
     }
-    if (!ImGui::IsItemActive() && valid) text_edits_.erase(it);
+    const Json accepted = p.pending.is_null() ? p.value : p.pending;
+    if (!ImGui::IsItemActive() && valid && !param_waiting(p) && param_error(p.name).empty() &&
+        accepted == Json(buffer)) text_edits_.erase(it);
     ImGui::PopID();
 }
 
@@ -1153,6 +1178,18 @@ RunLink::ActionResult AttachmentRunLink::action_result(const std::string& name) 
     const RunControls::Result* r = rc ? rc->action_result(name) : nullptr;
     if (!r) return {};
     return ActionResult{r->text, r->error, r->at_ns};
+}
+
+std::string AttachmentRunLink::param_error(const std::string& name) const {
+    const RunControls* rc = att_.controls();
+    return rc ? rc->param_error(name) : std::string();
+}
+
+std::string AttachmentRunLink::control_session() const {
+    const auto& status = att_.status();
+    const RunControls* rc = att_.controls();
+    return status.session + "/" + std::to_string(status.start_unix_ms) + "/" + std::to_string(status.pid) +
+           "/" + std::to_string(rc ? rc->text_epoch() : 0);
 }
 
 }  // namespace caliper_live

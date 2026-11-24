@@ -1070,6 +1070,13 @@ struct FakeLink final : caliper_live::RunLink {
     };
     std::vector<Sent> sent;
     std::map<std::string, ActionResult> results;
+    std::map<std::string, std::string> param_errors;
+    std::string session = "first";
+    std::string param_error(const std::string& name) const override {
+        const auto it = param_errors.find(name);
+        return it == param_errors.end() ? std::string() : it->second;
+    }
+    std::string control_session() const override { return session; }
 
     FakeLink() {
         ctl.run_state = "running";
@@ -1232,6 +1239,25 @@ TEST_CASE("app session: the run control sends CONTROL requests and maps the refu
     e = rc.pause(cb::RunPauseOp::resume, 0);
     CHECK(e.code == cb::kRunControlNotAllowed);
     CHECK(e.message == "The stream takes no control.");
+}
+
+TEST_CASE("app session: the run control exposes parameter refusals and session changes") {
+    caliper_host::AppRunControl rc;
+    FakeLink link;
+    CHECK(rc.param_error("prompt").empty());
+    rc.set_link(&link);
+    CHECK(rc.set_param("prompt", "draft").ok());
+    link.param_errors["prompt"] = "bad_value: refused";
+    CHECK(rc.param_error("prompt") == "bad_value: refused");
+    CHECK(rc.param_error("other").empty());
+    const auto session = rc.control_session();
+    link.session = "second";
+    link.param_errors.clear();
+    CHECK(rc.control_session() != session);
+    CHECK(rc.param_error("prompt").empty());
+    CHECK(link.sent.size() == 1);
+    rc.set_link(nullptr);
+    CHECK(rc.control_session().empty());
 }
 
 TEST_CASE("app session: the run control turns CONTROLS and action results into run events") {

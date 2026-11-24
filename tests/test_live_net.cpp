@@ -3644,8 +3644,9 @@ TEST_CASE("live/controls: a session switch discards the active text draft") {
     ui.focus();
     ImGui::GetIO().AddInputCharactersUTF8("old draft"); ui.frame();
     REQUIRE(ui.source.sent.empty());
-    ui.source.session = "other";
-    ++ui.source.ctl.version;
+    SUBCASE("session switch with the same controls version") { ui.source.session = "other"; }
+    SUBCASE("reset") { ui.controls.reset(); }
+    SUBCASE("detach") { ui.controls.update(nullptr, ui.source.clock_ns); }
     ui.source.ctl.params.front().value = Json("new prompt");
     ui.frame();
     ui.enter();
@@ -3660,12 +3661,88 @@ TEST_CASE("live/controls: a session switch discards the active text draft") {
 TEST_CASE("live/controls: full text values survive focus and commit unchanged") {
     std::string value;
     for (unsigned i = 0; i < 2048; ++i) value += "\xc3\xa9";
+    SUBCASE("UTF-8 byte limit") {}
+    SUBCASE("existing multiline value") { value = "first line\nsecond line"; }
     ControlsUi ui(value);
     ui.focus();
     ui.enter();
     ui.click(30, 110);
     CHECK(ui.source.sent.empty());
     CHECK(ui.source.ctl.params.front().value.as_string() == value);
+}
+
+TEST_CASE("live/controls: text drafts survive local and producer refusals") {
+    ControlsUi ui;
+    bool asynchronous = false;
+    SUBCASE("local refusal") { ui.source.send_failure = "queue full"; }
+    SUBCASE("producer refusal") { asynchronous = true; }
+    ui.focus();
+    ImGui::GetIO().AddInputCharactersUTF8("A caf\xc3\xa9");
+    ui.frame();
+    ui.enter();
+    if (asynchronous) {
+        REQUIRE(ui.source.sent.size() == 1);
+        ui.source.reply(1, CALIPER_NET_STATUS_ERROR, {}, CALIPER_NET_ERR_BAD_VALUE);
+    }
+    ui.click(30, 110);
+    CHECK(ui.controls.notice().error);
+    CHECK_FALSE(ui.controls.param_error("prompt").empty());
+    CHECK_FALSE(ui.controls.param_waiting(ui.controls.state().params.front()));
+    ui.source.ctl.params.front().value = Json("A caf\xc3\xa9");
+    ++ui.source.ctl.version;
+    ui.frame();
+    ui.source.ctl.params.front().value = Json("background");
+    ++ui.source.ctl.version;
+    ui.frame();
+    ui.focus();
+    REQUIRE(ImGui::GetCurrentContext()->InputTextState.TextA.Data);
+    CHECK(std::string(ImGui::GetCurrentContext()->InputTextState.TextA.Data) == "A caf\xc3\xa9");
+    ui.source.send_failure.clear();
+    ui.enter();
+    REQUIRE(ui.source.sent.size() == (asynchronous ? 2 : 1));
+    CHECK(ui.source.sent.back().value.as_string() == "A caf\xc3\xa9");
+    CHECK(ui.controls.param_error("prompt").empty());
+    ui.click(30, 110);
+    ui.focus();
+    ui.enter();
+    CHECK(ui.source.sent.size() == (asynchronous ? 2 : 1));
+    ui.click(30, 110);
+    ui.source.reply(ui.source.sent.back().id, CALIPER_NET_STATUS_OK, Json("A caf\xc3\xa9"));
+    ui.frame();
+    ui.source.ctl.params.front().pending = Json("A caf\xc3\xa9");
+    ++ui.source.ctl.version;
+    ui.frame();
+    ui.source.ctl.params.front().pending = {};
+    ui.source.ctl.params.front().value = Json("accepted then changed");
+    ++ui.source.ctl.version;
+    ui.frame();
+    ui.focus();
+    REQUIRE(ImGui::GetCurrentContext()->InputTextState.TextA.Data);
+    CHECK(std::string(ImGui::GetCurrentContext()->InputTextState.TextA.Data) == "accepted then changed");
+}
+
+TEST_CASE("live/controls: a local send refusal returns failure without a pending value") {
+    ScriptedSource source;
+    source.controls_now(CALIPER_NET_RUN_RUNNING, 0.001);
+    source.send_failure = "queue full";
+    caliper_live::RunControls controls;
+    controls.update(&source, kMs);
+    CHECK_FALSE(controls.set("lr", Json(0.02)));
+    CHECK_FALSE(controls.param_waiting(controls.state().params.front()));
+    CHECK(controls.param_error("lr") == "set lr: queue full");
+}
+
+TEST_CASE("live/controls: unnamed sources retain text drafts across frames") {
+    ControlsUi ui;
+    ui.source.session.clear();
+    ui.frame();
+    ui.focus();
+    ImGui::GetIO().AddInputCharactersUTF8("draft");
+    ui.frame();
+    ui.frame();
+    ui.enter();
+    REQUIRE(ui.source.sent.size() == 1);
+    CHECK(ui.source.sent.back().value.as_string() == "draft");
 }
 
 TEST_CASE("live/controls: reply queries stay within their admitted method and run") {
