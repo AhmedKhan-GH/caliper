@@ -22,15 +22,30 @@ def memory(monkeypatch):
     return guard
 
 
+class FixtureConfig(SimpleNamespace):
+    @classmethod
+    def from_dict(cls, data):
+        return cls(**data)
+
+    def to_dict(self):
+        return vars(self).copy()
+
+
+class FixtureHFModel(torch.nn.Linear):
+    def __init__(self, config):
+        super().__init__(3, 2)
+        self.config = config
+        self.variance_epsilon = config.rms_norm_eps
+        self.register_buffer("persistent", torch.arange(3, dtype=torch.float32))
+        self.register_buffer("transient", torch.arange(2, dtype=torch.float32), persistent=False)
+
+
 def hf_model():
+    config = FixtureConfig(model_type="qwen3_5_text", _name_or_path=model_load.MODEL_ID,
+                           _commit_hash=model_load.MODEL_REVISION, rms_norm_eps=1e-6)
     with torch.random.fork_rng(devices=[]):
         torch.manual_seed(19)
-        model = torch.nn.Linear(3, 2)
-    model.config = SimpleNamespace(model_type="qwen3_5_text", _name_or_path=model_load.MODEL_ID,
-                                   _commit_hash=model_load.MODEL_REVISION)
-    model.register_buffer("persistent", torch.arange(3, dtype=torch.float32))
-    model.register_buffer("transient", torch.arange(2, dtype=torch.float32), persistent=False)
-    return model
+        return FixtureHFModel(config).eval()
 
 
 def change_weights(model, change):
@@ -106,6 +121,75 @@ def test_provenance_belongs_to_one_model_instance(memory):
         dictionary.model_identity(model)
 
 
+@pytest.mark.parametrize("field", ["variance_epsilon", "config_epsilon", "training"])
+def test_trusted_forward_mutation_refuses_dictionary_before_file_access(memory, field):
+    model = hf_model()
+    dictionary._record_verified_hf_load(model, memory=memory)
+    if field == "variance_epsilon":
+        model.variance_epsilon = .1
+    elif field == "config_epsilon":
+        model.config.rms_norm_eps = .1
+    else:
+        model.train()
+    with pytest.raises(ValueError, match="forward settings changed"):
+        dictionary.load_dictionary("unused", model=model)
+
+
+@pytest.mark.parametrize("field", ["norm", "config", "activation", "scaling", "rotary", "routing"])
+def test_external_forward_settings_use_checkpoint_before_admission(tmp_path, memory, monkeypatch, field):
+    import safetensors
+    from .test_trace import qwen_for_trace
+
+    model = qwen_for_trace(layers=4)
+    model.config._name_or_path = model_load.MODEL_ID
+    model.config._commit_hash = model_load.MODEL_REVISION
+    snapshot = local_snapshot(tmp_path, model)
+    if field == "norm":
+        model.model.layers[0].linear_attn.norm.variance_epsilon = .1
+    elif field == "config":
+        model.config.rms_norm_eps = .1
+    elif field == "activation":
+        model.model.layers[0].mlp.act_fn = torch.nn.ReLU()
+    elif field == "scaling":
+        model.model.layers[3].self_attn.scaling = .1
+    elif field == "rotary":
+        model.model.rotary_emb.mrope_section = [1, 1, 1]
+    else:
+        model.model.layers[0].block_type = "full_attention"
+    monkeypatch.setattr(safetensors, "safe_open", lambda *_a, **_k: pytest.fail("header access ran"))
+    with pytest.raises(ValueError, match="forward settings differ from the local checkpoint"):
+        dictionary.verify_hf_model(model, snapshot)
+    assert model not in dictionary._VERIFIED_MODELS
+
+
+@pytest.mark.parametrize("backend", ["eager", "sdpa"])
+def test_supported_backend_preserves_checkpoint_identity(tmp_path, memory, backend):
+    from .test_trace import qwen_for_trace
+
+    model = qwen_for_trace(layers=1)
+    model.config._name_or_path = model_load.MODEL_ID
+    model.config._commit_hash = model_load.MODEL_REVISION
+    snapshot = local_snapshot(tmp_path, model)
+    model.config._attn_implementation = backend
+    identity = dictionary.verify_hf_model(model, snapshot)
+    model.config._attn_implementation = "sdpa" if backend == "eager" else "eager"
+    assert dictionary.model_identity(model) == identity
+
+
+def test_trusted_qwen_mutation_refuses_new_trace(tmp_path, memory):
+    from .test_trace import qwen_for_trace, random_dictionary
+    from caliper.interp._trace import Tracer
+
+    model = qwen_for_trace(layers=1)
+    model.config._name_or_path = model_load.MODEL_ID
+    model.config._commit_hash = model_load.MODEL_REVISION
+    dictionary._record_verified_hf_load(model, memory=memory)
+    source = random_dictionary(model)
+    model.model.layers[0].linear_attn.norm.variance_epsilon = .1
+    with pytest.raises(ValueError, match="forward settings changed"):
+        Tracer(model, None, source)
+
+
 def test_unverified_model_refusal_precedes_content_transfer(monkeypatch):
     model = hf_model()
     monkeypatch.setattr(dictionary, "_UNVERIFIED_CPU_BYTES", 1)
@@ -178,6 +262,7 @@ def local_snapshot(tmp_path, model, *, prefix=""):
     snapshot.mkdir(parents=True)
     save_file({prefix + name: value.detach().clone() for name, value in model.state_dict().items()},
               snapshot / "model.safetensors")
+    (snapshot / "config.json").write_text(json.dumps(model.config.to_dict()))
     return snapshot
 
 
@@ -196,14 +281,19 @@ def test_external_snapshot_verification_and_subsequent_change(tmp_path, memory, 
         dictionary.model_identity(model)
 
 
+class FixtureTextModel(torch.nn.Module):
+    def __init__(self, config):
+        super().__init__()
+        self.config = config
+        self.model = torch.nn.Module()
+        self.model.embed_tokens = torch.nn.Embedding(4, 2, dtype=torch.bfloat16)
+        self.model.norm = torch.nn.Linear(2, 2, bias=False, dtype=torch.bfloat16)
+        self.lm_head = torch.nn.Linear(2, 4, bias=False, dtype=torch.bfloat16)
+        self.lm_head.weight = self.model.embed_tokens.weight
+
+
 def text_subset_snapshot(tmp_path):
-    model = torch.nn.Module()
-    model.config = hf_model().config
-    model.model = torch.nn.Module()
-    model.model.embed_tokens = torch.nn.Embedding(4, 2, dtype=torch.bfloat16)
-    model.model.norm = torch.nn.Linear(2, 2, bias=False, dtype=torch.bfloat16)
-    model.lm_head = torch.nn.Linear(2, 4, bias=False, dtype=torch.bfloat16)
-    model.lm_head.weight = model.model.embed_tokens.weight
+    model = FixtureTextModel(hf_model().config).eval()
     state = {"model.language_model." + name: value.detach().clone()
              for name, value in model.model.state_dict().items()}
     _, excluded = dictionary._checkpoint_subset(
@@ -213,6 +303,7 @@ def text_subset_snapshot(tmp_path):
     snapshot = tmp_path / "models--Qwen--Qwen3.5-0.8B" / "snapshots" / model_load.MODEL_REVISION
     snapshot.mkdir(parents=True)
     save_file(state, snapshot / "model.safetensors")
+    (snapshot / "config.json").write_text(json.dumps({"text_config": model.config.to_dict()}))
     return model.float(), snapshot, state
 
 

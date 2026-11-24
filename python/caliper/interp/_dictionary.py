@@ -14,6 +14,7 @@ from torch import nn
 from torch.nn import functional as F
 
 from ._memory import CleanStop, MemoryGuard, autorelease_scope
+from ._forward_identity import checkpoint_settings, forward_settings
 
 
 _WEIGHTS = ("W_enc", "b_enc", "W_dec", "b_dec")
@@ -33,6 +34,7 @@ _VERIFIED_MODELS = weakref.WeakKeyDictionary()
 class _VerifiedWeights:
     identity: str
     digest: str
+    settings: dict
     memory: object
 
 
@@ -144,15 +146,16 @@ def _record_verified_hf_load(model, *, memory):
     """Record a baseline only after the trusted loader verifies complete weights."""
     identity = _hf_identity(model.config)
     digest = _hf_digest(model, memory=memory)
-    _VERIFIED_MODELS[model] = _VerifiedWeights(identity, digest, memory)
+    settings = forward_settings(model, tensor_hash=lambda state: _state_hash(state, memory=memory))
+    _VERIFIED_MODELS[model] = _VerifiedWeights(identity, digest, settings, memory)
 
 
 def model_identity(model, *, memory_limit_gb=None):
     """Return a verified checkpoint identity or a bounded CPU content identity.
 
     Configuration fields never prove weights. A trusted local load supplies the
-    baseline. Every later check reads all weights in fixed-size chunks, including
-    changes through ``.data`` aliases. A device or large external model requires
+    baseline for weights and forward settings. Every later check reads all weights
+    in fixed-size chunks, including changes through ``.data`` aliases. A device or large external model requires
     ``verify_hf_model`` before it can use a pinned HF dictionary.
     """
     config = getattr(model, "config", None)
@@ -163,6 +166,10 @@ def model_identity(model, *, memory_limit_gb=None):
         raise ValueError("HF configuration does not verify model weights")
     verified = _VERIFIED_MODELS.get(model)
     if verified is not None:
+        settings = forward_settings(model, tensor_hash=lambda state: _state_hash(
+            state, memory=verified.memory, limit_gb=memory_limit_gb))
+        if settings != verified.settings:
+            raise ValueError("dictionary model identity mismatch: verified checkpoint forward settings changed")
         if (identity != verified.identity
                 or _hf_digest(model, memory=verified.memory, limit_gb=memory_limit_gb) != verified.digest):
             raise ValueError("dictionary model identity mismatch: verified checkpoint weights changed")
@@ -174,7 +181,8 @@ def model_identity(model, *, memory_limit_gb=None):
             or sum(value.numel() * value.element_size() for value in tensors) > _UNVERIFIED_CPU_BYTES):
         raise ValueError("unverified HF weights: call verify_hf_model with the local checkpoint first")
     content = _hf_digest(model)
-    return "sha256:" + hashlib.sha256((identity + content).encode("utf-8")).hexdigest()
+    settings = json.dumps(forward_settings(model, tensor_hash=_state_hash), sort_keys=True)
+    return "sha256:" + hashlib.sha256((identity + content + settings).encode("utf-8")).hexdigest()
 
 
 def _checkpoint_slices(shape, maximum, prefix=()):
@@ -230,7 +238,8 @@ def verify_hf_model(model, snapshot, *, key_mapping=None, checkpoint_subset=None
     pinned Qwen3.5-0.8B revision. It supplies the prefix mapping and excludes
     exactly 153 vision and 15 MTP keys. All other unexpected keys remain errors.
     Tied parameters can share one checkpoint entry. Nonpersistent buffers form
-    part of the baseline for subsequent checks.
+    part of the baseline for subsequent checks. Forward settings must match an
+    evaluation-mode reference from the local config. Eager and SDPA are supported.
 
     Converted slices and CPU transfers stay within fixed chunk limits. The
     function returns the verified HF identity and records private provenance for
@@ -254,6 +263,16 @@ def verify_hf_model(model, snapshot, *, key_mapping=None, checkpoint_subset=None
         raise ValueError("checkpoint verification requires one model device")
     memory = MemoryGuard(memory_limit_gb, next(iter(devices)))
     _hash_admission(memory)
+    with (snapshot / "config.json").open("rb") as source:
+        config_bytes = source.read(1024 * 1024 + 1)
+    if len(config_bytes) > 1024 * 1024:
+        raise ValueError("checkpoint config exceeds the metadata byte limit")
+    config_data = json.loads(config_bytes)
+    settings = checkpoint_settings(model, config_data, tensor_hash=_state_hash)
+    current_settings = lambda: forward_settings(
+        model, tensor_hash=lambda state: _state_hash(state, memory=memory))
+    if current_settings() != settings:
+        raise ValueError("model forward settings differ from the local checkpoint")
     mapping, excluded = _checkpoint_subset(model, identity, checkpoint_subset, key_mapping)
     if (not isinstance(mapping, dict) or any(not isinstance(k, str) or not k
             or not isinstance(v, str) for k, v in mapping.items())):
@@ -306,7 +325,9 @@ def verify_hf_model(model, snapshot, *, key_mapping=None, checkpoint_subset=None
                 del expected, actual
     if _hf_identity(model.config) != identity or _hf_digest(model, memory=memory) != before:
         raise ValueError("model weights changed during checkpoint verification")
-    _VERIFIED_MODELS[model] = _VerifiedWeights(identity, before, memory)
+    if current_settings() != settings:
+        raise ValueError("model forward settings changed during checkpoint verification")
+    _VERIFIED_MODELS[model] = _VerifiedWeights(identity, before, settings, memory)
     return identity
 
 
