@@ -74,6 +74,9 @@ The model must use evaluation mode.
 Eager and SDPA attention are supported backend choices and preserve the checkpoint identity.
 Later identity checks refuse changes to weights or forward settings, including changes before dictionary admission or tracer construction.
 
+For default Qwen3.5 text RoPE, the verifier reconstructs buffers within a fixed CPU allocation limit.
+It refuses other nonpersistent buffers and nondefault RoPE modes.
+
 Each encoder and decoder has shape `(latents, width)`.
 TopK encoding applies ReLU, then retains the largest `k` feature activations.
 Decoding multiplies the activations by the decoder and adds the decoder bias.
@@ -97,6 +100,10 @@ The manifest records the source and partition rules.
 A pinned local dataset manifest can identify the staged Parquet files.
 Without that manifest, the tools use the specifically approved public dataset stream at the fixed revision above.
 This dataset stream can require network access. Local model files do not imply a local dataset source.
+
+Local Parquet input supports flat UTF-8 text with uncompressed or SNAPPY pages.
+Each decode uses one row and checks process and host memory.
+Other codecs and unbounded decode units are refused before data allocation.
 
 The preparation commands below use local resource folders.
 Each full job requires an external resource wrapper, a heavy slot, and an exclusive model slot.
