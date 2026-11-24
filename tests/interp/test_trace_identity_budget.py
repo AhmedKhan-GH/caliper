@@ -89,3 +89,28 @@ def test_direct_frozen_path_checks_supplied_guard_before_model_hash(monkeypatch)
     monkeypatch.setattr(torch.Tensor, "to", lambda *a, **k: pytest.fail("hash copy preceded admission"))
     with pytest.raises(CleanStop, match="model identity allocation"):
         _frozen.FrozenPath(model, torch.tensor([[1, 2]]), dictionary, guard=memory)
+
+
+def test_model_hash_chunks_keep_deadline_callbacks_without_forced_process_reads(monkeypatch):
+    from caliper.interp._memory import MemoryGuard
+    state = SimpleNamespace(reads=0)
+    def resident():
+        state.reads += 1
+        return 1_000
+    memory = MemoryGuard(12, "cpu", resident=resident, footprint=lambda: 1_000,
+                         peak=lambda: 1_000, driver=lambda: 0, pressure=lambda: 80, clock=lambda: 0.)
+    monkeypatch.setattr(_frozen, "ProcessMemoryGuard", lambda *a, **kw: memory)
+    model, tokenizer, dictionary = resources()
+    tracer = _trace.Tracer(model, tokenizer, dictionary)
+    results = []
+    for size in (256, 1024):
+        monkeypatch.setattr(_dictionary, "_HASH_CHUNK_BYTES", size)
+        state.reads = 0
+        stages = []
+        def check(stage):
+            stages.append(stage)
+            tracer._dictionary_check(stage)
+        _frozen._validate_dictionary(model, dictionary, check)
+        results.append((state.reads, stages.count("model_identity")))
+    assert results[0][0] == results[1][0] > 0
+    assert results[0][1] > results[1][1] > 2

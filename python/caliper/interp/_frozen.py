@@ -140,7 +140,7 @@ def _validate_dictionary(model, dictionary, check=_no_check, *, memory=None):
     check("dictionary admission")
     def identity_check(stage):
         # The caller reserves hash scratch and checks its deadline at each chunk.
-        check("dictionary admission")
+        check("model_identity")
     data = dictionary.metadata
     if not isinstance(data, dict) or data.get("model_hash") != model_identity(model, memory=memory, check=identity_check):
         raise ValueError("dictionary model identity mismatch")

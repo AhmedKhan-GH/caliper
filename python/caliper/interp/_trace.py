@@ -15,7 +15,7 @@ from ._families import model_family
 from ._frozen import (FrozenPath, MemoryGuard, _validate_dictionary, _validate_ablation_points,
                       _validate_intervention_positions, _finite_max, _require_finite, _no_check,
                       _ENCODER_BLOCK_ELEMENTS)
-from ._memory import BudgetMemory, allocation_bytes, autorelease_scope, family_memory_limit
+from ._memory import BudgetMemory, CleanStop, allocation_bytes, autorelease_scope, family_memory_limit
 from ._graph import Graph, bounded_integer
 from ._influence import influence
 from ._labels import token_label
@@ -453,6 +453,10 @@ class Tracer:
     def _dictionary_check(self, stage):
         if stage == "dictionary admission":
             self.guard.reserve(stage, 4 * _HASH_CHUNK_BYTES)
+        elif stage == "model_identity":
+            current = self.guard._check_interval(stage)
+            if current + 4 * _HASH_CHUNK_BYTES > self.guard.limit:
+                raise CleanStop("model identity allocation exceeds the trace memory limit")
         elif stage.startswith("finite block"):
             self.guard._guard.check(stage, force=False)
         else:
