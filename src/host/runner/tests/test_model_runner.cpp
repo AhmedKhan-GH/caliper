@@ -61,6 +61,7 @@ TEST_CASE("runner: native interpretation validation and protocol errors need no 
     REQUIRE(connection.open("ws://127.0.0.1:" + std::to_string(server.port()) +
         "/v3/stream?token=native_fixture_0123456789", &why));
     caliper_net::ConnId peer = 0;
+    std::uint32_t pong = 0;
     std::vector<wire::Control> received;
     const auto send = [&](const wire::Message& message) {
         std::vector<std::uint8_t> bytes;
@@ -83,6 +84,7 @@ TEST_CASE("runner: native interpretation validation and protocol errors need no 
                 welcome.control = true;
                 send(welcome);
             } else if (auto* control = std::get_if<wire::Control>(&message)) received.push_back(*control);
+            else if (auto* reply = std::get_if<wire::Pong>(&message)) pong = reply->nonce;
         }
         connection.poll(5);
     };
@@ -91,6 +93,11 @@ TEST_CASE("runner: native interpretation validation and protocol errors need no 
         REQUIRE(ready());
     };
     until([&] { return !connection.session().empty(); });
+    const auto raw_reply = [&](const caliper_net::Json& meta) {
+        std::vector<std::uint8_t> bytes;
+        REQUIRE(wire::encode_frame(CALIPER_NET_MSG_CONTROL_REPLY, meta, {}, &bytes));
+        REQUIRE(server.send(peer, bytes.data(), bytes.size()));
+    };
     std::string prompt;
     for (unsigned i = 0; i < 2048; ++i) prompt += "\xc3\xa9";
     for (const auto& invalid : {std::string("a\0b", 3), prompt + "\xc3\xa9", std::string("\xc3\x28", 2)}) {
@@ -109,6 +116,45 @@ TEST_CASE("runner: native interpretation validation and protocol errors need no 
     REQUIRE(received.size() == 1);
     CHECK(received.front().request_id == id);
     CHECK(received.front().interpretation.find("params")->find("prompt")->as_string() == prompt);
+    std::size_t expected_received = 1;
+    SUBCASE("text parameters require the producer capability") {
+        expected_received = 3;
+        wire::Controls controls;
+        controls.run = caliper_net::Json::object();
+        controls.run.set("state", "running");
+        controls.run.set("step", 1);
+        auto parameter = caliper_net::Json::object();
+        parameter.set("name", "prompt");
+        parameter.set("type", "text");
+        parameter.set("value", "initial");
+        controls.params.push(parameter);
+        send(controls);
+        until([&] { return !connection.controls().is_null(); });
+        for (const auto& value : {std::string("short"), std::string(), prompt}) {
+            CHECK(connection.send_control("set", "prompt", value, 0, &why) == 0);
+            CHECK(why.find("text_params") != std::string::npos);
+        }
+        const auto choice = connection.send_control("set", "choice", "line\n\tbreak", 0, &why);
+        REQUIRE(choice != 0);
+        until([&] { return received.size() == 2; });
+        wire::Welcome welcome;
+        welcome.role = CALIPER_NET_ROLE_PRODUCER;
+        welcome.session = wire::Identity{"native-fixture", "fixture.py", 1, 1}.to_json();
+        welcome.capabilities = {CALIPER_NET_CAP_INTERPRETATION, CALIPER_NET_CAP_CONTROLS, CALIPER_NET_CAP_TEXT_PARAMS};
+        welcome.control = true;
+        send(welcome);
+        send(wire::Ping{19});
+        until([&] { return pong == 19; });
+        REQUIRE(connection.send_control("set", "prompt", prompt, 0, &why) != 0);
+        until([&] { return received.size() == 3; });
+        CHECK(received.back().value.as_string() == prompt);
+        wire::Error error;
+        error.in_reply_to = CALIPER_NET_MSG_CONTROL;
+        error.request_id = id;
+        error.code = CALIPER_NET_ERR_BAD_REQUEST;
+        error.message = "The fixture ended this request.";
+        send(error);
+    }
     SUBCASE("CONTROL ERROR") {
         wire::Error error;
         error.in_reply_to = CALIPER_NET_MSG_CONTROL;
@@ -117,26 +163,45 @@ TEST_CASE("runner: native interpretation validation and protocol errors need no 
         error.message = "The fixture refused this request.";
         send(error);
     }
-    SUBCASE("decoder ERROR without a request ID") {
-        wire::Error error;
-        error.code = CALIPER_NET_ERR_BAD_REQUEST;
-        error.message = "The fixture decoder refused the request.";
-        send(error);
-    }
     SUBCASE("malformed CONTROL_REPLY") {
         auto meta = caliper_net::Json::object();
         meta.set("request_id", id); meta.set("op", "interpret"); meta.set("status", "ok");
-        // Send the missing result through the decoder without message validation at the encoder.
-        std::vector<std::uint8_t> bytes;
-        REQUIRE(wire::encode_frame(CALIPER_NET_MSG_CONTROL_REPLY, meta, {}, &bytes));
-        REQUIRE(server.send(peer, bytes.data(), bytes.size()));
+        raw_reply(meta);
     }
     SUBCASE("malformed CONTROL_REPLY without a usable request ID") {
         auto meta = caliper_net::Json::object();
         meta.set("request_id", "invalid"); meta.set("op", "interpret"); meta.set("status", "ok");
-        std::vector<std::uint8_t> bytes;
-        REQUIRE(wire::encode_frame(CALIPER_NET_MSG_CONTROL_REPLY, meta, {}, &bytes));
-        REQUIRE(server.send(peer, bytes.data(), bytes.size()));
+        raw_reply(meta);
+    }
+    SUBCASE("unrelated errors preserve the pending request") {
+        for (const auto* op : {"set", "run", "pause", "intervene"}) {
+            for (const auto& request : {caliper_net::Json(id), caliper_net::Json("invalid"), caliper_net::Json()}) {
+                auto meta = caliper_net::Json::object();
+                if (!request.is_null()) meta.set("request_id", request);
+                meta.set("op", op); meta.set("status", "invalid");
+                raw_reply(meta);
+            }
+        }
+        wire::Error error;
+        error.code = CALIPER_NET_ERR_BAD_REQUEST;
+        error.message = "The fixture refused an unrelated message.";
+        send(error);
+        error.in_reply_to = CALIPER_NET_MSG_CONTROL;
+        send(error);
+        error.request_id = id;
+        error.sub = 1;
+        send(error);
+        send(wire::Ping{17});
+        until([&] { return pong == 17; });
+        CHECK(connection.interpret("trace.run", json::object(), id) == queued);
+        error.sub.reset();
+        send(error);
+    }
+    SUBCASE("BYE ends pending queries before the socket closes") {
+        send(wire::Bye{CALIPER_NET_BYE_NORMAL, "The fixture ended."});
+        until([&] { return connection.state() == cr::RunConnection::State::closed; });
+        CHECK(connection.interpret("trace.run", json::object(), id)["error"]["code"] == "run.not_attached");
+        return;
     }
     until([&] { return connection.interpret("trace.run", json::object(), id).contains("error"); });
     const auto final = connection.interpret("trace.run", json::object(), id);
@@ -152,7 +217,7 @@ TEST_CASE("runner: native interpretation validation and protocol errors need no 
         "/v3/stream?token=native_fixture_0123456789", &why));
     until([&] { return connection.interpret("trace.run", json::object(), id).value("error", json::object())
         .value("code", std::string()) == "interpret.unknown_request"; });
-    CHECK(received.size() == 1);
+    CHECK(received.size() == expected_received);
 }
 
 namespace {

@@ -606,6 +606,25 @@ def test_free_text_capability_round_trip(mode, ctl, make_server):
         async with Viewer(server) as old:
             controls = await old.expect(w.Controls)
             assert controls.params == []
+            for request, value in enumerate(["short", "", "é" * 2048], 1):
+                await old.send(w.Control(request, "set", name="prompt", value=value))
+                answer = await old.expect(w.ControlReply)
+                assert answer.status == "error" and answer.error["code"] == w.ERR_UNSUPPORTED
+                assert answer.value is None
+                assert parameter.value == "river " * 682 + "leaf"
+    run(check())
+
+
+def test_legacy_choice_controls_keep_short_text(mode, ctl, make_server):
+    parameter = caliper.param("mode", "first", choices=["first", "line\n\tbreak"])
+    server = make_server()
+
+    async def check():
+        async with Viewer(server) as viewer:
+            await viewer.expect(w.Controls)
+            await viewer.send(w.Control(1, "set", name="mode", value="line\n\tbreak"))
+            answer = await viewer.expect(w.ControlReply)
+            assert answer.status == "ok" and parameter.value == "line\n\tbreak"
     run(check())
 
 

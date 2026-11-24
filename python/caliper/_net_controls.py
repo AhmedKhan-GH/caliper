@@ -166,6 +166,15 @@ class ControlsPort:
                                           error={"code": "interpret.unsupported",
                                                  "message": "The peer did not announce interpretation."}))
             return
+        if msg.op == _wire.OP_SET and _wire.CAP_TEXT_PARAMS not in link.caps:
+            with self.route.ctl.lock:
+                parameter = self.route.ctl.params.get(msg.name)
+                text_parameter = parameter is not None and parameter.type == _wire.PARAM_TEXT
+            if text_parameter or (isinstance(msg.value, str) and not _wire._name(msg.value)):
+                link.queue(_wire.ControlReply(msg.request_id, msg.op, _wire.STATUS_ERROR,
+                                              error={"code": _wire.ERR_UNSUPPORTED,
+                                                     "message": "The peer did not announce text_params."}))
+                return
         try:
             reply = self.route.on_control(link, msg.to_meta(), acknowledge=lambda meta:
                 self._send(link, _wire.encode_frame(_wire.MsgType.CONTROL_REPLY, meta)))

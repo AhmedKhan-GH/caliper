@@ -1184,6 +1184,8 @@ class Control(_Msg):
     interpretation: dict | None = None
 
     def to_meta(self):
+        if self.op == OP_SET and not _set_value(self.value):
+            _bad("invalid set value")
         if self.op == OP_INTERPRET and not _interpret_protocol.request(self.interpretation):
             _bad("invalid interpretation request")
         if self.op != OP_INTERPRET and self.interpretation is not None:
@@ -1241,6 +1243,8 @@ class ControlReply(_Msg):
     result: dict | None = None
 
     def to_meta(self):
+        if self.value is not None and not _set_value(self.value):
+            _bad("invalid control reply value")
         if self.result is not None and (self.op != OP_INTERPRET or self.status != STATUS_OK):
             _bad("result requires a successful interpretation reply")
         if self.op == OP_INTERPRET and self.status == STATUS_OK and not _interpret_protocol.bounded(self.result):

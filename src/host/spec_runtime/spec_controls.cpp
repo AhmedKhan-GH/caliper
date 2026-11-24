@@ -775,8 +775,12 @@ bool draw_text_field(const spec::Control& c, const Row& row, SpecInstrumentHost&
         it = edits.emplace(key, std::move(start)).first;
     }
     std::string& buf = it->second;
+    const bool invalid = script && buf.size() > limit;
+    const std::string refusal = "Text exceeds " + std::to_string(limit) + " bytes. The draft was retained.";
+    const float notice_width = invalid ? std::min(row.widget.GetWidth() * 0.6f,
+        ImGui::CalcTextSize(refusal.c_str()).x + ImGui::GetStyle().ItemSpacing.x) : 0.0f;
     ImGui::SetCursorScreenPos(row.widget.Min);
-    ImGui::SetNextItemWidth(row.widget.GetWidth());
+    ImGui::SetNextItemWidth(row.widget.GetWidth() - notice_width);
     const std::string hint = c.options.placeholder.value_or("");
     ImGui::BeginDisabled(!why.empty());
     auto resize = [](ImGuiInputTextCallbackData* data) {
@@ -799,11 +803,16 @@ bool draw_text_field(const spec::Control& c, const Row& row, SpecInstrumentHost&
     if (done && why.empty()) {
         const std::string value(buf.c_str());
         if (script) {
-            changed = value.size() <= limit && host.run->set_param(target->name, value).ok();
+            changed = value.size() <= limit && value != now && host.run->set_param(target->name, value).ok();
             if (changed) push_control_event(host, c, value);
         } else changed = write(host, c, value, true);
     }
-    if (!editing) edits.erase(key);   // shows the session's value again
+    if (invalid) {
+        const auto shown = fit_row_text(refusal, notice_width - ImGui::GetStyle().ItemSpacing.x);
+        ImGui::GetWindowDrawList()->AddText(ImVec2(row.widget.Max.x - notice_width,
+            row.widget.Min.y + ImGui::GetStyle().FramePadding.y), ImGui::GetColorU32(ImGuiCol_Text), shown.c_str());
+    }
+    if (!editing && (!script || buf.size() <= limit)) edits.erase(key);
     return changed;
 }
 

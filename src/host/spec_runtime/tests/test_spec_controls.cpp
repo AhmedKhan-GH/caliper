@@ -871,9 +871,8 @@ TEST_CASE("spec controls: a text parameter preserves a long current value") {
     prompt.name = "prompt"; prompt.type = "text"; prompt.value = text;
     run.run.params.push_back(prompt);
     auto control = make("long_prompt", spec::ControlKind::text, "param:prompt");
-    bool accepts = true;
     SUBCASE("default bound") {}
-    SUBCASE("explicit smaller bound") { control.options.max_length = 1024; accepts = false; }
+    SUBCASE("explicit smaller bound") { control.options.max_length = 1024; }
     const auto sp = instrument_spec({control});
     cb::ValueStore values;
     values.reset(sp);
@@ -882,10 +881,8 @@ TEST_CASE("spec controls: a text parameter preserves a long current value") {
     auto draw = [&] { return caliper_host::draw_spec_control(control, kRow, look, host); };
     ui.click(300, 15, draw);
     press(ui, ImGuiKey_Enter, [&] { draw(); });
-    if (accepts) {
-        REQUIRE(run.sent.size() == 1);
-        CHECK(run.sent[0].second == text);
-    } else CHECK(run.sent.empty());
+    CHECK(run.sent.empty());
+    CHECK(rec.events.empty());
     CHECK(run.run.params.back().value == text);
 }
 
@@ -898,6 +895,9 @@ TEST_CASE("spec controls: an oversized parameter edit is refused without a trunc
     prompt.name = "prompt"; prompt.type = "text"; prompt.value = "";
     run.run.params.push_back(prompt);
     auto control = make("oversized_prompt", spec::ControlKind::text, "param:prompt");
+    std::size_t limit = 4096;
+    SUBCASE("protocol limit on Return") {}
+    SUBCASE("smaller limit on focus loss") { limit = 32; control.options.max_length = limit; }
     const auto sp = instrument_spec({control});
     cb::ValueStore values;
     values.reset(sp);
@@ -905,10 +905,21 @@ TEST_CASE("spec controls: an oversized parameter edit is refused without a trunc
     const SpecLook look;
     auto draw = [&] { return caliper_host::draw_spec_control(control, kRow, look, host); };
     ui.click(300, 15, draw);
-    ImGui::GetIO().AddInputCharactersUTF8(std::string(4097, 'a').c_str());
+    ImGui::GetIO().AddInputCharactersUTF8(std::string(limit + 1, 'a').c_str());
     ui.frame([&] { draw(); });
-    press(ui, ImGuiKey_Enter, [&] { draw(); });
+    if (limit == 4096) press(ui, ImGuiKey_Enter, [&] { draw(); });
+    ui.click(500, 100, draw);
     CHECK(run.sent.empty());
     CHECK(rec.events.empty());
     CHECK(run.run.params.back().value == "");
+    ui.click(230, 15, draw);
+    const auto& input = ImGui::GetCurrentContext()->InputTextState;
+    REQUIRE(input.TextA.Data);
+    CHECK(std::string(input.TextA.Data) == std::string(limit + 1, 'a'));
+    press(ui, ImGuiKey_End, [&] { draw(); });
+    press(ui, ImGuiKey_Backspace, [&] { draw(); });
+    press(ui, ImGuiKey_Enter, [&] { draw(); });
+    REQUIRE(run.sent.size() == 1);
+    CHECK(run.sent.back().second == std::string(limit, 'a'));
+    CHECK(rec.events.size() == 1);
 }

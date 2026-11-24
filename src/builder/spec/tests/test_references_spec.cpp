@@ -323,6 +323,7 @@ TEST_CASE("references spec: an annotation point reads the x, y and z fields of a
 }
 
 TEST_CASE("spec text parameter bounds retain the state text limit") {
+    CHECK_FALSE(check(control("prompt", "text", "param:prompt", "value = \"a\\u0000b\"")).ok());
     CHECK(check(control("prompt", "text", "param:prompt", "max_length = 4096")).ok());
     CHECK_FALSE(check(control("prompt", "text", "param:prompt", "max_length = 4097")).ok());
     CHECK(check(control("note", "text", "value", "max_length = 1024")).ok());

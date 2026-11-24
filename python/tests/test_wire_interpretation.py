@@ -7,6 +7,23 @@ from caliper import _wire as wire
 
 
 @pytest.mark.parametrize("encode", [wire.encode, wire.encode_parts])
+def test_outbound_set_values_match_inbound_limits(encode):
+    for value in ["", "é" * 2048, "line\n\tbreak", True, 1, 0.5]:
+        for message in [wire.Control(1, "set", name="prompt", value=value),
+                        wire.ControlReply(1, "set", "ok", name="prompt", value=value)]:
+            encode(message)
+            assert wire.decode(wire.encode(message)).value == value
+    for value in ["é" * 2048 + "x", "a\0b", "\ud800", float("inf"), [], {}]:
+        for message in [wire.Control(1, "set", name="prompt", value=value),
+                        wire.ControlReply(1, "set", "ok", name="prompt", value=value)]:
+            with pytest.raises(wire.MessageError):
+                encode(message)
+    with pytest.raises(wire.MessageError):
+        encode(wire.Control(1, "set", name="prompt"))
+    encode(wire.ControlReply(1, "set", "error", error={"code": "unsupported"}))
+
+
+@pytest.mark.parametrize("encode", [wire.encode, wire.encode_parts])
 def test_outbound_requests_require_the_interpretation_operation(encode):
     request = {"version": 1, "method": "trace.status", "params": {}}
     encode(wire.Control(1, "interpret", interpretation=request))

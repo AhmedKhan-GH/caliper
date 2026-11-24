@@ -34,6 +34,7 @@
 #include "tensor_bridge.h"             // map_f32_to_rgba8 / colormap_lut (CPU reference)
 
 #include <imgui.h>
+#include <imgui_internal.h>
 
 #include <algorithm>
 #include <atomic>
@@ -2553,6 +2554,7 @@ public:
     caliper_live::ControlAccess access{true, ""};
     bool have = true;
     bool interpretation = true;
+    bool alive = true;
     caliper_live::Controls ctl;
     std::vector<caliper_live::ControlReply> replies;
     struct Sent {
@@ -2573,7 +2575,7 @@ public:
     std::string script() const override { return "train.py"; }
     uint64_t start_unix_ms() const override { return started; }
     int32_t producer_pid() const override { return 0; }
-    bool producer_alive() override { return true; }
+    bool producer_alive() override { return alive; }
     bool sync(std::vector<caliper_live::SourceView>*) override { return false; }
     bool take(uint64_t, uint64_t, caliper_live::Snapshot*) override { return false; }
     void release_prev(uint64_t) override {}
@@ -3576,9 +3578,21 @@ TEST_CASE("live/controls: text byte caps refuse oversized UTF-8 edits without tr
     CHECK(ui.source.sent.empty());
     ui.enter();
     CHECK(ui.source.sent.empty());
+    CHECK(ui.controls.notice().error);
+    CHECK(ui.controls.notice().text.find("draft was retained") != std::string::npos);
     ui.click(30, 110);
     CHECK(ui.source.sent.empty());
     CHECK(ui.source.ctl.params.front().value.as_string().empty());
+    ui.focus();
+    REQUIRE(ImGui::GetCurrentContext()->InputTextState.TextA.Data);
+    CHECK(std::string(ImGui::GetCurrentContext()->InputTextState.TextA.Data) == prefix + suffix);
+    ImGui::GetIO().AddKeyEvent(ImGuiKey_End, true); ui.frame();
+    ImGui::GetIO().AddKeyEvent(ImGuiKey_End, false); ui.frame();
+    ImGui::GetIO().AddKeyEvent(ImGuiKey_Backspace, true); ui.frame();
+    ImGui::GetIO().AddKeyEvent(ImGuiKey_Backspace, false); ui.frame();
+    ui.enter();
+    REQUIRE(ui.source.sent.size() == 1);
+    CHECK(ui.source.sent.back().value.as_string() == prefix);
 }
 
 TEST_CASE("live/controls: a session switch discards the active text draft") {
@@ -3652,7 +3666,7 @@ TEST_CASE("live/controls: completed replies require the same concrete session") 
     CHECK(source.sent.size() == 1);
 }
 
-TEST_CASE("live/controls: unscoped protocol errors end only queued interpretation requests") {
+TEST_CASE("live/controls: only interpretation errors without IDs end queued interpretation requests") {
     ScriptedSource source;
     caliper_live::RunControls controls;
     controls.update(&source, 0);
@@ -3673,6 +3687,11 @@ TEST_CASE("live/controls: unscoped protocol errors end only queued interpretatio
     source.replies.push_back(error);
     controls.update(&source, 2);
     CHECK(controls.interpret("trace.status", Json::object(), first) == final);
+    CHECK(controls.interpret("trace.status", Json::object(), second) == waiting);
+    CHECK(controls.interpret("feature.dictionary", Json::object(), third) == another);
+    error.op = CALIPER_NET_OP_INTERPRET;
+    source.replies.push_back(error);
+    controls.update(&source, 3);
     const auto result = controls.interpret("trace.status", Json::object(), second);
     REQUIRE(result.find("error"));
     CHECK(result.find("error")->find("code")->as_string() == CALIPER_NET_ERR_BAD_REQUEST);
@@ -3680,4 +3699,30 @@ TEST_CASE("live/controls: unscoped protocol errors end only queued interpretatio
     source.reply(second, "queued");
     controls.update(&source, 3);
     CHECK(controls.interpret("trace.status", Json::object(), second) == result);
+}
+
+TEST_CASE("live/controls: session exit ends pending queries and retains final replies") {
+    ScriptedSource source;
+    caliper_live::RunControls controls;
+    controls.update(&source, 0);
+    const auto completed = controls.interpret("trace.status", Json::object(), 0);
+    const auto first = static_cast<uint32_t>(completed.find("request_id")->as_double());
+    const auto pending = controls.interpret("feature.dictionary", Json::object(), 0);
+    const auto second = static_cast<uint32_t>(pending.find("request_id")->as_double());
+    source.reply(first, "ok");
+    source.replies.back().result = Json::object();
+    source.alive = false;
+    SUBCASE("frame update") { controls.update(&source, 1); }
+    SUBCASE("direct query") {}
+    const auto final = controls.interpret("trace.status", Json::object(), first);
+    REQUIRE(final.find("pending"));
+    CHECK_FALSE(final.find("pending")->as_bool());
+    const auto closed = controls.interpret("feature.dictionary", Json::object(), second);
+    REQUIRE(closed.find("error"));
+    CHECK(closed.find("error")->find("code")->as_string() == CALIPER_NET_ERR_NOT_ATTACHED);
+    CHECK(controls.interpret("trace.status", Json::object(), 0).find("error"));
+    source.alive = true;
+    source.reply(second, "queued");
+    controls.update(&source, 2);
+    CHECK(controls.interpret("feature.dictionary", Json::object(), second) == closed);
 }

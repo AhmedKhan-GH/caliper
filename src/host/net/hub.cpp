@@ -334,6 +334,7 @@ struct Session {
     // waiting for the producer's reply, by the hub's own request_id.
     Json views_plain = Json::array();
     SharedBytes controls;
+    std::set<std::string> text_params;
     std::map<std::string, SelectionState> selections;
     std::map<uint32_t, ControlRoute> routes;
     uint32_t next_control = 1;
@@ -1617,10 +1618,13 @@ struct Hub::Impl {
             refuse(CALIPER_NET_ERR_UNSUPPORTED, "the producer of session " + s->id + " does not take controls");
             return;
         }
-        if (ctl.op == CALIPER_NET_OP_SET && ctl.value.is_string() && !s->text_params_cap &&
-            (ctl.value.as_string().empty() || ctl.value.as_string().size() > CALIPER_NET_NAME_MAX)) {
-            refuse(CALIPER_NET_ERR_UNSUPPORTED, "the producer must announce text_params for this text value");
-            return;
+        if (ctl.op == CALIPER_NET_OP_SET && !(p.cap_text_params && s->text_params_cap)) {
+            const bool text_parameter = ctl.name && s->text_params.count(*ctl.name);
+            if (text_parameter || (ctl.value.is_string() &&
+                (ctl.value.as_string().empty() || ctl.value.as_string().size() > CALIPER_NET_NAME_MAX))) {
+                refuse(CALIPER_NET_ERR_UNSUPPORTED, "Both peers must announce text_params for text parameters.");
+                return;
+            }
         }
         if (ctl.op == "intervene" && !(p.cap_interventions && s->interventions_cap)) {
             refuse(CALIPER_NET_ERR_UNSUPPORTED, p.cap_interventions
@@ -1679,6 +1683,10 @@ struct Hub::Impl {
     // the hub received before it (deliver_controls).
     // 3.2 draft: a viewer without `interventions` gets the CONTROLS without that key.
     void producer_controls(Session& s, const wire::Controls& m, SharedBytes buf) {
+        s.text_params.clear();
+        for (const auto& param : m.params.items())
+            if (param.find("type")->as_string() == CALIPER_NET_PARAM_TEXT)
+                s.text_params.insert(param.find("name")->as_string());
         if (s.controls) meta_bytes -= s.controls->size();
         if (s.controls_plain) meta_bytes -= s.controls_plain->size();
         s.controls = buf;
@@ -2177,6 +2185,7 @@ struct Hub::Impl {
     void forget_meta(Session& s) {
         if (s.controls) meta_bytes -= s.controls->size();
         s.controls.reset();
+        s.text_params.clear();
         if (s.controls_plain) meta_bytes -= s.controls_plain->size();
         s.controls_plain.reset();
         if (s.program_state) meta_bytes -= s.program_state->size();
