@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
+import threading
 import weakref
 
 
@@ -19,6 +20,8 @@ class Probe:
 
 _ACTIVE = weakref.WeakKeyDictionary()
 _EAGER = {}
+# Configs can be shared across models. One lock covers their complete ownership changes.
+_LIFECYCLE_LOCK = threading.RLock()
 
 
 def _architecture(model):
@@ -157,6 +160,12 @@ class Capture(dict):
     Values detach from autograd and share device storage with the observed tensors.
     Exit removes hooks and retains results. An error or watch removal also clears results.
     ``close(clear=True)`` releases captured tensors explicitly. Contexts are single-use.
+
+    Qwen full-attention patterns temporarily select eager attention on the shared config.
+    The last capture restores the original backend. Model parameters stay unchanged.
+    Evaluation bindings still observe the actual backend and can refuse this temporary change.
+    Lifecycle operations serialize, but model forwards do not. Callers must coordinate forwards,
+    capture entry and exit, and external model changes. Concurrent forwards are unsupported.
     """
 
     def __init__(self, model, requested):
@@ -177,14 +186,23 @@ class Capture(dict):
         self._closed = False
 
     def _save(self, name, value):
-        tensor = _first_tensor(value)
-        if tensor is None:
-            raise TypeError(f"probe {name!r} did not produce a tensor")
-        self[name] = tensor.detach()
-        from .._ablate import _shapes
-        model = self._model()
-        if model is not None:
-            _shapes.setdefault(model, {})[name] = tuple(tensor.shape)
+        with _LIFECYCLE_LOCK:
+            # PyTorch can retain a hook callback after its handle is removed.
+            if self._closed:
+                return
+            tensor = _first_tensor(value)
+            if tensor is None:
+                raise TypeError(f"probe {name!r} did not produce a tensor")
+            self[name] = tensor.detach()
+            from .._ablate import _shapes
+            model = self._model()
+            if model is not None:
+                _shapes.setdefault(model, {})[name] = tuple(tensor.shape)
+
+    def _start(self, *_):
+        with _LIFECYCLE_LOCK:
+            if not self._closed:
+                self.clear()
 
     def _output(self, name):
         def hook(module, args, output):
@@ -192,39 +210,57 @@ class Capture(dict):
         return hook
 
     def _pre(self, name, head=None):
-        def hook(module, args, kwargs):
-            tensor = _input(args, kwargs)
-            if head is not None:
-                h, width = head
-                tensor = tensor[..., h * width:(h + 1) * width]
-            self._save(name, tensor)
+        def hook(module, args, kwargs=None):
+            with _LIFECYCLE_LOCK:
+                if self._closed:
+                    return
+                tensor = _input(args, kwargs or {})
+                if head is not None:
+                    h, width = head
+                    tensor = tensor[..., h * width:(h + 1) * width]
+                self._save(name, tensor)
         return hook
 
     def _delta(self, probe, module):
         values = self._pending[probe.point] = {}
 
-        def start(mod, args, kwargs):
-            values.clear()
-            cache = kwargs.get("cache", kwargs.get("cache_params", args[1] if len(args) > 1 else None))
-            if cache is not None and cache.get_conv_state(mod.layer_idx, state_idx=0) is not None:
-                raise ValueError("DeltaNet pattern capture requires a complete prompt without a populated cache")
-            if kwargs.get("cu_seq_lens_q") is not None:
-                raise ValueError("DeltaNet pattern capture does not support packed sequences")
+        def start(mod, args, kwargs=None):
+            with _LIFECYCLE_LOCK:
+                if self._closed:
+                    return
+                kwargs = kwargs or {}
+                values.clear()
+                cache = kwargs.get("cache", kwargs.get("cache_params", args[1] if len(args) > 1 else None))
+                if cache is not None and cache.get_conv_state(mod.layer_idx, state_idx=0) is not None:
+                    raise ValueError("DeltaNet pattern capture requires a complete prompt without a populated cache")
+                if kwargs.get("cu_seq_lens_q") is not None:
+                    raise ValueError("DeltaNet pattern capture does not support packed sequences")
 
         self._handles.append(module.register_forward_pre_hook(start, with_kwargs=True))
         for name, child in (("qkv", module.in_proj_qkv), ("a", module.in_proj_a), ("b", module.in_proj_b)):
             def keep(mod, args, output, name=name):
-                values[name] = output.detach()
+                with _LIFECYCLE_LOCK:
+                    if not self._closed:
+                        values[name] = output.detach()
             self._handles.append(child.register_forward_hook(keep))
 
         def finish(mod, args, output):
             import torch
+            with _LIFECYCLE_LOCK:
+                if self._closed:
+                    return
+                observed = dict(values)
+                values.clear()
+            # Do not hold the lifecycle lock through the tensor computation.
             with torch.no_grad():
-                self._save(probe.point, _delta_pattern(mod, values))
-            values.clear()
+                self._save(probe.point, _delta_pattern(mod, observed))
         self._handles.append(module.register_forward_hook(finish))
 
     def __enter__(self):
+        with _LIFECYCLE_LOCK:
+            return self._enter_locked()
+
+    def _enter_locked(self):
         if self._entered or self._closed:
             raise RuntimeError("a capture context can only be entered once")
         self._entered = True
@@ -236,7 +272,7 @@ class Capture(dict):
         _ACTIVE.setdefault(model, weakref.WeakValueDictionary())[id(self)] = self
         try:
             # A new call must not leave any result from a prior or partial call.
-            self._handles.append(model.register_forward_pre_hook(lambda *_: self.clear()))
+            self._handles.append(model.register_forward_pre_hook(self._start))
             for name in self.requested:
                 probe = self._probes.get(name)
                 if probe is None:
@@ -274,6 +310,11 @@ class Capture(dict):
 
     def close(self, *, clear=False):
         """Remove this context's hooks and restore its attention configuration."""
+        with _LIFECYCLE_LOCK:
+            self._close_locked(clear=clear)
+
+    def _close_locked(self, *, clear):
+        self._closed = True
         while self._handles:
             self._handles.pop().remove()
         while self._configs:
@@ -283,13 +324,16 @@ class Capture(dict):
             if state[2] == 0:
                 config._attn_implementation = state[1]
                 del _EAGER[id(config)]
+        for values in self._pending.values():
+            values.clear()
         self._pending.clear()
         model = self._model()
         if model is not None and model in _ACTIVE:
             _ACTIVE[model].pop(id(self), None)
+            if not _ACTIVE[model]:
+                del _ACTIVE[model]
         if clear:
             self.clear()
-        self._closed = True
 
     def __exit__(self, exc_type, exc, traceback):
         self.close(clear=exc_type is not None)
@@ -303,5 +347,6 @@ def capture(model, points):
 
 def clear_captures(model):
     """Remove active capture hooks and tensors when a watch ends."""
-    for context in list(_ACTIVE.get(model, {}).values()):
-        context.close(clear=True)
+    with _LIFECYCLE_LOCK:
+        for context in list(_ACTIVE.get(model, {}).values()):
+            context.close(clear=True)
