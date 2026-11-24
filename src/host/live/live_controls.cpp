@@ -521,9 +521,18 @@ void RunControls::on_reply(const ControlReply& r) {
         }
         if (r.op == CALIPER_NET_OP_INTERPRET) return;
     }
+    // Wire ERROR carries a request ID but no operation. Recover the operation
+    // from the pending request before the parameter and action reply paths.
+    std::string operation = r.op;
+    if (operation.empty() && r.status == CALIPER_NET_STATUS_ERROR) {
+        if (runs_.count(r.request_id)) operation = CALIPER_NET_OP_RUN;
+        else if (std::any_of(locals_.begin(), locals_.end(), [&](const auto& item) {
+                     return item.second.request == r.request_id;
+                 })) operation = CALIPER_NET_OP_SET;
+    }
     ++counts_.replies;
     if (r.status == CALIPER_NET_STATUS_ERROR) ++counts_.refused;
-    if (r.op == CALIPER_NET_OP_SET) {
+    if (operation == CALIPER_NET_OP_SET) {
         for (auto it = locals_.begin(); it != locals_.end(); ++it) {
             Local& l = it->second;
             if (l.request != r.request_id) continue;
@@ -541,7 +550,7 @@ void RunControls::on_reply(const ControlReply& r) {
         if (r.status == CALIPER_NET_STATUS_ERROR) refuse("set " + r.name, reply_error(r));
         return;
     }
-    if (r.op == CALIPER_NET_OP_RUN) {
+    if (operation == CALIPER_NET_OP_RUN) {
         const auto it = runs_.find(r.request_id);
         const std::string name = it != runs_.end() ? it->second : r.name;
         if (r.status == CALIPER_NET_STATUS_QUEUED) return;   // one more reply follows

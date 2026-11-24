@@ -18,8 +18,12 @@
 #include "runner/run_connection.h"
 #include "net/wire.h"
 #include "net/ws.h"
+#include "../../../../tests/probe_metadata.h"
 
 #include <caliper_builder/session/events.h>
+#include <caliper_builder/session/session.h>
+#include <caliper_builder/commands/command_table.h>
+#include <caliper_builder/commands/schema.h>
 
 #include <doctest/doctest.h>
 
@@ -946,6 +950,61 @@ TEST_CASE("runner: a symbolic link among the kept checkpoints is never used for 
     REQUIRE(runner.wait_for(state_is(fork.id, "exited"), 60000));
     REQUIRE(runner.wait_for(state_is("base", "exited"), 60000));
     CHECK(runner.running_pids().empty());
+}
+
+TEST_CASE("runner: semantic probe metadata survives the managed connection") {
+    const std::string pythonpath = std::getenv("PYTHONPATH") ? std::getenv("PYTHONPATH") : "";
+    Workspace workspace("probe-metadata");
+    // Retain an external CPU guard before the checkout path in child processes.
+    if (!pythonpath.empty()) setenv("PYTHONPATH", pythonpath.c_str(), 1);
+    REQUIRE(!workspace.python.empty());
+    const json expected = caliper_test::probe_descriptors();
+    std::ofstream script(workspace.ws + "/scripts/stand_in_run.py");
+    script << "import json, os, threading\nfrom pathlib import Path\nimport torch\nimport caliper\n"
+              "from caliper._controls import CONTROLS\n"
+              "from caliper import _net_programs\n"
+              "class Descriptors:\n"
+              "    def points(self, unused):\n"
+              "        return json.loads(" << json(expected.dump()).dump() << ")\n"
+              "fixture = torch.nn.Module().to('cpu')\n"
+              "CONTROLS.interventions_on(fixture, adapter=Descriptors())\n"
+              // Announce the watch capability without a program manager or device.
+              "_net_programs.enable()\n"
+              "done = threading.Event()\n"
+              "caliper.action('caliper.stop', done.set)\n"
+              "server = caliper.serve(control=True)\n"
+              "Path(os.environ['CALIPER_RUN_LINK_FILE']).write_text(server.url)\n"
+              "while not done.wait(0.01):\n"
+              "    caliper.step()\n"
+              "caliper.close()\n"
+              "_net_programs.disable()\n";
+    script.close();
+    cr::ModelRunner::Options options;
+    options.workspace = workspace.ws;
+    options.python = workspace.python;
+    cr::ModelRunner runner(options);
+    struct Guard { cr::ModelRunner& runner; ~Guard() { runner.shutdown(); } } guard{runner};
+    cb::RunEntry entry;
+    REQUIRE(!runner.start(workspace.start({}, json::object(), "probe-metadata"), &entry));
+    REQUIRE(runner.wait_for(state_is(entry.id, "running"), 30000));
+    cb::Error error;
+    auto* control = runner.control_of(entry.id, &error);
+    REQUIRE(control);
+    REQUIRE(runner.wait_for([&](const auto&) { return control->intervention_points().size() == expected.size(); }, 30000));
+    CHECK(runner.intervention_points(entry.id).size() == expected.size());
+    auto opened = cb::Session::open(workspace.ws);
+    REQUIRE(opened.session);
+    opened.session->set_run_control(control);
+    cb::CommandInvocation command;
+    command.name = "intervene.points";
+    command.args = json::object();
+    command.origin = cb::CommandOrigin::mcp;
+    const auto reply = opened.session->invoke(command);
+    REQUIRE_MESSAGE(reply.ok, reply.error.message);
+    CHECK(reply.result.at("points") == expected);
+    const auto* descriptor = cb::find_command_descriptor(command.name);
+    REQUIRE(descriptor);
+    CHECK(cb::validate_command_value(descriptor->result, reply.result).ok());
 }
 
 TEST_CASE("runner: interpretation uses the managed connection without attachment") {

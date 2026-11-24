@@ -300,6 +300,12 @@ std::vector<cb::InterventionPoint> intervention_points_of(const json& interventi
         q.kind = p.value("kind", std::string("module"));
         q.module = p.value("module", q.point);
         q.head = opt_int(p, "head");
+        if (p.contains("probe") && p["probe"].is_string()) q.probe = p["probe"].get<std::string>();
+        q.layer = opt_int(p, "layer");
+        if (p.contains("pattern")) {
+            if (p["pattern"].is_null()) q.pattern.emplace(std::nullopt);
+            else if (p["pattern"].is_string()) q.pattern.emplace(p["pattern"].get<std::string>());
+        }
         q.type = p.is_object() && p.contains("type") && p["type"].is_string() ? p["type"].get<std::string>() : "";
         if (p.contains("shape") && p["shape"].is_array()) {
             std::vector<std::int64_t> shape;

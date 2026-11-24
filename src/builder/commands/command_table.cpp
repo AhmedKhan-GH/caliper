@@ -533,12 +533,15 @@ const std::pair<const char*, const char*> kFragments[] = {
     {"intervention_point", R"json({
       "type": "object", "additionalProperties": false, "required": ["point", "kind", "module", "head", "type", "shape"],
       "properties": {
-        "point": {"type": "string", "description": "The point's name: a module's dotted name, or <module>#<h> for a head."},
-        "kind": {"type": "string", "enum": ["module", "head"], "description": "module for a module's output, head for one head of an attention module."},
+        "point": {"type": "string", "description": "The point's name: a module's dotted name, <module>#<h> for a head, or <block>.<probe> for a semantic probe."},
+        "kind": {"type": "string", "enum": ["module", "head"], "description": "module for a module or semantic probe, head for one attention head."},
         "module": {"type": "string", "description": "The module's dotted name."},
         "head": {"type": ["integer", "null"], "description": "The head's index, or null for a module."},
         "type": {"type": "string", "description": "The module's class name, such as Linear or MultiheadAttention."},
-        "shape": {"type": ["array", "null"], "items": {"type": "integer"}, "description": "The shape of the module's last output, or null before the first step."}}})json"},
+        "shape": {"type": ["array", "null"], "items": {"type": "integer"}, "description": "The shape of the module's last output, or null before the first step."},
+        "probe": {"type": "string", "enum": ["resid_pre", "mlp_in", "mlp_out", "attn_pattern"], "description": "The optional semantic form. attn_pattern is read-only."},
+        "layer": {"type": "integer", "minimum": 0, "description": "The optional decoder layer index, from zero."},
+        "pattern": {"type": ["string", "null"], "enum": ["softmax", "signed_value_mixing", null], "description": "The optional attention pattern form, or null for another semantic probe."}}})json"},
 
     {"intervention_spec", R"json({"type": "object", "additionalProperties": false, "required": ["point"], "properties": {"point": {"type": "string", "description": "The point name from intervene.points.", "minLength": 1, "maxLength": 255}, "op": {"type": "string", "description": "The legacy discriminator. Supply op or kind. Steer stays reserved.", "enum": ["ablate", "add", "scale", "clamp", "patch", "steer"]}, "kind": {"type": "string", "description": "The operation discriminator. It must equal op when both are present.", "enum": ["ablate", "add", "scale", "clamp", "patch", "steer"]}, "from_step": {"type": ["integer", "null"], "description": "The first step, or null for the next step.", "minimum": 0, "maximum": 9007199254740991}, "until_step": {"type": ["integer", "null"], "description": "The exclusive end step, or null until cleared.", "minimum": 0, "maximum": 9007199254740991}, "positions": {"type": "array", "description": "Selected token positions. Omission selects all, and an empty list selects none.", "maxItems": 32, "items": {"type": "integer", "minimum": 0, "maximum": 31}}, "vector": {"type": "array", "description": "The add vector. Its length must match the point width.", "minItems": 1, "maxItems": 16384, "items": {"type": "number"}}, "coefficient": {"type": "number", "description": "The finite coefficient for add."}, "feature": {"type": "integer", "description": "The feature for scale or clamp.", "minimum": 0, "maximum": 2147483647}, "multiplier": {"type": "number", "description": "The finite multiplier for scale."}, "value": {"type": "number", "description": "The finite activation for clamp."}, "source_prompt": {"type": "string", "description": "The clean patch source, at most 4096 UTF-8 bytes and 32 model tokens.", "minLength": 1, "maxLength": 4096}, "source_position": {"type": "integer", "description": "The one source position, or matching positions when absent.", "minimum": 0, "maximum": 31}, "dictionary": {"type": "string", "description": "The configured dictionary identifier for scale or clamp.", "minLength": 1, "maxLength": 255}}})json"},
 
@@ -1917,7 +1920,7 @@ const Row kRows[] = {
     {"intervene.points", false, false, true,
      "Lists the intervention points of the model that the attached script watches: each module's output by its dotted "
      "name, and each head of an attention module as <module>#<h>, with the module's class and the shape of its last "
-     "output. It changes nothing.",
+     "output. Semantic probes retain kind module and add probe, layer and pattern metadata. It changes nothing.",
      R"json({"type": "object", "additionalProperties": false, "required": [],
       "properties": {
         "match": {"type": "string", "minLength": 1, "maxLength": 255, "description": "Only the points whose names match this glob, such as blocks.*.attn*; every point when absent."}}})json",
