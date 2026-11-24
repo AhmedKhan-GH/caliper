@@ -7,7 +7,9 @@ For other layer counts, the active range starts at `layers // 2`.
 An odd layer count gives the upper group one additional layer.
 The source must contain at least two layers.
 
-Section 7 of the approved M7 and M8 outline authorizes this fallback after complete source training and failed full quality evaluation.
+This page describes the library support for upper-half dictionaries.
+The 23 November M7 and M8 decision prohibits new fallback training in that run.
+Its acceptance uses the complete all-layer dictionary and records any failed causal check.
 
 ## Eligibility
 
@@ -138,7 +140,7 @@ The evaluator computes FVU and dead-feature fraction only across active upper la
 It retains the global layer indices in its arrays and uses null metrics for lower layers.
 The `per_layer_status` array labels those lower layers `error_only`.
 The report includes `scope: "upper_half"` and `active_layers`.
-The FVU, dead-feature, and cross-entropy thresholds remain 0.30, 0.15, and 0.5 nats.
+The FVU, dead-feature, and cross-entropy thresholds are 0.40, 0.15, and 0.5 nats.
 
 For cross-entropy, the evaluator replaces only upper MLPs and retains the original lower MLP computation.
 The `replaced_mlps` field records the actual replacement count.

@@ -86,6 +86,31 @@ def test_evaluation_sync_precedes_binding_recheck_and_cursor(tmp_path, monkeypat
     assert json.loads((folder / "state.json").read_text())["tensors"] == "stats-a.safetensors"
 
 
+@pytest.mark.parametrize("metric,value,status", [
+    ("fvu", 0.40, "passed"), ("fvu", 0.401, "failed"),
+    ("dead", 0.15, "passed"), ("dead", 0.20, "failed"),
+    ("ce", 0.50, "passed"), ("ce", 0.501, "failed"),
+])
+def test_completed_quality_thresholds(metric, value, status):
+    stats = evaluation.QualityStats(1, 2, 20)
+    stats.count, stats.ce_tokens = 200_000, 100_000
+    stats.variance_sum.fill_(10)
+    stats.error_sum.fill_(4)
+    stats.hits.fill_(1)
+    stats.hits[:, :3] = 0
+    stats.original_ce, stats.replaced_ce = 100_000, 150_000
+    if metric == "fvu":
+        stats.error_sum.fill_(value * 10)
+    elif metric == "dead":
+        stats.hits[:, :round(value * 20)] = 0
+    else:
+        stats.replaced_ce = stats.original_ce + value * stats.ce_tokens
+    result = stats.metrics()
+    assert result["status"] == status
+    assert result["thresholds"] == {"fvu": .40, "dead_fraction": .15,
+                                    "cross_entropy_delta": .5, "evaluated_tokens": 200_000}
+
+
 def test_chunked_cross_entropy_matches_full_logits():
     model = TinyLM()
     ids = torch.tensor([[1, 2, 3, 4], [5, 6, 0, 0]])

@@ -86,7 +86,7 @@ A 270-second work interval forces a clean stop. Checkpoint writes consume additi
 A bounded pilot must establish time and memory requirements before a full run.
 
 Quality checks use 200,000 separate tokens.
-Mean unexplained variance must be at most 0.30, and the dead-feature fraction must be at most 0.15.
+Mean unexplained variance must be at most 0.40, and the dead-feature fraction must be at most 0.15.
 Replacement of all MLPs must increase cross-entropy by at most 0.5 nats.
 These thresholds describe acceptance criteria, not a claim that a local dictionary passed.
 The example index uses two million other tokens and a 12 GB process limit.

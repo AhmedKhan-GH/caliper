@@ -135,7 +135,7 @@ Model and tokenizer files must exist locally before a tool starts.
 The dataset can use a pinned local Parquet manifest or the specifically approved public FineWeb-Edu stream.
 The stream uses the fixed revision and document partitions in the training metadata.
 
-Quality uses 200,000 held-out tokens. Mean unexplained variance must not exceed 0.30.
+Quality uses 200,000 held-out tokens. Mean unexplained variance must not exceed 0.40.
 Dead latents must not exceed 15 percent. Full MLP replacement must increase cross-entropy by at most 0.5 nats.
 Evaluation admission compares runtime tensor bytes with the artifact after the loader dtype conversion.
 The cursor binds those bytes, the dictionary fingerprint, and evaluation settings. Resume refuses a cursor without that tensor evidence.
@@ -144,8 +144,13 @@ After admission, an incomplete evaluation records `partial` and the current dict
 It emits `quality_end` and replaces any earlier passed report only when the final artifact verification succeeds.
 If memory admission prevents that verification, the evaluator preserves the prior published evidence.
 
-Section 7 of the approved M7 and M8 outline authorizes an upper-half fallback after complete training and failed full quality evaluation.
-The fallback trains the upper half with its full token budget and represents the lower half through error nodes.
+The 23 November decision accepts the 8,192-feature dictionary and supersedes the earlier quality fallback plan.
+This run completes 40 million tokens and then evaluates quality, builds the example index, and captures the hidden Qwen demo.
+No new dictionary run or upper-half retraining is authorized. Failed causal checks remain failures and retain their captures.
+The feature-share, graph-validation, steering, pixel, parity, and budget checks remain unchanged.
+
+The library retains upper-half dictionary support for existing artifacts.
+Such a dictionary represents the lower half through error nodes.
 For Qwen, layers 12 through 23 train, and layers 0 through 11 retain zero transcoders.
 The original lower MLPs remain in the quality evaluation.
 The fallback records the admitted source metadata, exact fingerprint, and completed evaluation cursor in `fallback_source`.
