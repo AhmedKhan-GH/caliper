@@ -1,12 +1,41 @@
 """Step-boundary service for real feature indexes and attribution graphs."""
 from collections import deque
-from contextlib import nullcontext
+from contextlib import ExitStack, nullcontext
 from copy import deepcopy
+import math
 import threading
 import time
 
 from .. import _interpret_protocol as protocol
 from ._labels import pack_labels
+
+_RESOURCE_LOCK = threading.Lock()
+_ACTIVE_RESOURCES = set()
+
+
+class _ServiceTraceGuard:
+    """Combine request admission with the tracer's own checks and reserves."""
+
+    def __init__(self, owner, memory):
+        from ._memory import BudgetMemory
+        self.owner = owner
+        self._guard = BudgetMemory(owner, memory.limit / 1e9, extra=memory)
+
+    def __getattr__(self, name):
+        return getattr(self._guard, name)
+
+    def check(self, stage):
+        return self._guard.check(stage)
+
+    def reserve(self, stage, size):
+        from ._frozen import MemoryGuard
+        MemoryGuard.reserve(self, stage, size)
+        self.owner.reserve(stage, size)
+
+    def batch_size(self, requested, **kwargs):
+        from ._frozen import MemoryGuard
+        admitted = MemoryGuard.batch_size(self, requested, **kwargs)
+        return min(admitted, self.owner.batch_size(requested, **kwargs))
 
 
 class Refused(ValueError):
@@ -28,6 +57,9 @@ class InterpretationService:
         self.model, self.tokenizer = model, tokenizer
         self.dictionary, self.index, self.tracer = dictionary, index, tracer
         self.memory_limit_gb, self.memory = memory_limit_gb, memory
+        self._process_memory = self._memory_budget = None
+        self._request_stack = None
+        self._borrowed = set()
         self.factories = {"dictionary": dictionary_factory, "index": index_factory, "tracer": tracer_factory}
         self.handlers = dict(handlers or {})
         self.graph = None
@@ -106,6 +138,7 @@ class InterpretationService:
 
     def _resource(self, name):
         self._bind_resources()
+        self._guard_resources("service " + name + " admission")
         value = getattr(self, name)
         if value is None:
             factory = self.factories[name]
@@ -133,7 +166,106 @@ class InterpretationService:
                     self._check_tracer_controls(value, getattr(self, "controls", None))
                 setattr(self, name, value)
                 self._bind_resources()
+            self._guard_resources("service " + name + " ready")
         return value
+
+    def _service_memory(self):
+        from ._dictionary import _canonical_device
+        from ._memory import BudgetMemory, MemoryGuard, family_memory_limit
+        if self.memory is None and self.memory_limit_gb is None:
+            return None
+        device = next(self.model.parameters()).device if self.model is not None else getattr(self.memory, "device", "cpu")
+        if self.model is not None:
+            limit = family_memory_limit(self.model, self.memory_limit_gb, self.memory)
+        else:
+            limit = self.memory_limit_gb
+            if limit is None:
+                limit = min(28, getattr(self.memory, "limit", 12e9) / 1e9)
+            if (isinstance(limit, bool) or not isinstance(limit, (int, float))
+                    or not math.isfinite(limit) or not 0 < limit <= 28):
+                raise ValueError("service memory limit must be positive and at most 28 GB")
+        if self.memory is None:
+            if self._process_memory is None or _canonical_device(self._process_memory.device) != _canonical_device(device):
+                # A lazy factory can reveal the model device after CPU admission.
+                previous = self._process_memory
+                self._process_memory = MemoryGuard(limit, device)
+                if previous is not None:
+                    self._process_memory.peak = max(self._process_memory.peak, previous.peak)
+                self._memory_budget = None
+            memory = self._process_memory
+        else:
+            memory = self.memory
+        self._check_memory_device(memory, device)
+        if self._memory_budget is None:
+            self._memory_budget = BudgetMemory(memory, limit)
+        else:
+            self._memory_budget.limit = min(self._memory_budget.limit, int(limit * 1e9))
+        return self._memory_budget
+
+    @staticmethod
+    def _check_memory_device(memory, device):
+        from ._dictionary import _canonical_device
+        for owner in (memory, getattr(memory, "_guard", memory)):
+            if _canonical_device(getattr(owner, "device", device)) != _canonical_device(device):
+                raise Refused("interpret.device_mismatch", "The memory guard must use the resource device.")
+
+    def _guard_resources(self, stage):
+        from ._memory import BudgetMemory
+        memory = self._service_memory()
+        if memory is not None:
+            memory.check(stage)
+        if self._request_stack is None:
+            return
+        for name, attribute in (("index", "memory"), ("tracer", "guard")):
+            resource = getattr(self, name)
+            if resource is None or id(resource) in self._borrowed:
+                continue
+            key = id(resource)
+            with _RESOURCE_LOCK:
+                if key in _ACTIVE_RESOURCES:
+                    raise Refused("interpret.busy", "An interpretation resource has an active request.")
+                _ACTIVE_RESOURCES.add(key)
+            self._borrowed.add(key)
+
+            def release(key=key):
+                with _RESOURCE_LOCK:
+                    _ACTIVE_RESOURCES.remove(key)
+
+            self._request_stack.callback(release)
+            if memory is None:
+                continue
+            guard = getattr(resource, attribute, None)
+            if guard is None:
+                continue
+            device = next(self.model.parameters()).device if self.model is not None else memory.device
+            self._check_memory_device(guard, device)
+            combined = (_ServiceTraceGuard(guard, memory) if name == "tracer" else
+                        BudgetMemory(guard, memory.limit / 1e9, extra=memory))
+            combined.check(stage)
+            if name == "tracer":
+                self._borrow_trace_guard(resource, combined)
+            else:
+                self._request_stack.callback(setattr, resource, attribute, guard)
+                setattr(resource, attribute, combined)
+
+    def _borrow_trace_guard(self, tracer, guard):
+        original = tracer.guard
+        cached = getattr(tracer, "_forward_cache", None)
+        path = cached[1] if cached is not None else None
+        path_guard = getattr(path, "guard", None)
+        if path_guard is not None:
+            path.guard = _ServiceTraceGuard(path_guard, guard._guard)
+
+        def restore():
+            current = getattr(tracer, "_forward_cache", None)
+            if current is not None and current[1].guard is guard:
+                current[1].guard = original
+            if path_guard is not None:
+                path.guard = path_guard
+            tracer.guard = original
+
+        self._request_stack.callback(restore)
+        tracer.guard = guard
 
     def _feature(self, params):
         if "node" not in params:
@@ -161,8 +293,18 @@ class InterpretationService:
     def _execute(self, method, params, step):
         from ._publish import _publication_scope
         scope = _publication_scope(self.model) if method in ("trace.run", "feature.examples") else nullcontext()
-        with scope:
-            return self._execute_request(method, params, step)
+        with scope, ExitStack() as stack:
+            self._request_stack = stack
+            try:
+                self._guard_resources("service request admission")
+                result = self._execute_request(method, params, step)
+                self._guard_resources("service request complete")
+                return result
+            finally:
+                # Restore borrowed owners before replies and close completion.
+                stack.close()
+                self._request_stack = None
+                self._borrowed.clear()
 
     def _execute_request(self, method, params, step):
         if method == "feature.dictionary":
@@ -302,8 +444,18 @@ class InterpretationService:
 
     def _publish_example_tensors(self, rows):
         import torch
+        from ._memory import BudgetMemory, CleanStop, allocation_bytes
         from ._publish import _publish_many
         device = next(self.model.parameters()).device if self.model is not None else "cpu"
+        memory = self._service_memory()
+        if memory is not None:
+            owned = getattr(self.index, "memory", None)
+            if owned is not None:
+                memory = BudgetMemory(owned, memory.limit / 1e9, extra=memory)
+            memory.check("example publication admission")
+            # Include CPU tensors, device copies, and one temporary label row.
+            if allocation_bytes(memory) + 64_000 > memory.limit:
+                raise CleanStop("example publication allocation exceeds the process memory limit")
         tokens = torch.zeros((16, 25), dtype=torch.int32)
         activations = torch.zeros((16, 25), dtype=torch.float32)
         ids = torch.full((16,), -1, dtype=torch.int32)
