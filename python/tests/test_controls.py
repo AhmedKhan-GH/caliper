@@ -722,21 +722,22 @@ def test_an_action_that_raises(ctl):
 
 @pytest.mark.parametrize("terminal", ["expire", "remove"])
 @pytest.mark.parametrize("late_join", [False, True])
-def test_deferred_action_keeps_deadline_and_exact_terminal_replies(ctl, monkeypatch, terminal, late_join):
+@pytest.mark.parametrize("report_due", [False, True])
+def test_deferred_action_keeps_deadline_and_exact_terminal_replies(ctl, monkeypatch, terminal, late_join, report_due):
     transport = Fake()
-    route = ctl.attach(transport)
     ran, timers, requests = [], [], []
+    monkeypatch.setattr(ctl._timers, "at", lambda when, fn, *args: timers.append((when, fn, args)))
+    route = ctl.attach(transport)
     evaluate = ctl.action("evaluate", lambda: ran.append("evaluate"))
     ctl.action("after", lambda: ran.append("after"))
     ctl.step()
-    monkeypatch.setattr(ctl._timers, "at", lambda when, fn, *args: timers.append((when, fn, args)))
     before = time.monotonic()
     requests.extend(control(route, "run", name="evaluate", conn=conn) for conn in ("a", "b"))
     after = time.monotonic()
     follower = control(route, "run", name="after", conn="c")
     deadline, expire, args = next(item for item in timers if item[2] == (evaluate, evaluate.run_id))
     assert before + C.ACTION_WAIT_S <= deadline <= after + C.ACTION_WAIT_S
-    original_timers = list(timers)
+    original_timers = [item for item in timers if item[1] == ctl._expire]
     run_id = evaluate.run_id
     results = iter([True, False, True])
     monkeypatch.setattr(ctl, "_intervention_boundary", lambda *args: (False, next(results)))
@@ -750,11 +751,13 @@ def test_deferred_action_keeps_deadline_and_exact_terminal_replies(ctl, monkeypa
 
     ctl.interpretation_service = types.SimpleNamespace(pending=False, step=nested)
     try:
+        if report_due:
+            next(fn for _, fn, _ in timers if fn == ctl._report)()
         ctl.step()
         assert not ran and not transport.replies
         assert evaluate.queued and evaluate.run_id == run_id
         assert len(evaluate.waiters) == len(requests)
-        assert timers == original_timers
+        assert [item for item in timers if item[1] == ctl._expire] == original_timers
         if terminal == "expire":
             expire(*args)
             code, message = "timeout", f"no checkpoint ran the action within {C.ACTION_WAIT_S:g} s"
