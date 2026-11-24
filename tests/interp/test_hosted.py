@@ -700,6 +700,86 @@ def _trace_at_boundary(run, **params):
     return run.service.graph
 
 
+@pytest.mark.parametrize("arrival", ["preparation", "comparison"])
+def test_hosted_fork_matches_generation_after_late_intervention_requests(hosted_run, monkeypatch, arrival):
+    from caliper.interp._output import Output
+    from .test_intervene import explicit_forward
+
+    run, route = hosted_run
+    _trace_at_boundary(run, prompt="AB", max_targets=16)
+    _, activations = explicit_forward(run.model, run.tokenizer("AB")["input_ids"])
+    point = "layers.3.mlp_out"
+    run.interventions.set({"kind": "clamp", "point": point, "feature": int(activations[-1][0, -1].argmax()),
+                           "positions": [2], "value": 0.})
+    run.boundary()
+    run.validate()
+    run.sweep(clean_prompt="AB", corrupted_prompt="AC", metric={"positive_token": 65, "negative_token": 66})
+    ablation = {"kind": "ablate", "point": point}
+    run.interventions.set(ablation)
+    requests = [
+        {"kind": "add", "point": point, "vector": run.model.lm_head.weight[65].detach().tolist(), "coefficient": 2.},
+        dict(ablation, until_step=100),
+    ]
+    injected = []
+
+    def enqueue():
+        if injected:
+            return
+        injected.append(arrival)
+        for request_id, specification in enumerate(requests, 1):
+            reply = route.on_control(None, wire.Control(request_id, "intervene", intervene={"set": specification}).to_meta())
+            assert reply["status"] == "ok", reply
+        reply = route.on_control(None, wire.Control(3, "run", name="generate").to_meta())
+        assert reply["status"] == "queued", reply
+
+    # Inject once at an exact boundary phase, without a clock or thread race.
+    if arrival == "preparation":
+        install = run.controls._install_intervention
+
+        def installed(service, iv, spec, **kwargs):
+            install(service, iv, spec, **kwargs)
+            if iv.op == "ablate":
+                enqueue()
+
+        monkeypatch.setattr(run.controls, "_install_intervention", installed)
+    else:
+        compare = run.output.compare
+
+        def compared(prompt):
+            result = compare(prompt)
+            enqueue()
+            return result
+
+        monkeypatch.setattr(run.output, "compare", compared)
+    run.boundary()
+    assert injected == [arrival]
+    run.boundary()
+    reply, = [reply for reply in route.transport.replies if reply.request_id == 3]
+    assert reply.status == "ok", reply.error
+    saved = json.loads(Path(run.managed.checkpoint(run.model, None)).read_bytes())
+    generation = run.inference_status()["generation"]
+    assert generation["counts"] == [24, 24]
+    assert [record["specification"]["op"] for record in saved["interventions"]["interventions"]] == ["clamp", "ablate", "add"]
+    assert all(record["state"] == "active" for record in saved["interventions"]["interventions"])
+    fork_model = ReferenceLM()
+    fork_model.load_state_dict(run.model.state_dict())
+    controls = _controls.Controls()
+    service = controls.interventions_on(fork_model)
+    try:
+        service.configure(dictionary=run.dictionary, tokenizer=run.tokenizer)
+        controls.n = saved["step"] - 1
+        service.load_state_dict(saved["interventions"])
+        controls.step()
+        assert service.state_dict() == saved["interventions"]
+        generated = Output(fork_model, run.tokenizer, service).generate(saved["params"]["prompt"])
+        for row, name in enumerate(("baseline", "steered")):
+            assert generated["token_ids"][row] == generation["token_ids"][row], name
+            assert generated[name] == saved["params"]["output." + name], name
+        assert generation["interventions_hash"] == run.inference_status()["interventions_hash"]
+    finally:
+        service.remove()
+
+
 @pytest.mark.parametrize("new_params,retained", [({"prompt": "AC", "max_targets": 32}, False),
     ({"prompt": "AB", "max_targets": 32, "max_nodes": 20}, False),
     ({"prompt": "AB", "max_targets": 32, "max_nodes": 20}, True)])
