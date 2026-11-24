@@ -494,36 +494,27 @@ class ManagedRun:
             self._intervening = False
 
     def _apply_fork_overrides(self) -> None:
-        """At the first forward pass: apply ``interventions`` before the first step, as
-        ``intervene.set`` would at a checkpoint.
+        """Apply explicit overrides before the first forward and retain unrelated requests.
 
         Raises:
             RuntimeError: When the script takes no interventions, or one is refused; the fork
                 must not train without them.
         """
-        ctl = self._pkg._CTL
+        from .interp._intervene import InterventionError
+        service = self._pkg._CTL.intervention_service
         error = None
-        with ctl.lock:
-            if ctl._iv_model is None:
-                error = "the script watches no model with caliper.watch(model, optimizer)"
-            else:
-                for iv in self.interventions:
-                    refused = ctl._intervene({"set": iv})
-                    if refused is not None:
-                        error = f"{iv.get('point')!r}: {refused[1]}"
-                        break
-                if error is None:
-                    ctl._apply_interventions()
-                    failed = [iv for iv in ctl._ivs.values() if iv.error]
-                    if failed:
-                        error = f"{failed[0].point!r}: {failed[0].error}"
-            ctl._update_busy()
+        if service is None:
+            error = "the script watches no model with caliper.watch(model, optimizer)"
+        else:
+            try:
+                service.apply_overrides(self.interventions)
+            except InterventionError as exc:
+                error = str(exc)
         if error is not None:
             print(f"caliper: run {self.id} cannot apply its interventions: {error}", flush=True)
             raise RuntimeError(f"the fork's interventions cannot apply: {error}")
-        ctl._publish()
         print(f"caliper: run {self.id} applies "
-              + ", ".join(f"{iv.get('op')} {iv.get('point')}" for iv in self.interventions)
+              + ", ".join(f"{iv.get('kind', iv.get('op'))} {iv.get('point')}" for iv in self.interventions)
               + " from its first step", flush=True)
 
     def request_stop(self) -> str:

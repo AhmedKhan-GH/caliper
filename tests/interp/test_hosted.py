@@ -432,8 +432,8 @@ def test_script_checkpoint_keeps_the_existing_tensor_format(tmp_path):
     assert fork.step == 5
 
 
-@pytest.mark.parametrize("bind_late", [False, True])
-def test_script_fork_restores_outputs_and_defers_queued_lifecycle(tmp_path, monkeypatch, bind_late):
+@pytest.mark.parametrize("bind_late,explicit_override", [(False, False), (True, False), (False, True)])
+def test_script_fork_restores_outputs_and_defers_queued_lifecycle(tmp_path, monkeypatch, bind_late, explicit_override):
     import caliper
     from caliper import _net
     from caliper.interp._output import is_internal_forward
@@ -447,6 +447,7 @@ def test_script_fork_restores_outputs_and_defers_queued_lifecycle(tmp_path, monk
     parent._pkg = SimpleNamespace(_CTL=parent_controls)
     inputs = tokenizer("AB")
     add = {"kind": "add", "point": "layers.3.mlp_out", "vector": [1.] * 64, "coefficient": .25}
+    override = {"kind": "add", "point": "layers.2.mlp_out", "vector": [1.] * 64, "coefficient": .125}
     try:
         parent_service.set({"kind": "ablate", "point": "layers.3.mlp_out"})
         parent_service.set(add)
@@ -466,10 +467,19 @@ def test_script_fork_restores_outputs_and_defers_queued_lifecycle(tmp_path, monk
         expected, states = [], []
         for step in (None, 5, 6, 7):
             if step is not None:
+                if step == 5 and explicit_override:
+                    parent_service.set(override)
                 parent_controls.step(step)
             states.append(parent_service.state_dict())
-            with internal_forward(), torch.no_grad():
-                expected.append(parent_model(**inputs).logits.clone())
+            # Apply only the explicit override with an independent tensor oracle.
+            hook = parent_model.layers[2].mlp.register_forward_hook(lambda m, a, y: y + .125) \
+                if step is None and explicit_override else None
+            try:
+                with internal_forward(), torch.no_grad():
+                    expected.append(parent_model(**inputs).logits.clone())
+            finally:
+                if hook is not None:
+                    hook.remove()
         assert not torch.equal(expected[0], expected[1])
         assert not torch.equal(expected[2], expected[3])
     finally:
@@ -479,7 +489,8 @@ def test_script_fork_restores_outputs_and_defers_queued_lifecycle(tmp_path, monk
     model = TinyLM()
     folder = tmp_path / "script-fork"
     folder.mkdir()
-    fork = _managed.ManagedRun("script-fork", str(folder), str(folder / "link"), resume=checkpoint)
+    fork = _managed.ManagedRun("script-fork", str(folder), str(folder / "link"), resume=checkpoint,
+                               interventions=[override] if explicit_override else None)
     monkeypatch.setattr(caliper, "_CTL", controls)
     monkeypatch.setattr(_controls, "CONTROLS", controls)
     monkeypatch.setattr(_managed, "current", lambda: fork)
@@ -508,7 +519,16 @@ def test_script_fork_restores_outputs_and_defers_queued_lifecycle(tmp_path, monk
         for wanted, received in zip(expected, actual):
             torch.testing.assert_close(received, wanted, rtol=0, atol=0)
         assert [step for step, _ in seen] == [4, 5, 6, 7]
-        assert [state for _, state in seen] == states
+        def inherited(state):
+            return [record for record in state["interventions"] if
+                    (record["specification"]["point"], record["specification"]["kind"]) != (override["point"], override["kind"])]
+        if explicit_override:
+            assert [inherited(state) for _, state in seen] == [inherited(state) for state in states]
+            assert any(record["applied_specification"] is not None
+                       and record["applied_specification"].get("coefficient") == .125
+                       for record in seen[0][1]["interventions"])
+        else:
+            assert [state for _, state in seen] == states
         assert controls.n == 8 and fork._first is None
     finally:
         if handle is not None:
