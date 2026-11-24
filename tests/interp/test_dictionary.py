@@ -201,6 +201,7 @@ def test_partial_export_refuses_load_and_retry_resets_quality(tmp_path, monkeypa
     assert load_dictionary(tmp_path, model=model).metadata["quality"]["status"] == "passed"
     trainer = SimpleNamespace(metadata=deepcopy(data), device="cpu",
                               layers=deepcopy([block.mlp for block in model.layers]))
+    trainer.optimizers = [torch.optim.Adam(layer.parameters()) for layer in trainer.layers]
     with torch.no_grad():
         for layer in trainer.layers:
             layer.W_enc.add_(1)
