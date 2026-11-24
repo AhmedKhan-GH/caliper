@@ -171,6 +171,18 @@ def _gemma_source(metadata, response):
     return source
 
 
+def _gemma_model_binding(metadata, response):
+    """Require exact model evidence from quality and the current live resources."""
+    fields = {"version", "model_hash", "tensor_hash", "forward_settings_hash"}
+    for binding in (metadata["quality"].get("model_binding"), response.get("model_binding")):
+        _require(isinstance(binding, dict) and set(binding) == fields
+                 and _integer(binding.get("version"), 2) and binding.get("model_hash") == GEMMA_HASH
+                 and _digest(binding.get("tensor_hash")) and _digest(binding.get("forward_settings_hash")),
+                 "Gemma requires complete verified model evidence for quality and live resources.")
+    _require(metadata["quality"]["model_binding"] == response["model_binding"],
+             "Gemma quality model tensors or forward settings differ from the current resources.")
+
+
 def _fallback(metadata, response):
     training = metadata["training"]
     fallback = training["fallback"]
@@ -245,6 +257,7 @@ def dictionary_qualification(response, *, quality_override=None, family="qwen"):
         provenance = index["provenance"]
         _partitions(training)
         if gemma:
+            _gemma_model_binding(metadata, response)
             _require(provenance.get("publisher_training_overlap") == "unknown",
                      "Gemma index must retain unknown publisher training overlap.")
         else:

@@ -46,6 +46,9 @@ def gemma_reply():
     metadata["quality"].update(fvu=.3, per_layer_fvu=[.3] * 26,
                                per_layer_dead_fraction=[.15] * 26, all_mlps_replaced=26,
                                evaluation_source=deepcopy(source), publisher_training_overlap="unknown")
+    response["model_binding"] = {"version": 2, "model_hash": GEMMA_HASH,
+                                 "tensor_hash": "2" * 64, "forward_settings_hash": "3" * 64}
+    metadata["quality"]["model_binding"] = deepcopy(response["model_binding"])
     identity["model_hash"] = index["model_hash"] = GEMMA_HASH
     index.update(layers=26, features=16384,
                  provenance={**deepcopy(source), "partition": "index", "publisher_training_overlap": "unknown"})
@@ -130,6 +133,35 @@ def test_gemma_requires_current_import_evidence(fault):
         field = "sha256" if fault == "file_hash" else "input_gain_hash"
         response["import_binding"]["layers"][0][field] = ("sha256:" if fault == "gain_hash" else "") + "b" * 64
     assert not dictionary_qualification(response, family="gemma")["qualified"]
+
+
+@pytest.mark.parametrize("location", ["quality", "live"])
+@pytest.mark.parametrize("fault", ["missing", "tensor_hash", "forward_settings_hash", "legacy",
+                                    "model_hash", "uppercase", "extra", "version_type"])
+def test_gemma_requires_exact_quality_and_live_model_binding(location, fault):
+    response = gemma_reply()
+    target = response["metadata"]["quality"] if location == "quality" else response
+    if fault == "missing":
+        del target["model_binding"]
+    elif fault == "legacy":
+        del target["model_binding"]["forward_settings_hash"]
+    elif fault == "model_hash":
+        target["model_binding"][fault] = "hf:google/gemma-2-2b@main"
+    elif fault == "uppercase":
+        target["model_binding"]["tensor_hash"] = "A" * 64
+    elif fault == "extra":
+        target["model_binding"]["trusted"] = True
+    elif fault == "version_type":
+        target["model_binding"]["version"] = 2.0
+    else:
+        target["model_binding"][fault] = "9" * 64
+    assert not dictionary_qualification(response, family="gemma")["qualified"]
+
+
+def test_qwen_retains_legacy_quality_evidence_policy():
+    response = qualification_reply()
+    assert "model_binding" not in response["metadata"]["quality"]
+    assert dictionary_qualification(response)["qualified"]
 
 
 def test_gemma_finish_keeps_causal_failure_and_separate_model_result():
