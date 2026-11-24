@@ -12,6 +12,7 @@ import numpy as np
 import torch
 from safetensors import safe_open
 from safetensors.torch import save_file
+from caliper.interp._dictionary import _zero, fallback_metadata
 from .memory_limits import autorelease_scope
 
 
@@ -52,11 +53,14 @@ def save_checkpoint(root, trainer, stream, progress, *, elapsed=None):
     folder.mkdir()
     groups = []
     for i, (layer, optimizer) in enumerate(zip(trainer.layers, trainer.optimizers)):
-        groups.append([{k: v for k, v in group.items() if k != "params"} for group in optimizer.param_groups])
+        groups.append([{k: v for k, v in group.items() if k != "params"} for group in optimizer.param_groups]
+                      if optimizer is not None else [])
         for name, parameter in layer.named_parameters():
             with autorelease_scope(trainer.device):
                 values = {"weight": parameter.detach().cpu().contiguous()}
-                for key, value in optimizer.state.get(parameter, {}).items():
+                if optimizer is None and not _zero(parameter):
+                    raise ValueError("inactive checkpoint weights must remain zero")
+                for key, value in (optimizer.state.get(parameter, {}) if optimizer is not None else {}).items():
                     if not isinstance(value, torch.Tensor):
                         raise TypeError("Adam checkpoint state must contain tensors")
                     values[key] = value.detach().cpu().contiguous()
@@ -104,15 +108,29 @@ def checkpoint_record(root):
     return folder, record
 
 
+def validate_checkpoint(record, settings, metadata, source_id):
+    """Refuse changed fallback contracts before model or optimizer allocation."""
+    if record["settings"] != settings or record["metadata"]["model_hash"] != metadata["model_hash"]:
+        raise ValueError("checkpoint settings or model identity differ")
+    fallback = fallback_metadata(metadata)
+    saved_fallback = fallback_metadata(record["metadata"])
+    if fallback != saved_fallback:
+        raise ValueError("checkpoint fallback metadata differs")
+    if fallback and (settings.get("fallback") != fallback
+                     or record["stream"]["source_id"] != source_id
+                     or source_id != fallback["source_id"]):
+        raise ValueError("checkpoint fallback settings or text source differ")
+
+
 def restore_checkpoint(root, trainer, stream):
     """Restore into existing device weights without a whole-state CPU copy."""
     folder, record = checkpoint_record(root)
-    if record["settings"] != trainer.settings or record["metadata"]["model_hash"] != trainer.metadata["model_hash"]:
-        raise ValueError("checkpoint settings or model identity differ")
+    validate_checkpoint(record, trainer.settings, trainer.metadata, stream.source_id)
     for i, (layer, optimizer) in enumerate(zip(trainer.layers, trainer.optimizers)):
-        if len(record["optimizer_groups"][i]) != len(optimizer.param_groups):
+        groups = optimizer.param_groups if optimizer is not None else []
+        if len(record["optimizer_groups"][i]) != len(groups):
             raise ValueError("checkpoint optimizer groups differ")
-        for group, saved in zip(optimizer.param_groups, record["optimizer_groups"][i]):
+        for group, saved in zip(groups, record["optimizer_groups"][i]):
             group.update(saved)
             group["betas"] = tuple(group["betas"])
         for name, parameter in layer.named_parameters():
@@ -120,6 +138,8 @@ def restore_checkpoint(root, trainer, stream):
                 weight = source.get_tensor("weight")
                 if weight.shape != parameter.shape or not torch.isfinite(weight).all():
                     raise ValueError("invalid checkpoint weight")
+                if optimizer is None and (not _zero(weight) or set(source.keys()) != {"weight"}):
+                    raise ValueError("inactive checkpoint layer has weights or Adam state")
                 with torch.no_grad():
                     parameter.copy_(weight)
                 del weight
@@ -131,7 +151,8 @@ def restore_checkpoint(root, trainer, stream):
                     if (key != "step" and value.shape != parameter.shape) or not torch.isfinite(value).all():
                         raise ValueError("invalid Adam checkpoint tensor")
                     state[key] = value.to("cpu" if key == "step" else parameter.device)
-                optimizer.state[parameter] = state
+                if optimizer is not None:
+                    optimizer.state[parameter] = state
         with autorelease_scope(trainer.device), safe_open(folder / f"activity_{i:02d}.safetensors", framework="pt") as source:
             trainer.last_active[i].copy_(source.get_tensor("last_active"))
     trainer.initialized = record["initialized"]
@@ -154,6 +175,8 @@ def export_dictionary(root, trainer, progress):
     # A partial export must not retain quality metrics for the prior weights.
     (root / "dictionary.json").unlink(missing_ok=True)
     for i, layer in enumerate(trainer.layers):
+        if trainer.optimizers[i] is None and any(not _zero(p) for p in layer.parameters()):
+            raise ValueError("inactive export weights must remain zero")
         path = root / f"layer_{i:02d}.safetensors"
         with autorelease_scope(trainer.device):
             values = {name: parameter.detach().cpu().contiguous() for name, parameter in layer.named_parameters()}

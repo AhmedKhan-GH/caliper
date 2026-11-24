@@ -295,6 +295,49 @@ def _integer(value, name, minimum=1):
     return value
 
 
+def fallback_metadata(data):
+    """Validate the optional version-one upper-half contract without tensors."""
+    training = data["training"]
+    if "fallback" not in training:
+        return None
+    fallback = training["fallback"]
+    fields = {"version", "mode", "active_layers", "zero_layers", "source_dictionary_hash",
+              "source_checkpoint_generation", "source_training_tokens", "source_elapsed_seconds",
+              "prior_wall_seconds", "aggregate_wall_limit_seconds", "token_budget", "warm_start",
+              "source_id", "lower_behavior"}
+    if not isinstance(fallback, dict) or set(fallback) != fields:
+        raise ValueError("invalid fallback metadata fields")
+    if (type(fallback["version"]) is not int or fallback["version"] != 1
+            or fallback["mode"] != "upper_half"
+            or fallback["warm_start"] != "upper_weights_fresh_adam"
+            or fallback["lower_behavior"] != "zero_dictionary_original_mlp"):
+        raise ValueError("unsupported fallback contract")
+    layers = _integer(data["layers"], "layers", 2)
+    for name, expected in (("active_layers", list(range(layers // 2, layers))),
+                           ("zero_layers", list(range(layers // 2)))):
+        indices = fallback[name]
+        if (not isinstance(indices, list) or any(type(i) is not int for i in indices)
+                or indices != expected):
+            raise ValueError("fallback requires complete ordered upper and lower partitions")
+    for name, pattern in (("source_dictionary_hash", r"[0-9a-f]{64}"),
+                          ("source_checkpoint_generation", r"checkpoint-[0-9a-f]{32}")):
+        if not isinstance(fallback[name], str) or not re.fullmatch(pattern, fallback[name]):
+            raise ValueError(f"invalid fallback {name}")
+    for name in ("source_training_tokens", "token_budget"):
+        _integer(fallback[name], f"fallback.{name}")
+    for name in ("source_elapsed_seconds", "prior_wall_seconds", "aggregate_wall_limit_seconds"):
+        value = fallback[name]
+        if type(value) not in (int, float) or not math.isfinite(value) or value < 0:
+            raise ValueError(f"invalid fallback {name}")
+    if (not 0 < fallback["aggregate_wall_limit_seconds"] <= 36_000
+            or fallback["prior_wall_seconds"] < fallback["source_elapsed_seconds"]):
+        raise ValueError("fallback aggregate time conflicts with the source or ten-hour cap")
+    if (not isinstance(fallback["source_id"], str) or not fallback["source_id"]
+            or fallback["source_id"] != training.get("source_id")):
+        raise ValueError("fallback text source identity differs")
+    return fallback
+
+
 def _manifest(data):
     if not isinstance(data, dict) or data.get("format_version") != 1:
         raise ValueError("unsupported dictionary format_version")
@@ -334,6 +377,7 @@ def _manifest(data):
         if (type(training.get(field)) not in (int, float)
                 or not math.isfinite(training[field]) or training[field] < 0):
             raise ValueError(f"dictionary training requires nonnegative {field}")
+    fallback_metadata(data)
     quality = data.get("quality")
     if not isinstance(quality, dict) or any(field not in quality for field in (
         "fvu", "dead_fraction", "cross_entropy_delta", "evaluated_tokens",
@@ -393,6 +437,15 @@ def _finite(value):
     return True
 
 
+def _zero(value):
+    flat = value.reshape(-1)
+    for start in range(0, flat.numel(), _FINITE_CHUNK_ELEMENTS):
+        with autorelease_scope(value.device):
+            if torch.count_nonzero(flat[start:start + _FINITE_CHUNK_ELEMENTS]).item():
+                return False
+    return True
+
+
 def _admit(memory, required, stage):
     memory.check(stage)
     if memory.peak + required > memory.limit:
@@ -424,6 +477,8 @@ def load_dictionary(path, *, model=None, model_hash=None, device=None, dtype=Non
     folder = Path(path)
     data = _manifest(json.loads((folder / "dictionary.json").read_text(encoding="utf-8"),
                                 parse_constant=_reject_constant))
+    fallback = fallback_metadata(data)
+    zero_layers = set(fallback["zero_layers"]) if fallback else set()
     if actual != data["model_hash"]:
         if model is not None and data["model_hash"].startswith("hf:") and model not in _VERIFIED_MODELS:
             raise ValueError("dictionary model identity mismatch: verify_hf_model(model, snapshot) "
@@ -473,6 +528,8 @@ def load_dictionary(path, *, model=None, model_hash=None, device=None, dtype=Non
                 value = source.get_tensor(name)
                 if not _finite(value):
                     raise ValueError(f"dictionary layer {index} has invalid or nonfinite {name}")
+                if index in zero_layers and not _zero(value):
+                    raise ValueError(f"fallback lower layer {index} has nonzero {name}")
                 # Converted CPU layers must release the entire source mapping.
                 value = value.to(device=device, dtype=dtype, copy=budgets[index][2])
                 if not _finite(value):

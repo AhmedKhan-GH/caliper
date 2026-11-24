@@ -6,6 +6,7 @@ require the shared heavy-job wrapper. The model and tokenizer use local files.
 from __future__ import annotations
 
 import argparse
+import copy
 import json
 import math
 from pathlib import Path
@@ -14,10 +15,11 @@ import time
 
 import numpy as np
 import torch
+from safetensors import safe_open
 from torch.nn import functional as F
 
 from caliper.interp import capture, points
-from caliper.interp._dictionary import TopKTranscoder, model_identity
+from caliper.interp._dictionary import TopKTranscoder, _finite, _layer_header, fallback_metadata, model_identity
 from .checkpoint_state import checkpoint_record, export_dictionary, restore_checkpoint, save_checkpoint, write_json
 from .memory_limits import CleanStop, MemoryGuard, StopControl, autorelease_scope
 from .model_load import MODEL_ID, MODEL_REVISION, hidden_forward, load_text_model
@@ -39,19 +41,34 @@ def make_manifest(model, latents, k):
                         "evaluated_tokens": 0, "status": "not_evaluated"}}
 
 
+def trainer_settings(metadata, *, learning_rate=3e-4, microbatch_tokens=256,
+                     auxiliary_weight=1 / 32, dead_tokens=100_000, context=256, batch_tokens=4096):
+    """Describe checkpoint compatibility before any model or optimizer allocation."""
+    settings = {"learning_rate": learning_rate, "microbatch_tokens": microbatch_tokens,
+                "auxiliary_weight": auxiliary_weight, "dead_tokens": dead_tokens,
+                "context": context, "batch_tokens": batch_tokens,
+                "decoder_normalization": "initial_directions_only",
+                "layers": metadata["layers"], "width": metadata["width"],
+                "latents": metadata["latents"], "k": metadata["k"], "dtype": "float32"}
+    fallback = fallback_metadata(metadata)
+    if fallback:
+        settings.update(fallback=copy.deepcopy(fallback), model_hash=metadata["model_hash"],
+                        source_id=metadata["training"]["source_id"])
+    return settings
+
+
 class Trainer:
-    """Fresh random transcoders and one Adam optimizer per layer."""
+    """Complete dictionary layers with Adam only for active layers."""
 
     def __init__(self, metadata, *, device="cpu", learning_rate=3e-4, microbatch_tokens=256,
                  auxiliary_weight=1 / 32, dead_tokens=100_000, context=256, batch_tokens=4096):
         self.metadata = metadata
         self.device = torch.device(device)
-        self.settings = {"learning_rate": learning_rate, "microbatch_tokens": microbatch_tokens,
-                         "auxiliary_weight": auxiliary_weight, "dead_tokens": dead_tokens,
-                         "context": context, "batch_tokens": batch_tokens,
-                         "decoder_normalization": "initial_directions_only",
-                         "layers": metadata["layers"], "width": metadata["width"],
-                         "latents": metadata["latents"], "k": metadata["k"], "dtype": "float32"}
+        self.settings = trainer_settings(metadata, learning_rate=learning_rate,
+                                         microbatch_tokens=microbatch_tokens, auxiliary_weight=auxiliary_weight,
+                                         dead_tokens=dead_tokens, context=context, batch_tokens=batch_tokens)
+        fallback = fallback_metadata(metadata)
+        self.active_layers = tuple(fallback["active_layers"] if fallback else range(metadata["layers"]))
         if (not 0 < learning_rate < 1 or microbatch_tokens < 1 or dead_tokens < 1
                 or not 0 <= auxiliary_weight <= 1 or context < 2 or batch_tokens < context
                 or not 1 <= metadata["k"] <= metadata["latents"]):
@@ -61,19 +78,51 @@ class Trainer:
         self.metadata["training"]["optimizer"] = {"name": "Adam", **self.settings,
                                                    "decay_start": 0.8, "final_lr_ratio": 0.1}
         width, latents = metadata["width"], metadata["latents"]
-        for _ in range(metadata["layers"]):
+        for index in range(metadata["layers"]):
             # Separate random encoder and decoder directions. No teacher weights enter here.
             with autorelease_scope(self.device):
-                encoder = torch.randn(latents, width, device=self.device) / math.sqrt(width)
-                decoder = 0.1 * F.normalize(torch.randn(latents, width, device=self.device), dim=-1)
+                active = index in self.active_layers
+                if fallback:
+                    encoder = torch.zeros(latents, width, device=self.device)
+                    decoder = torch.zeros_like(encoder)
+                else:
+                    encoder = torch.randn(latents, width, device=self.device) / math.sqrt(width)
+                    decoder = 0.1 * F.normalize(torch.randn(latents, width, device=self.device), dim=-1)
                 layer = TopKTranscoder(encoder, torch.zeros(latents, device=self.device), decoder,
-                                      torch.zeros(width, device=self.device), metadata["k"], trainable=True)
+                                      torch.zeros(width, device=self.device), metadata["k"], trainable=active)
                 self.layers.append(layer)
-                self.optimizers.append(torch.optim.Adam(layer.parameters(), lr=learning_rate, foreach=False))
+                self.optimizers.append(torch.optim.Adam(layer.parameters(), lr=learning_rate, foreach=False)
+                                       if active else None)
                 self.last_active.append(torch.zeros(latents, dtype=torch.int64, device=self.device))
+
+    def initialize_upper(self, source_folder):
+        """Copy approved source parameters one at a time into fresh upper modules."""
+        if fallback_metadata(self.metadata) is None:
+            raise ValueError("upper initialization requires fallback metadata")
+        if any(optimizer.state for optimizer in self.optimizers if optimizer is not None):
+            raise ValueError("upper initialization requires fresh Adam state")
+        for index in self.active_layers:
+            layer = self.layers[index]
+            shapes = {name: tuple(parameter.shape) for name, parameter in layer.named_parameters()}
+            with autorelease_scope(self.device), safe_open(
+                Path(source_folder) / f"layer_{index:02d}.safetensors", framework="pt", device="cpu",
+            ) as source:
+                _layer_header(source, index, shapes, torch.float32)
+                for name, parameter in layer.named_parameters():
+                    weight = source.get_tensor(name)
+                    if not _finite(weight):
+                        raise ValueError("invalid warm source weight")
+                    with torch.no_grad():
+                        parameter.copy_(weight)
+                    del weight
+                    if not _finite(parameter):
+                        raise ValueError("warm source weight overflows float32")
+            self.initialized[index] = True
 
     def step_layer(self, index, x, y, tokens_before, *, health=None):
         """Accumulate microbatch gradients, then update one layer once."""
+        if index not in self.active_layers:
+            raise ValueError("cannot update an inactive lower layer")
         layer, optimizer = self.layers[index], self.optimizers[index]
         x, y = x.detach().reshape(-1, x.shape[-1]), y.detach().reshape(-1, y.shape[-1])
         if x.shape != y.shape or not x.numel():
@@ -123,6 +172,8 @@ class Trainer:
         decay = min(1.0, max(0.0, (fraction - decay_start) / (1 - decay_start)))
         rate = self.settings["learning_rate"] * (1 - decay * (1 - final_ratio))
         for optimizer in self.optimizers:
+            if optimizer is None:
+                continue
             for group in optimizer.param_groups:
                 group["lr"] = rate
 
@@ -167,7 +218,8 @@ def train_online(model, trainer, stream, output, *, token_budget, progress=None,
     def save():
         nonlocal last_save, checkpoint_seconds
         for optimizer in trainer.optimizers:
-            optimizer.zero_grad(set_to_none=True)
+            if optimizer is not None:
+                optimizer.zero_grad(set_to_none=True)
         if memory:
             trainer.metadata["training"]["peak_memory_bytes"] = max(
                 trainer.metadata["training"]["peak_memory_bytes"], memory.peak)
@@ -202,12 +254,15 @@ def train_online(model, trainer, stream, output, *, token_budget, progress=None,
             context = trainer.settings["context"]
             ids = torch.tensor(progress["pending_ids"], dtype=torch.int64, device=trainer.device)
             padded = F.pad(ids, (0, (-len(ids)) % context)).reshape(-1, context)
-            requested = trainer.metadata["read_points"] + trainer.metadata["write_points"]
+            requested = [trainer.metadata[field][i] for field in ("read_points", "write_points")
+                         for i in trainer.active_layers]
             with autorelease_scope(trainer.device), capture(model, requested) as captured, torch.no_grad():
                 hidden_forward(model, padded)
             if memory:
                 memory.check("after_forward", force=False)
-            for index in range(progress["next_layer"], len(trainer.layers)):
+            for index in trainer.active_layers:
+                if index < progress["next_layer"]:
+                    continue
                 health()
                 read, write = trainer.metadata["read_points"][index], trainer.metadata["write_points"][index]
                 x = captured[read].reshape(-1, trainer.metadata["width"])[:count]
