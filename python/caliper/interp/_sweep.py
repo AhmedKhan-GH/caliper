@@ -4,11 +4,12 @@ import math
 
 import torch
 
+from ._memory import autorelease_scope
 from ._output import forward_logits, prompt_inputs
 from ._points import _architecture, _input, capture
 
 
-def patch_sweep(model, tokenizer, interventions, *, clean_prompt, corrupted_prompt, metric):
+def patch_sweep(model, tokenizer, interventions, *, clean_prompt, corrupted_prompt, metric, guard=None):
     """Patch each residual input cell, with at most 32 cells per batch.
 
     The metric is the positive token logit minus the negative token logit.
@@ -33,12 +34,12 @@ def patch_sweep(model, tokenizer, interventions, *, clean_prompt, corrupted_prom
 
     cache = {}
     try:
-        with interventions.suspend(), torch.no_grad():
+        with interventions.suspend(), torch.no_grad(), autorelease_scope(next(model.parameters()).device):
             with capture(model, [p.point for p in probes]) as captured:
-                clean_value = float(score(forward_logits(model, clean))[0])
+                clean_value = float(score(forward_logits(model, clean, guard=guard))[0])
                 cache = {p.point: captured[p.point].clone() for p in probes}
             captured.close(clear=True)
-            corrupted_value = float(score(forward_logits(model, corrupted))[0])
+            corrupted_value = float(score(forward_logits(model, corrupted, guard=guard))[0])
             denominator = clean_value - corrupted_value
             if not math.isfinite(denominator) or abs(denominator) <= 1e-12:
                 raise ValueError("patch recovery is undefined because the clean metric equals the corrupted metric")
@@ -46,7 +47,7 @@ def patch_sweep(model, tokenizer, interventions, *, clean_prompt, corrupted_prom
             cells = [(probe, position) for probe in probes for position in range(positions)]
             for start in range(0, len(cells), 32):
                 batch = cells[start:start + 32]
-                with ExitStack() as hooks:
+                with autorelease_scope(next(model.parameters()).device), ExitStack() as hooks:
                     for probe in probes:
                         selected = [(row, position) for row, (target, position) in enumerate(batch) if target == probe]
                         if not selected:
@@ -64,7 +65,7 @@ def patch_sweep(model, tokenizer, interventions, *, clean_prompt, corrupted_prom
                         handle = modules[probe.module].register_forward_pre_hook(patch, with_kwargs=True)
                         hooks.callback(handle.remove)
                     inputs = {k: v.repeat(len(batch), 1) for k, v in corrupted.items()}
-                    recovered.append((score(forward_logits(model, inputs)) - corrupted_value) / denominator)
+                    recovered.append((score(forward_logits(model, inputs, guard=guard)) - corrupted_value) / denominator)
             grid = torch.cat(recovered).reshape(len(probes), positions).to(torch.float32)
             if not torch.isfinite(grid).all():
                 raise ValueError("patch recovery contains a nonfinite value")

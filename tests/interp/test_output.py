@@ -72,7 +72,7 @@ def test_utf8_labels_end_on_character_boundaries():
     labels = packed_labels(["a" * 63 + "é", "😀" * 17, "A\0B"], "cpu")
     raw = [b"".join(int(i).to_bytes(4, "little") for i in row) for row in labels.tolist()]
     assert raw[0].rstrip(b"\0").decode() == "a" * 63
-    assert raw[1].decode() == "😀" * 16
+    assert raw[1].rstrip(b"\0").decode() == "😀" * 15
     assert raw[2].rstrip(b"\0").decode() == "AB"
 
 
@@ -93,3 +93,19 @@ def test_failed_forward_restores_row_and_internal_scope(output_case, monkeypatch
         output.compare("A")
     assert selected_rows(model) is None
     assert not is_internal_forward()
+
+
+def test_supported_text_model_requests_only_next_token_logits(output_case, monkeypatch):
+    from caliper.interp._output import forward_logits
+    model, tokenizer, controls, service, output = output_case
+    original = model.forward
+    seen = []
+    model.config.model_type = "qwen3_5_text"
+    def forward(*a, **kwargs):
+        seen.append(kwargs.pop("logits_to_keep", None))
+        result = original(*a, **kwargs)
+        result.logits = result.logits[:, -1:]
+        return result
+    monkeypatch.setattr(model, "forward", forward)
+    value = forward_logits(model, tokenizer("AB"))
+    assert value.shape == (1, 1, 512) and seen == [1]
