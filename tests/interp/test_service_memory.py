@@ -305,6 +305,59 @@ def test_cached_examples_reserve_publication_before_allocation(resources, monkey
         unregister_service(service, controls=case.controls)
 
 
+@pytest.mark.parametrize("method", ["feature.show", "feature.examples"])
+@pytest.mark.parametrize("failure", ["stop", "limit"])
+def test_default_service_checks_cached_resource_guard_before_publication(resources, monkeypatch, method, failure):
+    from caliper.interp import _publish
+    case = resources
+    service = service_for(case, "default")
+    try:
+        replies = submit(service, case, method)
+        service.step()
+        assert replies[0][0] == "ok"
+        published = dict(_publish._TENSORS)
+        stopped = CleanStop("cached resource stop")
+
+        def stop(stage):
+            raise stopped
+
+        if failure == "stop":
+            monkeypatch.setattr(case.index_memory, "check", stop)
+        else:
+            case.index_memory.limit = 500
+        monkeypatch.setattr(torch, "zeros", lambda *a, **kw: pytest.fail("publication followed resource stop"))
+        replies = submit(service, case, method)
+        queued = submit(service, case, "feature.dictionary")
+        with pytest.raises(CleanStop) as caught:
+            service.step()
+        assert service.failure is caught.value
+        assert replies[0][2]["code"] == queued[0][2]["code"] == "interpret.stopped"
+        assert all(_publish._TENSORS[name] is value for name, value in published.items())
+        assert not service.queue
+        assert case.index.memory is case.index_memory
+    finally:
+        case.index_memory.limit = 2_000_000_000
+        unregister_service(service, controls=case.controls)
+
+
+def test_default_service_reserves_cached_example_publication(resources, monkeypatch):
+    case = resources
+    service = service_for(case, "default")
+    try:
+        replies = submit(service, case, "feature.examples")
+        service.step()
+        assert replies[0][0] == "ok"
+        case.index_memory.limit = 64_000
+        monkeypatch.setattr(torch, "zeros", lambda *a, **kw: pytest.fail("unadmitted cached publication"))
+        replies = submit(service, case, "feature.examples")
+        with pytest.raises(CleanStop, match="example publication allocation"):
+            service.step()
+        assert replies[0][2]["code"] == "interpret.stopped"
+    finally:
+        case.index_memory.limit = 2_000_000_000
+        unregister_service(service, controls=case.controls)
+
+
 def test_factory_result_retains_stop_before_first_use(resources):
     case, lower = resources, RequestGuard()
     failure = CleanStop("factory result stop")

@@ -218,7 +218,12 @@ class InterpretationService:
             return
         for name, attribute in (("index", "memory"), ("tracer", "guard")):
             resource = getattr(self, name)
-            if resource is None or id(resource) in self._borrowed:
+            if resource is None:
+                continue
+            if id(resource) in self._borrowed:
+                guard = getattr(resource, attribute, None)
+                if guard is not None:
+                    guard.check(stage)
                 continue
             key = id(resource)
             with _RESOURCE_LOCK:
@@ -232,13 +237,15 @@ class InterpretationService:
                     _ACTIVE_RESOURCES.remove(key)
 
             self._request_stack.callback(release)
-            if memory is None:
-                continue
             guard = getattr(resource, attribute, None)
             if guard is None:
                 continue
-            device = next(self.model.parameters()).device if self.model is not None else memory.device
+            device = (next(self.model.parameters()).device if self.model is not None else
+                      getattr(guard, "device", getattr(memory, "device", "cpu")))
             self._check_memory_device(guard, device)
+            guard.check(stage)
+            if memory is None:
+                continue
             combined = (_ServiceTraceGuard(guard, memory) if name == "tracer" else
                         BudgetMemory(guard, memory.limit / 1e9, extra=memory))
             combined.check(stage)
@@ -448,10 +455,12 @@ class InterpretationService:
         from ._publish import _publish_many
         device = next(self.model.parameters()).device if self.model is not None else "cpu"
         memory = self._service_memory()
+        owned = getattr(self.index, "memory", None)
+        if memory is None:
+            memory = owned
+        elif owned is not None:
+            memory = BudgetMemory(owned, memory.limit / 1e9, extra=memory)
         if memory is not None:
-            owned = getattr(self.index, "memory", None)
-            if owned is not None:
-                memory = BudgetMemory(owned, memory.limit / 1e9, extra=memory)
             memory.check("example publication admission")
             # Include CPU tensors, device copies, and one temporary label row.
             if allocation_bytes(memory) + 64_000 > memory.limit:
