@@ -7,6 +7,7 @@ from copy import deepcopy
 import json
 import math
 from pathlib import Path
+import threading
 from types import SimpleNamespace
 
 import torch
@@ -307,6 +308,7 @@ class HostedService(InterpretationService):
         super().__init__(model=owner.model, tokenizer=owner.tokenizer, dictionary=owner.dictionary, index=owner.index,
                          handlers={"patch.sweep": owner.sweep, "trace.validate": owner.validate})
         self.boundary_running = False
+        self.boundary_thread = None
 
     def _execute(self, method, params, step):
         if method == "trace.run":
@@ -322,9 +324,11 @@ class HostedService(InterpretationService):
         return result
 
     def step(self, step=None):
-        if self.running or self.boundary_running or self.closed:
-            return 0
-        self.boundary_running = True
+        with self.lock:
+            if self.running or self.boundary_running or self.closed:
+                return 0
+            self.boundary_running = True
+            self.boundary_thread = threading.get_ident()
         try:
             with internal_forward():
                 try:
@@ -338,7 +342,24 @@ class HostedService(InterpretationService):
                     self.owner.status.set(bounded_text(str(exc)))
                 return count
         finally:
-            self.boundary_running = False
+            with self.idle:
+                self.boundary_running = False
+                self.boundary_thread = None
+                self.idle.notify_all()
+
+    def _check_close_thread(self):
+        super()._check_close_thread()
+        with self.lock:
+            if self.boundary_thread == threading.get_ident():
+                raise Refused("interpret.busy", "An active hosted boundary cannot close its own service.")
+
+    def close(self):
+        with self.idle:
+            self._check_close_thread()
+            self.closed = True
+            while self.boundary_running:
+                self.idle.wait()
+        super().close()
 
 
 class HostedInference:

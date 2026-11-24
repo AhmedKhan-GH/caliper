@@ -145,6 +145,69 @@ def test_trace_snapshot_uses_applied_effects_during_a_queued_replacement(resourc
         run.close()
 
 
+def test_hosted_service_close_waits_for_output_and_refuses_recursive_close(resource_folder, monkeypatch):
+    from caliper.interp._hosted import HostedService
+    from caliper.interp._output import Output
+    from caliper.interp._service import Refused
+    run = HostedInference("tiny-lm", resource_folder, "AB")
+    controls = _controls.Controls()
+    interventions = controls.interventions_on(run.model)
+    output = Output(run.model, run.tokenizer, interventions)
+    service = HostedService(run)
+    entered, release, waiting, finished = (threading.Event() for _ in range(4))
+    errors, results = [], []
+    wait = service.idle.wait
+
+    def wait_for_boundary(*args):
+        waiting.set()
+        return wait(*args)
+
+    def update_controls():
+        with pytest.raises(Refused, match="hosted boundary"):
+            service.close()
+
+    def update_output():
+        entered.set()
+        assert release.wait(5), "output gate did not open"
+        results.append(output.compare("AB"))
+
+    def invoke(fn):
+        try:
+            fn()
+        except BaseException as exc:
+            errors.append(exc)
+
+    def close():
+        service.close()
+        finished.set()
+
+    monkeypatch.setattr(service.idle, "wait", wait_for_boundary)
+    monkeypatch.setattr(run, "update_controls", update_controls)
+    monkeypatch.setattr(run, "update_output", update_output)
+    worker = threading.Thread(target=invoke, args=(service.step,))
+    closer = threading.Thread(target=invoke, args=(close,))
+    try:
+        worker.start()
+        assert entered.wait(5), errors
+        closer.start()
+        assert waiting.wait(5), errors
+        assert not finished.is_set()
+        release.set()
+        worker.join(5)
+        closer.join(5)
+        assert not worker.is_alive() and not closer.is_alive()
+        assert not errors and len(results) == 1
+        assert finished.is_set() and service.closed
+        assert controls.n == 0
+    finally:
+        release.set()
+        worker.join(5)
+        if closer.ident is not None:
+            closer.join(5)
+        interventions.remove()
+        run.close()
+
+
 class HostedChild:
     def __init__(self, root, dictionary, name, *, resume=None):
         self.folder = root / name
