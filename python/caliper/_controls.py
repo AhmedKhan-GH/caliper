@@ -242,7 +242,7 @@ class Param:
 
     Attributes:
         name (str): The name of the parameter.
-        type (str): `"boolean"`, `"integer"`, `"number"` or `"choice"`.
+        type (str): `"boolean"`, `"integer"`, `"number"`, `"choice"`, or `"text"`.
         min (int | float | None): The lower end of the range, or `None`.
         max (int | float | None): The upper end of the range, or `None`.
         log (bool): Whether a viewer draws the slider on a log scale.
@@ -345,7 +345,12 @@ def _param_spec(name, value, lo, hi, log, choices, help):
             raise ValueError(f"parameter {name!r}: a boolean takes no min, max or log")
         return "boolean", value, None, None, False, None, help
     if isinstance(value, str):
-        raise TypeError(f"parameter {name!r}: a str value needs choices=[...]")
+        from ._interpret_protocol import text
+        if not text(value, TEXT_MAX):
+            raise ValueError(f"parameter {name!r}: text must be valid UTF-8 within {TEXT_MAX} bytes")
+        if lo is not None or hi is not None or log:
+            raise ValueError(f"parameter {name!r}: text takes no min, max or log")
+        return "text", value, None, None, False, None, help
     if isinstance(value, numbers.Integral):
         type_, conv = "integer", int
         ok = (lambda x: isinstance(x, numbers.Integral) and not isinstance(x, bool)

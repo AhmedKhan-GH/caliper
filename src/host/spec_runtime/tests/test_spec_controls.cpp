@@ -833,3 +833,29 @@ TEST_CASE("spec controls: texts wider than a narrow row end in an ellipsis in th
     CHECK(rec.events.empty());
 }
 }  // TEST_SUITE("gpu")
+
+TEST_CASE("spec controls: a text parameter sends UTF-8 on Return") {
+    Ui ui;
+    Recorder rec;
+    FakeRun run;
+    run.run = training();
+    cb::RunParam prompt;
+    prompt.name = "prompt"; prompt.type = "text"; prompt.value = "";
+    run.run.params.push_back(prompt);
+    auto control = make("prompt", spec::ControlKind::text, "param:prompt");
+    const auto sp = instrument_spec({control});
+    cb::ValueStore values;
+    values.reset(sp);
+    SpecInstrumentHost host{&rec, &run, &values, nullptr, &sp};
+    const SpecLook look;
+    auto draw = [&] { return caliper_host::draw_spec_control(control, kRow, look, host); };
+    ui.click(300, 15, draw);
+    ImGui::GetIO().AddInputCharactersUTF8("A café");
+    ui.frame([&] { draw(); });
+    CHECK(run.sent.empty());
+    press(ui, ImGuiKey_Enter, [&] { draw(); });
+    REQUIRE(run.sent.size() == 1);
+    CHECK(run.sent[0] == std::make_pair(std::string("set prompt"), json("A café")));
+    REQUIRE(rec.events.size() == 1);
+    CHECK(rec.events[0].fields["value"] == "A café");
+}

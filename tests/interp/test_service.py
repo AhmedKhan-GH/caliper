@@ -35,10 +35,16 @@ def call(route, method, params=None, request_id=1):
 
 
 @pytest.fixture
-def actual(tmp_path):
+def actual(tmp_path, request):
     from caliper.interp import load_dictionary
     from caliper.interp._index import FeatureIndex, build_index
-    model, _ = write_fixture(tmp_path)
+    from .fixture import TinyLM
+    import torch
+    model = TinyLM()
+    with torch.no_grad():
+        for block in model.layers:
+            block.mlp.W_dec.mul_(getattr(request, "param", 1.0))
+    model, _ = write_fixture(tmp_path, model)
     tokenizer = TinyTokenizer()
     dictionary = load_dictionary(tmp_path, model=model)
     build_index(tmp_path, [("fixture", [65, 66, 67, 68] * 12)], model=model, tokenizer=tokenizer,

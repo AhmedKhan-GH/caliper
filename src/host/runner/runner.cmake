@@ -42,3 +42,9 @@ if(BUILD_TESTS AND TARGET doctest::doctest AND NOT WIN32)
     set_tests_properties(caliper_runner PROPERTIES LABELS "builder" TIMEOUT 300
         ENVIRONMENT "CALIPER_AGENT_OFFLINE=1")
 endif()
+
+if(BUILD_TESTS AND NOT WIN32)
+    add_executable(caliper_interpret_command_host ${CMAKE_SOURCE_DIR}/tests/interp/command_host.cpp)
+    target_link_libraries(caliper_interpret_command_host PRIVATE caliper_runner caliper_builder_session_host)
+    target_compile_features(caliper_interpret_command_host PRIVATE cxx_std_17)
+endif()

@@ -844,3 +844,55 @@ TEST_CASE("runner: a symbolic link among the kept checkpoints is never used for 
     REQUIRE(runner.wait_for(state_is("base", "exited"), 60000));
     CHECK(runner.running_pids().empty());
 }
+
+TEST_CASE("runner: interpretation uses the managed connection without attachment") {
+    Workspace w("interpretation");
+    if (const char* python = std::getenv("CALIPER_INTERPRET_PYTHON")) w.python = python;
+    REQUIRE(!w.python.empty());
+    std::ofstream script(w.ws + "/scripts/stand_in_run.py");
+    script << R"PY(import os
+from pathlib import Path
+import caliper
+from caliper._controls import CONTROLS
+from caliper.interp._service import register_service
+service = register_service()
+server = caliper.serve(control=True)
+Path(os.environ["CALIPER_RUN_LINK_FILE"]).write_text(server.url)
+while True:
+    with CONTROLS.cond:
+        CONTROLS.cond.wait_for(lambda: service.pending, timeout=1)
+    if service.pending:
+        caliper.step()
+)PY";
+    script.close();
+    cr::ModelRunner::Options options;
+    options.workspace = w.ws;
+    options.python = w.python;
+    cr::ModelRunner runner(options);
+    struct Guard { cr::ModelRunner& runner; ~Guard() { runner.shutdown(); } } guard{runner};
+    cb::RunEntry entry;
+    REQUIRE(!runner.start(w.start({}, json::object(), "interpretation"), &entry));
+    REQUIRE(runner.wait_for(state_is(entry.id, "running"), 30000));
+    cb::Error error;
+    auto* control = runner.control_of(entry.id, &error);
+    REQUIRE(control);
+    REQUIRE(runner.wait_for([&](const auto&) { return control->state().control; }, 30000));
+    auto output = control->interpret("trace.status", json::object(), 0);
+    REQUIRE(!output.error);
+    const auto request = output.result.at("request_id").get<std::uint32_t>();
+    REQUIRE(runner.wait_for([&](const auto&) {
+        output = control->interpret("trace.status", json::object(), request);
+        return output.error || !output.result.at("pending").get<bool>();
+    }, 30000));
+    REQUIRE(!output.error);
+    CHECK(output.result.at("result").at("state") == "idle");
+    output = control->interpret("feature.dictionary", json::object(), 0);
+    REQUIRE(!output.error);
+    const auto missing = output.result.at("request_id").get<std::uint32_t>();
+    REQUIRE(runner.wait_for([&](const auto&) {
+        output = control->interpret("feature.dictionary", json::object(), missing);
+        return static_cast<bool>(output.error);
+    }, 30000));
+    CHECK(output.error.code == "interpret.missing_dictionary");
+    CHECK(control->interpret("trace.read", json::object(), request).error.code == "interpret.unknown_request");
+}

@@ -96,6 +96,13 @@ Error check_value(const RunParam& param, const json& value) {
         if (!value.is_boolean()) return fail(kRunBadValue, "The parameter " + param.name + " takes true or false.", where);
         return {};
     }
+    if (param.type == "text") {
+        if (!value.is_string() || value.get_ref<const std::string&>().size() > 1024 ||
+            value.get_ref<const std::string&>().find('\0') != std::string::npos)
+            return fail(kRunBadValue, "The text parameter accepts at most 1024 UTF-8 bytes.", where);
+        try { (void)value.dump(); } catch (...) { return fail(kRunBadValue, "The text is not valid UTF-8.", where); }
+        return {};
+    }
     if (param.type == "choice") {
         if (value.is_string())
             for (const auto& c : param.choices)

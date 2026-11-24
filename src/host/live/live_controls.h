@@ -81,6 +81,7 @@ public:
     // script applies it at its next step; a refusal in its CONTROL_REPLY
     // shows in notice().
     bool intervene(const caliper_net::Json& body);
+    caliper_net::Json interpret(const std::string& method, const caliper_net::Json& params, uint32_t request);
 
     // What a parameter's control shows: the value set here until the script
     // confirms it, else the script's pending value, else its value.
@@ -154,6 +155,7 @@ private:
     ControlAccess access_{false, "not attached to a session"};
     std::map<std::string, Local> locals_;
     std::map<uint32_t, std::string> runs_;     // run request -> action
+    std::map<uint32_t, std::pair<std::string, ControlReply>> interpretations_;
     std::map<uint32_t, std::string> ops_;      // pause/resume/step request -> op
     std::map<std::string, Result> results_;
     Result notice_;
@@ -269,6 +271,7 @@ public:
     std::string send(const std::string& op, const std::string& name, const caliper_net::Json& value,
                      uint32_t count) override;
     ActionResult action_result(const std::string& name) const override;
+    caliper_net::Json interpret(const std::string& method, const caliper_net::Json& params, uint32_t request) override;
 
 private:
     const Attachment& att_;

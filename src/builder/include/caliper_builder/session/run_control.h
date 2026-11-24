@@ -130,6 +130,10 @@ public:
     // Sends {op: "pause"}, {op: "resume"} or {op: "step", count}.
     virtual Error pause(RunPauseOp op, std::int64_t count) = 0;
 
+    virtual CommandOutput interpret(const std::string&, const nlohmann::json&, std::uint32_t) {
+        return CommandOutput::fail(Error("interpret.unsupported", "This run has no interpretation transport."));
+    }
+
     // The interventions (design/gpu-programs.md, Intervention Wire). A script
     // that announced the capability `interventions` sends its points and its
     // interventions in CONTROLS, and takes CONTROL {op: "intervene"}. The

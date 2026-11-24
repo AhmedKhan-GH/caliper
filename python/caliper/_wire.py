@@ -167,11 +167,13 @@ OP_PAUSE, OP_RESUME, OP_STEP, OP_SET, OP_RUN = "pause", "resume", "step", "set",
 OP_INTERVENE = "intervene"                 # 3.2 draft, capability "interventions"
 OP_INTERPRET = "interpret"
 CAP_INTERPRETATION = "interpretation"
+CAP_TEXT_PARAMS = "text_params"
+PARAM_TEXT = "text"
 INTERPRET_MAX_BYTES = 262144
 INTERPRET_STRING_MAX = 4096
 OPS = (OP_PAUSE, OP_RESUME, OP_STEP, OP_SET, OP_RUN, OP_INTERVENE, OP_INTERPRET)
 PARAM_NUMBER, PARAM_INTEGER, PARAM_BOOLEAN, PARAM_CHOICE = "number", "integer", "boolean", "choice"
-PARAM_TYPES = (PARAM_NUMBER, PARAM_INTEGER, PARAM_BOOLEAN, PARAM_CHOICE)
+PARAM_TYPES = (PARAM_NUMBER, PARAM_INTEGER, PARAM_BOOLEAN, PARAM_CHOICE, PARAM_TEXT)
 STATUS_OK, STATUS_QUEUED, STATUS_ERROR = "ok", "queued", "error"
 STATUSES = (STATUS_OK, STATUS_QUEUED, STATUS_ERROR)
 
@@ -1055,6 +1057,9 @@ def _fits_type(p: dict, v) -> bool:
         return _is_int(v) and abs(v) <= _INT_EXACT
     if t == PARAM_BOOLEAN:
         return _bool(v)
+    if t == PARAM_TEXT:
+        from ._interpret_protocol import text
+        return text(v, TEXT_MAX)
     return isinstance(v, str) and v in p["choices"]
 
 
@@ -1146,7 +1151,8 @@ class Controls(_Msg):
 
 
 def _set_value(v) -> bool:
-    return _finite(v) or _bool(v) or _name(v)
+    from ._interpret_protocol import text
+    return _finite(v) or _bool(v) or text(v, TEXT_MAX)
 
 
 @dataclass
@@ -1309,11 +1315,11 @@ def param_value(param: dict, value):
     for a value of another type, a fraction for an integer, or an unknown
     choice."""
     t = param["type"]
-    if t == PARAM_BOOLEAN or t == PARAM_CHOICE:
+    if t in (PARAM_BOOLEAN, PARAM_CHOICE, PARAM_TEXT):
         if not _fits_type(param, value):
             raise MessageError(ERR_BAD_VALUE, f"{param['name']!r} takes "
                                + ("true or false" if t == PARAM_BOOLEAN else
-                                  f"one of {param['choices']}") + f", not {value!r}")
+                                  "UTF-8 text" if t == PARAM_TEXT else f"one of {param['choices']}") + f", not {value!r}")
         return value
     if t == PARAM_NUMBER:
         if not _finite(value):

@@ -144,6 +144,7 @@ class ConnectionControl final : public cb::RunControl {
 public:
     ConnectionControl(RunnerState* state, std::string id) : state_(state), id_(std::move(id)) {}
     cb::RunState state() override;
+    cb::CommandOutput interpret(const std::string& method, const json& params, std::uint32_t request) override;
     cb::Error set_param(const std::string& name, const json& value) override { return send("set", name, value, 1); }
     cb::Error run_action(const std::string& name) override { return send("run", name, json(), 1); }
     cb::Error pause(cb::RunPauseOp op, std::int64_t count) override {
@@ -358,6 +359,18 @@ std::vector<cb::Intervention> ConnectionControl::interventions() {
     }
     pending.insert(pending.end(), rest.begin(), rest.end());
     return pending;
+}
+
+cb::CommandOutput ConnectionControl::interpret(const std::string& method, const json& params, std::uint32_t request) {
+    std::lock_guard<std::mutex> lock(state_->m);
+    Run* run = state_->find(id_);
+    if (!run || !run->conn)
+        return cb::CommandOutput::fail(fail(cb::kRunNotAttached, "The run has no connection."));
+    const auto result = run->conn->interpret(method, params, request);
+    if (result.contains("error"))
+        return cb::CommandOutput::fail(fail(result["error"]["code"], result["error"]["message"]));
+    state_->wake.notify_all();
+    return cb::CommandOutput::ok(result);
 }
 
 cb::Error ConnectionControl::send(const std::string& op, const std::string& name, const json& value,

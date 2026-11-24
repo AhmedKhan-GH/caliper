@@ -11,6 +11,8 @@ namespace caliper_builder {
 // the session's run control, or null, which answers command.not_available. A
 // run control whose script did not announce `interventions` answers
 // intervene.not_supported. Defined in intervene_commands.cpp.
+CommandOutput interpretation_command(const CommandContext& context, RunControl* control);
+
 CommandOutput intervene_command(const CommandContext& context, RunControl* control);
 
 }  // namespace caliper_builder

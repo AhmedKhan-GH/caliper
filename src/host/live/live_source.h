@@ -125,6 +125,7 @@ struct ControlAccess {
 struct ControlReply {
     uint32_t request_id = 0;
     std::string op, status, name;             // status: ok, queued, error
+    caliper_net::Json result;                 // structured interpretation result
     caliper_net::Json value;                  // set with ok: the accepted value
     std::string message;                      // run with ok: the action's result text
     std::string error_code, error_message;    // status error

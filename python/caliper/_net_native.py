@@ -277,6 +277,8 @@ class NativeServer(NetServer):
         self.transport.producer = self.producer
         from ._net_controls import ControlsPort
         self.nio.enable_controls(bool(control))
+        from ._controls import CONTROLS
+        self.nio.enable_interpretation(CONTROLS.interpretation_service is not None)
         self.producer.controls = ControlsPort(self, control, native=True)
         self._events_thread = None
         self.port = 0
@@ -300,6 +302,8 @@ class NativeServer(NetServer):
         """Start listening for viewers (a producer that connect() started)."""
         self.producer.controls.allow = bool(control)
         self.nio.enable_controls(bool(control))
+        from ._controls import CONTROLS
+        self.nio.enable_interpretation(CONTROLS.interpretation_service is not None)
         if not self.nio.listening:
             self.nio.listen(int(port))
         self._set_urls()
@@ -353,7 +357,7 @@ class NativeServer(NetServer):
                 info = json.loads(frame)
                 link.caps = frozenset(c for c in (_wire.CAP_CONTROLS, _wire.CAP_SELECTION,
                                                   _wire.CAP_SCENES, _wire.CAP_PROGRAMS,
-                                                  _wire.CAP_INTERVENTIONS, _wire.CAP_INTERPRETATION, _wire.CAP_RESOURCES,
+                                                  _wire.CAP_INTERVENTIONS, _wire.CAP_INTERPRETATION, _wire.CAP_TEXT_PARAMS, _wire.CAP_RESOURCES,
                                                   _wire.CAP_SCENE_PIECES)
                                       if info.get(c))
                 link.may_control = bool(info.get("control"))

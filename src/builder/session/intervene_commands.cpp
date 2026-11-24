@@ -178,6 +178,28 @@ CommandOutput clear(const json& args, RunControl& control) {
 
 }  // namespace
 
+CommandOutput interpretation_command(const CommandContext& context, RunControl* control) {
+    if (!control) return CommandOutput::fail(fail("interpret.unsupported", "This session has no run transport."));
+    const auto state = control->state();
+    if (!state.attached) return CommandOutput::fail(fail(kRunNotAttached, "No run is attached."));
+    const auto& name = context.invocation.name;
+    const bool change = name == "trace.run" || name == "trace.validate" || name == "patch.sweep";
+    if (change && !state.control) return CommandOutput::fail(fail(kRunControlNotAllowed, state.why_not));
+    json params = context.invocation.args;
+    const auto request = params.value("request_id", std::uint32_t(0));
+    params.erase("request_id");
+    if (request && !params.empty())
+        return CommandOutput::fail(fail("command.invalid_args", "A reply query accepts only request_id."));
+    if (!request && (name == "feature.show" || name == "feature.examples")) {
+        const bool node = params.contains("node"), layer = params.contains("layer"), feature = params.contains("feature");
+        if (!((node && !layer && !feature) || (!node && layer && feature)))
+            return CommandOutput::fail(fail("command.invalid_args", "Supply node or both layer and feature."));
+    }
+    if (!request && name == "trace.run" && !params.contains("prompt"))
+        return CommandOutput::fail(fail("command.invalid_args", "A trace requires a prompt."));
+    return control->interpret(name, params, request);
+}
+
 CommandOutput intervene_command(const CommandContext& context, RunControl* control) {
     const std::string& name = context.invocation.name;
     if (!control)

@@ -588,3 +588,21 @@ def test_interpretation_capability_and_real_service_round_trip(mode, ctl, make_s
         assert published["examples.example_ids"].tolist() == list(range(16))
     finally:
         unregister_service(service, controls=ctl)
+        index.close()
+
+
+def test_free_text_capability_round_trip(mode, ctl, make_server):
+    parameter = caliper.param("prompt", "A café")
+    server = make_server()
+
+    async def check():
+        async with Viewer(server, CAPS + [w.CAP_TEXT_PARAMS]) as viewer:
+            controls = await viewer.expect(w.Controls)
+            assert controls.params[0]["type"] == "text"
+            await viewer.send(w.Control(1, "set", name="prompt", value="river " * 30))
+            answer = await viewer.expect(w.ControlReply)
+            assert answer.status == "ok" and parameter.value == "river " * 30
+        async with Viewer(server) as old:
+            controls = await old.expect(w.Controls)
+            assert controls.params == []
+    run(check())

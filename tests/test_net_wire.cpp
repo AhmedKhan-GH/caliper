@@ -809,3 +809,35 @@ TEST_CASE("net/wire: encode_head gives existing sections a new head, as the hub 
     std::vector<uint8_t> head;
     CHECK_FALSE(encode_head(CALIPER_NET_MSG_SNAPSHOT, Json::object(), {}, 0, &head));
 }
+
+TEST_CASE("net/wire: interpretation metadata preserves framing and rejects malformed extensions") {
+    auto status = [](uint16_t type, const std::string& metadata) {
+        const auto bytes = frame_of(type, metadata);
+        Message message;
+        return decode(bytes.data(), bytes.size(), &message).status;
+    };
+    const auto valid = DecodeResult::Status::Ok;
+    const auto bad = DecodeResult::Status::BadMessage;
+    CHECK(status(CALIPER_NET_MSG_CONTROL, R"({"request_id":1,"op":"interpret","interpretation":{"version":1,"method":"feature.show","params":{"layer":0,"feature":2}}})") == valid);
+    CHECK(status(CALIPER_NET_MSG_CONTROL, R"({"request_id":1,"op":"interpret","interpretation":{"version":true,"method":"trace.status","params":{}}})") == bad);
+    CHECK(status(CALIPER_NET_MSG_CONTROL, R"({"request_id":1,"op":"interpret","interpretation":{"version":1,"method":"trace.read","params":{"node_limit":257}}})") == bad);
+    CHECK(status(CALIPER_NET_MSG_CONTROL, R"({"request_id":1,"op":"interpret","interpretation":{"version":1,"method":"feature.show","params":{"layer":0,"feature":true}}})") == bad);
+    CHECK(status(CALIPER_NET_MSG_CONTROL, R"({"request_id":1,"op":"interpret","interpretation":{"version":1,"method":"trace.run","params":{"prompt":"x","unknown":1}}})") == bad);
+    CHECK(status(CALIPER_NET_MSG_CONTROL, R"({"request_id":1,"op":"pause","interpretation":{}})") == bad);
+    CHECK(status(CALIPER_NET_MSG_CONTROL_REPLY, R"({"request_id":1,"op":"interpret","status":"queued"})") == valid);
+    CHECK(status(CALIPER_NET_MSG_CONTROL_REPLY, R"({"request_id":1,"op":"interpret","status":"ok","result":{"nodes":[{"id":"a"}],"next":null}})") == valid);
+    CHECK(status(CALIPER_NET_MSG_CONTROL_REPLY, R"({"request_id":1,"op":"interpret","status":"ok"})") == bad);
+    CHECK(status(CALIPER_NET_MSG_CONTROL_REPLY, R"({"request_id":1,"op":"pause","status":"ok","result":{}})") == bad);
+    CHECK(status(CALIPER_NET_MSG_CONTROL_REPLY, R"({"request_id":1,"op":"interpret","status":"ok","result":{"too_large":9007199254740992}})") == bad);
+    Control request;
+    request.request_id = 7;
+    request.op = "interpret";
+    const std::string envelope = R"({"version":1,"method":"trace.status","params":{}})";
+    std::string error;
+    REQUIRE(Json::parse(envelope.data(), envelope.size(), &request.interpretation, &error));
+    std::vector<uint8_t> bytes;
+    REQUIRE(encode(request, &bytes));
+    Message message;
+    REQUIRE(decode(bytes.data(), bytes.size(), &message).status == valid);
+    CHECK(std::get<Control>(message).interpretation.dump() == request.interpretation.dump());
+}

@@ -475,9 +475,16 @@ bool one_of(const Json& v, std::initializer_list<const char*> words) {
 }
 bool is_op(const Json& v) {
     return one_of(v, {CALIPER_NET_OP_PAUSE, CALIPER_NET_OP_RESUME, CALIPER_NET_OP_STEP, CALIPER_NET_OP_SET,
-                      CALIPER_NET_OP_RUN, CALIPER_NET_OP_INTERVENE});
+                      CALIPER_NET_OP_RUN, CALIPER_NET_OP_INTERVENE, CALIPER_NET_OP_INTERPRET});
 }
-bool is_set_value(const Json& v) { return is_finite(v) || v.is_bool() || is_name(v); }
+bool utf8_ok(const uint8_t* p, size_t n);
+bool param_text(const Json& v) {
+    if (!v.is_string()) return false;
+    const auto& s = v.as_string();
+    return s.size() <= CALIPER_NET_TEXT_MAX && s.find('\0') == std::string::npos &&
+           utf8_ok(reinterpret_cast<const uint8_t*>(s.data()), s.size());
+}
+bool is_set_value(const Json& v) { return is_finite(v) || v.is_bool() || param_text(v); }
 bool present(const Json* v) { return v && !v->is_null(); }
 
 // Whether v is a value of parameter p's type, its range aside.
@@ -486,6 +493,7 @@ bool fits_type(const Json& p, const Json& v) {
     if (t == CALIPER_NET_PARAM_NUMBER) return is_finite(v);
     if (t == CALIPER_NET_PARAM_INTEGER) return v.is_int() && is_int53(v);
     if (t == CALIPER_NET_PARAM_BOOLEAN) return v.is_bool();
+    if (t == CALIPER_NET_PARAM_TEXT) return param_text(v);
     if (!v.is_string()) return false;
     for (const Json& c : p.find("choices")->items())
         if (c.is_string() && c.as_string() == v.as_string()) return true;
@@ -505,7 +513,7 @@ bool param_entry(const Json& p) {
     const Json* type = p.find("type");
     if (!(name && is_name(*name) && type &&
           one_of(*type, {CALIPER_NET_PARAM_NUMBER, CALIPER_NET_PARAM_INTEGER, CALIPER_NET_PARAM_BOOLEAN,
-                         CALIPER_NET_PARAM_CHOICE})))
+                         CALIPER_NET_PARAM_CHOICE, CALIPER_NET_PARAM_TEXT})))
         return false;
     const std::string& t = type->as_string();
     if (t == CALIPER_NET_PARAM_NUMBER || t == CALIPER_NET_PARAM_INTEGER) {
@@ -572,6 +580,67 @@ bool bounded_text(const Json* v, size_t limit) {
 }
 bool point_ok(const Json* v) { return bounded_text(v, CALIPER_NET_POINT_MAX); }
 bool name_ok(const Json* v) { return v && is_name(*v); }
+
+
+bool utf8_ok(const uint8_t* p, size_t n);
+bool interpretation_text(const Json& v, size_t limit, bool empty = true) {
+    if (!v.is_string()) return false;
+    const auto& s = v.as_string();
+    return (empty || !s.empty()) && s.size() <= limit && s.find('\0') == std::string::npos &&
+           utf8_ok(reinterpret_cast<const uint8_t*>(s.data()), s.size());
+}
+bool interpretation_value(const Json& v, unsigned depth, size_t& count) {
+    if (depth > 8 || ++count > 16384) return false;
+    if (v.is_null() || v.is_bool()) return true;
+    if (v.is_string()) return interpretation_text(v, 4096);
+    if (v.is_int()) return is_int53(v) && std::abs(v.as_double()) <= double(kSafeInt);
+    if (v.is_number()) return is_finite(v);
+    if (v.is_array()) {
+        if (v.size() > 512) return false;
+        for (const auto& x : v.items()) if (!interpretation_value(x, depth + 1, count)) return false;
+        return true;
+    }
+    if (!v.is_object() || v.size() > 64) return false;
+    for (const auto& kv : v.members()) {
+        if (!interpretation_text(Json(kv.first), 63, false) ||
+            !interpretation_value(kv.second, depth + 1, count)) return false;
+    }
+    return true;
+}
+bool interpretation_object(const Json& v) {
+    size_t count = 0;
+    return v.is_object() && interpretation_value(v, 0, count) && v.dump().size() <= 262144;
+}
+bool interpretation_request(const Json& v) {
+    if (!interpretation_object(v) || v.size() != 3) return false;
+    const auto* version = v.find("version");
+    const auto* method = v.find("method");
+    const auto* params = v.find("params");
+    if (!version || !int_in(*version, 1, 1) || !method || !method->is_string() ||
+        !params || !params->is_object()) return false;
+    const auto& m = method->as_string();
+    std::set<std::string> allowed;
+    if (m == "feature.dictionary" || m == "trace.status") {}
+    else if (m == "feature.show") allowed = {"layer", "feature", "node"};
+    else if (m == "feature.examples") allowed = {"layer", "feature", "node", "limit"};
+    else if (m == "trace.run") allowed = {"prompt", "max_targets", "max_nodes", "max_edges"};
+    else if (m == "trace.read") allowed = {"node_offset", "node_limit", "edge_offset", "edge_limit"};
+    else return false;
+    for (const auto& kv : params->members()) if (!allowed.count(kv.first)) return false;
+    const struct { const char* key; uint64_t low, high; } bounds[] = {
+        {"layer",0,4095}, {"feature",0,2147483647}, {"node",0,511}, {"limit",0,16},
+        {"max_targets",0,512}, {"max_nodes",1,512}, {"max_edges",0,8192},
+        {"node_offset",0,512}, {"edge_offset",0,8192}, {"node_limit",0,256}, {"edge_limit",0,256}};
+    for (const auto& b : bounds) if (auto* x = params->find(b.key); x && !int_in(*x,b.low,b.high)) return false;
+    if (m == "feature.show" || m == "feature.examples")
+        return (params->has("node") && !params->has("layer") && !params->has("feature")) ||
+               (!params->has("node") && params->has("layer") && params->has("feature"));
+    if (m == "trace.run") {
+        auto* prompt = params->find("prompt");
+        return prompt && interpretation_text(*prompt,4096,false);
+    }
+    return true;
+}
 
 bool intervene_request(const Json& v) {
     if (!v.is_object()) return false;
@@ -662,6 +731,9 @@ Control control(const Frame& f) {
     if (c.op == CALIPER_NET_OP_INTERVENE)   // 3.2 draft
         c.intervene = req(m, "intervene", intervene_request,
                           "exactly one of {set: {point, op, from_step, until_step}}, {clear: point} and {clear_all: true}");
+    if (c.op == CALIPER_NET_OP_INTERPRET)
+        c.interpretation = req(m, "interpretation", interpretation_request, "a version 1 interpretation request");
+    else if (m.has("interpretation")) bad("interpretation requires op interpret");
     if (named) c.name = name->as_string();
     return c;
 }
@@ -680,12 +752,17 @@ ControlReply control_reply(const Frame& f) {
     }, "{code, message}");
     if ((err == nullptr) == (r.status == CALIPER_NET_STATUS_ERROR))
         bad("a control_reply carries 'error' exactly when its status is 'error'");
-    if (r.status == CALIPER_NET_STATUS_QUEUED && r.op != CALIPER_NET_OP_RUN) bad("only 'run' is queued");
+    if (r.status == CALIPER_NET_STATUS_QUEUED && r.op != CALIPER_NET_OP_RUN && r.op != CALIPER_NET_OP_INTERPRET) bad("only 'run' is queued");
     r.request_id = u32(req(m, "request_id", is_u32, "a uint32"));
     if (const Json* v = opt(m, "name", is_name, "a parameter or action name")) r.name = v->as_string();
     if (const Json* v = opt(m, "value", is_set_value, "a number, a boolean or a choice")) r.value = *v;
     if (const Json* v = opt(m, "message", is_text, "a string of at most 1024 bytes")) r.message = v->as_string();
     if (err) r.error = *err;
+    if (const Json* result = opt(m, "result", interpretation_object, "bounded structured result")) r.result = *result;
+    if (m.has("result") && (r.op != CALIPER_NET_OP_INTERPRET || r.status != CALIPER_NET_STATUS_OK))
+        bad("result requires a successful interpretation reply");
+    if (r.op == CALIPER_NET_OP_INTERPRET && r.status == CALIPER_NET_STATUS_OK && r.result.is_null())
+        bad("a successful interpretation reply requires result");
     return r;
 }
 
@@ -2469,6 +2546,7 @@ Encoded to_meta(const Message& msg) {
         if (!c->value.is_null()) m.set("value", c->value);
         if (c->count) m.set("count", *c->count);
         if (!c->intervene.is_null()) m.set("intervene", c->intervene);
+        if (!c->interpretation.is_null()) m.set("interpretation", c->interpretation);
     } else if (const auto* r = std::get_if<ControlReply>(&msg)) {
         m.set("request_id", r->request_id);
         m.set("op", r->op);
@@ -2477,6 +2555,7 @@ Encoded to_meta(const Message& msg) {
         if (!r->value.is_null()) m.set("value", r->value);
         if (r->message) m.set("message", *r->message);
         if (!r->error.is_null()) m.set("error", r->error);
+        if (!r->result.is_null()) m.set("result", r->result);
     } else if (const auto* s = std::get_if<Selection>(&msg)) {
         m.set("space", s->space);
         m.set("items", s->items);
