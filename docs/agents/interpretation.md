@@ -176,6 +176,12 @@ It shows the script value or its pending value.
 Return or loss of focus submits the edit at the next run boundary.
 The control is disabled when the parameter is absent, has another type, or the connection cannot change the run.
 The existing `value` and `state:` text bindings retain their behavior.
+
+The browser `<caliper-controls>` element uses the same submit behavior.
+Shift+Return inserts a new line in its text parameters.
+Invalid drafts remain in the field after focus loss and background updates.
+Shorten or correct the draft, then submit it again.
+
 `trace.run` and text parameters share the 4,096-byte limit.
 The executor also checks the 32-token limit, including special tokens.
 No path truncates the prompt. Invalid UTF-8 and NUL are refused.
