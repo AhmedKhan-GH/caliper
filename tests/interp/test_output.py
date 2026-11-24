@@ -161,3 +161,26 @@ def test_supported_text_model_requests_only_next_token_logits(output_case, monke
     monkeypatch.setattr(model, "forward", forward)
     value = forward_logits(model, tokenizer("AB"))
     assert value.shape == (1, 1, 512) and seen == [1]
+
+
+@pytest.mark.parametrize("steered_winner", [0, 10])
+def test_comparison_reserves_both_true_winners(output_case, monkeypatch, steered_winner):
+    from caliper.interp import _output
+    model, _, _, _, output = output_case
+    probabilities = torch.empty((2, model.config.vocab_size), dtype=torch.float64)
+    probabilities[0, :10] = torch.tensor([.11] + [.09] * 9)
+    probabilities[0, 10:] = .08 / (model.config.vocab_size - 10)
+    probabilities[1, :10] = torch.tensor([.07] + [.06] * 9)
+    probabilities[1, 10] = .08
+    probabilities[1, 11:] = .31 / (model.config.vocab_size - 11)
+    if steered_winner == 0:
+        probabilities[1, 0], probabilities[1, 10] = .08, .07
+    logits = probabilities.log().unsqueeze(1)
+    monkeypatch.setattr(_output, "forward_logits", lambda *args, **kwargs: logits)
+    result = output.compare("AB")
+    assert result["argmax_token_ids"] == [0, steered_winner]
+    assert set(result["argmax_token_ids"]) <= set(result["tokens"])
+    assert len(result["tokens"]) == len(set(result["tokens"])) == 10
+    assert _resolve("output.probs").shape == (2, 10)
+    expected = logits[:, 0].softmax(-1)[:, result["tokens"]].float()
+    torch.testing.assert_close(_resolve("output.probs"), expected)

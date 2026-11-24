@@ -11,7 +11,7 @@ import numpy as np
 import torch
 
 from ._dictionary import load_dictionary, model_identity, weights_hash
-from ._memory import autorelease_scope as _device_scope
+from ._memory import CleanStop, MemoryGuard, autorelease_scope as _device_scope
 from ._points import capture
 
 INDEX_VERSION = 1
@@ -272,11 +272,12 @@ class FeatureIndex:
     Model and dictionary weights must remain fixed for the lifetime of this object.
     """
 
-    def __init__(self, dictionary_path, *, model, tokenizer, dictionary=None):
+    def __init__(self, dictionary_path, *, model, tokenizer, dictionary=None, memory=None):
         self._closed = False
         self._cache = OrderedDict()
         self.root = Path(dictionary_path)
         self.model, self.tokenizer = model, tokenizer
+        self.memory = memory if memory is not None else MemoryGuard(12, next(model.parameters()).device)
         self.dictionary = dictionary if dictionary is not None else load_dictionary(self.root, model=model)
         data = _compatible(model, self.dictionary)
         folder = self.root / "index"
@@ -437,6 +438,38 @@ class FeatureIndex:
                              "promoted_tokens": promoted, "example_tokens": common}
         return deepcopy(entry["show"])
 
+    def _example_bytes(self, rows):
+        """Bound one no-gradient layer, retained probes, and dictionary encode work."""
+        config = self.model.config
+        width = self.dictionary.metadata["width"]
+        latents = self.dictionary.metadata["latents"]
+        heads = getattr(config, "num_attention_heads", 1)
+        head_dim = getattr(config, "head_dim", None) or width // heads
+        intermediate = getattr(config, "intermediate_size", latents)
+        key_dim = getattr(config, "linear_key_head_dim", head_dim)
+        value_dim = getattr(config, "linear_value_head_dim", head_dim)
+        value_heads = getattr(config, "linear_num_value_heads", heads)
+        key_heads = getattr(config, "linear_num_key_heads", heads)
+        dimensions = (width, latents, heads, head_dim, intermediate, key_dim, value_dim, value_heads, key_heads)
+        if any(type(value) is not int or not 1 <= value <= 2**20 for value in dimensions):
+            raise ValueError("example admission requires bounded model dimensions")
+        size = max(4, *(p.element_size() for p in self.model.parameters()),
+                   *(layer.W_enc.element_size() for layer in self.dictionary.layers))
+        tokens = rows * WINDOW_TOKENS
+        mixer = max(width, heads * head_dim, key_heads * key_dim, value_heads * value_dim)
+        workspace = tokens * (32 * width + 8 * intermediate + 8 * mixer + 4 * latents)
+        # Attention patterns can remain on fixture modules after each layer.
+        patterns = 4 * rows * heads * WINDOW_TOKENS**2 * len(self.dictionary.layers)
+        recurrent = 4 * rows * value_heads * key_dim * value_dim
+        logits = 0 if config.model_type == "qwen3_5_text" else tokens * config.vocab_size
+        # Include token tensors, output lists, temporary copies, and allocator reserve.
+        return size * (workspace + patterns + recurrent + logits) + tokens * 32 + 512_000_000
+
+    def _admit_examples(self, rows):
+        self.memory.check("example windows admission")
+        if self.memory.peak + self._example_bytes(rows) > self.memory.limit:
+            raise CleanStop("example allocation exceeds the process memory limit")
+
     def examples(self, layer, feature, limit=TOP_EXAMPLES):
         entry = self._entry(layer, feature)
         _positive_integer(limit, "limit", TOP_EXAMPLES, minimum=0)
@@ -445,6 +478,7 @@ class FeatureIndex:
         if "examples" not in entry:
             rows = self._windows(layer, feature)
             if rows:
+                self._admit_examples(len(rows))
                 device = next(self.model.parameters()).device
                 pad = getattr(self.tokenizer, "pad_token_id", None)
                 pad = 0 if pad is None else pad
@@ -462,6 +496,7 @@ class FeatureIndex:
                     if not torch.isfinite(values).all().item():
                         raise ValueError("index window activations must be finite")
                     values = values[..., feature].cpu().tolist()
+                self.memory.check("example windows complete")
                 for row, values_row in zip(rows, values):
                     iterator = iter(values_row)
                     row["activations"] = [next(iterator) if valid else None for valid in row["valid"]]

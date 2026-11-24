@@ -9,6 +9,7 @@ import torch
 
 from caliper.interp._dictionary import _record_verified_hf_load
 from caliper.interp._memory import MemoryGuard
+from caliper.interp._admission import _admit_model_load, _admit_model_transfer
 
 
 MODEL_ID = "Qwen/Qwen3.5-0.8B"
@@ -30,8 +31,7 @@ def load_text_model(*, device="mps", memory=None):
     config = Qwen3_5TextConfig(**json.loads((snapshot / "config.json").read_text())["text_config"])
     if (config.num_hidden_layers, config.hidden_size) != (24, 1024):
         raise ValueError("the pinned text model has unexpected dimensions")
-    if memory:
-        memory.check("before_model_load")
+    estimate = _admit_model_load(snapshot, memory, device)
     model, info = Qwen3_5ForCausalLM.from_pretrained(
         snapshot, config=config, dtype=torch.float32, attn_implementation="eager",
         local_files_only=True, output_loading_info=True,
@@ -47,6 +47,7 @@ def load_text_model(*, device="mps", memory=None):
         memory.check("after_model_cpu_load")
     # The complete CPU load establishes the digest in the final float32 dtype.
     _record_verified_hf_load(model, memory=memory)
+    _admit_model_transfer(memory, estimate, device)
     model.to(device=device, dtype=torch.float32)
     if memory:
         memory.check("after_model_device_load")

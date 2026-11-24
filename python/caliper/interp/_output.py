@@ -106,15 +106,20 @@ class Output:
                 raise ValueError("output comparison requires at least ten vocabulary tokens")
             scores = probabilities.max(dim=0).values
             ids = torch.argsort(scores, descending=True, stable=True)[:10].clone()
-            baseline_top = probabilities[0].argmax()
-            if not torch.any(ids == baseline_top):
-                ids[-1] = baseline_top
+            argmax_ids = probabilities.argmax(dim=-1)
+            # Reserve both row winners before filling the fixed comparison slots.
+            winners = set(argmax_ids.tolist())
+            for winner in sorted(winners):
+                if not torch.any(ids == winner):
+                    replace = next(i for i in range(9, -1, -1) if int(ids[i]) not in winners)
+                    ids[replace] = winner
             values = probabilities[:, ids].to(torch.float32)
             labels = [bounded_text(self.tokenizer.convert_ids_to_tokens(i), 63) for i in ids.tolist()]
             publish("output.probs", values)
             publish("output.tokens", ids.to(torch.int32))
             publish("output.label_text", packed_labels(labels, ids.device))
-            return {"tokens": ids.tolist(), "probabilities": values.tolist(), "labels": labels}
+            return {"tokens": ids.tolist(), "probabilities": values.tolist(), "labels": labels,
+                    "argmax_token_ids": argmax_ids.tolist()}
 
     def generate(self, prompt):
         """Produce exactly 24 greedy tokens for both rows, including EOS tokens."""

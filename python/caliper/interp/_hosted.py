@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 from contextlib import contextmanager
 from copy import deepcopy
+import hashlib
 import json
 import math
 import os
@@ -15,6 +16,7 @@ import torch
 from torch import nn
 from torch.nn import functional as F
 
+from ._admission import _admit_model_load, _admit_model_transfer
 from ._output import Output, bounded_text, internal_forward, prompt_inputs
 from ._service import InterpretationService, Refused, register_service, unregister_service
 
@@ -56,8 +58,9 @@ def checkpoint_metadata(value):
 
 class _RunGuard:
     """Retain a resource stop after an action or service catches its exception."""
-    def __init__(self, guard, *, extra=None):
+    def __init__(self, guard, *, extra=None, on_stop=None):
         self.guard, self.extra, self.failure = guard, extra, None
+        self.on_stop = on_stop
 
     def check(self, *args, **kwargs):
         from ._memory import CleanStop
@@ -70,6 +73,8 @@ class _RunGuard:
                 self.extra.check(*args, **kwargs)
         except CleanStop as exc:
             self.failure = exc
+            if self.on_stop is not None:
+                self.on_stop(exc)
             raise
 
 
@@ -346,7 +351,7 @@ def fixture_resources(folder):
 
 def load_resources(model_name, dictionary_path):
     """Load only local safe weights and the exact pinned Qwen text model."""
-    from ._dictionary import load_dictionary
+    from ._dictionary import load_dictionary, _record_verified_hf_load
     from ._index import FeatureIndex
     from ._memory import MemoryGuard
     folder = Path(dictionary_path).resolve(strict=True)
@@ -363,9 +368,11 @@ def load_resources(model_name, dictionary_path):
             raise ValueError("model snapshot does not identify the pinned Qwen repository")
         from transformers import AutoTokenizer, Qwen3_5ForCausalLM, Qwen3_5TextConfig
         config = Qwen3_5TextConfig(**json.loads((snapshot / "config.json").read_text())["text_config"])
+        if (config.num_hidden_layers, config.hidden_size) != (24, 1024):
+            raise ValueError("the pinned text model has unexpected dimensions")
         device = "mps" if torch.backends.mps.is_available() else "cpu"
         guard = MemoryGuard(12, device)
-        guard.check("inference load start")
+        estimate = _admit_model_load(snapshot, guard, device)
         model, info = Qwen3_5ForCausalLM.from_pretrained(
             snapshot, config=config, dtype=torch.float32, attn_implementation="eager",
             local_files_only=True, use_safetensors=True, output_loading_info=True,
@@ -373,7 +380,11 @@ def load_resources(model_name, dictionary_path):
         if any(info.get(key) for key in ("missing_keys", "unexpected_keys", "mismatched_keys", "error_msgs")):
             raise ValueError("local model weights do not match the pinned text architecture")
         model.config._name_or_path, model.config._commit_hash = QWEN_ID, QWEN_REVISION
-        model.eval().to(device)
+        model.requires_grad_(False).eval()
+        guard.check("inference model CPU load")
+        _record_verified_hf_load(model, memory=guard)
+        _admit_model_transfer(guard, estimate, device)
+        model.to(device)
         guard.check("inference model load")
         tokenizer = AutoTokenizer.from_pretrained(snapshot, local_files_only=True, trust_remote_code=False)
     dictionary = load_dictionary(folder, model=model, device=next(model.parameters()).device,
@@ -392,6 +403,18 @@ class HostedService(InterpretationService):
                          handlers={"patch.sweep": owner.sweep, "trace.validate": owner.validate})
         self.boundary_running = False
         self.boundary_thread = None
+
+    def submit(self, metadata, reply, *, acknowledge=None):
+        status, result = super().submit(metadata, reply, acknowledge=acknowledge)
+        if metadata["method"] == "trace.status":
+            result["inference"] = self.owner.inference_status()
+        return status, result
+
+    def stop(self, failure, step=None):
+        error = super().stop(failure, step)
+        self.owner._latch_failure(self.failure)
+        self.owner.controls._terminate_actions(self.failure)
+        return error
 
     def _execute(self, method, params, step):
         if method == "trace.run":
@@ -414,6 +437,7 @@ class HostedService(InterpretationService):
             self.boundary_running = True
             self.boundary_thread = threading.get_ident()
         try:
+            self.owner._check_stop()
             with internal_forward():
                 try:
                     self.owner.update_controls()
@@ -425,6 +449,9 @@ class HostedService(InterpretationService):
                 except ValueError as exc:
                     self.owner.status.set(bounded_text(str(exc)))
                 return count
+        except self.stop_exception as exc:
+            self.stop(exc, step)
+            raise self.failure
         finally:
             with self.idle:
                 self.boundary_running = False
@@ -454,13 +481,21 @@ class HostedInference:
         self.dictionary_path = str(Path(dictionary_path).resolve())
         self.model, self.tokenizer, self.dictionary, self.index, self.guard = (
             load_resources(model_name, dictionary_path) if resources is None else resources)
-        self.guard = _RunGuard(self.guard, extra=display_guard) if self.guard is not None or display_guard is not None else None
+        self.guard = (_RunGuard(self.guard, extra=display_guard, on_stop=self._latch_failure)
+                      if self.guard is not None or display_guard is not None else None)
         self.fixture_display = _FixtureDisplay(self.guard) if display_guard is not None else None
         prompt_inputs(self.model, self.tokenizer, prompt)
         self.initial_prompt = prompt
         self.restored = None
         self.handle = self.service = self.managed = None
+        self._failure = None
+        self._stop_checkpointed = False
+        self._verified_bindings = None
+        self._inference_lock = threading.Lock()
+        self._comparison = None
+        self._restore_generation(0)
         self.selection = None
+        self._owned_clamp = None
         self._selection_graph = None
         self.traced_prompt = None
         self.traced_specifications = None
@@ -471,11 +506,32 @@ class HostedInference:
         self._retrace = False
         self.parameters, self.actions = [], []
 
+    def _latch_failure(self, failure):
+        """Latch a stop without callbacks, including while the Controls lock is held."""
+        if self._failure is None:
+            self._failure = failure
+        if self.guard is not None:
+            self.guard.failure = self._failure
+        if self.service is not None:
+            with self.service.lock:
+                if self.service.failure is None:
+                    self.service.failure = self._failure
+
     def _bindings(self):
         from ._dictionary import model_identity
-        return {"model": self.model_name, "model_hash": model_identity(self.model),
-                "dictionary": self.dictionary_path, "dictionary_hash": self.index.metadata["dictionary_hash"],
-                "tokenizer_hash": self.index.metadata["tokenizer_hash"]}
+        from ._memory import CleanStop
+        if self._failure is not None and self._verified_bindings is not None:
+            return deepcopy(self._verified_bindings)
+        try:
+            identity = model_identity(self.model)
+        except CleanStop as exc:
+            self._latch_failure(exc)
+            raise self._failure
+        bindings = {"model": self.model_name, "model_hash": identity,
+                    "dictionary": self.dictionary_path, "dictionary_hash": self.index.metadata["dictionary_hash"],
+                    "tokenizer_hash": self.index.metadata["tokenizer_hash"]}
+        self._verified_bindings = deepcopy(bindings)
+        return bindings
 
     def load_checkpoint(self, record):
         if (not checkpoint_metadata(record) or record.get("format") != CHECKPOINT_FORMAT or type(record.get("version")) is not int
@@ -493,16 +549,88 @@ class HostedInference:
             limits = {"layer": len(self.dictionary.layers), "feature": self.dictionary.metadata["latents"], "position": 32}
             if any(type(selection[k]) is not int or not 0 <= selection[k] < limit for k, limit in limits.items()):
                 raise ValueError("inference checkpoint selection is out of range")
+        generation_id = record.get("generation_id", 0)
+        if type(generation_id) is not int or not 0 <= generation_id < 2**53:
+            raise ValueError("inference checkpoint generation identity is invalid")
+        owned = record.get("owned_clamp")
+        if owned is not None:
+            from .._intervention_protocol import specification
+            if (not specification(owned) or owned.get("op", owned.get("kind")) != "clamp"
+                    or not any(item.get("specification") == owned and not item.get("clear")
+                               and item.get("state") in ("active", "pending")
+                               for item in record["interventions"].get("interventions", [])
+                               if type(item) is dict)):
+                raise ValueError("inference checkpoint clamp ownership is invalid")
         self.restored = deepcopy(record)
 
     def state_dict(self):
-        return {"bindings": self._bindings(), "interventions": self.interventions.state_dict(),
-                "selection": deepcopy(self.selection)}
+        bindings = self._bindings()
+        with self.interventions._ctl.lock, self._inference_lock:
+            owned = self._owned_record()
+            return {"bindings": bindings, "interventions": self.interventions._state_dict(),
+                    "selection": deepcopy(self.selection),
+                    "owned_clamp": deepcopy(owned.spec) if owned is not None else None,
+                    "generation_id": self._generation["id"]}
+
+    def _restore_generation(self, generation_id):
+        with self._inference_lock:
+            self._generation = {"id": generation_id, "prompt_hash": None, "interventions_hash": None,
+                                "token_ids": [[], []], "counts": [0, 0], "completed_step": None,
+                                "text_hashes": [None, None]}
+
+    def _input_state(self):
+        with self.controls.lock:
+            specifications = [deepcopy(iv.applied_spec) for iv in self.controls._ivs.values()
+                              if iv.state == "active" and iv.hook is not None and iv.applied_spec is not None]
+            return self.prompt.value, specifications
+
+    @staticmethod
+    def _input_hashes(state):
+        prompt, specifications = state
+        encoded = json.dumps(specifications, sort_keys=True, separators=(",", ":"),
+                             ensure_ascii=True, allow_nan=False).encode("utf-8")
+        return {"prompt_hash": hashlib.sha256(prompt.encode("utf-8")).hexdigest(),
+                "interventions_hash": hashlib.sha256(encoded).hexdigest()}
+
+    def inference_status(self):
+        binding = self._input_hashes(self._input_state())
+        with self._inference_lock:
+            return dict(binding, comparison=deepcopy(self._comparison), generation=deepcopy(self._generation))
+
+    def _owned_record(self):
+        """Resolve the exact slider request while the Controls lock is held."""
+        if self._owned_clamp is None:
+            return None
+        iv = self.interventions._ctl._ivs.get((self._owned_clamp["point"], "clamp"))
+        if iv is not None and iv.spec is self._owned_clamp and not iv.clear and iv.state != "ended":
+            return iv
+        return None
+
+    def _restore_owned_clamp(self, owned):
+        with self.controls.lock:
+            self._owned_clamp = None
+            if owned is not None:
+                iv = self.controls._ivs.get((owned["point"], "clamp"))
+                if iv is not None and iv.spec == owned and not iv.clear and iv.state != "ended":
+                    self._owned_clamp = iv.spec
+
+    def _discard_owned_clamp(self):
+        """Mark only the owned record for removal with the Controls lock held."""
+        iv = self._owned_record()
+        self._owned_clamp = None
+        if iv is None:
+            return
+        iv.clear = True
+        self.controls._iv_due = True
+        self.controls.counters["interventions_in"] += 1
+        self.controls._update_busy()
+        self.controls.cond.notify_all()
 
     def start(self):
         import caliper
         from .. import _managed
         self.controls = caliper._CTL
+        self._bindings()
         self.managed = _managed.current()
         if self.managed is not None:
             self.managed.inference = self
@@ -528,7 +656,9 @@ class HostedInference:
             self.service = register_service(HostedService(self), controls=self.controls)
             if self.restored is not None:
                 self.interventions.load_state_dict(self.restored["interventions"])
-                self.selection = deepcopy(self.restored["selection"])
+                self.selection = deepcopy(self.restored.get("selection"))
+                self._restore_owned_clamp(self.restored.get("owned_clamp"))
+                self._restore_generation(self.restored.get("generation_id", 0))
             # Fork overrides apply before any internal forward, after resource binding.
             if self.managed is not None and self.managed.interventions:
                 self.managed._intervene()
@@ -586,16 +716,28 @@ class HostedInference:
             maximum = float(self.index.show(layer, feature)["maximum"])
             if not torch.isfinite(torch.tensor(maximum)) or maximum <= 0:
                 raise ValueError("selected feature has no positive indexed maximum")
-            self.interventions.set({"kind": "clamp", "point": self.dictionary.metadata["write_points"][layer],
-                                    "feature": feature, "positions": [position], "value": self.clamp.value * maximum})
+            point = self.dictionary.metadata["write_points"][layer]
+            with self.controls.lock:
+                refused = self.controls._intervene({"set": {"kind": "clamp", "point": point, "feature": feature,
+                    "positions": [position], "value": self.clamp.value * maximum}})
+                if refused is not None:
+                    raise ValueError(refused[1])
+                self._discard_owned_clamp()
+                self.controls._update_busy()
+                self._owned_clamp = self.controls._ivs[(point, "clamp")].spec
             self._apply()
             self._clamp_version = self.clamp._version
 
     def update_output(self):
-        key = (self.prompt.value, self.interventions.specifications())
+        key = self._input_state()
         changed = self._output_key != key
         if changed:
-            self.output.compare(self.prompt.value)
+            comparison = self.output.compare(key[0])
+            if self._input_state() != key:
+                raise ValueError("inference state changed during the output comparison")
+            with self._inference_lock:
+                self._comparison = dict(self._input_hashes(key), argmax_token_ids=comparison["argmax_token_ids"],
+                                        completed_step=self.controls.n)
             self._output_key = deepcopy(key)
             self.status.set("ready")
         if self.retrace.value and (changed or not self._retrace):
@@ -608,23 +750,45 @@ class HostedInference:
             self.fixture_display.publish()
 
     def generate(self):
+        self._check_stop()
+        state = self._input_state()
+        with self._inference_lock:
+            generation_id = self._generation["id"] + 1
+        if generation_id >= 2**53:
+            raise ValueError("generation identity exceeds the metadata limit")
         with internal_forward():
-            result = self.output.generate(self.prompt.value)
-        self.baseline_text.set(result["baseline"])
-        self.steered_text.set(result["steered"])
+            result = self.output.generate(state[0])
+        ids = result.get("token_ids")
+        if (type(ids) is not list or len(ids) != 2 or any(type(row) is not list or len(row) != 24
+                or any(type(token) is not int or not 0 <= token < self.model.config.vocab_size for token in row)
+                for row in ids)):
+            raise ValueError("generation requires exactly two rows of 24 token IDs")
+        texts = [result.get("baseline"), result.get("steered")]
+        expected = [bounded_text(self.tokenizer.decode(row)) for row in ids]
+        if texts != expected:
+            raise ValueError("generation text does not match its token IDs")
+        if self._input_state() != state:
+            raise ValueError("inference state changed during generation")
+        self.baseline_text.set(texts[0])
+        self.steered_text.set(texts[1])
+        if self._input_state() != state:
+            raise ValueError("inference state changed during generation publication")
+        completion = dict(self._input_hashes(state), id=generation_id, token_ids=deepcopy(ids), counts=[24, 24],
+                          completed_step=self.controls.n,
+                          text_hashes=[hashlib.sha256(text.encode("utf-8")).hexdigest() for text in texts])
+        with self._inference_lock:
+            self._generation = completion
         return "Generated 24 tokens for each output."
 
     def reset(self):
         with internal_forward():
-            self._update_selection()
-            if self.selection is not None:
-                point = self.dictionary.metadata["write_points"][self.selection["layer"]]
-                self.interventions.clear_feature(point, self.selection["feature"], kind="clamp")
-                self._apply()
+            with self.controls.lock:
+                self._discard_owned_clamp()
+            self._apply()
             self.clamp.set(0.)
             self._clamp_version = self.clamp._version
             self.update_output()
-        return "The selected feature clamp is reset."
+        return "The feature clamp is reset."
 
     def sweep(self, *, clean_prompt, corrupted_prompt, metric):
         from ._sweep import patch_sweep
@@ -639,16 +803,42 @@ class HostedInference:
             return validate_trace(self.model, self.tokenizer, self.dictionary, replay,
                                   self.service.graph, prompt=self.traced_prompt, guard=self.guard)
 
+    def _check_stop(self):
+        failure = self._failure or getattr(self.guard, "failure", None)
+        if failure is not None:
+            raise failure
+
+    @contextmanager
+    def _stop_boundary(self):
+        from ._memory import CleanStop
+        try:
+            self._check_stop()
+            yield
+            self._check_stop()
+        except CleanStop as exc:
+            if self.service is not None:
+                self.service.stop(exc, self.controls.n)
+            if self._failure is None:
+                self._failure = exc
+            if self.managed is not None and not self._stop_checkpointed:
+                self._stop_checkpointed = True
+                try:
+                    self.managed.checkpoint(self.model, None)
+                except Exception as checkpoint_error:
+                    raise self._failure from checkpoint_error
+            raise self._failure
+
     def boundary(self):
         import caliper
-        self.controls.busy = True
-        caliper.step()
-        if self.managed is not None:
-            if self.managed.stopping:
-                self.managed.exit()
-            self.managed._keep(self.model, None)
-        if self.guard is not None:
-            self.guard.check("inference actions", force=False)
+        with self._stop_boundary():
+            self.controls.busy = True
+            caliper.step()
+            if self.guard is not None:
+                self.guard.check("inference actions", force=False)
+            if self.managed is not None:
+                if self.managed.stopping:
+                    self.managed.exit()
+                self.managed._keep(self.model, None)
 
     def run(self):
         from .._controls import RUN_PAUSING, RUN_STEPPING
@@ -665,14 +855,13 @@ class HostedInference:
                 self.controls.cond.wait_for(pending, timeout=1.)
                 work = pending()
             try:
-                if work:
-                    self.boundary()
-                else:
-                    # Reports and intervention expiry need no new prompt step or forward.
-                    self.controls.checkpoint()
+                with self._stop_boundary():
+                    if work:
+                        self.boundary()
+                    else:
+                        # Reports and intervention expiry need no new prompt step or forward.
+                        self.controls.checkpoint()
             except CleanStop:
-                if self.managed is not None:
-                    self.managed.checkpoint(self.model, None)
                 raise
             except Exception as exc:
                 self.status.set(bounded_text(f"{type(exc).__name__}: {exc}"))

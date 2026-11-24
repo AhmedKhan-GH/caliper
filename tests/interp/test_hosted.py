@@ -703,7 +703,7 @@ def test_new_trace_reconciles_semantic_selection_before_clamp_or_reset(hosted_ru
         assert not run.interventions.specifications()
 
 
-def test_removed_feature_cannot_reset_a_stale_clamp(hosted_run):
+def test_reset_removes_owned_clamp_after_feature_disappears(hosted_run):
     run, _ = hosted_run
     graph = _trace_at_boundary(run, prompt="AB", max_targets=32)
     run.selected.set(next(i for i, node in enumerate(graph.nodes) if node["kind"] == "feature"))
@@ -712,8 +712,10 @@ def test_removed_feature_cannot_reset_a_stale_clamp(hosted_run):
     saved = run.interventions.state_dict()
     _trace_at_boundary(run, prompt="AC", max_targets=32)
     assert run.selection is None and run.selected.value == -1
+    assert saved["interventions"]
     run.reset()
-    assert run.interventions.state_dict() == saved
+    assert not run.interventions.specifications()
+    assert run.state_dict()["owned_clamp"] is None
 
 
 def test_reset_with_retrace_has_one_public_boundary(hosted_run, monkeypatch):
