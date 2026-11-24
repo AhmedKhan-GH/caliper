@@ -61,7 +61,7 @@ def forward_settings(model, *, tensor_hash):
                    else function.__module__ + "." + function.__qualname__)
         config = getattr(module, "config", None)
         backend = getattr(config, "_attn_implementation", None)
-        if getattr(config, "model_type", None) == "gemma2" and backend not in (None, "eager"):
+        if getattr(config, "model_type", None) == "gemma2" and backend != "eager":
             raise ValueError("Gemma checkpoint identity requires eager attention for its softcap")
         if backend not in (None, "eager", "sdpa"):
             raise ValueError("checkpoint identity supports eager or sdpa attention")
