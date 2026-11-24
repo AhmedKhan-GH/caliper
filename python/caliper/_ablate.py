@@ -63,7 +63,10 @@ def _type_name(module) -> str:
 
 
 def points(model) -> list:
-    """List the intervention points of ``model``; see ``TorchAdapter.points``."""
+    """List intervention points with semantic probes first for bounded advertisements.
+
+    Module and head rows retain their relative traversal order. See ``TorchAdapter.points``.
+    """
     shapes = _shapes.get(model, {})
     out = []
     for name, mod in model.named_modules():
@@ -77,7 +80,7 @@ def points(model) -> list:
             out += [{"point": f"{name}{HEAD_SEPARATOR}{h}", "kind": "head", "module": name, "head": h,
                      "type": _type_name(mod), "shape": None} for h in range(heads)]
     from .interp._points import semantic_points
-    return out + semantic_points(model, required=False)
+    return semantic_points(model, required=False) + out
 
 
 def _find(model, point: str):

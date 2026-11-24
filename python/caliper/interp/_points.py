@@ -265,7 +265,8 @@ class Capture(dict):
                         config._attn_implementation = "eager"
                     def pattern(mod, args, output, name=name):
                         self._save(name, output[1])
-                    self._handles.append(module.register_forward_hook(pattern))
+                    # Observe weights before output hooks can ablate the attention tuple.
+                    self._handles.append(module.register_forward_hook(pattern, prepend=True))
         except BaseException:
             self.close(clear=True)
             raise
