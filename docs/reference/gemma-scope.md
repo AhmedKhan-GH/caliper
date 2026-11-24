@@ -152,8 +152,8 @@ The `source_id` must match the admitted stream, including a local Parquet manife
 These partitions separate local evaluation data from local index data.
 They establish no disjointness from publisher training data, and both result records retain `publisher_training_overlap="unknown"`.
 
-The separate runtime tool update supplies Gemma evaluation and index preparation with this source contract.
-This documentation base does not yet include that tool update.
+The evaluation and index tools use this source contract with `--model google/gemma-2-2b`.
+They select a 28 GB limit by default for that explicit model choice.
 Evaluation must replace the semantic residual write and apply the actual final softcap during cross-entropy computation.
 The local affine tangent belongs only to attribution.
 

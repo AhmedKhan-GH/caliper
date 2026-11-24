@@ -178,7 +178,7 @@ The Qwen quality override does not apply to Gemma.
 CPU tests with random Gemma configurations verify the implemented paths without gated weights.
 Actual model-bound conversion, quality, the full index, and hidden acceptance remain unrun in the recorded evidence.
 Gemma memory and speed remain unverified.
-The separate evaluation and index tool update remains an integration dependency for this documentation base.
+Evaluation and index tools select Gemma with `--model google/gemma-2-2b` and require the pinned `evaluation_source` record.
 
 ## Example Index
 

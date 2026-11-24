@@ -145,7 +145,7 @@ The separate `evaluation_source` record binds the pinned FineWeb source, source 
 The converter accepts this record, and acceptance requires it.
 Local partition separation does not establish disjointness from publisher training data.
 Quality and index records must retain `publisher_training_overlap="unknown"`.
-The separate runtime tool update supplies this evaluation contract but remains absent from this documentation base.
+The evaluation and index tools implement this source contract for the explicit Gemma model selection.
 
 Gemma quality retains the original limits of 0.30 mean FVU, 0.15 dead fraction, and 0.5 nats cross-entropy rise on exactly 200,000 tokens.
 The index requires exactly 2,000,000 tokens.
