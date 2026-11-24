@@ -118,11 +118,11 @@ def test_finish_refuses_missing_evidence():
     assert result["qwen_acceptance"] is False
 
 
-def qualification_reply(*, fallback=False):
+def qualification_reply(*, fallback=False, token_budget=20_000_000):
     """Synthetic metadata exercises gates without model or index allocation."""
     training = {"dataset_id": "test-source", "dataset_config": "test", "dataset_revision": "revision",
-                "split": "train", "source_id": "test-source:revision", "tokens": 20_000_000,
-                "token_budget": 20_000_000, "stop_reason": "token_budget",
+                "split": "train", "source_id": "test-source:revision", "tokens": token_budget,
+                "token_budget": token_budget, "stop_reason": "token_budget",
                 "partitions": {"algorithm": "sha256-utf8-text-mod10000-v1", "train": [0, 9400],
                                "quality": [9400, 9500], "index": [9500, 10000],
                                "quality_tokens": 200_000, "index_tokens": 2_000_000}}
@@ -154,8 +154,8 @@ def qualification_reply(*, fallback=False):
         metadata["fallback_source"] = response["fallback_source"]
         training["fallback"] = {"version": 1, "mode": "upper_half", "active_layers": list(range(12, 24)),
                                 "zero_layers": list(range(12)), "source_dictionary_hash": "e" * 64,
-                                "source_training_tokens": 20_000_000, "source_id": training["source_id"],
-                                "token_budget": 20_000_000, "warm_start": "upper_weights_fresh_adam",
+                                "source_training_tokens": token_budget, "source_id": training["source_id"],
+                                "token_budget": token_budget, "warm_start": "upper_weights_fresh_adam",
                                 "lower_behavior": "zero_dictionary_original_mlp"}
         del quality["all_mlps_replaced"]
         quality.update(status="fallback_passed", scope="upper_half", active_layers=list(range(12, 24)),
@@ -165,13 +165,43 @@ def qualification_reply(*, fallback=False):
 
 
 @pytest.mark.parametrize("fallback", [False, True])
-def test_qualification_accepts_exact_complete_scope(fallback):
-    response = qualification_reply(fallback=fallback)
+@pytest.mark.parametrize("token_budget", [20_000_000, 40_000_000])
+def test_qualification_accepts_exact_complete_scope(fallback, token_budget):
+    response = qualification_reply(fallback=fallback, token_budget=token_budget)
     qualified = dictionary_qualification(response)
     assert qualified["qualified"] is True
     assert qualified["scope"] == ("upper_half" if fallback else "all_layers")
     assert qualified["status"] == ("fallback_passed" if fallback else "passed")
     assert qualified["identity"] == response["identity"]
+
+
+@pytest.mark.parametrize("scope", ["all_layers", "upper_half", "fallback_source"])
+@pytest.mark.parametrize("fault", ["unfinished_count", "pilot_budget", "wrong_stop_reason"])
+def test_qualification_requires_completed_approved_training(scope, fault):
+    response = qualification_reply(fallback=scope != "all_layers")
+    current = response["metadata"]["training"]
+    training = response["fallback_source"]["metadata"]["training"] if scope == "fallback_source" else current
+    if fault == "unfinished_count":
+        training["tokens"] -= 1
+    elif fault == "pilot_budget":
+        training.update(tokens=100_000, token_budget=100_000)
+    else:
+        training["stop_reason"] = "memory_stop"
+    if scope == "upper_half":
+        current["fallback"]["token_budget"] = training["token_budget"]
+    elif scope == "fallback_source":
+        current["fallback"]["source_training_tokens"] = training["tokens"]
+    qualified = dictionary_qualification(response)
+    assert qualified["qualified"] is False
+    assert "complete training budget" in qualified["reason"]
+
+
+def test_qualification_rejects_fallback_budget_mismatch():
+    response = qualification_reply(fallback=True)
+    response["metadata"]["training"]["token_budget"] = 40_000_000
+    qualified = dictionary_qualification(response)
+    assert qualified["qualified"] is False
+    assert "complete training budget" in qualified["reason"]
 
 
 @pytest.mark.parametrize("field,value", [

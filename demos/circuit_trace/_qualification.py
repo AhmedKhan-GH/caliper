@@ -84,9 +84,10 @@ def _partitions(training):
 
 
 def _completed_training(training, budget):
-    _require(type(budget) is int and budget > 0 and _integer(training.get("tokens"), budget)
+    _require(type(budget) is int and budget in (20_000_000, 40_000_000)
+             and _integer(training.get("tokens"), budget)
              and training.get("stop_reason") == "token_budget",
-             "Fallback requires a complete training budget.")
+             "Qwen requires a complete training budget of 20000000 or 40000000 tokens.")
 
 
 def _fallback(metadata, response):
@@ -155,6 +156,7 @@ def dictionary_qualification(response):
                  "Acceptance requires a complete 2000000-token index.")
         training, provenance = metadata["training"], index["provenance"]
         _partitions(training)
+        _completed_training(training, training.get("token_budget"))
         _require(provenance.get("partition") == "index" and all(provenance.get(k) == training[k] for k in
                  ("dataset_id", "dataset_config", "dataset_revision", "split", "partitions")),
                  "The index source or held-out partition differs.")
