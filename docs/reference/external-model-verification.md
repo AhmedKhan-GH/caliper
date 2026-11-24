@@ -32,7 +32,8 @@ The pinned snapshot header contains 488 tensor entries in one safetensors file.
 Of these, 320 entries have the `model.language_model.` prefix.
 The snapshot omits `lm_head.weight`, and the text configuration ties that parameter to the token embedding.
 The 59,840-byte header and shard index confirm these namespaces without a tensor load.
-The current end-to-end checkpoint verification remains unverified after the identity corrections.
+The pinned checkpoint passed end-to-end identity verification in the local MPS circuit trace run.
+This result covers the declared text subset.
 
 The following example assumes that `model` already contains the text model in its final dtype and device.
 The `snapshot` path must end with the standard Hugging Face cache structure shown below.
@@ -72,4 +73,5 @@ The spellings `mps` and `mps:0` refer to the same sole MPS device.
 Verification enforces a total process limit of at most 12 GB.
 The MPS process limit remains active after verification, as required by the run policy.
 Library memory diagnostics use stderr, and tool result records retain their stdout channel.
-Actual MPS execution remains deferred while the training process owns the GPU.
+The local MPS run uses this verification path.
+CPU tests cover refusal cases and bounded transfers.

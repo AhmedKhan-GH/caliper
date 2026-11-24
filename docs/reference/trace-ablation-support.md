@@ -26,7 +26,8 @@ A head point must pass the live ablation resolver for that attention module.
 The tracer does not infer head support from a point name alone.
 A whole MLP ablation removes its feature nodes, because the MLP makes no feature contribution.
 A complete forward check and direct-effect checks verify the supported paths on the CPU fixture.
-The current Qwen checkpoint and MPS execution remain deferred.
+The local MPS run traces the pinned Qwen checkpoint and tests feature clamps.
+The supported module and head ablations in this table retain CPU fixture coverage.
 
 ## Unsupported Points
 
