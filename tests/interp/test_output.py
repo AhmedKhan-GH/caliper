@@ -3,7 +3,7 @@ import pytest
 import torch
 
 from caliper._controls import Controls
-from caliper.interp._output import Output, is_internal_forward, packed_labels
+from caliper.interp._output import Output, forward_logits, is_internal_forward, packed_labels
 from caliper.interp._publish import _clear, _resolve
 from .fixture import make_fixture
 from .test_intervene import dictionary_for, explicit_forward
@@ -46,6 +46,34 @@ def test_paired_probabilities_use_one_batch_and_preserve_baseline(output_case):
     assert _resolve("output.label_text").shape == (10, 16)
     assert controls.n == 1
     assert service.specifications()[0]["feature"] == feature
+
+
+def test_fork_matches_full_logits_after_overlapping_replacement(output_case):
+    model, tokenizer, controls, service, output = output_case
+    ablation = {"kind": "ablate", "point": "layers.3.mlp_out"}
+    service.set(ablation)
+    service.set({"kind": "add", "point": "layers.3.mlp_out", "vector": [1.] * 64, "coefficient": .25})
+    controls.step(3)
+    service.set(dict(ablation, until_step=20))
+    controls.step(4)
+    inputs = tokenizer("AB")
+    expected = forward_logits(model, inputs)
+    expected_bars = output.compare("AB")
+    with service.suspend():
+        baseline = forward_logits(model, inputs)
+    assert not torch.equal(expected, baseline)
+    fork_model, fork_tokenizer = make_fixture()
+    fork_controls = Controls()
+    fork = fork_controls.interventions_on(fork_model)
+    try:
+        fork.configure(dictionary=dictionary_for(fork_model), tokenizer=fork_tokenizer)
+        fork.load_state_dict(service.state_dict())
+        fork_controls.step(controls.n)
+        torch.testing.assert_close(forward_logits(fork_model, inputs), expected, rtol=0, atol=0)
+        assert Output(fork_model, fork_tokenizer, fork).compare("AB") == expected_bars
+        assert fork.specifications() == service.specifications()
+    finally:
+        fork.remove()
 
 
 def test_generation_has_exactly_24_greedy_tokens_per_row(output_case):
