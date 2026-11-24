@@ -149,7 +149,8 @@ def test_secondary_uses_owned_executor_guard_and_cleanup(case, monkeypatch, fail
     installed, executors = [], []
     install = InterventionService.install
     def owned(executor, spec, **kwargs):
-        assert executor is not service.executor and executor.resource_guard is guard
+        assert executor is not service.executor
+        assert executor.resource_guard.memory is guard and executor.resource_guard.limit == guard.limit
         executors.append(executor)
         hook = install(executor, spec, **kwargs)
         installed.append(hook)

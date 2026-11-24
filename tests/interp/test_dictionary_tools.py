@@ -47,4 +47,4 @@ def test_requested_limit_refuses_before_tensor_materialization(tmp_path, monkeyp
     monkeypatch.setattr(safetensors, "safe_open", HeadersOnly)
     arguments = ["--dictionary", str(tmp_path), "--device", "cpu", "--memory-gb", "6"]
     assert command.main(arguments) == 2
-    assert limits == [6, 6]
+    assert limits == [6]

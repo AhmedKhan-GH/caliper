@@ -505,9 +505,11 @@ def test_script_fork_restores_outputs_and_defers_queued_lifecycle(tmp_path, monk
         service = controls.intervention_service
         assert service.state_dict()["interventions"] == []
         if bind_late:
-            with pytest.raises(ValueError, match="dictionary"):
+            from caliper.interp._intervene import InterventionError
+            with pytest.raises(RuntimeError, match="dictionary") as refused:
                 model(**inputs)
-            with pytest.raises(ValueError, match="dictionary"):
+            assert isinstance(refused.value.__cause__, InterventionError)
+            with pytest.raises(RuntimeError, match="dictionary"):
                 model(**inputs)
             assert fork._first is not None and controls.n == 4
         # Scripts bind resources after watch and before their first forward.

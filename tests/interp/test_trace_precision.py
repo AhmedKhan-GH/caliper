@@ -29,7 +29,9 @@ def test_encoder_conversion_uses_bounded_blocks(monkeypatch):
         return linear(inputs, weight, bias)
     monkeypatch.setattr(_frozen, "_ENCODER_BLOCK_ELEMENTS", 16)
     monkeypatch.setattr(F, "linear", bounded_linear)
-    actual = _frozen._trace_features(layer, x, SimpleNamespace(check=lambda stage: None))
+    guard = SimpleNamespace(check=lambda stage: None, limit=12_000_000_000,
+                            device=torch.device("cpu"), current=0, peak=0)
+    actual = _frozen._trace_features(layer, x, guard)
     torch.testing.assert_close(actual, expected, atol=1e-7, rtol=0)
     assert blocks == [16, 16, 16, 12]
 

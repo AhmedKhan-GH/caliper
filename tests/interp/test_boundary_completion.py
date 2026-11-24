@@ -15,6 +15,9 @@ def test_encoder_stop_cleans_hook_before_forward_continues(controlled, kind, fat
     error = CleanStop("encoder resource stop") if fatal else RuntimeError("encoder hook error")
 
     class Guard:
+        limit, peak, current = 12_000_000_000, 0, 0
+        device = torch.device("cpu")
+
         def check(self, stage):
             if stage == "dictionary encoder block":
                 raise error
@@ -41,6 +44,7 @@ def test_encoder_stop_cleans_hook_before_forward_continues(controlled, kind, fat
                 expected = model(**tokenizer("abc")).logits
             torch.testing.assert_close(output, expected, rtol=0, atol=0)
         assert hook.removed and hook.errors == 1
+        assert hook.error == f"{type(error).__name__}: {error}"
         assert record.state == "ended" and record.hook is None
         assert record.error_code == "intervene.hook_failed"
         assert service.specifications() == []

@@ -1121,4 +1121,6 @@ def main(argv=None):
 
 
 if __name__ == "__main__":
-    main()
+    # Keep durable fixture type names equal in imported and module entry paths.
+    from caliper.interp._hosted import main as hosted_main
+    hosted_main()
