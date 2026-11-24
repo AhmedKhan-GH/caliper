@@ -826,7 +826,7 @@ class Interventions:
                 return []
             if active_only:
                 return [deepcopy(iv.applied_spec) for iv in self._ctl._ivs.values()
-                        if iv.state == IV_ACTIVE and iv.applied_spec is not None]
+                        if iv.state == IV_ACTIVE and iv.hook is not None and iv.applied_spec is not None]
             return [deepcopy(iv.spec) for iv in self._ctl._ivs.values()
                     if iv.state != IV_ENDED and not iv.clear]
 
@@ -838,6 +838,7 @@ class Interventions:
                 raise ValueError("the intervention service is no longer attached")
             return {"version": 1, "interventions": [
                 {"specification": deepcopy(iv.spec), "state": iv.state,
+                 "applied_specification": deepcopy(iv.applied_spec),
                  "since_step": iv.since_step, "clear": iv.clear,
                  "error": iv.error, "error_code": iv.error_code}
                 for iv in self._ctl._ivs.values()]}
@@ -852,7 +853,7 @@ class Interventions:
         Temporary hook failures raise InterventionError at exit and leave live records intact.
 
         Accept a version 1 lifecycle object or an active list from specifications().
-        Use that list for a trace because state_dict() can contain queued replacements.
+        Lifecycle snapshots retain both applied effects and queued replacements.
         """
         from .interp._intervene import InterventionError, _InterventionReplay
         if isinstance(state, list):
@@ -876,21 +877,26 @@ class Interventions:
         # Validate every record before any hook installation or patch-source forward.
         specifications, keys = [], set()
         for record in records:
-            spec = _record_specification(record, replay.executor)
+            spec, applied = _record_specifications(record, replay.executor)
             key = spec["point"], spec["op"]
             if key in keys:
                 raise InterventionError("duplicate intervention record")
             keys.add(key)
             if record["state"] == IV_ACTIVE:
                 # A queued clear does not remove an effect until the next boundary.
+                spec = applied
                 spec.pop("from_step", None)
                 spec.pop("until_step", None)
                 specifications.append(spec)
         with replay._scope(hooks, specifications):
             yield replay
 
-    def load_state_dict(self, state):
-        """Validate all fork records before replacement. Hooks resume at a boundary."""
+    def load_state_dict(self, state, *, restore_active=False):
+        """Restore queued records, with optional applied hooks before a script forward.
+
+        The default resumes hooks at a boundary. restore_active installs only the saved
+        applied effects and leaves queued requests and the public step counter unchanged.
+        """
         from .interp._intervene import InterventionError
         if (not isinstance(state, dict) or type(state.get("version")) is not int
                 or state["version"] != 1 or set(state) != {"version", "interventions"}):
@@ -903,14 +909,25 @@ class Interventions:
                 raise InterventionError("the intervention service is no longer attached")
             restored = {}
             for record in records:
-                spec = _record_specification(record, self.executor)
+                spec, applied = _record_specifications(record, self.executor)
                 key = spec["point"], spec["op"]
                 if key in restored:
                     raise InterventionError("duplicate intervention record")
                 iv = _Intervention(*key, spec.get("from_step"), spec.get("until_step"), spec)
                 iv.state, iv.since_step = record["state"], record["since_step"]
                 iv.clear, iv.error, iv.error_code = record["clear"], record["error"], record["error_code"]
+                iv.applied_spec = applied
+                iv.replace = applied is not None and spec != applied
                 restored[key] = iv
+            if restore_active:
+                try:
+                    for iv in restored.values():
+                        if iv.applied_spec is not None:
+                            self._ctl._install_intervention(self, iv, iv.applied_spec)
+                except BaseException:
+                    for iv in restored.values():
+                        self._ctl._unhook(iv)
+                    raise
             for iv in self._ctl._ivs.values():
                 self._ctl._unhook(iv)
             self.invalidate_source_cache()
@@ -922,13 +939,14 @@ class Interventions:
         self._ctl._interventions_off(self)
 
 
-def _record_specification(record, executor):
+def _record_specifications(record, executor):
     """Validate lifecycle structure before resources that an effect still needs."""
     from . import _intervention_protocol as metadata
     from .interp._intervene import InterventionError
-    if not isinstance(record, dict) or set(record) != {
+    fields = {
         "specification", "state", "since_step", "clear", "error", "error_code"
-    }:
+    }
+    if not isinstance(record, dict) or set(record) not in (fields, fields | {"applied_specification"}):
         raise InterventionError("invalid intervention record")
     state, since = record["state"], record["since_step"]
     if (state not in (IV_PENDING, IV_ACTIVE, IV_ENDED) or type(record["clear"]) is not bool
@@ -940,7 +958,17 @@ def _record_specification(record, executor):
     entry.update({key: record[key] for key in ("error", "error_code") if record[key] is not None})
     if not metadata.specification(entry, lifecycle=True):
         raise InterventionError("invalid intervention lifecycle metadata")
-    return spec if state == IV_ENDED else executor.validate(spec)
+    if state != IV_ENDED:
+        spec = executor.validate(spec)
+    # Older version 1 checkpoints had only the requested specification.
+    applied = record.get("applied_specification", spec if state == IV_ACTIVE else None)
+    if state == IV_ACTIVE:
+        applied = executor.validate(applied)
+        if (applied["point"], applied["op"]) != (spec["point"], spec["op"]):
+            raise InterventionError("applied intervention must match the record point and kind")
+    elif applied is not None:
+        raise InterventionError("inactive intervention cannot have an applied specification")
+    return spec, applied
 
 
 def _step_ok(v) -> bool:
@@ -1675,6 +1703,18 @@ class Controls:
             except Exception:                     # a hook handle's remove() does not fail
                 _log.debug("removing the hook of %s failed", iv.point, exc_info=True)
 
+    def _install_intervention(self, service, iv, spec):
+        """Install one effect with the same error callback on restore and at a boundary."""
+        from copy import deepcopy
+        callback = lambda message, iv=iv: self._intervention_failed(iv, message)
+        if iv.op == "ablate":
+            iv.hook = service.adapter.ablate(service.model, iv.point)
+            if hasattr(iv.hook, "on_error"):
+                iv.hook.on_error = callback
+        else:
+            iv.hook = service.executor.install(spec, on_error=callback)
+        iv.applied_spec = deepcopy(spec)
+
     def _intervene(self, req):
         """Take the ``intervene`` key of a CONTROL (lock held). Returns ``(code, text)`` of a
         refusal, or None."""
@@ -1840,15 +1880,7 @@ class Controls:
                 # activation or replacement before an existing overlapping effect.
                 self._unhook(iv)
                 try:
-                    callback = lambda message, iv=iv: self._intervention_failed(iv, message)
-                    if iv.op == "ablate":
-                        iv.hook = m.adapter.ablate(m.model, iv.point)
-                        if hasattr(iv.hook, "on_error"):
-                            iv.hook.on_error = callback
-                    else:
-                        iv.hook = m.executor.install(iv.spec, on_error=callback)
-                    from copy import deepcopy
-                    iv.applied_spec = deepcopy(iv.spec)
+                    self._install_intervention(m, iv, iv.spec)
                     reinstall = True
                 except Exception as e:
                     iv.error = f"{type(e).__name__}: {e}"[:TEXT_MAX]

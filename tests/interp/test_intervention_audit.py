@@ -195,3 +195,63 @@ def test_cancelled_replacement_preserves_hooks_output_and_cache_identity(control
     assert key == json.dumps(service.specifications(), sort_keys=True)
     torch.testing.assert_close(model(**tokenizer("AB")).logits, before, rtol=0, atol=0)
     assert hooks == [iv.hook for iv in ctl._ivs.values()]
+
+
+@pytest.mark.parametrize("queued", ["replacement", "clear", "future"])
+def test_script_restore_preserves_applied_output_and_queued_boundary(controlled, queued):
+    model, tokenizer, ctl, service = controlled
+    inputs = tokenizer("AB")
+    service.set({"kind": "ablate", "point": "layers.0.mlp_out"})
+    service.set(add_spec())
+    service.set(add_spec(point="layers.2.mlp_out", from_step=100))
+    ctl.step(5)
+    before = model(**inputs).logits
+    if queued == "clear":
+        service.clear("layers.0.mlp_out")
+    else:
+        service.set(add_spec(coefficient=2, **({"from_step": 100} if queued == "future" else {})))
+    state = service.state_dict()
+    other, _ = make_fixture()
+    fork = Controls()
+    restored = fork.interventions_on(other)
+    fork.n = ctl.n - 1
+    try:
+        restored.load_state_dict(state, restore_active=True)
+        assert fork.n == 4 and restored.state_dict() == state
+        torch.testing.assert_close(other(**inputs).logits, before, rtol=0, atol=0)
+        with service.temporary_state(state):
+            torch.testing.assert_close(model(**inputs).logits, before, rtol=0, atol=0)
+        ctl.step(5)
+        fork.step()
+        assert fork.n == ctl.n == 5
+        after = model(**inputs).logits
+        assert not torch.equal(before, after)
+        torch.testing.assert_close(other(**inputs).logits, after, rtol=0, atol=0)
+        assert restored.state_dict() == service.state_dict()
+    finally:
+        restored.remove()
+
+
+def test_script_restore_accepts_older_checkpoint_records(controlled):
+    model, tokenizer, ctl, service = controlled
+    service.set(add_spec())
+    ctl.step()
+    expected = model(**tokenizer("AB")).logits
+    state = service.state_dict()
+    for record in state["interventions"]:
+        record.pop("applied_specification", None)
+    service.load_state_dict(state, restore_active=True)
+    torch.testing.assert_close(model(**tokenizer("AB")).logits, expected, rtol=0, atol=0)
+
+
+@pytest.mark.parametrize("applied", [None, add_spec(point="layers.1.mlp_out"), add_spec(coefficient=2**53 + 1)])
+def test_invalid_applied_snapshot_refuses_before_live_replacement(controlled, applied):
+    _, _, ctl, service = controlled
+    service.set(add_spec())
+    ctl.step()
+    before = service.state_dict()
+    state = deepcopy(before)
+    state["interventions"][0]["applied_specification"] = applied
+    with pytest.raises(InterventionError):
+        service.load_state_dict(state, restore_active=True)
+    assert service.state_dict() == before
