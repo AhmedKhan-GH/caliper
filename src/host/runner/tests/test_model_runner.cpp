@@ -1378,7 +1378,12 @@ TEST_CASE("runner: native inference keeps prompts out of arguments and excludes 
     CHECK(observed.at("prompt_removed") == true);
     CHECK(observed.at("executable") == w.ws + "/.venv/bin/python");
     const auto arguments = observed.at("original_argv").get<std::vector<std::string>>();
-    CHECK(arguments == std::vector<std::string>{w.ws + "/.venv/bin/python", "-E", "-P", "-u", "-m",
+    CAPTURE(observed.at("original_argv").dump());
+    REQUIRE(!arguments.empty());
+    // Framework launchers can report their binary in orig_argv[0]. The selected
+    // virtual environment remains in sys.executable, checked above.
+    const std::vector<std::string> interpreter_options(arguments.begin() + 1, arguments.end());
+    CHECK(interpreter_options == std::vector<std::string>{"-E", "-P", "-u", "-m",
           "caliper.interp._entry", "--model=" + request.model, "--dictionary=" + request.dictionary});
     for (const char* key : {"original_argv", "argv"}) {
         CHECK(observed.at(key).dump().find("native prompt marker") == std::string::npos);
