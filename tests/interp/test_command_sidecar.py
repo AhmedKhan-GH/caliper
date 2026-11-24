@@ -134,6 +134,15 @@ def test_offline_command_sidecar(actual, tmp_path, monkeypatch):
         assert _resolve("examples.label_text").shape == (400, 16)
         assert _resolve("trace.node_i").shape == (512, 4)
         assert tool("trace.read", {"node_limit": 257})["isError"]
+        for name, params in (("patch.sweep", {"clean_prompt": "AB", "corrupted_prompt": "AC",
+                                              "metric": {"positive_token": 1, "negative_token": 2}}),
+                             ("trace.validate", {})):
+            reply = tool(name, params)
+            deadline = time.monotonic() + 30
+            while not reply.get("isError"):
+                assert time.monotonic() < deadline and reply["structuredContent"]["pending"]
+                reply = tool(name, {"request_id": reply["structuredContent"]["request_id"]})
+            assert json.loads(reply["content"][0]["text"])["error"]["code"] == "interpret.unsupported"
         actual.dictionary = None
         reply = tool("feature.dictionary", {})
         deadline = time.monotonic() + 30
