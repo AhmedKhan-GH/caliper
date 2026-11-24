@@ -80,6 +80,9 @@ class TextStream:
         self.offset = 0
         self.document_id = 0
         self.iterator = None
+        self.buffer = [[], [], []]
+        self.closed = False
+        self._closed_state = None
         if state is not None:
             self.load_state_dict(state)
 
@@ -94,14 +97,18 @@ class TextStream:
                 next(self.iterator)
 
     def state_dict(self):
+        if self.closed:
+            return copy.deepcopy(self._closed_state)
         source_state = self.documents.state_dict() if self.iterator is not None and hasattr(self.documents, "state_dict") else None
         return {"version": 1, "source_id": self.source_id, "partition": self.partition,
                 "partitions": partition_metadata(), "rows": self.rows, "emitted": self.emitted,
                 "skipped_long": self.skipped_long, "pending": list(self.pending),
                 "offset": self.offset, "document_id": self.document_id,
-                "source_state": copy.deepcopy(source_state)}
+                "source_state": copy.deepcopy(source_state), "buffer": copy.deepcopy(self.buffer)}
 
     def load_state_dict(self, state):
+        if self.closed:
+            raise RuntimeError("cannot restore a closed text stream")
         if (state.get("version"), state.get("source_id"), state.get("partition"), state.get("partitions")) != (
             1, self.source_id, self.partition, partition_metadata(),
         ):
@@ -112,19 +119,24 @@ class TextStream:
                 raise ValueError("invalid text cursor")
             setattr(self, key, value)
         self.pending = list(state["pending"])
+        self.buffer = copy.deepcopy(state.get("buffer", [[], [], []]))
         if not 0 <= self.offset <= len(self.pending) or any(type(t) is not int or t < 0 for t in self.pending):
             raise ValueError("invalid token cursor")
         self._iterator(state.get("source_state"))
 
-    def next_tokens(self, count):
+    def next_tokens(self, count, *, health=None):
         """Return at most count tokens. Exhaustion returns a shorter batch."""
+        if self.closed:
+            raise RuntimeError("cannot read a closed text stream")
         if type(count) is not int or count < 1:
             raise ValueError("token count must be positive")
         if self.iterator is None:
             self._iterator()
-        tokens, documents, positions = [], [], []
+        tokens, documents, positions = self.buffer
         while len(tokens) < count:
             if self.offset >= len(self.pending):
+                if health:
+                    health()
                 self.pending, self.offset = [], 0
                 try:
                     record = next(self.iterator)
@@ -151,5 +163,26 @@ class TextStream:
             documents.extend([self.document_id] * (end - self.offset))
             positions.extend(range(self.offset, end))
             self.offset = end
-        self.emitted += len(tokens)
-        return TokenBatch(*(torch.tensor(values, dtype=torch.int64) for values in (tokens, documents, positions)))
+        values = [part[:count] for part in self.buffer]
+        self.buffer = [part[count:] for part in self.buffer]
+        self.emitted += len(values[0])
+        return TokenBatch(*(torch.tensor(part, dtype=torch.int64) for part in values))
+
+    def close(self):
+        """Release source generators after the final checkpoint preserves their cursor."""
+        if self.closed:
+            return
+        self._closed_state = self.state_dict()
+        iterator, self.iterator = self.iterator, None
+        self.documents = None
+        self.closed = True
+        if iterator is not None and hasattr(iterator, "close"):
+            iterator.close()
+
+    def __enter__(self):
+        if self.closed:
+            raise RuntimeError("cannot enter a closed text stream")
+        return self
+
+    def __exit__(self, *_):
+        self.close()
