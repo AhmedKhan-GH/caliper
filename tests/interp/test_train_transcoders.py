@@ -196,3 +196,14 @@ def test_cli_refuses_unbounded_work_before_model_load(tmp_path, monkeypatch, arg
     monkeypatch.setattr(train_transcoders, "load_text_model", lambda **_: pytest.fail("model load ran"))
     with pytest.raises(ValueError):
         train_transcoders.main(["--output", str(tmp_path), *arguments])
+
+
+def test_exhausted_resume_refuses_model_load(tmp_path, monkeypatch):
+    from tools.interp import train_transcoders
+    _, trainer, stream = small_trainer()
+    progress = initial_progress()
+    progress["elapsed_seconds"] = 36_000
+    save_checkpoint(tmp_path / "checkpoints", trainer, stream, progress)
+    monkeypatch.setattr(train_transcoders, "load_text_model", lambda **_: pytest.fail("model load ran"))
+    with pytest.raises(ValueError, match="reserve"):
+        train_transcoders.main(["--output", str(tmp_path), "--resume"])

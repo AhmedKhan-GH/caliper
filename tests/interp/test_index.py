@@ -544,3 +544,50 @@ def test_text_scan_observes_resource_stops():
             raise RuntimeError("fixture scan stop")
     with pytest.raises(RuntimeError, match="fixture scan stop"):
         list(stream_documents(stream, check=check))
+
+
+def test_cli_local_parquet_preserves_source_and_closes_stream(tmp_path, monkeypatch):
+    import json
+    from tools.interp import build_index as command
+    from tools.interp.text_stream import fineweb_documents, TextStream
+    from .fixture import TinyLM
+    from .test_training_stream import local_manifest
+
+    model = TinyLM()
+    metadata = _t2_source_manifest(tmp_path, model)
+    manifest = local_manifest(tmp_path)
+    identity = fineweb_documents(local_manifest=manifest).source_id
+    metadata["training"]["source_id"] = identity
+    (tmp_path / "dictionary.json").write_text(json.dumps(metadata))
+    monkeypatch.setattr(command, "load_text_model", lambda **kwargs: (model, TinyTokenizer()))
+    opened = []
+    def stream(*args, **kwargs):
+        value = TextStream(*args, **kwargs)
+        opened.append(value)
+        return value
+    monkeypatch.setattr(command, "TextStream", stream)
+    assert command.main(["--dictionary", str(tmp_path), "--device", "cpu", "--tokens", "73",
+                         "--context", "17", "--local-dataset-manifest", str(manifest)]) == 0
+    assert len(opened) == 1 and opened[0].closed
+    with FeatureIndex(tmp_path, model=model, tokenizer=TinyTokenizer()) as index:
+        assert index.metadata["tokens"] == 73
+        assert index.metadata["provenance"]["source_id"] == identity
+        assert index.metadata["provenance"]["source_kind"] == "pinned_local_parquet"
+
+
+def test_cli_refuses_a_different_training_source(tmp_path, monkeypatch):
+    import json
+    from tools.interp import build_index as command
+    from .fixture import TinyLM
+    from .test_training_stream import local_manifest
+
+    model = TinyLM()
+    metadata = _t2_source_manifest(tmp_path, model)
+    metadata["training"]["source_id"] = "different-source"
+    (tmp_path / "dictionary.json").write_text(json.dumps(metadata))
+    manifest = local_manifest(tmp_path)
+    monkeypatch.setattr(command, "load_text_model", lambda **kwargs: (model, TinyTokenizer()))
+    with pytest.raises(ValueError, match="source differs"):
+        command.main(["--dictionary", str(tmp_path), "--device", "cpu",
+                      "--local-dataset-manifest", str(manifest)])
+    assert not (tmp_path / "index").exists()

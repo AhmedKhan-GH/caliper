@@ -18,7 +18,7 @@ from torch.nn import functional as F
 
 from caliper.interp import capture, points
 from caliper.interp._dictionary import TopKTranscoder, model_identity
-from .checkpoint_state import export_dictionary, restore_checkpoint, save_checkpoint, write_json
+from .checkpoint_state import checkpoint_record, export_dictionary, restore_checkpoint, save_checkpoint, write_json
 from .memory_limits import CleanStop, MemoryGuard, StopControl, autorelease_scope
 from .model_load import MODEL_ID, MODEL_REVISION, hidden_forward, load_text_model
 from .text_stream import DATASET_CONFIG, DATASET_ID, DATASET_REVISION, TextStream, fineweb_documents, partition_metadata
@@ -148,7 +148,9 @@ def train_online(model, trainer, stream, output, *, token_budget, progress=None,
     # A bounded reserve covers a final checkpoint and dictionary export.
     reserve = min(60.0, invocation_limit / 4)
     last_save = clock()
-    checkpoint_seconds = 0.0
+    checkpoint_seconds = progress.get("checkpoint_seconds", 0.0)
+    if invocation_limit <= max(reserve, 2 * checkpoint_seconds):
+        raise ValueError("wall time budget has no checkpoint reserve")
     last_metrics = {}
     model.requires_grad_(False).eval()
 
@@ -171,10 +173,13 @@ def train_online(model, trainer, stream, output, *, token_budget, progress=None,
                 trainer.metadata["training"]["peak_memory_bytes"], memory.peak)
         before = clock()
         save_checkpoint(output / "checkpoints", trainer, stream, progress, elapsed=elapsed)
-        checkpoint_seconds = clock() - before
+        duration = clock() - before
+        checkpoint_seconds = max(checkpoint_seconds, duration)
+        progress["checkpoint_seconds"] = checkpoint_seconds
         last_save = before
         print(json.dumps({"stage": "checkpoint", "tokens": progress["tokens"],
-                          "next_layer": progress["next_layer"], "save_seconds": checkpoint_seconds,
+                          "next_layer": progress["next_layer"], "save_seconds": duration,
+                          "max_save_seconds": checkpoint_seconds,
                           "elapsed_seconds": elapsed()}), flush=True)
 
     reason = "token_budget"
@@ -241,7 +246,8 @@ def train_online(model, trainer, stream, output, *, token_budget, progress=None,
     trainer.metadata["training"]["elapsed_seconds"] = elapsed()
     write_json(output / "dictionary.json", trainer.metadata)
     generation = json.loads((output / "checkpoints" / "latest.json").read_text())["generation"]
-    write_json(output / "runtime.json", {"generation": generation, "elapsed_seconds": elapsed()})
+    write_json(output / "runtime.json", {"generation": generation, "elapsed_seconds": elapsed(),
+                                         "checkpoint_seconds": checkpoint_seconds})
     print(json.dumps({"stage": "train_end", "reason": reason, "tokens": progress["tokens"],
                       "elapsed_seconds": elapsed()}), flush=True)
     return progress
@@ -283,6 +289,11 @@ def main(argv=None):
         raise ValueError("invalid token, checkpoint, or wall-time budget")
     if args.output.exists() and (args.output / "checkpoints" / "latest.json").exists() and not args.resume:
         raise ValueError("output has a checkpoint; use --resume or a new output folder")
+    if args.resume:
+        prior = checkpoint_record(args.output / "checkpoints")[1]["progress"]
+        reserve = max(60, 2 * prior.get("checkpoint_seconds", 0))
+        if args.max_wall_seconds - prior["elapsed_seconds"] <= reserve:
+            raise ValueError("wall time budget has no model-load and checkpoint reserve")
     random.seed(args.seed)
     np.random.seed(args.seed)
     torch.manual_seed(args.seed)
