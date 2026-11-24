@@ -252,7 +252,7 @@ def test_atomic_publication_and_layer_release(tmp_path, monkeypatch, fail):
     monkeypatch.setattr(conversion.os, "fsync", writable_fsync)
 
     def admitted(model, limit):
-        admissions.append(True)
+        admissions.append(limit)
         return blocks
 
     monkeypatch.setattr(conversion, "_model_admission", admitted)
@@ -278,7 +278,7 @@ def test_atomic_publication_and_layer_release(tmp_path, monkeypatch, fail):
         assert not output.exists()
     else:
         result = conversion.convert_gemma_scope(source, output, model=model)
-        assert admissions == [True, True]
+        assert admissions == [28, 28]
         assert calls == list(conversion.SOURCE_PATHS)
         assert json.loads((output / "dictionary.json").read_text()) == result
         for row in result["import_source"]["layers"]:
@@ -289,3 +289,40 @@ def test_atomic_publication_and_layer_release(tmp_path, monkeypatch, fail):
             conversion.convert_gemma_scope(source, output, model=model)
         assert (output / "dictionary.json").read_bytes() == before
     assert not output.with_name("." + output.name + ".conversion-lock").exists()
+
+
+@pytest.mark.parametrize("requested", [None, 12, 28, 28.1])
+def test_cli_budget_admits_exact_gemma_load_reserve_and_preserves_lower_cap(tmp_path, monkeypatch, requested):
+    from caliper.interp import _admission
+    from .test_memory_phases import process_guard
+    source = tmp_path / "models--google--gemma-scope-2b-pt-transcoders" / "snapshots" / conversion.SOURCE_REVISION
+    snapshot = tmp_path / "models--google--gemma-2-2b" / "snapshots" / conversion.MODEL_REVISION
+    arguments = ["--source", str(source), "--output", str(tmp_path / "output"), "--model-snapshot", str(snapshot)]
+    if requested is not None:
+        arguments += ["--memory-limit-gb", str(requested)]
+    calls, converted = [], []
+    model = object()
+    monkeypatch.setattr(conversion, "MemoryGuard", lambda limit, device: process_guard(
+        int(limit * 1e9), {"current": 512_000_000, "peak": 1_000_000_000}))
+
+    def load(path, *, memory, device):
+        assert path == snapshot and device == "cpu"
+        calls.append(memory.limit)
+        # Scalar accounting only. No gated model or large array is loaded.
+        _admission._admit_load(memory, 18_557_347_328, "Gemma CPU reserve", staged=True)
+        return model
+
+    def convert(source_path, output, **kwargs):
+        assert source_path == source and kwargs["model"] is model
+        converted.append(kwargs["memory_limit_gb"])
+
+    monkeypatch.setattr(_admission, "_load_gemma_model", load)
+    monkeypatch.setattr(conversion, "convert_gemma_scope", convert)
+    if requested in (12, 28.1):
+        with pytest.raises(CleanStop if requested == 12 else ValueError, match="memory limit"):
+            conversion.main(arguments)
+        assert not converted
+        assert calls == ([12_000_000_000] if requested == 12 else [])
+    else:
+        conversion.main(arguments)
+        assert calls == [28_000_000_000] and converted == [28]
