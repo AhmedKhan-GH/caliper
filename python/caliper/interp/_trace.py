@@ -11,8 +11,10 @@ import time
 import torch
 
 from ._dictionary import _state_hash, weights_hash
+from ._families import model_family
 from ._frozen import (FrozenPath, MemoryGuard, _validate_dictionary, _validate_ablation_points,
-                      _validate_intervention_positions, _finite_max, _require_finite, _no_check)
+                      _validate_intervention_positions, _finite_max, _require_finite, _no_check,
+                      _ENCODER_BLOCK_ELEMENTS)
 from ._memory import autorelease_scope
 from ._graph import Graph, bounded_integer
 from ._influence import influence
@@ -70,6 +72,11 @@ class _DirectEffects:
         self.check = check
         self.nodes, self.source_layers = [], []
         self.feature_columns = {}
+        count = path.tokens * (path.layers + 1) + 10
+        count += sum(int((output.activations != 0).sum()) for output in path.feature_outputs)
+        # Python node dictionaries and their lookup tables also use process memory.
+        # Refuse an oversized active set explicitly. Never truncate JumpReLU sources.
+        path.guard.reserve("source nodes", count * 2048)
         self.tokens = [{"position": p, "token_id": token, "text": token_label(tokenizer, token)}
                        for p, token in enumerate(token_ids)]
         for token in self.tokens:
@@ -78,12 +85,10 @@ class _DirectEffects:
         for layer, output in enumerate(path.feature_outputs):
             with autorelease_scope(path.device):
                 check(f"source layer {layer}")
-                weights = dictionary.layers[layer]
-                # Original TopK columns and explicit edits retain signed and constant writes.
+                # Active columns and explicit edits retain signed and constant writes.
                 indices = output.indices
                 activations = output.activations
                 active = activations != 0
-                decoders = weights.W_dec.detach()[indices].to(path.dtype)
                 positions = torch.arange(path.tokens, device=path.device)[:, None].expand_as(indices)
                 start = len(self.nodes)
                 columns = torch.arange(indices.shape[1], device=path.device)[None].expand_as(indices)
@@ -99,7 +104,7 @@ class _DirectEffects:
                     self.nodes.append({"id": f"error:{layer}:{position}", "kind": "error", "layer": layer,
                                        "position": position, "activation": 1., "label": f"L{layer} error"})
                 self.source_layers.append((slice(start, end), slice(end, len(self.nodes)),
-                                           decoders, activations, active))
+                                           indices, activations, active))
         probabilities = path.logits[0].softmax(-1)
         order = torch.argsort(probabilities, descending=True, stable=True)[:10]
         count = min(10, int((probabilities[order].cumsum(0) < .95).sum()) + 1, len(order))
@@ -120,11 +125,9 @@ class _DirectEffects:
         zero = path.embedding.new_zeros(())
         if node["kind"] == "logit":
             token = node["token_id"]
-            bias = path.unembedding_bias
-            return _Target(index, path.layers, path.tokens - 1,
-                           path.unembedding[token] - path.unembedding_mean,
-                           path.logits[0, token] - path.logits[0].mean(), zero,
-                           zero if bias is None else bias[token] - bias.mean(), zero)
+            direction, bias = path.logit_target(token)
+            return _Target(index, path.layers, path.tokens - 1, direction,
+                           path.logits[0, token] - path.logits[0].mean(), zero, bias, zero)
         if node["kind"] != "feature":
             raise ValueError("only features and logits are trace targets")
         layer, position, feature = node["layer"], node["position"], node["feature"]
@@ -162,18 +165,30 @@ class _DirectEffects:
             gradients = torch.autograd.grad(objective, leaves, allow_unused=True)
         path.guard.check("target backward")
         self.check("target backward")
+        path.guard.reserve("direct edge matrix", len(self.nodes) * batch * path.embedding.element_size())
         weights = path.embedding.new_zeros(len(self.nodes), batch)
         token_gradient = gradients[0]
         if token_gradient is not None:
             weights[:path.tokens] = (token_gradient * path.embedding).sum(-1).T
-        for layer, (feature_slice, error_slice, decoders, activations, active) in enumerate(self.source_layers):
+        for layer, (feature_slice, error_slice, indices, activations, active) in enumerate(self.source_layers):
             self.check(f"edge layer {layer}")
             gradient = gradients[layer + 1]
             if gradient is None:
                 continue
-            products = torch.bmm(gradient.transpose(0, 1), decoders.transpose(1, 2)).transpose(0, 1)
-            products = products * activations
-            weights[feature_slice] = products[:, active].T
+            # JumpReLU can activate every column. Copy only bounded decoder
+            # blocks instead of retaining token-by-feature-by-width tensors.
+            rows = self.dictionary.layers[layer].W_dec.detach()
+            step = max(1, _ENCODER_BLOCK_ELEMENTS // path.width)
+            node = feature_slice.start
+            for position in range(path.tokens):
+                selected = indices[position, active[position]]
+                values = activations[position, active[position]]
+                for start in range(0, len(selected), step):
+                    self.check("direct decoder block")
+                    decoder = rows[selected[start:start + step]].to(path.dtype)
+                    products = (gradient[:, position] @ decoder.T) * values[start:start + step]
+                    weights[node:node + decoder.shape[0]] = products.T
+                    node += decoder.shape[0]
             weights[error_slice] = (gradient * path.errors[layer]).sum(-1).T
         expected = torch.stack([target.expected for target in targets])
         affine = torch.stack([(path.bias_final if target.layer == path.layers else path.bias_reads[target.layer])
@@ -222,10 +237,14 @@ def _forward_settings(model, memory):
         "rope_type", "attention_scaling", "mrope_section", "max_seq_len_cached",
         "original_max_seq_len", "long_inv_freq", "max_norm", "norm_type",
         "padding_idx", "scale_grad_by_freq", "sparse", "inplace",
+        # Gemma attention routing, softcaps, and scaled embedding.
+        "layer_type", "sliding_window", "attn_logit_softcapping", "scalar_embed_scale", "embed_scale",
     )
     config_fields = ("model_type", "num_hidden_layers", "hidden_size", "vocab_size",
                      "layer_types", "is_causal", "rope_parameters", "max_position_embeddings",
-                     "head_dim", "num_attention_heads")
+                     "head_dim", "num_attention_heads", "num_key_value_heads",
+                     "sliding_window", "attn_logit_softcapping", "final_logit_softcapping",
+                     "query_pre_attn_scalar", "use_bidirectional_attention", "hidden_activation")
     settings = {}
 
     def record(name, value):
@@ -377,13 +396,13 @@ def _prune(effects, weights, target_indices, scores, normalized, *, max_nodes, m
 
 
 class Tracer:
-    """Trace the fixture or Qwen3.5 with an eight-entry state-keyed graph cache.
+    """Trace a supported decoder with an eight-entry state-keyed graph cache.
 
     ``controls`` supplies the model's intervention owner. Standalone callers use
     the global owner when this keyword is absent.
     """
 
-    def __init__(self, model, tokenizer, dictionary, *, controls=None, index=None):
+    def __init__(self, model, tokenizer, dictionary, *, controls=None, index=None, memory_limit_gb=12):
         if dictionary is None:
             raise ValueError("trace requires a dictionary")
         _validate_dictionary(model, dictionary)
@@ -397,7 +416,8 @@ class Tracer:
         self._cache = OrderedDict()
         self._forward_cache = None
         self._prompt = None
-        self.guard = MemoryGuard(next(model.parameters()).device)
+        self.memory_limit_gb = model_family(model).memory_limit(memory_limit_gb)
+        self.guard = MemoryGuard(next(model.parameters()).device, memory_limit_gb=self.memory_limit_gb)
         self._settings = _forward_settings(model, self.guard._guard)
 
     def bind_index(self, index):
@@ -505,7 +525,7 @@ class Tracer:
                 raise
             device = next(self.model.parameters()).device
             if device != self.guard.device:
-                self.guard = MemoryGuard(device)
+                self.guard = MemoryGuard(device, memory_limit_gb=self.memory_limit_gb)
                 self._forward_cache = None
             if not isinstance(prompt, str):
                 raise TypeError("prompt must be a string")
@@ -558,6 +578,9 @@ class Tracer:
             effects = _DirectEffects(path, self.dictionary, ids[0].tolist(), self.tokenizer, check=check)
             target_indices = list(effects.logit_nodes)
             budget = len(target_indices) + min(max_targets, len(effects.feature_nodes))
+            # Influence retains normalized edges and work tensors beside the matrix.
+            path.guard.reserve("trace edge matrices", len(effects.nodes) *
+                               (4 * budget + 4 * self.target_batch_size + 32) * path.embedding.element_size())
             weights = path.embedding.new_zeros(len(effects.nodes), budget)
             seeds = path.embedding.new_zeros(len(effects.nodes))
             for index in effects.logit_nodes:
