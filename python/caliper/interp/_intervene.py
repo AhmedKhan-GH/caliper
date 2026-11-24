@@ -303,6 +303,11 @@ class InterventionService:
                 raise InterventionError("unknown or absent dictionary", "intervene.unknown_dictionary")
             if probe is None or not point.endswith(".mlp_out"):
                 raise InterventionError("features require an mlp_out point")
+            from ._dictionary import fallback_metadata
+            meta = self.dictionary.metadata
+            fallback = fallback_metadata(meta) if "fallback" in meta.get("training", {}) else None
+            if fallback is not None and probe.layer not in fallback["active_layers"]:
+                raise InterventionError("dictionary excludes this feature layer", "intervene.unknown_feature")
             feature = spec.get("feature")
             if type(feature) is not int or not 0 <= feature < self.dictionary.layers[probe.layer].W_dec.shape[0]:
                 raise InterventionError("unknown dictionary feature", "intervene.unknown_feature")
