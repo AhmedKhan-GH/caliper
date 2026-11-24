@@ -202,7 +202,9 @@ function frameAt(type: number, meta: Record<string, unknown>, sections: Section[
   const source = numberSources.get(meta);
   const interpretationKey = meta.op === 'interpret'
     ? (type === MSG.control ? 'interpretation' : type === MSG.control_reply ? 'result' : undefined) : undefined;
-  const mbytes = utf8.encode(canonicalObject(m, (value, key) => canonicalJson(value, sourceField(source, key), key === interpretationKey)));
+  const mbytes = utf8.encode(canonicalObject(m, (value, key) => canonicalJson(value, sourceField(source, key), key === interpretationKey
+    || (type === MSG.control && meta.op === 'intervene' && key === 'intervene')
+    || (type === MSG.controls && key === 'interventions'))));
   if (mbytes.length > LIMITS.maxMetaBytes) throw new WireError('too_big', `metadata of ${mbytes.length} bytes`, CLOSE.tooBig);
   let pos = HEADER_BYTES + 4 * sections.length + mbytes.length;
   const offsets: number[] = [];
@@ -2270,7 +2272,7 @@ function isInterventionSpec(v: unknown, lifecycle: boolean, source: unknown): bo
     if (!interpretationText(o.source_prompt, 4096, false)) return false;
     if (Object.hasOwn(o, 'source_position') && !interpretationInteger(o.source_position, sourceField(source, 'source_position'), 0, 31)) return false;
   }
-  return utf8.encode(canonicalJson(v, source)).length <= INTERVENTION_LIMITS.maxBytes;
+  return utf8.encode(canonicalJson(v, source, true)).length <= INTERVENTION_LIMITS.maxBytes;
 }
 
 /** CONTROL's intervene: exactly one of set, clear and clear_all. */
