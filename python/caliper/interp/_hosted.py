@@ -62,6 +62,19 @@ class _RunGuard:
         self.guard, self.extra, self.failure = guard, extra, None
         self.on_stop = on_stop
 
+    @property
+    def limit(self):
+        return min(getattr(guard, "limit", math.inf) for guard in (self.guard, self.extra))
+
+    @property
+    def peak(self):
+        return max(getattr(guard, "peak", 0) for guard in (self.guard, self.extra))
+
+    @property
+    def device(self):
+        guard = self.guard if self.guard is not None else self.extra
+        return getattr(guard, "device", torch.device("cpu"))
+
     def check(self, *args, **kwargs):
         from ._memory import CleanStop
         if self.failure is not None:

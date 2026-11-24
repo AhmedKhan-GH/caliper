@@ -122,6 +122,55 @@ def test_identity_respects_lower_guard_limit_before_readback(controlled, monkeyp
     assert guard.stages == ["model_identity"]
 
 
+@pytest.mark.parametrize("lower", ["primary", "extra"])
+def test_hosted_guard_preserves_identity_memory_admission(controlled, monkeypatch, lower):
+    from caliper.interp._hosted import _RunGuard
+    _, tokenizer, _, service = controlled
+    primary, extra = IdentityGuard(), IdentityGuard()
+    guard = _RunGuard(primary, extra=extra)
+    service.configure(tokenizer=tokenizer, resource_guard=guard)
+    selected = primary if lower == "primary" else extra
+    selected.limit = 4 * _dictionary._HASH_CHUNK_BYTES + 100
+    selected.peak = 101
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("hosted memory admission must precede a tensor readback")
+
+    monkeypatch.setattr(torch.Tensor, "to", forbidden)
+    with pytest.raises(CleanStop, match="allocation exceeds"):
+        service.executor._identity()
+    assert primary.stages == extra.stages == ["model_identity"]
+
+
+@pytest.mark.parametrize("display_only", [False, True])
+def test_hosted_guard_exposes_device_budget_to_content_identity(monkeypatch, display_only):
+    from caliper.interp._hosted import _RunGuard
+    from caliper.interp._intervene import _content_identity
+    guard = IdentityGuard()
+    guard.device = torch.device("mps")
+    hosted = _RunGuard(None, extra=guard) if display_only else _RunGuard(guard)
+
+    class DeviceLabel(torch.Tensor):
+        @property
+        def device(self):
+            return torch.device("mps")
+
+    state = {"weight": torch.zeros(1).as_subclass(DeviceLabel)}
+
+    def admitted(values, *, memory):
+        assert values is state
+        assert memory.device == guard.device
+        assert memory.limit == guard.limit
+        memory.check("model_identity")
+        guard.peak = 10
+        assert memory.peak == 10
+        return "bounded identity"
+
+    monkeypatch.setattr(_dictionary, "_state_hash", admitted)
+    assert _content_identity(state, hosted) == "bounded identity"
+    assert guard.stages == ["model_identity"]
+
+
 def test_identity_failure_ends_only_patch_and_releases_cache(controlled):
     model, tokenizer, ctl, service = controlled
     guard = IdentityGuard()
