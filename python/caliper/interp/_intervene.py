@@ -784,6 +784,9 @@ class InterventionService:
         except BaseException:
             copies.clear()
             raise
+        finally:
+            # A retained exception keeps this frame after the caller clears its maps.
+            value = storage = None
 
     def _prepare_source(self, spec):
         identity = self._identity()

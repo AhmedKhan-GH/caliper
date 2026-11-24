@@ -4,6 +4,7 @@ import weakref
 
 import pytest
 import torch
+from torch.multiprocessing.reductions import StorageWeakRef
 
 from caliper.interp import _intervene, _points
 from caliper.interp._intervene import InterventionService
@@ -84,6 +85,87 @@ def assert_retained(service, cache, identity):
         assert service._cache_identity is identity
     else:
         assert not service._cache_identity[1]
+
+
+def use_capture_views(model, monkeypatch):
+    for module in (model.embed_tokens, model.layers[0].post_attention_layernorm):
+        def forward(*args, original=module.forward, **kwargs):
+            output = original(*args, **kwargs)
+            backing = output.new_empty((*output.shape[:-1], 4 * output.shape[-1]))
+            view = backing[..., 1::4]
+            view.copy_(output)
+            return view
+
+        monkeypatch.setattr(module, "forward", forward)
+
+
+@pytest.mark.parametrize("views", [False, True])
+@pytest.mark.parametrize("failure", ["admission", "guard"])
+@pytest.mark.parametrize("completed", [0, 1])
+def test_retained_refusal_releases_capture_tensors_and_storage(
+        decoder_source, monkeypatch, views, failure, completed):
+    model, _, service = decoder_source
+    initial_hooks = hook_objects(model)
+    if views:
+        use_capture_views(model, monkeypatch)
+    prepare_sources(service, monkeypatch, eviction=True)
+    cache, identity, hooks = list(service._cache.items()), service._cache_identity, hook_objects(model)
+    capacity = 2 * SOURCE_BYTES - (failure == "admission" and completed == 0)
+    guard = DecoderBudget("outer", capacity, live=True)
+    service.resource_guard = guard
+    save, clone, check = _points.Capture._save, torch.Tensor.clone, guard.check
+    contexts, captures, copies = {}, [], []
+
+    def record_capture(values, name, value):
+        save(values, name, value)
+        contexts[id(values)] = values
+        tensor = values[name]
+        storage = tensor.untyped_storage()
+        captures.append((weakref.ref(tensor), StorageWeakRef(storage), storage.nbytes()))
+
+    def record_copy(tensor, *args, **kwargs):
+        result = clone(tensor, *args, **kwargs)
+        if tensor.ndim == 3:
+            copies.append((weakref.ref(result), StorageWeakRef(result.untyped_storage())))
+            guard.copied += tensor.numel() * tensor.element_size()
+            if failure == "admission":
+                guard.growth = 1
+        return result
+
+    def stop(stage):
+        current = check(stage)
+        if failure == "guard" and stage == "patch source copy" and len(copies) == completed:
+            raise CleanStop("decoder guard stop")
+        return current
+
+    monkeypatch.setattr(_points.Capture, "_save", record_capture)
+    monkeypatch.setattr(torch.Tensor, "clone", record_copy)
+    monkeypatch.setattr(guard, "check", stop)
+    match = "patch source allocation exceeds" if failure == "admission" else "decoder guard stop"
+    with pytest.raises(CleanStop, match=match) as refused:
+        service.install(specification(POINTS[0]))
+    error, traceback = refused.value, refused.value.__traceback__
+    assert traceback is not None
+    assert len(captures) == 2 and len(copies) == completed
+    assert [size for _, _, size in captures] == [SOURCE_BYTES * (4 if views else 1)] * 2
+    assert len(contexts) == 1
+    assert all(values._closed and not values._handles and not values for values in contexts.values())
+    assert_retained(service, cache, identity)
+    assert hook_objects(model) == hooks and model not in _points._ACTIVE
+    assert not service.preparing_source
+
+    def assert_released():
+        assert refused.value is error and error.__traceback__ is traceback
+        assert all(reference() is None for reference, _, _ in captures)
+        # Python storage wrappers can die before their native allocation.
+        assert all(storage.expired() for _, storage, _ in captures)
+        assert all(reference() is None and storage.expired() for reference, storage in copies)
+
+    assert_released()
+    service.close()
+    assert_released()
+    assert not service._cache and service._cache_identity is None
+    assert hook_objects(model) == initial_hooks and model not in _points._ACTIVE
 
 
 @pytest.mark.parametrize("eviction", [False, True])
