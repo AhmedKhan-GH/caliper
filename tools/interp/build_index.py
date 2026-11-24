@@ -3,7 +3,9 @@
 Run with ``python -m tools.interp.build_index --help``. Real jobs require the
 shared heavy-job wrapper. Model and tokenizer loads use the local cache only.
 
-Indexes require the exact training source and the disjoint index partition.
+Indexes require the exact recorded source and the disjoint index partition.
+Imported dictionaries use an independent evaluation source. Their publisher
+training overlap remains unknown.
 The JSONL option serves only tiny-lm fixture dictionaries in CPU test harnesses,
 which supply a fixture model loader. Their manifests must record the JSONL
 SHA256 source identity and the same document partition rules.
@@ -21,19 +23,19 @@ import torch
 from caliper.interp import load_dictionary
 from caliper.interp._index import FeatureIndex, MAX_TOKENS, _hash_file, build_index
 from .memory_limits import CleanStop, MemoryGuard, StopControl
-from .model_load import load_text_model
+from .model_load import GEMMA_ID, MODEL_ID, load_text_model
 from .stop_records import clean_stop_record
 from .text_stream import (DATASET_CONFIG, DATASET_ID, DATASET_REVISION, TextStream,
-                          fineweb_documents, partition_metadata)
+                          evaluation_source_metadata, fineweb_documents, partition_metadata)
 
 MEMORY_LIMIT_GB = 12
 
 
 def validate_partitions(metadata):
-    """Require the exact T2 source and disjoint document partitions."""
+    """Require the pinned evaluation source and unchanged document partitions."""
     if not isinstance(metadata, dict) or not isinstance(metadata.get("training"), dict):
         raise ValueError("dictionary requires text source metadata")
-    training = metadata.get("training", {})
+    training = evaluation_source_metadata(metadata)
     expected = {"dataset_id": DATASET_ID, "dataset_config": DATASET_CONFIG,
                 "dataset_revision": DATASET_REVISION, "split": "train",
                 "partitions": partition_metadata()}
@@ -41,6 +43,8 @@ def validate_partitions(metadata):
         raise ValueError("dictionary text source or partitions differ from the training dataset")
     if not isinstance(training.get("source_id"), str) or not training["source_id"]:
         raise ValueError("dictionary requires training source identity")
+    if "import_source" in metadata:
+        expected["publisher_training_overlap"] = "unknown"
     return expected
 
 
@@ -119,8 +123,9 @@ def _index_stream(args, metadata, provenance, resources, *, health=None, memory=
     if args.local_dataset_manifest is not None:
         source_id = source.source_id
     stream = resources.enter_context(TextStream(source, None, args.partition, source_id=source_id))
-    if stream.source_id != metadata["training"]["source_id"]:
-        raise ValueError("index source differs from the training source")
+    if stream.source_id != evaluation_source_metadata(metadata)["source_id"]:
+        label = "evaluation" if "import_source" in metadata else "training"
+        raise ValueError(f"index source differs from the {label} source")
     provenance["source_id"] = stream.source_id
     return stream
 
@@ -136,18 +141,29 @@ def _bounded_int(maximum):
 
 def _memory_gb(value):
     number = float(value)
-    if not math.isfinite(number) or not 0 < number <= MEMORY_LIMIT_GB:
-        raise argparse.ArgumentTypeError("memory limit must be positive and at most 12 GB")
+    if not math.isfinite(number) or not 0 < number <= 28:
+        raise argparse.ArgumentTypeError("memory limit must be positive and at most 28 GB")
     return number
 
 
+class _IndexParser(argparse.ArgumentParser):
+    def parse_args(self, args=None, namespace=None):
+        result = super().parse_args(args, namespace)
+        ceiling = 28 if result.model == GEMMA_ID else MEMORY_LIMIT_GB
+        result.memory_gb = ceiling if result.memory_gb is None else result.memory_gb
+        if result.memory_gb > ceiling:
+            self.error(f"memory limit must be at most {ceiling} GB for this model")
+        return result
+
+
 def parser():
-    result = argparse.ArgumentParser(description=__doc__)
+    result = _IndexParser(description=__doc__)
     result.add_argument("--dictionary", type=Path, required=True)
+    result.add_argument("--model", choices=(MODEL_ID, GEMMA_ID), default=MODEL_ID)
     result.add_argument("--device", choices=("cpu", "mps"), default="mps")
     result.add_argument("--tokens", type=_bounded_int(MAX_TOKENS), default=MAX_TOKENS)
     result.add_argument("--context", type=_bounded_int(256), default=256)
-    result.add_argument("--memory-gb", type=_memory_gb, default=MEMORY_LIMIT_GB)
+    result.add_argument("--memory-gb", type=_memory_gb)
     result.add_argument("--partition", choices=("index",), default="index")
     result.add_argument("--dataset-cache", type=Path)
     source = result.add_mutually_exclusive_group()
@@ -186,7 +202,8 @@ def main(argv=None):
                                        health=lambda: check("source admission"), memory=memory)
                 check("source")
                 stop.check()
-            model, tokenizer = load_text_model(device=args.device, memory=memory)
+            selection = {"model_id": args.model} if args.model != MODEL_ID else {}
+            model, tokenizer = load_text_model(device=args.device, memory=memory, **selection)
             stop.check()
             dictionary = load_dictionary(args.dictionary, model=model, memory_limit_gb=args.memory_gb)
             check("dictionary")

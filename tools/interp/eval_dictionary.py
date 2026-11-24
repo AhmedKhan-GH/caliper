@@ -17,9 +17,9 @@ from caliper.interp._dictionary import fallback_metadata
 from .checkpoint_state import _save_tensors, dictionary_fingerprint, write_json
 from .evaluation_binding import EvaluationBinding
 from .memory_limits import CleanStop, MemoryGuard, StopControl, autorelease_scope
-from .model_load import hidden_forward, load_text_model
+from .model_load import GEMMA_ID, MODEL_ID, hidden_forward, load_text_model
 from .stop_records import clean_stop_record, stop_reason
-from .text_stream import TextStream, fineweb_documents, partition_metadata
+from .text_stream import TextStream, evaluation_source_metadata, fineweb_documents, partition_metadata
 
 
 _QUALITY_THRESHOLDS = {"fvu": 0.40, "dead_fraction": 0.15, "cross_entropy_delta": 0.5,
@@ -30,11 +30,35 @@ _QUALITY_THRESHOLDS = {"fvu": 0.40, "dead_fraction": 0.15, "cross_entropy_delta"
 def replace_all_mlps(model, dictionary):
     """Replace every active MLP for one forward and restore it on every exit."""
     originals = []
+    handles, reads = [], {}
     try:
         if len(dictionary.layers) != model.config.num_hidden_layers:
             raise ValueError("cross-entropy requires a replacement for every MLP")
         fallback = fallback_metadata(dictionary.metadata)
         active = fallback["active_layers"] if fallback else range(len(dictionary.layers))
+        if getattr(model.config, "model_type", None) == "gemma2":
+            from caliper.interp._points import _architecture, _input
+            probes = _architecture(model)
+            for i in active:
+                read = probes[dictionary.metadata["read_points"][i]]
+                write = probes[dictionary.metadata["write_points"][i]]
+                if read.event != "input" or write.event != "output":
+                    raise ValueError("Gemma replacement requires semantic input and output probes")
+
+                def remember(module, args, kwargs, output, index=i):
+                    reads[index] = _input(args, kwargs)
+
+                def replace(module, args, output, index=i):
+                    # The dictionary decoder already writes after the post norm.
+                    value = dictionary.layers[index](reads.pop(index))
+                    if value.shape != output.shape:
+                        raise ValueError("Gemma replacement shape differs from the semantic write")
+                    return value.to(dtype=output.dtype, device=output.device)
+
+                handles.append(model.get_submodule(read.module).register_forward_hook(remember, with_kwargs=True))
+                handles.append(model.get_submodule(write.module).register_forward_hook(replace))
+            yield
+            return
         for i in active:
             point = dictionary.metadata["read_points"][i]
             block = model.get_submodule(point.rsplit(".", 1)[0])
@@ -42,6 +66,9 @@ def replace_all_mlps(model, dictionary):
             block.mlp = dictionary.layers[i]
         yield
     finally:
+        for handle in reversed(handles):
+            handle.remove()
+        reads.clear()
         for block, original in originals:
             block.mlp = original
 
@@ -62,6 +89,10 @@ def cross_entropy_sum(model, hidden, input_ids, count, *, chunk_tokens=64, healt
             health()
         selected = positions[start:start + chunk_tokens]
         logits = head(states[selected]).float()
+        if getattr(model.config, "model_type", None) == "gemma2":
+            cap = model.config.final_logit_softcapping
+            if cap is not None:
+                logits = (logits / cap).tanh() * cap
         loss = F.cross_entropy(logits, ids[selected + 1], reduction="sum")
         total += float(loss.item())
     return total, len(positions)
@@ -70,7 +101,8 @@ def cross_entropy_sum(model, hidden, input_ids, count, *, chunk_tokens=64, healt
 class QualityStats:
     """Merge stable per-batch variance statistics and feature activity counts."""
 
-    def __init__(self, layers, width, latents, *, active_layers=None):
+    def __init__(self, layers, width, latents, *, active_layers=None, thresholds=None):
+        self.thresholds = dict(_QUALITY_THRESHOLDS if thresholds is None else thresholds)
         self.scope = "all_layers" if active_layers is None else "upper_half"
         self.active_layers = tuple(range(layers) if active_layers is None else active_layers)
         self.count = 0
@@ -83,7 +115,8 @@ class QualityStats:
         self.ce_tokens = 0
 
     def merge(self, other):
-        if self.scope != other.scope or self.active_layers != other.active_layers:
+        if (self.scope != other.scope or self.active_layers != other.active_layers
+                or self.thresholds != other.thresholds):
             raise ValueError("quality scopes differ")
         total = self.count + other.count
         if other.count == 0:
@@ -115,13 +148,15 @@ class QualityStats:
                   "original_cross_entropy": self.original_ce / self.ce_tokens,
                   "replaced_cross_entropy": self.replaced_ce / self.ce_tokens,
                   "per_layer_fvu": fvu, "per_layer_dead_fraction": dead.tolist(),
-                  "thresholds": dict(_QUALITY_THRESHOLDS)}
+                  "thresholds": dict(self.thresholds)}
         finite = (all(math.isfinite(v) for v in fvu if v is not None)
                   and torch.isfinite(dead).all().item() and math.isfinite(delta))
         if not finite:
             raise ValueError("quality metrics are nonfinite")
-        passed = mean_fvu is not None and mean_fvu <= 0.40 and values["dead_fraction"] <= 0.15 and delta <= 0.5
-        complete = self.count == 200_000 and mean_fvu is not None
+        passed = (mean_fvu is not None and mean_fvu <= self.thresholds["fvu"]
+                  and values["dead_fraction"] <= self.thresholds["dead_fraction"]
+                  and delta <= self.thresholds["cross_entropy_delta"])
+        complete = self.count == self.thresholds["evaluated_tokens"] and mean_fvu is not None
         values["status"] = ("passed" if passed else "failed") if complete else "partial"
         if self.scope == "upper_half":
             values["status"] = "fallback_" + values["status"]
@@ -140,8 +175,13 @@ class QualityStats:
 
 def quality_stats(metadata):
     fallback = fallback_metadata(metadata)
+    thresholds = dict(_QUALITY_THRESHOLDS)
+    if metadata.get("model_id") == GEMMA_ID:
+        if fallback:
+            raise ValueError("Gemma quality requires every layer")
+        thresholds["fvu"] = 0.30
     return QualityStats(metadata["layers"], metadata["width"], metadata["latents"],
-                        active_layers=fallback["active_layers"] if fallback else None)
+                        active_layers=fallback["active_layers"] if fallback else None, thresholds=thresholds)
 
 
 @torch.no_grad()
@@ -258,10 +298,12 @@ def evaluate(model, dictionary, stream, folder, *, tokens=200_000, context=256,
     if stream.partition != "quality":
         raise ValueError("quality evaluation requires the quality partition")
     metadata = dictionary.metadata
-    trained_source = metadata["training"].get("source_id")
+    source_metadata = evaluation_source_metadata(metadata)
+    trained_source = source_metadata.get("source_id")
     if trained_source is not None and trained_source != stream.source_id:
-        raise ValueError("quality source differs from the training source")
-    if metadata["training"]["dataset_id"] != "fixture" and metadata["training"]["partitions"] != partition_metadata():
+        label = "evaluation" if "import_source" in metadata else "training"
+        raise ValueError(f"quality source differs from the {label} source")
+    if source_metadata["dataset_id"] != "fixture" and source_metadata["partitions"] != partition_metadata():
         raise ValueError("dictionary text partitions differ from this evaluator")
     folder = Path(folder)
     identity = dictionary_fingerprint(folder, metadata, memory=memory)
@@ -269,6 +311,8 @@ def evaluate(model, dictionary, stream, folder, *, tokens=200_000, context=256,
     state_folder = folder / "evaluation"
     stats = quality_stats(metadata)
     settings = {"tokens": tokens, "context": context, "batch_tokens": batch_tokens, "chunk_tokens": chunk_tokens}
+    if "import_source" in metadata:
+        settings["evaluation_source"] = source_metadata
     if stats.scope == "upper_half":
         settings.update(scope=stats.scope, active_layers=list(stats.active_layers))
     pending, elapsed_before = None, 0.0
@@ -330,9 +374,11 @@ def evaluate(model, dictionary, stream, folder, *, tokens=200_000, context=256,
                    "original_cross_entropy": None, "replaced_cross_entropy": None,
                    "per_layer_fvu": [None] * len(dictionary.layers),
                    "per_layer_dead_fraction": [None] * len(dictionary.layers),
-                   "thresholds": dict(_QUALITY_THRESHOLDS)}
+                   "thresholds": dict(stats.thresholds)}
     quality.update(elapsed_seconds=elapsed_before + time.monotonic() - started, stop_reason=reason,
                    dictionary_hash=identity, model_binding=binding.model_evidence, partition="quality")
+    if "import_source" in metadata:
+        quality.update(evaluation_source=source_metadata, publisher_training_overlap="unknown")
     if stats.scope == "upper_half":
         quality.update(stats.scope_fields(), replaced_mlps=len(stats.active_layers))
     else:
@@ -355,12 +401,13 @@ def evaluate(model, dictionary, stream, folder, *, tokens=200_000, context=256,
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--dictionary", type=Path, required=True)
+    parser.add_argument("--model", choices=(MODEL_ID, GEMMA_ID), default=MODEL_ID)
     parser.add_argument("--device", choices=("mps", "cpu"), default="mps")
     parser.add_argument("--tokens", type=int, default=200_000)
     parser.add_argument("--context", type=int, default=256)
     parser.add_argument("--batch-tokens", type=int, default=512)
     parser.add_argument("--chunk-tokens", type=int, default=64)
-    parser.add_argument("--memory-gb", type=float, default=12)
+    parser.add_argument("--memory-gb", type=float)
     parser.add_argument("--dataset-cache", type=Path)
     parser.add_argument("--local-dataset-manifest", type=Path)
     parser.add_argument("--resume", action="store_true")
@@ -368,15 +415,18 @@ def main(argv=None):
     if (not 2 <= args.tokens <= 200_000 or not 2 <= args.context <= 256
             or not args.context <= args.batch_tokens <= 4096 or not 1 <= args.chunk_tokens <= 128):
         raise ValueError("requested dimensions exceed the bounded evaluator allocations")
-    if not 0 < args.memory_gb <= 12:
-        raise ValueError("the evaluator memory limit is at most 12 GB")
+    ceiling = 28 if args.model == GEMMA_ID else 12
+    args.memory_gb = ceiling if args.memory_gb is None else args.memory_gb
+    if not 0 < args.memory_gb <= ceiling:
+        raise ValueError(f"the evaluator memory limit is at most {ceiling} GB")
     try:
         with StopControl() as stop, ExitStack() as resources:
             stop.check()
             memory = MemoryGuard(args.memory_gb, args.device)
             memory.check("start")
             stop.check()
-            model, tokenizer = load_text_model(device=args.device, memory=memory)
+            selection = {"model_id": args.model} if args.model != MODEL_ID else {}
+            model, tokenizer = load_text_model(device=args.device, memory=memory, **selection)
             stop.check()
             dictionary = load_dictionary(args.dictionary, model=model, device=args.device, dtype=torch.float32,
                                          memory_limit_gb=args.memory_gb)

@@ -37,6 +37,28 @@ def partition_metadata():
     return copy.deepcopy(PARTITIONS)
 
 
+def evaluation_source_metadata(metadata):
+    """Separate imported training provenance from the local evaluation source."""
+    if "import_source" not in metadata:
+        if metadata.get("training", {}).get("origin") == "imported":
+            raise ValueError("imported dictionary requires import_source provenance")
+        return metadata["training"]
+    if not isinstance(metadata["import_source"], dict) or not metadata["import_source"]:
+        raise ValueError("imported dictionary requires import_source provenance")
+    from caliper.interp._admission import GEMMA_ID, GEMMA_REVISION
+    if (metadata.get("model_id"), metadata.get("revision")) != (GEMMA_ID, GEMMA_REVISION):
+        raise ValueError("imported evaluation requires the pinned Gemma model")
+    source = metadata.get("evaluation_source")
+    expected = {"dataset_id": DATASET_ID, "dataset_config": DATASET_CONFIG,
+                "dataset_revision": DATASET_REVISION, "split": "train",
+                "partitions": partition_metadata()}
+    if (not isinstance(source, dict) or set(source) != {*expected, "source_id"}
+            or any(source.get(k) != v for k, v in expected.items())
+            or not isinstance(source.get("source_id"), str) or not source["source_id"]):
+        raise ValueError("imported dictionary requires the pinned evaluation source and partitions")
+    return source
+
+
 def document_identity(text):
     """Return the partition and a stable signed-int64 document ID."""
     digest = hashlib.sha256(text.encode("utf-8")).digest()
