@@ -50,7 +50,7 @@ def stream_documents(stream, *, batch_tokens=4096, check=None):
     for_batch = check if check is not None else lambda stage: None
     while True:
         for_batch("text batch")
-        batch = stream.next_tokens(batch_tokens)
+        batch = stream.next_tokens(batch_tokens, health=lambda: for_batch("text document"))
         if not (batch.input_ids.ndim == batch.document_ids.ndim == batch.positions.ndim == 1 and
                 len(batch.input_ids) == len(batch.document_ids) == len(batch.positions)):
             raise ValueError("invalid text batch shape")

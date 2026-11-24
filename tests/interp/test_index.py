@@ -520,3 +520,27 @@ def test_table_partial_allocation_closes_earlier_map(tmp_path, monkeypatch):
         _TopTable(tmp_path, 1, 1)
     assert len(maps) == 1 and maps[0].closed
     (tmp_path / "table.npy").unlink()
+
+
+def test_cli_shared_guard_enforces_twelve_gb_before_model_load(tmp_path, monkeypatch):
+    from tools.interp import build_index as command
+    from caliper.interp._memory import MemoryGuard
+    from .fixture import TinyLM
+    _t2_source_manifest(tmp_path, TinyLM())
+    monkeypatch.setattr(command, "load_text_model", lambda **kwargs: pytest.fail("memory limit loaded a model"))
+    monkeypatch.setattr(command, "MemoryGuard", lambda gb, device: MemoryGuard(
+        gb, device, resident=lambda: 0, footprint=lambda: 0, peak=lambda: 12_000_000_001,
+        driver=lambda: 0, pressure=lambda: 50))
+    assert command.main(["--dictionary", str(tmp_path), "--device", "cpu"]) == 2
+    assert not (tmp_path / "index").exists()
+
+
+def test_text_scan_observes_resource_stops():
+    from tools.interp.build_index import stream_documents
+    from tools.interp.text_stream import TextStream
+    stream = TextStream([{"text": "Example document"}], TinyTokenizer(), "index")
+    def check(stage):
+        if stage == "text document":
+            raise RuntimeError("fixture scan stop")
+    with pytest.raises(RuntimeError, match="fixture scan stop"):
+        list(stream_documents(stream, check=check))
