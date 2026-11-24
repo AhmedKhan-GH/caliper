@@ -21,6 +21,8 @@ class Clock:
 def controlled_run(tmp_path, monkeypatch, *, fallback=False, remaining=36000):
     model = tiny_model()
     metadata = fallback_manifest(model) if fallback else fixture_manifest(model)
+    if not fallback:
+        metadata["training"]["token_budget"] = 8
     if fallback:
         metadata["training"]["fallback"].update(prior_wall_seconds=100,
                                                  aggregate_wall_limit_seconds=150 + remaining)
@@ -124,7 +126,7 @@ def test_observed_export_cost_controls_next_invocation(tmp_path, monkeypatch):
     assert restored["checkpoint_seconds"] == 10 and restored["export_seconds"] == 35
     assert training._save_reserve(restored) == 90
     with pytest.raises(ValueError, match="reserve"):
-        training.train_online(model, trainer, stream, output, token_budget=16, progress=restored,
+        training.train_online(model, trainer, stream, output, token_budget=8, progress=restored,
                               run_seconds=90, clock=clock)
 
 
