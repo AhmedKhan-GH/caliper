@@ -2,9 +2,9 @@ name: Interpretability
 on:
   push:
     branches: [main]
-    paths: ['python/**', 'tools/interp/**', 'tests/interp/**', 'src/host/runner/**', 'pyproject.toml', '.github/workflows/interp.yml']
+    paths: ['python/**', 'tools/interp/**', 'tests/interp/**', 'src/builder/programs/library/pieces/**', 'src/host/runner/**', 'pyproject.toml', '.github/workflows/interp.yml']
   pull_request:
-    paths: ['python/**', 'tools/interp/**', 'tests/interp/**', 'src/host/runner/**', 'pyproject.toml', '.github/workflows/interp.yml']
+    paths: ['python/**', 'tools/interp/**', 'tests/interp/**', 'src/builder/programs/library/pieces/**', 'src/host/runner/**', 'pyproject.toml', '.github/workflows/interp.yml']
   workflow_dispatch:
 permissions:
   contents: read
@@ -27,6 +27,8 @@ jobs:
       CALIPER_TEST_RUN: '1'
       CALIPER_DATA_DIR: ${{ runner.temp }}/caliper-interp/data
       TMPDIR: ${{ runner.temp }}/caliper-interp/temp
+      TEMP: ${{ runner.temp }}/caliper-interp/temp
+      TMP: ${{ runner.temp }}/caliper-interp/temp
       HF_HUB_OFFLINE: '1'
       HF_DATASETS_OFFLINE: '1'
       HF_HUB_DISABLE_TELEMETRY: '1'
