@@ -2,7 +2,7 @@
 import pytest
 
 from tools.interp import checkpoint_state, train_transcoders as training
-from .test_dictionary_startup import snapshot, startup
+from .test_dictionary_startup import assert_clean_stop, snapshot, startup
 from .test_durability_reserve import Clock
 from .test_upper_half import tiny_model
 from .test_upper_half_cli import arguments, synthetic_source
@@ -10,7 +10,7 @@ from .test_upper_half_cli import arguments, synthetic_source
 
 @pytest.mark.parametrize("resume", [False, True])
 @pytest.mark.parametrize("fallback", [False, True])
-def test_startup_exhaustion_preserves_generation_and_export(tmp_path, monkeypatch, resume, fallback):
+def test_startup_exhaustion_preserves_generation_and_export(tmp_path, monkeypatch, capsys, resume, fallback):
     output = tmp_path / "output"
     if fallback:
         source = tmp_path / "source"
@@ -63,10 +63,10 @@ def test_startup_exhaustion_preserves_generation_and_export(tmp_path, monkeypatc
     monkeypatch.setattr(training, "export_dictionary", forbidden)
     monkeypatch.setattr(training, "hidden_forward", forbidden)
     monkeypatch.setattr(training.TextStream, "next_tokens", forbidden)
-    with pytest.raises(ValueError, match="reserve"):
-        training.main(argv)
-    assert "after_resume" in seen
+    assert training.main(argv) == 2
+    assert_clean_stop(capsys)
+    assert "model" in seen and "after_resume" not in seen
     assert snapshot(tmp_path) == before
     assert output.exists() == resume
-    assert streams and all(stream.closed for stream in streams)
-    assert sources and all(source.closed for source in sources)
+    assert bool(streams) == fallback and all(stream.closed for stream in streams)
+    assert bool(sources) == fallback and all(source.closed for source in sources)

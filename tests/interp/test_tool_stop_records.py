@@ -36,7 +36,10 @@ def test_command_stops_have_one_bounded_record(tmp_path, monkeypatch, capsys, co
     monkeypatch.setattr(command, "MemoryGuard", refuse)
     monkeypatch.setattr(command, "load_text_model", lambda **k: pytest.fail("model load ran"))
     option = "--output" if command is training else "--dictionary"
-    assert command.main([option, str(tmp_path), "--device", "cpu"]) == 2
+    folder = tmp_path / "output" if command is training else tmp_path
+    assert command.main([option, str(folder), "--device", "cpu"]) == 2
+    if command is training:
+        assert not folder.exists()
     captured = capsys.readouterr()
     assert not captured.err
     result = json.loads(captured.out)

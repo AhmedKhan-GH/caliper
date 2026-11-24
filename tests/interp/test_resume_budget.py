@@ -71,5 +71,7 @@ def test_matching_cli_budget_reaches_resource_admission(tmp_path, monkeypatch):
 
     monkeypatch.setattr(training, "MemoryGuard", admitted)
     monkeypatch.setattr(training, "load_text_model", lambda **k: pytest.fail("model load ran"))
-    assert training.main(["--output", str(tmp_path), "--resume", "--device", "cpu", "--tokens", "16"]) == 2
+    assert training.main(["--output", str(tmp_path), "--resume", "--device", "cpu", "--tokens", "16",
+                          "--latents", "8", "--k", "2", "--context", "4",
+                          "--batch-tokens", "8", "--microbatch-tokens", "4"]) == 2
     assert snapshot(tmp_path) == before
