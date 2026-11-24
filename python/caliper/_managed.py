@@ -372,7 +372,7 @@ class ManagedRun:
             extra = json.loads(data)
             if not checkpoint_metadata(extra):
                 raise ValueError("inference checkpoint contains invalid metadata")
-            self.inference.load_checkpoint(extra)
+            self.inference.load_checkpoint(extra, params=self.params)
         else:
             if optimizer is not None and not hasattr(optimizer, "load_state_dict"):
                 optimizer = None         # watch() refuses it after this
@@ -435,6 +435,8 @@ class ManagedRun:
         ctl = self._pkg._CTL
         with ctl.lock:
             params = {n: p.value for n, p in ctl.params.items()}
+            if self.inference is not None:
+                params["prompt"] = self.inference.checkpoint_prompt
         extra = {"format": FORMAT, "version": VERSION, "run": self.id, "parent": self.parent,
                  "step": step, "params": params}
         if self.inference is not None:

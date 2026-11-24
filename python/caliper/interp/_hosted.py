@@ -457,6 +457,7 @@ class HostedService(InterpretationService):
         if method == "trace.run":
             prompt_inputs(self.model, self.tokenizer, params["prompt"])
             self.owner.prompt.set(params["prompt"])
+            self.owner.checkpoint_prompt = params["prompt"]
             traced_specifications = self.owner.interventions.specifications()
         result = super()._execute(method, params, step)
         if method == "trace.run":
@@ -523,6 +524,8 @@ class HostedInference:
         self.fixture_display = _FixtureDisplay(self.guard) if display_guard is not None else None
         prompt_inputs(self.model, self.tokenizer, prompt)
         self.initial_prompt = prompt
+        # Rejected editor text stays visible, but checkpoints retain an accepted prompt.
+        self.checkpoint_prompt = prompt
         self.restored = None
         self.handle = self.service = self.managed = None
         self._failure = None
@@ -573,7 +576,7 @@ class HostedInference:
         self._verified_bindings = deepcopy(bindings)
         return bindings
 
-    def load_checkpoint(self, record):
+    def load_checkpoint(self, record, *, params=None):
         if (not checkpoint_metadata(record) or record.get("format") != CHECKPOINT_FORMAT or type(record.get("version")) is not int
                 or record["version"] != 1 or record.get("bindings") != self._bindings()):
             raise ValueError("inference checkpoint resource bindings do not match")
@@ -581,7 +584,10 @@ class HostedInference:
             raise ValueError("inference checkpoint step is invalid")
         if type(record.get("params")) is not dict or type(record.get("interventions")) is not dict:
             raise ValueError("inference checkpoint state is invalid")
-        prompt_inputs(self.model, self.tokenizer, record["params"].get("prompt"))
+        # A fork can repair a rejected prompt from an older checkpoint. All other
+        # saved state still passes its original validation before the run starts.
+        prompt = (params or {}).get("prompt", record["params"].get("prompt"))
+        prompt_inputs(self.model, self.tokenizer, prompt)
         selection = record.get("selection")
         if selection is not None:
             if type(selection) is not dict or set(selection) != {"layer", "feature", "position"}:
@@ -602,6 +608,7 @@ class HostedInference:
                                if type(item) is dict)):
                 raise ValueError("inference checkpoint clamp ownership is invalid")
         self.restored = deepcopy(record)
+        self.restored["params"]["prompt"] = prompt
 
     def state_dict(self):
         bindings = self._bindings()
@@ -700,6 +707,8 @@ class HostedInference:
                 self.parameters.append(result)
                 return result
             self.prompt = param("prompt", self.initial_prompt)
+            prompt_inputs(self.model, self.tokenizer, self.prompt.value)
+            self.checkpoint_prompt = self.prompt.value
             self.selected = param("selected_node", -1, min=-1, max=511)
             self.clamp = param("clamp", 0., min=-4., max=4.)
             self.clamp_status = param("clamp.status", "No feature selected. No slider clamp.")
@@ -768,7 +777,9 @@ class HostedInference:
         # Consume the edit even when prompt, selection, or clamp validation fails.
         self._clamp_version = self.clamp._version
         try:
-            prompt_inputs(self.model, self.tokenizer, self.prompt.value)
+            prompt = self.prompt.value
+            prompt_inputs(self.model, self.tokenizer, prompt)
+            self.checkpoint_prompt = prompt
             self._update_selection()
             if clamp_changed:
                 self._set_clamp()

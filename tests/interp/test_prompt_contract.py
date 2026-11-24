@@ -1,6 +1,7 @@
 """Hosted prompt bytes with a synthetic tokenizer and the CPU fixture."""
 from contextlib import contextmanager
 import json
+from pathlib import Path
 
 import pytest
 
@@ -10,10 +11,18 @@ from caliper.interp._output import prompt_inputs
 from .test_service import Transport
 
 
-class CompactTokenizer(TinyTokenizer):
-    """Map long neutral text to three tokens without a model tokenizer."""
+class WordTokenizer(TinyTokenizer):
+    """Encode each whitespace-separated word, with one additional BOS token."""
     def encode(self, text, add_special_tokens=True):
-        return ([self.bos_token_id] if add_special_tokens else []) + [65, 66]
+        return ([self.bos_token_id] if add_special_tokens else []) + [
+            sum(word.encode("utf-8")) % 256 for word in text.split()]
+
+    def __call__(self, text, **kwargs):
+        assert kwargs.get("truncation", False) is False
+        return super().__call__(text, **kwargs)
+
+
+TOKEN_OVERFLOW = " ".join(["token"] * 32)  # BOS plus 32 words gives 33 tokens.
 
 
 @pytest.fixture
@@ -24,18 +33,20 @@ def prompt_run(tmp_path, monkeypatch):
     serial = 0
 
     @contextmanager
-    def start(prompt, *, resume=None):
+    def start(prompt, *, resume=None, params=None, interventions=None):
         nonlocal serial
         serial += 1
         model, _, dictionary, index, guard = load_resources("tiny-lm", folder)
-        tokenizer = CompactTokenizer()
+        tokenizer = WordTokenizer()
         index.tokenizer = tokenizer
         controls = _controls.Controls()
         monkeypatch.setattr(caliper, "_CTL", controls)
         monkeypatch.setattr(_controls, "CONTROLS", controls)
         managed_folder = tmp_path / f"run-{serial}"
         managed_folder.mkdir()
-        managed = _managed.ManagedRun("prompt", str(managed_folder), str(managed_folder / "link"), resume=resume)
+        managed = _managed.ManagedRun("prompt", str(managed_folder), str(managed_folder / "link"),
+                                      resume=resume, params=params, interventions=interventions)
+        managed.kept.clock = lambda: 0.
         monkeypatch.setattr(_managed, "current", lambda: managed)
         monkeypatch.setattr(_managed, "watch_parent", lambda: None)
         run = HostedInference("tiny-lm", folder, prompt,
@@ -60,16 +71,16 @@ def assert_prompt(run, expected):
     assert wire.decode(wire.encode(metadata)).params[0]["value"].encode() == expected.encode()
 
 
-@pytest.mark.parametrize("prompt", ["river " * 171, "é" * 2048])
+@pytest.mark.parametrize("prompt", ["river" * 205 + " x", "é" * 2048])
 def test_hosted_startup_preserves_long_prompt(prompt_run, prompt):
     with prompt_run(prompt) as (run, _):
         assert len(prompt.encode()) > 1024
-        assert prompt_inputs(run.model, run.tokenizer, prompt)["input_ids"].shape == (1, 3)
+        assert prompt_inputs(run.model, run.tokenizer, prompt)["input_ids"].shape == (1, len(prompt.split()) + 1)
         assert_prompt(run, prompt)
 
 
 def test_trace_control_and_checkpoint_preserve_exact_prompt(prompt_run, tmp_path):
-    traced = "river " * 682 + "leaf"
+    traced = "r" * 4094 + " x"
     edited = "é" * 2048
     assert len(traced.encode()) == len(edited.encode()) == 4096
     with prompt_run("start") as (run, route):
@@ -98,6 +109,102 @@ def test_trace_control_and_checkpoint_preserve_exact_prompt(prompt_run, tmp_path
             assert_prompt(run, edited)
     with prompt_run("initial", resume=str(checkpoint)) as (restored, _):
         assert_prompt(restored, edited)
+
+
+def control(route, request_id, op, **kwargs):
+    message = wire.decode(wire.encode(wire.Control(request_id, op, **kwargs)))
+    return route.on_control(None, message.to_meta())
+
+
+def save_boundary(run, route, kind):
+    """Write a real checkpoint after pending text reaches the hosted boundary."""
+    from caliper.interp._memory import CleanStop
+
+    if kind == "explicit":
+        assert control(route, 90, "run", name="caliper.checkpoint")["status"] == "queued"
+    if kind == "clean-stop":
+        def stop():
+            raise CleanStop("prompt checkpoint test stop")
+        action = run.controls.action("test_stop", stop)
+        try:
+            assert control(route, 90, "run", name="test_stop")["status"] == "queued"
+            with pytest.raises(CleanStop, match="prompt checkpoint test stop"):
+                run.boundary()
+        finally:
+            action.remove()
+    else:
+        run.boundary()
+    if kind == "kept":
+        step, path = run.managed.kept.kept[-1]
+        assert step == run.controls.n
+    elif kind == "explicit":
+        reply, = [reply for reply in route.transport.replies if reply.request_id == 90]
+        assert reply.status == "ok"
+        path = reply.message
+    else:
+        path = Path(run.managed.dir) / f"checkpoint-{run.controls.n}.json"
+    path = Path(path)
+    record = json.loads(path.read_bytes())
+    assert record["step"] == run.controls.n
+    return path, record
+
+
+@pytest.mark.parametrize("rejected", ["", TOKEN_OVERFLOW], ids=["empty", "33-tokens"])
+@pytest.mark.parametrize("kind", ["kept", "explicit", "clean-stop"])
+def test_rejected_boundary_prompt_keeps_valid_state_and_forks(prompt_run, rejected, kind):
+    accepted = "current prompt"
+    with prompt_run("initial") as (run, route):
+        assert control(route, 1, "set", name="prompt", value=accepted)["status"] == "ok"
+        run.boundary()
+        assert_prompt(run, accepted)
+        assert len(run.tokenizer.encode(TOKEN_OVERFLOW)) == 33
+        assert control(route, 2, "set", name="prompt", value=rejected)["status"] == "ok"
+        assert run.prompt.pending == rejected and run.prompt.value == accepted
+        checkpoint, record = save_boundary(run, route, kind)
+        # The rejected editor text and error stay visible, but do not replace durable state.
+        assert run.prompt.value == rejected and run.prompt.pending is None
+        assert "prompt must contain" in run.status.value
+        assert run.output.prompt == accepted
+        assert record["params"]["prompt"] == accepted
+    with prompt_run("initial", resume=str(checkpoint)) as (fork, _):
+        assert_prompt(fork, accepted)
+        assert fork.controls.n == record["step"]
+        assert json.loads(Path(fork.managed.kept.kept[-1][1]).read_bytes())["params"]["prompt"] == accepted
+    override = "é" * 2048
+    with prompt_run("initial", resume=str(checkpoint), params={"prompt": override}) as (fork, _):
+        assert_prompt(fork, override)
+        assert len(override.encode()) == 4096
+        assert json.loads(Path(fork.managed.checkpoint(fork.model, None)).read_bytes())["params"]["prompt"] == override
+    for invalid in ("", TOKEN_OVERFLOW, "x" * 4097, "bad\0prompt"):
+        with pytest.raises(ValueError, match="prompt must contain"):
+            with prompt_run("initial", resume=str(checkpoint), params={"prompt": invalid}):
+                pytest.fail("invalid fork prompt started")
+
+
+@pytest.mark.parametrize("rejected", ["", TOKEN_OVERFLOW], ids=["empty", "33-tokens"])
+def test_legacy_rejected_checkpoint_requires_valid_prompt_override(prompt_run, rejected, tmp_path):
+    with prompt_run("accepted") as (run, route):
+        assert control(route, 1, "set", name="prompt", value=rejected)["status"] == "ok"
+        checkpoint, record = save_boundary(run, route, "explicit")
+        # Reproduce the old serializer after the actual rejected boundary.
+        record["params"]["prompt"] = run.prompt.value
+        checkpoint = tmp_path / "legacy.json"
+        checkpoint.write_text(json.dumps(record), encoding="utf-8")
+    before = checkpoint.read_bytes()
+    with pytest.raises(ValueError, match="prompt must contain"):
+        with prompt_run("initial", resume=str(checkpoint)):
+            pytest.fail("invalid saved prompt started without an override")
+    for invalid in ("", TOKEN_OVERFLOW):
+        with pytest.raises(ValueError, match="prompt must contain"):
+            with prompt_run("initial", resume=str(checkpoint), params={"prompt": invalid}):
+                pytest.fail("invalid override started")
+    with prompt_run("initial", resume=str(checkpoint), params={"prompt": "valid override"}) as (fork, _):
+        assert_prompt(fork, "valid override")
+        saved = Path(fork.managed.checkpoint(fork.model, None))
+        assert json.loads(saved.read_bytes())["params"]["prompt"] == "valid override"
+    with prompt_run("initial", resume=str(saved)) as (fork, _):
+        assert_prompt(fork, "valid override")
+    assert checkpoint.read_bytes() == before
 
 
 @pytest.mark.parametrize("prompt", ["", "x" * 4097, "é" * 2048 + "x", "bad\0prompt", "\ud800"])
