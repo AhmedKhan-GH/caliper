@@ -54,8 +54,11 @@ def test_fixture_dictionary_and_index_load_locally(resource_folder):
 
 def test_module_fixture_creation_preserves_imported_resource_identity(tmp_path):
     folder = tmp_path / "module-fixture"
+    env = os.environ.copy()
+    source = str(Path(__file__).resolve().parents[2] / "python")
+    env["PYTHONPATH"] = os.pathsep.join([source, env.get("PYTHONPATH", "")])
     subprocess.run([sys.executable, "-m", "caliper.interp._hosted", "--fixture-dir", str(folder)],
-                   cwd=tmp_path, check=True, capture_output=True, text=True, timeout=30)
+                   cwd=tmp_path, env=env, check=True, capture_output=True, text=True, timeout=30)
     model, _, dictionary, index, _ = load_resources("tiny-lm", folder)
     try:
         from caliper.interp._dictionary import model_identity
