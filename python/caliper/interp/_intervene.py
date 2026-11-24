@@ -834,6 +834,7 @@ class Intervention:
             key = self.spec["source_prompt"], self.spec["point"]
             if key not in self.service._source_keys():
                 self.service._cache.pop(key, None)
+                self.service._trim_source_inputs()
         self.on_error = None
 
     def _failed(self, error):

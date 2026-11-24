@@ -44,6 +44,8 @@ def test_patch_refreshes_after_scalar_or_tokenizer_change(change):
         torch.testing.assert_close(service._cache["source", point], expected, rtol=0, atol=0)
         assert previous.shape != expected.shape or not torch.equal(previous, expected)
         assert service._cache_identity[1]
+        hook()
+        assert not service._cache and not service._cache_identity[1]
     finally:
         service.close()
     assert service._cache_identity is None and not service._cache
