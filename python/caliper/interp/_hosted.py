@@ -831,6 +831,18 @@ class HostedInference:
         return "The selected feature clamp is applied."
 
     def update_output(self, *, force=False):
+        try:
+            self._update_output(force=force)
+        except ValueError:
+            # Completed requests can publish CPU tensors before comparison fails.
+            # Actions and service boundaries must both synchronize those tensors.
+            if self.fixture_display is not None:
+                self.fixture_display.publish()
+            raise
+        if self.fixture_display is not None:
+            self.fixture_display.publish()
+
+    def _update_output(self, *, force=False):
         key = self._input_state()
         changed = self._output_key != key
         if changed or force:
@@ -855,8 +867,6 @@ class HostedInference:
         self._sync_clamp_control()
         if self.guard is not None:
             self.guard.check("inference boundary", force=False)
-        if self.fixture_display is not None:
-            self.fixture_display.publish()
 
     def generate(self):
         self._check_stop()
