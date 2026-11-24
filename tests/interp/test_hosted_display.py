@@ -1,6 +1,5 @@
 """CPU seams for the explicit fixture display bridge."""
 from contextlib import contextmanager
-from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -62,7 +61,7 @@ def test_fixture_opt_in_adds_the_shared_twelve_gb_guard_without_changes_to_math(
         assert run.fixture_display.guard is run.guard
         run.guard.check("test")
         assert stages == original_stages == ["test"]
-        assert forward_hash(model) == expected == Path(__file__).with_name("fixture.sha256").read_text().strip()
+        assert forward_hash(model) == expected
         assert all(parameter.device.type == "cpu" and parameter.dtype == torch.float64 for parameter in model.parameters())
     finally:
         run.close()

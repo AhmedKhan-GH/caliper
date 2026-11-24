@@ -16,7 +16,7 @@ import torch
 from caliper import _controls, _managed, _wire as wire
 from caliper.interp._hosted import HostedInference, TinyLM, TinyTokenizer, fixture_resources, load_resources
 from caliper.interp._output import internal_forward
-from .fixture import TinyLM as ReferenceLM, TinyTokenizer as ReferenceTokenizer, forward_hash
+from .fixture import TinyLM as ReferenceLM, TinyTokenizer as ReferenceTokenizer, forward_logits
 
 
 @pytest.fixture(scope="module")
@@ -27,7 +27,10 @@ def resource_folder(tmp_path_factory):
 def test_installed_fixture_has_the_reference_identity():
     from caliper.interp._dictionary import model_identity
     assert model_identity(TinyLM()) == model_identity(ReferenceLM())
-    assert forward_hash(TinyLM()) == Path(__file__).with_name("fixture.sha256").read_text().strip()
+    expected = torch.tensor(json.loads(Path(__file__).with_name("fixture_logits.json").read_text()),
+                            dtype=torch.float64) / 1e8
+    # The saved reference permits the same CPU kernel tolerance as test_fixture.
+    torch.testing.assert_close(forward_logits(TinyLM()), expected, atol=1e-6, rtol=1e-6)
     assert TinyTokenizer().encode("AB CD") == ReferenceTokenizer().encode("AB CD")
 
 

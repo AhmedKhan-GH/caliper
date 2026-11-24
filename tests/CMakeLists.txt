@@ -954,6 +954,15 @@ target_include_directories(caliper_circuit_readback_cpu PRIVATE "${CMAKE_SOURCE_
 target_link_libraries(caliper_circuit_readback_cpu PRIVATE caliper::sdk)
 add_executable(caliper_circuit_reference_cpu "${CMAKE_SOURCE_DIR}/demos/circuit_trace/reference_test.cpp")
 target_include_directories(caliper_circuit_reference_cpu PRIVATE "${CMAKE_SOURCE_DIR}/src/host" "${CMAKE_SOURCE_DIR}/include")
+# The CPU reference also builds when the platform disables the builder.
+if(NOT TARGET nlohmann_json::nlohmann_json)
+    include(FetchContent)
+    set(JSON_BuildTests OFF CACHE INTERNAL "")
+    FetchContent_Declare(nlohmann_json
+        URL https://github.com/nlohmann/json/releases/download/v3.11.3/json.tar.xz
+        URL_HASH SHA256=d6c65aca6b1ed68e7a182f4757257b107ae403032760ed6ef121c9d55e81757d)
+    FetchContent_MakeAvailable(nlohmann_json)
+endif()
 target_link_libraries(caliper_circuit_reference_cpu PRIVATE caliper::sdk imgui nlohmann_json::nlohmann_json sternbild_tokens)
 foreach(_circuit_cpu_target caliper_circuit_readback_cpu caliper_circuit_reference_cpu)
     set_target_properties(${_circuit_cpu_target} PROPERTIES CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON)
