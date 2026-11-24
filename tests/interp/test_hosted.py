@@ -155,6 +155,7 @@ class HostedChild:
         env = {k: v for k, v in os.environ.items() if not k.startswith("CALIPER_RUN_")}
         env.update(CALIPER_RUN_ID=name, CALIPER_RUN_DIR=str(self.folder), CALIPER_RUN_LINK_FILE=str(self.folder / "link"),
                    CALIPER_RUN_APP_PID=str(os.getpid()), CALIPER_AGENT_OFFLINE="1", CALIPER_TEST_RUN="1",
+                   CALIPER_DATA_DIR=str(self.folder / "data"),
                    CALIPER_NETIO="0", CALIPER_SESSION="0", PYTHONUNBUFFERED="1")
         if resume is not None:
             env.update(CALIPER_RUN_RESUME=str(resume), CALIPER_RUN_PARENT="parent")
