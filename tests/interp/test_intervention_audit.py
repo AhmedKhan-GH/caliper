@@ -479,3 +479,67 @@ def test_nested_source_refill_preserves_outer_probe_capture(controlled):
     torch.testing.assert_close(actual, expected, rtol=0, atol=0)
     for point in points:
         torch.testing.assert_close(cold[point], warm[point], rtol=0, atol=0)
+
+
+def test_explicit_fork_overrides_leave_saved_requests_queued(controlled):
+    model, tokenizer, ctl, service = controlled
+    service.set(add_spec())
+    service.set(add_spec(point="layers.2.mlp_out", coefficient=3))
+    ctl.step(5)
+    service.set(add_spec(coefficient=2))
+    service.clear("layers.2.mlp_out")
+    service.set(add_spec(point="layers.3.mlp_out", coefficient=4, from_step=5))
+    state = service.state_dict()
+    ctl.n = 4
+    service.load_state_dict(state, restore_active=True)
+    service.apply_overrides([add_spec(point="layers.1.mlp_out", coefficient=7)])
+    assert ctl.n == 4
+    current = service.state_dict()["interventions"]
+    assert current[:3] == state["interventions"]
+
+    def oracle(amounts):
+        handles = [model.layers[layer].mlp.register_forward_hook(
+            lambda m, a, y, amount=amount: y + y.new_tensor([0.1] * 64) * amount)
+            for layer, amount in amounts]
+        try:
+            with service.suspend():
+                return model(**tokenizer("AB")).logits
+        finally:
+            for handle in handles:
+                handle.remove()
+
+    expected = oracle([(0, 1), (1, 7), (2, 3)])
+    torch.testing.assert_close(model(**tokenizer("AB")).logits, expected, rtol=0, atol=0)
+    ctl.step()
+    assert ctl.n == 5
+    expected = oracle([(0, 2), (1, 7), (3, 4)])
+    torch.testing.assert_close(model(**tokenizer("AB")).logits, expected, rtol=0, atol=0)
+
+
+def test_explicit_override_replaces_only_its_record_and_obeys_schedule(controlled):
+    _, _, ctl, service = controlled
+    service.set(add_spec())
+    ctl.step(5)
+    service.set(add_spec(coefficient=2))
+    service.apply_overrides([add_spec(coefficient=3), add_spec(point="layers.1.mlp_out", from_step=10)])
+    assert ctl.n == 5 and service.specifications()[0]["coefficient"] == 3
+    assert service.state_dict()["interventions"][1]["state"] == "pending"
+    ctl.step()
+    assert service.specifications()[0]["coefficient"] == 3
+    assert len(service.specifications()) == 1
+    ctl.step(9)
+    assert len(service.specifications()) == 2
+
+
+def test_invalid_explicit_override_batch_preserves_live_records(controlled):
+    _, _, ctl, service = controlled
+    service.set(add_spec())
+    ctl.step()
+    service.set(add_spec(coefficient=2))
+    state = service.state_dict()
+    hook = next(iter(ctl._ivs.values())).hook
+    with pytest.raises(InterventionError):
+        service.apply_overrides([add_spec(point="layers.1.mlp_out"), add_spec(coefficient=2**53 + 1)])
+    assert service.state_dict() == state and next(iter(ctl._ivs.values())).hook is hook
+    service.apply_overrides([])
+    assert service.state_dict() == state and next(iter(ctl._ivs.values())).hook is hook

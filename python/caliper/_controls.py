@@ -832,16 +832,20 @@ class Interventions:
 
     def state_dict(self):
         """Return complete JSON state. The run checkpoint owns the step counter."""
-        from copy import deepcopy
         with self._ctl.lock:
             if self._ctl._iv_model is not self:
                 raise ValueError("the intervention service is no longer attached")
-            return {"version": 1, "interventions": [
-                {"specification": deepcopy(iv.spec), "state": iv.state,
-                 "applied_specification": deepcopy(iv.applied_spec),
-                 "since_step": iv.since_step, "clear": iv.clear,
-                 "error": iv.error, "error_code": iv.error_code}
-                for iv in self._ctl._ivs.values()]}
+            return self._state_dict()
+
+    def _state_dict(self):
+        """Export records while the controls lock is held."""
+        from copy import deepcopy
+        return {"version": 1, "interventions": [
+            {"specification": deepcopy(iv.spec), "state": iv.state,
+             "applied_specification": deepcopy(iv.applied_spec),
+             "since_step": iv.since_step, "clear": iv.clear,
+             "error": iv.error, "error_code": iv.error_code}
+            for iv in self._ctl._ivs.values()]}
 
     @contextmanager
     def temporary_state(self, state):
@@ -907,33 +911,74 @@ class Interventions:
         with self._ctl.lock:
             if self._ctl._iv_model is not self:
                 raise InterventionError("the intervention service is no longer attached")
-            restored = {}
-            for record in records:
-                spec, applied = _record_specifications(record, self.executor)
+            self._restore_records(records, restore_active=restore_active)
+
+    def apply_overrides(self, specifications):
+        """Apply explicit fork overrides without a boundary for unrelated saved work."""
+        from copy import deepcopy
+        from .interp._intervene import InterventionError
+        if not isinstance(specifications, list) or len(specifications) > MAX_INTERVENTIONS:
+            raise InterventionError("invalid intervention overrides")
+        with self._ctl.lock:
+            if self._ctl._iv_model is not self:
+                raise InterventionError("the intervention service is no longer attached")
+            if not specifications:
+                return
+            records = {(record["specification"]["point"], record["specification"]["op"]): record
+                       for record in self._state_dict()["interventions"]}
+            keys = set()
+            step = self._ctl._next_step()
+            for request in specifications:
+                spec = self.executor.validate(request)
                 key = spec["point"], spec["op"]
-                if key in restored:
-                    raise InterventionError("duplicate intervention record")
-                iv = _Intervention(*key, spec.get("from_step"), spec.get("until_step"), spec)
-                iv.state, iv.since_step = record["state"], record["since_step"]
-                iv.clear, iv.error, iv.error_code = record["clear"], record["error"], record["error_code"]
-                iv.applied_spec = applied
-                iv.replace = applied is not None and spec != applied
-                restored[key] = iv
-            if restore_active:
-                try:
-                    for iv in restored.values():
-                        if iv.applied_spec is not None:
-                            self._ctl._install_intervention(self, iv, iv.applied_spec)
-                except BaseException:
-                    for iv in restored.values():
-                        self._ctl._unhook(iv)
-                    raise
-            for iv in self._ctl._ivs.values():
-                self._ctl._unhook(iv)
-            self.invalidate_source_cache()
-            self._ctl._ivs = restored
-            self._ctl._iv_due = True
-            self._ctl._update_busy()
+                if key in keys:
+                    raise InterventionError("duplicate intervention override")
+                keys.add(key)
+                if spec.get("until_step") is not None and spec["until_step"] <= step:
+                    raise InterventionError("override until_step is in the past", "intervene.bad_range")
+                active = spec.get("from_step") is None or spec["from_step"] <= step
+                records[key] = {"specification": spec, "state": IV_ACTIVE if active else IV_PENDING,
+                                "applied_specification": deepcopy(spec) if active else None,
+                                "since_step": step if active else None, "clear": False,
+                                "error": None, "error_code": None}
+            while len(records) > MAX_INTERVENTIONS:
+                old = next((key for key, record in records.items() if record["state"] == IV_ENDED), None)
+                if old is None:
+                    raise InterventionError("too many live intervention records", _w().ERR_LIMIT)
+                del records[old]
+            self._restore_records(list(records.values()), restore_active=True)
+        self._ctl._publish()
+
+    def _restore_records(self, records, *, restore_active):
+        """Restore validated records while the controls lock is held."""
+        from .interp._intervene import InterventionError
+        restored = {}
+        for record in records:
+            spec, applied = _record_specifications(record, self.executor)
+            key = spec["point"], spec["op"]
+            if key in restored:
+                raise InterventionError("duplicate intervention record")
+            iv = _Intervention(*key, spec.get("from_step"), spec.get("until_step"), spec)
+            iv.state, iv.since_step = record["state"], record["since_step"]
+            iv.clear, iv.error, iv.error_code = record["clear"], record["error"], record["error_code"]
+            iv.applied_spec = applied
+            iv.replace = applied is not None and spec != applied
+            restored[key] = iv
+        if restore_active:
+            try:
+                for iv in restored.values():
+                    if iv.applied_spec is not None:
+                        self._ctl._install_intervention(self, iv, iv.applied_spec)
+            except BaseException:
+                for iv in restored.values():
+                    self._ctl._unhook(iv)
+                raise
+        for iv in self._ctl._ivs.values():
+            self._ctl._unhook(iv)
+        self.executor._discard_unused_sources()
+        self._ctl._ivs = restored
+        self._ctl._iv_due = True
+        self._ctl._update_busy()
 
     def remove(self) -> None:
         self._ctl._interventions_off(self)
