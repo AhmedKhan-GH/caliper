@@ -17,7 +17,8 @@ from .memory_limits import autorelease_scope
 
 def _save_tensors(values, path):
     save_file(values, path)
-    with Path(path).open("rb") as source:
+    # Windows file flush requires a handle with write access.
+    with Path(path).open("r+b") as source:
         os.fsync(source.fileno())
 
 
