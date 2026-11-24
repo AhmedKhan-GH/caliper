@@ -205,6 +205,7 @@ class KeptCheckpoints:
     def __init__(self, folder, clock=time.monotonic, limit=KEEP_MAX, share=KEEP_SHARE,
                  bytes_max=KEEP_BYTES):
         self.folder = folder
+        self.extension = ".pt"
         self.clock = clock
         self.limit = limit
         self.share = share
@@ -248,7 +249,7 @@ class KeptCheckpoints:
             raise OSError(f"{self.folder} is a link")
         os.makedirs(self.folder, mode=0o700, exist_ok=True)
         data = state()
-        path = os.path.join(self.folder, f"checkpoint-{step}.pt")
+        path = os.path.join(self.folder, f"checkpoint-{step}{self.extension}")
         _write(path, data)
         self.kept.append((step, path))
         self._spent += self.clock() - start
@@ -304,6 +305,7 @@ class ManagedRun:
         self.stopping = False
         self._resumed = False
         self._pkg = None
+        self.inference = None           # built-in hosted inference metadata owner
 
     @classmethod
     def from_env(cls, env=None):
@@ -358,13 +360,23 @@ class ManagedRun:
             self._load(pkg, model, optimizer)
 
     def _load(self, pkg, model, optimizer) -> None:
+        if self.inference is not None:
+            from .interp._hosted import CHECKPOINT_BYTES, checkpoint_metadata
         with open(self.resume, "rb") as f:
-            data = f.read()
-        if optimizer is not None and not hasattr(optimizer, "load_state_dict"):
-            optimizer = None             # watch() refuses it after this
-        extra = TORCH.restore(data, model, optimizer)
-        if extra.get("format") != FORMAT:
-            raise ValueError(f"{self.resume} is not a checkpoint of a managed run")
+            data = f.read(CHECKPOINT_BYTES + 1) if self.inference is not None else f.read()
+        if self.inference is not None:
+            if len(data) > CHECKPOINT_BYTES:
+                raise ValueError("inference checkpoint exceeds the metadata limit")
+            extra = json.loads(data)
+            if not checkpoint_metadata(extra):
+                raise ValueError("inference checkpoint contains invalid metadata")
+            self.inference.load_checkpoint(extra)
+        else:
+            if optimizer is not None and not hasattr(optimizer, "load_state_dict"):
+                optimizer = None         # watch() refuses it after this
+            extra = TORCH.restore(data, model, optimizer)
+            if extra.get("format") != FORMAT:
+                raise ValueError(f"{self.resume} is not a checkpoint of a managed run")
         step = int(extra.get("step") or 0)
         self.step = step
         ctl = pkg._CTL
@@ -420,15 +432,22 @@ class ManagedRun:
         ctl = self._pkg._CTL
         with ctl.lock:
             params = {n: p.value for n, p in ctl.params.items()}
-        return TORCH.state(model, optimizer, {
-            "format": FORMAT, "version": VERSION, "run": self.id, "parent": self.parent,
-            "step": step, "params": params})
+        extra = {"format": FORMAT, "version": VERSION, "run": self.id, "parent": self.parent,
+                 "step": step, "params": params}
+        if self.inference is not None:
+            from .interp._hosted import CHECKPOINT_FORMAT, checkpoint_metadata
+            extra.update(self.inference.state_dict(), format=CHECKPOINT_FORMAT)
+            if not checkpoint_metadata(extra):
+                raise ValueError("inference checkpoint exceeds the metadata limits")
+            return json.dumps(extra, ensure_ascii=False, allow_nan=False).encode("utf-8")
+        return TORCH.state(model, optimizer, extra)
 
     def checkpoint(self, model, optimizer) -> str:
         """The action ``caliper.checkpoint``: write the state and return the file's path."""
         step = self._pkg._CTL.n
         data = self._state(model, optimizer, step)
-        path = os.path.join(self.dir, f"checkpoint-{step}.pt")
+        extension = ".json" if self.inference is not None else ".pt"
+        path = os.path.join(self.dir, f"checkpoint-{step}{extension}")
         _write(path, data)
         return path
 
@@ -515,6 +534,13 @@ class ManagedRun:
         raise SystemExit(0)
 
     def _forward(self, module, inputs, output) -> None:
+        from .interp._output import is_internal_forward
+        ctl = self._pkg._CTL
+        interpretation = ctl.interpretation_service
+        interventions = ctl.intervention_service
+        if (is_internal_forward() or (interpretation is not None and interpretation.running)
+                or (interventions is not None and interventions.executor.preparing_source)):
+            return
         self._pkg.step()
         if self.stopping:
             self.exit()

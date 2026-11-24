@@ -1,0 +1,591 @@
+"""Offline hosted inference with deterministic fixture resources and safe forks."""
+from __future__ import annotations
+
+import argparse
+from contextlib import contextmanager
+from copy import deepcopy
+import json
+import math
+from pathlib import Path
+from types import SimpleNamespace
+
+import torch
+from torch import nn
+from torch.nn import functional as F
+
+from ._output import Output, bounded_text, internal_forward, prompt_inputs
+from ._service import InterpretationService, Refused, register_service, unregister_service
+
+QWEN_REVISION = "2fc06364715b967f1860aea9cf38778875588b17"
+QWEN_ID = "Qwen/Qwen3.5-0.8B"
+CHECKPOINT_FORMAT = "caliper.inference"
+
+CHECKPOINT_BYTES = 4 * 1024 * 1024
+
+
+def checkpoint_metadata(value):
+    """Validate local JSON metadata, including full-width intervention vectors."""
+    count = 0
+    def valid(item, depth=0):
+        nonlocal count
+        count += 1
+        if depth > 8 or count > 262144:
+            return False
+        if item is None or type(item) is bool:
+            return True
+        if type(item) is int:
+            return abs(item) < 2**53
+        if type(item) is float:
+            return math.isfinite(item)
+        if type(item) is str:
+            return len(item.encode("utf-8")) <= 4096
+        if type(item) is list:
+            return len(item) <= 16384 and all(valid(v, depth + 1) for v in item)
+        if type(item) is dict:
+            return len(item) <= 64 and all(type(k) is str and len(k.encode("utf-8")) <= 63
+                                           and valid(v, depth + 1) for k, v in item.items())
+        return False
+    try:
+        return (type(value) is dict and valid(value)
+                and len(json.dumps(value, ensure_ascii=False, allow_nan=False).encode("utf-8")) <= CHECKPOINT_BYTES)
+    except (ValueError, UnicodeError):
+        return False
+
+
+class _RunGuard:
+    """Retain a resource stop after an action or service catches its exception."""
+    def __init__(self, guard):
+        self.guard, self.failure = guard, None
+
+    def check(self, *args, **kwargs):
+        from ._memory import CleanStop
+        if self.failure is not None:
+            raise self.failure
+        try:
+            self.guard.check(*args, **kwargs)
+        except CleanStop as exc:
+            self.failure = exc
+            raise
+
+
+class RMSNorm(nn.Module):
+    def __init__(self, width, eps=1e-6):
+        super().__init__()
+        self.weight = nn.Parameter(torch.ones(width))
+        self.eps = eps
+        self.frozen_scale = None
+
+    def forward(self, x):
+        scale = self.frozen_scale
+        if scale is None:
+            scale = torch.rsqrt(x.square().mean(-1, keepdim=True) + self.eps)
+        self.last_scale = scale.detach()
+        return x * scale * self.weight
+
+
+class Attention(nn.Module):
+    def __init__(self, width=64, heads=4):
+        super().__init__()
+        self.num_heads = heads
+        self.head_dim = width // heads
+        self.q_proj = nn.Linear(width, width, bias=False)
+        self.k_proj = nn.Linear(width, width, bias=False)
+        self.v_proj = nn.Linear(width, width, bias=False)
+        self.o_proj = nn.Linear(width, width, bias=False)
+        self.pattern = nn.Identity()
+        self.frozen_pattern = None
+
+    def forward(self, x):
+        batch, length, width = x.shape
+        def split(proj):
+            return proj(x).view(batch, length, self.num_heads, self.head_dim).transpose(1, 2)
+        q, k, v = split(self.q_proj), split(self.k_proj), split(self.v_proj)
+        pattern = self.frozen_pattern
+        if pattern is None:
+            scores = q @ k.transpose(-1, -2) / self.head_dim ** 0.5
+            mask = torch.ones(length, length, device=x.device, dtype=torch.bool).triu(1)
+            pattern = scores.masked_fill(mask, -torch.inf).softmax(-1)
+        pattern = self.pattern(pattern)
+        self.last_pattern = pattern.detach()
+        y = (pattern @ v).transpose(1, 2).reshape(batch, length, width)
+        return self.o_proj(y)
+
+
+class TranscoderMLP(nn.Module):
+    def __init__(self, width=64, latents=256, k=8):
+        super().__init__()
+        self.k = k
+        # Rows of W_enc read a feature. Rows of W_dec write a feature.
+        self.W_enc = nn.Parameter(torch.randn(latents, width) / width ** 0.5)
+        self.b_enc = nn.Parameter(torch.zeros(latents))
+        self.W_dec = nn.Parameter(torch.randn(latents, width) / (latents * k) ** 0.5)
+        self.b_dec = nn.Parameter(torch.zeros(width))
+        self.features = nn.Identity()
+
+    def encode(self, x):
+        z = F.linear(x, self.W_enc, self.b_enc).relu()
+        values, indices = z.topk(self.k, dim=-1)
+        return torch.zeros_like(z).scatter(-1, indices, values)
+
+    def decode(self, a):
+        return a @ self.W_dec + self.b_dec
+
+    def forward(self, x):
+        return self.decode(self.features(self.encode(x)))
+
+
+class Block(nn.Module):
+    def __init__(self, width=64, heads=4, latents=256, k=8):
+        super().__init__()
+        self.input_layernorm = RMSNorm(width)
+        self.self_attn = Attention(width, heads)
+        self.post_attention_layernorm = RMSNorm(width)
+        self.mlp = TranscoderMLP(width, latents, k)
+
+    def forward(self, x):
+        x = x + self.self_attn(self.input_layernorm(x))
+        return x + self.mlp(self.post_attention_layernorm(x))
+
+
+class TinyLM(nn.Module):
+    def __init__(self, *, seed=7, layers=4, width=64, heads=4, vocab=512,
+                 latents=256, k=8, dtype=torch.float64):
+        super().__init__()
+        self.config = SimpleNamespace(model_type="caliper_tiny", _name_or_path="tiny-lm",
+                                      num_hidden_layers=layers, hidden_size=width,
+                                      num_attention_heads=heads, vocab_size=vocab,
+                                      rms_norm_eps=1e-6, latents=latents, k=k)
+        # Model construction must not change the caller's random state.
+        with torch.random.fork_rng(devices=[]):
+            torch.manual_seed(seed)
+            self.embed_tokens = nn.Embedding(vocab, width)
+            self.layers = nn.ModuleList(Block(width, heads, latents, k) for _ in range(layers))
+            self.norm = RMSNorm(width)
+            self.lm_head = nn.Linear(width, vocab, bias=False)
+        self.to(dtype=dtype)
+        self.eval()
+
+    def get_input_embeddings(self):
+        return self.embed_tokens
+
+    def get_output_embeddings(self):
+        return self.lm_head
+
+    def forward(self, input_ids=None, *, inputs_embeds=None, **kwargs):
+        if (input_ids is None) == (inputs_embeds is None):
+            raise ValueError("supply input_ids or inputs_embeds")
+        x = self.embed_tokens(input_ids) if inputs_embeds is None else inputs_embeds
+        for block in self.layers:
+            x = block(x)
+        return SimpleNamespace(logits=self.lm_head(self.norm(x)))
+
+    @contextmanager
+    def frozen_attention(self, *, norms=False):
+        """Freeze constants from the last forward pass, then restore prior values."""
+        saved = []
+        for module in self.modules():
+            key = "frozen_pattern" if isinstance(module, Attention) else (
+                "frozen_scale" if norms and isinstance(module, RMSNorm) else None)
+            if key is not None:
+                saved.append((module, key, getattr(module, key)))
+                source = "last_pattern" if key == "frozen_pattern" else "last_scale"
+                setattr(module, key, getattr(module, source).detach())
+        try:
+            yield self
+        finally:
+            for module, key, value in saved:
+                setattr(module, key, value)
+
+
+class TinyTokenizer:
+    """A byte tokenizer with a fixed 512-token vocabulary and a BOS token."""
+    vocab_size = 512
+    bos_token_id = 256
+    eos_token_id = 257
+    pad_token_id = 258
+
+    def encode(self, text, add_special_tokens=True):
+        ids = list(text.encode("utf-8"))
+        return ([self.bos_token_id] if add_special_tokens else []) + ids
+
+    def decode(self, ids, **kwargs):
+        if isinstance(ids, int):
+            ids = [ids]
+        return bytes(int(x) for x in ids if 0 <= int(x) < 256).decode("utf-8", errors="replace")
+
+    def convert_ids_to_tokens(self, ids):
+        if isinstance(ids, int):
+            return self.decode([ids]) if ids < 256 else f"<token{ids}>"
+        return [self.convert_ids_to_tokens(int(x)) for x in ids]
+
+    def __call__(self, text, return_tensors="pt", **kwargs):
+        ids = self.encode(text, add_special_tokens=kwargs.get("add_special_tokens", True))
+        return {"input_ids": torch.tensor([ids], dtype=torch.long),
+                "attention_mask": torch.ones(1, len(ids), dtype=torch.long)}
+
+
+
+def fixture_resources(folder):
+    """Create the seeded dictionary and a small real example index once."""
+    from safetensors.torch import save_file
+    from ._dictionary import load_dictionary, model_identity
+    from ._index import build_index
+    folder = Path(folder)
+    folder.mkdir(parents=True, exist_ok=True)
+    if any(folder.iterdir()):
+        raise ValueError("fixture resource folder must be empty")
+    model, tokenizer = TinyLM(), TinyTokenizer()
+    count = len(model.layers)
+    manifest = {
+        "format_version": 1, "model_id": "tiny-lm", "model_hash": model_identity(model),
+        "revision": "fixture-v1-seed-7", "layers": count, "width": model.config.hidden_size,
+        "latents": model.config.latents, "activation": "topk", "k": model.config.k,
+        "read_points": [f"layers.{i}.mlp_in" for i in range(count)],
+        "write_points": [f"layers.{i}.mlp_out" for i in range(count)],
+        "training": {"dataset_id": "fixture", "dataset_config": "seeded-text",
+                     "dataset_revision": "fixture-v1", "split": "train", "partitions": {},
+                     "tokens": 0, "elapsed_seconds": 0, "peak_memory_bytes": 0},
+        "quality": {"fvu": None, "dead_fraction": None, "cross_entropy_delta": None, "evaluated_tokens": 0},
+    }
+    for i, block in enumerate(model.layers):
+        save_file({name: p.detach().clone() for name, p in block.mlp.named_parameters()}, folder / f"layer_{i:02d}.safetensors")
+    (folder / "dictionary.json").write_text(json.dumps(manifest, allow_nan=False), encoding="utf-8")
+    dictionary = load_dictionary(folder, model=model)
+    texts = ("AB CD EF GH", "The red cube.", "A blue circle.", "AB CD AB CD", "A small test.",
+             "The red cube is beside a tree.")
+    documents = [(f"fixture-{i}-{copy}", tokenizer.encode(text))
+                 for i, text in enumerate(texts) for copy in range(16)]
+    build_index(folder, documents, model=model, tokenizer=tokenizer, dictionary=dictionary,
+                provenance={"partition": "fixture-v1"}, context_length=32)
+    return folder
+
+
+def load_resources(model_name, dictionary_path):
+    """Load only local safe weights and the exact pinned Qwen text model."""
+    from ._dictionary import load_dictionary
+    from ._index import FeatureIndex
+    from ._memory import MemoryGuard
+    folder = Path(dictionary_path).resolve(strict=True)
+    if not folder.is_dir():
+        raise ValueError("dictionary must name a local resource folder")
+    guard = None
+    if model_name == "tiny-lm":
+        model, tokenizer = TinyLM(), TinyTokenizer()
+    else:
+        snapshot = Path(model_name).resolve(strict=True)
+        if not snapshot.is_dir() or snapshot.name != QWEN_REVISION or snapshot.parent.name != "snapshots":
+            raise ValueError("model must name the pinned local Qwen snapshot or tiny-lm")
+        if snapshot.parent.parent.name != "models--Qwen--Qwen3.5-0.8B":
+            raise ValueError("model snapshot does not identify the pinned Qwen repository")
+        from transformers import AutoTokenizer, Qwen3_5ForCausalLM, Qwen3_5TextConfig
+        config = Qwen3_5TextConfig(**json.loads((snapshot / "config.json").read_text())["text_config"])
+        device = "mps" if torch.backends.mps.is_available() else "cpu"
+        guard = MemoryGuard(12, device)
+        guard.check("inference load start")
+        model, info = Qwen3_5ForCausalLM.from_pretrained(
+            snapshot, config=config, dtype=torch.float32, attn_implementation="eager",
+            local_files_only=True, use_safetensors=True, output_loading_info=True,
+            key_mapping={r"^model\.language_model\.": "model."})
+        if any(info.get(key) for key in ("missing_keys", "unexpected_keys", "mismatched_keys", "error_msgs")):
+            raise ValueError("local model weights do not match the pinned text architecture")
+        model.config._name_or_path, model.config._commit_hash = QWEN_ID, QWEN_REVISION
+        model.eval().to(device)
+        guard.check("inference model load")
+        tokenizer = AutoTokenizer.from_pretrained(snapshot, local_files_only=True, trust_remote_code=False)
+    dictionary = load_dictionary(folder, model=model, device=next(model.parameters()).device,
+                                 dtype=next(model.parameters()).dtype)
+    if guard is not None:
+        guard.check("inference dictionary load")
+    index = FeatureIndex(folder, model=model, tokenizer=tokenizer, dictionary=dictionary)
+    return model, tokenizer, dictionary, index, guard
+
+
+class HostedService(InterpretationService):
+    """Run steering updates and queued requests inside the same boundary."""
+    def __init__(self, owner):
+        self.owner = owner
+        super().__init__(model=owner.model, tokenizer=owner.tokenizer, dictionary=owner.dictionary, index=owner.index,
+                         handlers={"patch.sweep": owner.sweep, "trace.validate": owner.validate})
+        self.boundary_running = False
+
+    def _execute(self, method, params, step):
+        if method == "trace.run":
+            prompt_inputs(self.model, self.tokenizer, params["prompt"])
+            self.owner.prompt.set(params["prompt"])
+        result = super()._execute(method, params, step)
+        if method == "trace.run":
+            self.owner.traced_prompt = params["prompt"]
+            self.owner.traced_specifications = self.owner.interventions.specifications()
+            self.owner.traced_state = self.owner.interventions.state_dict()
+        return result
+
+    def step(self, step=None):
+        if self.running or self.boundary_running or self.closed:
+            return 0
+        self.boundary_running = True
+        try:
+            with internal_forward():
+                try:
+                    self.owner.update_controls()
+                except ValueError as exc:
+                    self.owner.status.set(bounded_text(str(exc)))
+                count = super().step(step)
+                try:
+                    self.owner.update_output()
+                except ValueError as exc:
+                    self.owner.status.set(bounded_text(str(exc)))
+                return count
+        finally:
+            self.boundary_running = False
+
+
+class HostedInference:
+    """Own one model, its controls, and safe checkpoint metadata."""
+    def __init__(self, model_name, dictionary_path, prompt, *, resources=None):
+        self.model_name = model_name
+        self.dictionary_path = str(Path(dictionary_path).resolve())
+        self.model, self.tokenizer, self.dictionary, self.index, self.guard = (
+            load_resources(model_name, dictionary_path) if resources is None else resources)
+        self.guard = _RunGuard(self.guard) if self.guard is not None else None
+        prompt_inputs(self.model, self.tokenizer, prompt)
+        self.initial_prompt = prompt
+        self.restored = None
+        self.handle = self.service = self.managed = None
+        self.selection = None
+        self.traced_prompt = None
+        self.traced_specifications = None
+        self.traced_state = None
+        self._output_key = None
+        self._clamp_version = None
+        self._selected_version = None
+        self._retrace = False
+        self.parameters, self.actions = [], []
+
+    def _bindings(self):
+        from ._dictionary import model_identity
+        return {"model": self.model_name, "model_hash": model_identity(self.model),
+                "dictionary": self.dictionary_path, "dictionary_hash": self.index.metadata["dictionary_hash"],
+                "tokenizer_hash": self.index.metadata["tokenizer_hash"]}
+
+    def load_checkpoint(self, record):
+        if (not checkpoint_metadata(record) or record.get("format") != CHECKPOINT_FORMAT or type(record.get("version")) is not int
+                or record["version"] != 1 or record.get("bindings") != self._bindings()):
+            raise ValueError("inference checkpoint resource bindings do not match")
+        if type(record.get("step")) is not int or not 0 <= record["step"] < 2**53:
+            raise ValueError("inference checkpoint step is invalid")
+        if type(record.get("params")) is not dict or type(record.get("interventions")) is not dict:
+            raise ValueError("inference checkpoint state is invalid")
+        prompt_inputs(self.model, self.tokenizer, record["params"].get("prompt"))
+        selection = record.get("selection")
+        if selection is not None:
+            if type(selection) is not dict or set(selection) != {"layer", "feature", "position"}:
+                raise ValueError("inference checkpoint selection is invalid")
+            limits = {"layer": len(self.dictionary.layers), "feature": self.dictionary.metadata["latents"], "position": 32}
+            if any(type(selection[k]) is not int or not 0 <= selection[k] < limit for k, limit in limits.items()):
+                raise ValueError("inference checkpoint selection is out of range")
+        self.restored = deepcopy(record)
+
+    def state_dict(self):
+        return {"bindings": self._bindings(), "interventions": self.interventions.state_dict(),
+                "selection": deepcopy(self.selection)}
+
+    def start(self):
+        import caliper
+        from .. import _managed
+        self.controls = caliper._CTL
+        self.managed = _managed.current()
+        if self.managed is not None:
+            self.managed.inference = self
+            self.managed.kept.extension = ".json"
+        self.handle = caliper.watch(self.model, activations=False)
+        try:
+            self.interventions = self.controls.intervention_service
+            self.interventions.configure(dictionary=self.dictionary, tokenizer=self.tokenizer)
+            self.output = Output(self.model, self.tokenizer, self.interventions, guard=self.guard)
+            def param(name, value, **kwargs):
+                result = caliper.param(name, value, **kwargs)
+                self.parameters.append(result)
+                return result
+            self.prompt = param("prompt", self.initial_prompt)
+            self.selected = param("selected_node", -1, min=-1, max=511)
+            self.clamp = param("clamp", 0., min=-4., max=4.)
+            self.retrace = param("retrace", False)
+            self.baseline_text = param("output.baseline", "")
+            self.steered_text = param("output.steered", "")
+            self.status = param("output.status", "ready")
+            self.actions = [caliper.action("generate", self.generate), caliper.action("reset", self.reset)]
+            self.service = register_service(HostedService(self), controls=self.controls)
+            if self.restored is not None:
+                self.interventions.load_state_dict(self.restored["interventions"])
+                self.selection = deepcopy(self.restored["selection"])
+            # Fork overrides apply before any internal forward, after resource binding.
+            if self.managed is not None and self.managed.interventions:
+                self.managed._intervene()
+            self._clamp_version, self._selected_version = self.clamp._version, self.selected._version
+            self.boundary()
+            return self
+        except BaseException:
+            self.close()
+            raise
+
+    def _apply(self):
+        with self.controls.lock:
+            changed = self.controls._apply_interventions()
+            self.controls._update_busy()
+        if changed:
+            self.controls._publish()
+
+    def update_controls(self):
+        prompt_inputs(self.model, self.tokenizer, self.prompt.value)
+        if self.selected._version != self._selected_version:
+            node = self.selected.value
+            if node == -1:
+                self.selection = None
+            elif self.service.graph is None or node >= len(self.service.graph.nodes):
+                raise ValueError("selected_node requires a completed trace")
+            else:
+                record = self.service.graph.nodes[node]
+                if record["kind"] != "feature":
+                    raise ValueError("selected_node must identify a feature")
+                self.selection = {k: record[k] for k in ("layer", "feature", "position")}
+            self._selected_version = self.selected._version
+        if self.clamp._version != self._clamp_version:
+            if self.selection is None:
+                raise ValueError("clamp requires a selected feature")
+            layer, feature, position = (self.selection[k] for k in ("layer", "feature", "position"))
+            maximum = float(self.index.show(layer, feature)["maximum"])
+            if not torch.isfinite(torch.tensor(maximum)) or maximum <= 0:
+                raise ValueError("selected feature has no positive indexed maximum")
+            self.interventions.set({"kind": "clamp", "point": self.dictionary.metadata["write_points"][layer],
+                                    "feature": feature, "positions": [position], "value": self.clamp.value * maximum})
+            self._apply()
+            self._clamp_version = self.clamp._version
+
+    def update_output(self):
+        key = (self.prompt.value, self.interventions.specifications())
+        changed = self._output_key != key
+        if changed:
+            self.output.compare(self.prompt.value)
+            self._output_key = deepcopy(key)
+            self.status.set("ready")
+        if self.retrace.value and (changed or not self._retrace):
+            if (self.traced_prompt, self.traced_specifications) != key:
+                self.service._execute("trace.run", {"prompt": self.prompt.value}, self.controls.n)
+        self._retrace = self.retrace.value
+        if self.guard is not None:
+            self.guard.check("inference boundary", force=False)
+
+    def generate(self):
+        with internal_forward():
+            result = self.output.generate(self.prompt.value)
+        self.baseline_text.set(result["baseline"])
+        self.steered_text.set(result["steered"])
+        return "Generated 24 tokens for each output."
+
+    def reset(self):
+        if self.selection is not None:
+            state = self.interventions.state_dict()
+            point = self.dictionary.metadata["write_points"][self.selection["layer"]]
+            state["interventions"] = [record for record in state["interventions"] if not (
+                record["specification"]["point"] == point and record["specification"]["op"] == "clamp"
+                and record["specification"].get("feature") == self.selection["feature"])]
+            self.interventions.load_state_dict(state)
+            with internal_forward():
+                self._apply()
+        self.clamp.set(0.)
+        self._clamp_version = self.clamp._version
+        self.update_output()
+        return "The selected feature clamp is reset."
+
+    def sweep(self, *, clean_prompt, corrupted_prompt, metric):
+        from ._sweep import patch_sweep
+        return patch_sweep(self.model, self.tokenizer, self.interventions, clean_prompt=clean_prompt,
+                           corrupted_prompt=corrupted_prompt, metric=metric, guard=self.guard)
+
+    def validate(self):
+        from ._validate import validate_trace
+        if self.service.graph is None:
+            raise Refused("interpret.missing_trace", "No completed trace is available.")
+        with internal_forward(), self.interventions.temporary_state(self.traced_state) as replay:
+            return validate_trace(self.model, self.tokenizer, self.dictionary, replay,
+                                  self.service.graph, prompt=self.traced_prompt, guard=self.guard)
+
+    def boundary(self):
+        import caliper
+        self.controls.busy = True
+        caliper.step()
+        if self.managed is not None:
+            if self.managed.stopping:
+                self.managed.exit()
+            self.managed._keep(self.model, None)
+        if self.guard is not None:
+            self.guard.check("inference actions", force=False)
+
+    def run(self):
+        from .._controls import RUN_PAUSING, RUN_STEPPING
+        from ._memory import CleanStop
+        while True:
+            def pending():
+                # The condition already owns Controls.lock. Do not call locking service APIs here.
+                due = any(iv.clear or iv.replace or (iv.state == "pending" and
+                          (iv.from_step is None or iv.from_step <= self.controls.n + 1))
+                          for iv in self.controls._ivs.values())
+                return bool(self.controls._npending or self.controls.queue or self.service.pending or due
+                            or self.controls.state in (RUN_PAUSING, RUN_STEPPING))
+            with self.controls.cond:
+                self.controls.cond.wait_for(pending, timeout=1.)
+                work = pending()
+            try:
+                if work:
+                    self.boundary()
+                else:
+                    # Reports and intervention expiry need no new prompt step or forward.
+                    self.controls.checkpoint()
+            except CleanStop:
+                if self.managed is not None:
+                    self.managed.checkpoint(self.model, None)
+                raise
+            except Exception as exc:
+                self.status.set(bounded_text(f"{type(exc).__name__}: {exc}"))
+
+    def close(self):
+        if self.service is not None:
+            unregister_service(self.service, controls=self.controls)
+            self.service = None
+        for item in self.actions + self.parameters:
+            item.remove()
+        self.actions.clear()
+        self.parameters.clear()
+        if self.handle is not None:
+            self.handle.remove()
+            self.handle = None
+        self.index.close()
+        if self.managed is not None and self.managed.inference is self:
+            self.managed.inference = None
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(description="Local Inference Run")
+    parser.add_argument("--model")
+    parser.add_argument("--dictionary")
+    parser.add_argument("--prompt")
+    parser.add_argument("--fixture-dir")
+    args = parser.parse_args(argv)
+    if args.fixture_dir:
+        if any((args.model, args.dictionary, args.prompt)):
+            parser.error("fixture creation takes no run arguments")
+        fixture_resources(args.fixture_dir)
+        return
+    if not all((args.model, args.dictionary, args.prompt)):
+        parser.error("model, dictionary, and prompt are required")
+    run = HostedInference(args.model, args.dictionary, args.prompt)
+    try:
+        run.start()
+        print(f"caliper: inference ready at step {run.controls.n}", flush=True)
+        run.run()
+    finally:
+        run.close()
+
+
+if __name__ == "__main__":
+    main()
