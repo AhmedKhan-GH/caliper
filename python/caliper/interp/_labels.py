@@ -6,6 +6,19 @@ def display_text(value):
     return str(value).encode("utf-8", errors="replace").decode("utf-8").replace("\x00", r"\x00")
 
 
+def token_label(tokenizer, token_id):
+    """Retain vocabulary text, or identify a row with no token spelling.
+
+    Sparse IDs and padded output rows keep their IDs and scores. The marker
+    describes absent token text. It is not a decoded token or a vocabulary entry.
+    """
+    token_id = int(token_id)
+    value = tokenizer.convert_ids_to_tokens(token_id)
+    if value is None:
+        return f"[unmapped token {token_id}]"
+    return display_text(value)
+
+
 def pack_labels(values, count):
     """Pack at most 63 UTF-8 bytes per label, with zero padding."""
     import torch
