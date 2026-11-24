@@ -2552,6 +2552,7 @@ class ScriptedSource : public caliper_live::Source {
 public:
     caliper_live::ControlAccess access{true, ""};
     bool have = true;
+    bool interpretation = true;
     caliper_live::Controls ctl;
     std::vector<caliper_live::ControlReply> replies;
     struct Sent {
@@ -2586,6 +2587,7 @@ public:
         return true;
     }
     caliper_live::ControlAccess control_access() override { return access; }
+    bool supports_interpretation() override { return interpretation; }
     uint32_t send_control(const std::string& op, const std::string& name, const Json& value, uint32_t,
                           std::string* error) override {
         if (!send_failure.empty()) {
@@ -3420,6 +3422,25 @@ TEST_CASE("live/controls: send failures retain a bounded transport error") {
     CHECK(reason.size() <= CALIPER_NET_TEXT_MAX);
     CHECK(caliper_net::valid_utf8(reason.data(), reason.size()));
     CHECK(source.sent.empty());
+}
+
+TEST_CASE("live/controls: interpretation capability refusal preserves completed replies") {
+    ScriptedSource source;
+    caliper_live::RunControls controls;
+    controls.update(&source, 0);
+    const auto queued = controls.interpret("trace.status", Json::object(), 0);
+    REQUIRE(queued.find("request_id"));
+    const auto id = static_cast<uint32_t>(queued.find("request_id")->as_double());
+    source.reply(id, "ok");
+    source.replies.back().result = Json::object();
+    controls.update(&source, 1);
+    const auto completed = controls.interpret("trace.status", Json::object(), id);
+    source.interpretation = false;
+    const auto refused = controls.interpret("trace.status", Json::object(), 0);
+    REQUIRE(refused.find("error"));
+    CHECK(refused.find("error")->find("code")->as_string() == "interpret.unsupported");
+    CHECK(source.sent.size() == 1);
+    CHECK(controls.interpret("trace.status", Json::object(), id) == completed);
 }
 
 TEST_CASE("live/controls: protocol errors complete interpretation requests by ID") {

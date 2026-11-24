@@ -473,6 +473,8 @@ caliper_net::Json RunControls::interpret(const std::string& method, const Json& 
         std::vector<uint8_t> bytes;
         std::string reason;
         if (!caliper_net::wire::encode(outbound, &bytes, &reason)) return error("command.invalid_args", reason);
+        if (!src_->supports_interpretation())
+            return error("interpret.unsupported", "The script did not announce interpretation.");
         if (interpretations_.size() >= 64) {
             auto it = std::find_if(interpretations_.begin(), interpretations_.end(), [](const auto& item) {
                 return item.second.second.status != "queued";

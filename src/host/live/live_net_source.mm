@@ -356,6 +356,11 @@ public:
         return access_locked();
     }
 
+    bool supports_interpretation() override {
+        std::lock_guard<std::mutex> g(mu_);
+        return has_cap(session_caps_, CALIPER_NET_CAP_INTERPRETATION);
+    }
+
     uint32_t send_control(const std::string& op, const std::string& name, const Json& value, uint32_t count,
                           std::string* err) override {
         {

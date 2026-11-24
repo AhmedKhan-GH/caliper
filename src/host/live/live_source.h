@@ -246,6 +246,7 @@ public:
     // for the attached session.
     virtual bool controls(Controls* out) { (void)out; return false; }
     virtual ControlAccess control_access() { return {false, "this stream takes no controls"}; }
+    virtual bool supports_interpretation() { return false; }
     // Sends CONTROL `op` (pause, resume, step, set, run) for parameter or action
     // `name` with `value` (set) or `count` (step). Returns the request id its
     // CONTROL_REPLY will carry, 0 with *err when it was not sent.

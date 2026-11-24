@@ -2313,6 +2313,24 @@ TEST_CASE("net/hub: interpretation reads preserve capability gates and write per
     request.interpretation = obj({{"version",1},{"method","trace.status"},{"params",Json::object()}});
     legacy->send(request);
     REQUIRE(world.until([&] { return legacy->control_replies(3).size() == 1; }));
-    CHECK(legacy->control_replies(3)[0]->error.find("code")->as_string() == CALIPER_NET_ERR_UNSUPPORTED);
+    CHECK(legacy->control_replies(3)[0]->error.find("code")->as_string() == "interpret.unsupported");
     CHECK(producer_link->controls_in.size() == 1);
+}
+
+TEST_CASE("net/hub: interpretation refuses a producer without the capability") {
+    HubRunner hub;
+    World world;
+    auto producer_link = producer(world, hub, "legacy-interpretation", 1, 1, kProducer31, true);
+    auto caps = kCaps31;
+    caps.push_back(CALIPER_NET_CAP_INTERPRETATION);
+    auto reader = viewer(world, hub, caps);
+    REQUIRE(world.until([&] { return reader->views() && reader->views()->session; }));
+    wire::Control request;
+    request.request_id = 1;
+    request.op = CALIPER_NET_OP_INTERPRET;
+    request.interpretation = obj({{"version",1},{"method","trace.status"},{"params",Json::object()}});
+    reader->send(request);
+    REQUIRE(world.until([&] { return reader->control_replies(1).size() == 1; }));
+    CHECK(reader->control_replies(1)[0]->error.find("code")->as_string() == "interpret.unsupported");
+    CHECK(producer_link->controls_in.empty());
 }
