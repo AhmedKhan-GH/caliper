@@ -19,6 +19,7 @@ import torch
 DATASET_ID = "HuggingFaceFW/fineweb-edu"
 DATASET_CONFIG = "sample-10BT"
 DATASET_REVISION = "87f09149ef4734204d70ed1d046ddc9ca3f2b8f9"
+_CHECKSUM_CHUNK_BYTES = 8 * 1024 * 1024
 PARTITIONS = {
     "algorithm": "sha256-utf8-text-mod10000-v1",
     "train": [0, 9400], "quality": [9400, 9500], "index": [9500, 10000],
@@ -45,7 +46,9 @@ def document_identity(text):
 class LocalParquetDocuments:
     """Pinned local shards with no Arrow worker pool and an exact row cursor."""
 
-    def __init__(self, manifest):
+    def __init__(self, manifest, *, health=None):
+        if health is not None:
+            health()
         import pyarrow.parquet as parquet
         manifest = Path(manifest)
         data = json.loads(manifest.read_text())
@@ -59,6 +62,8 @@ class LocalParquetDocuments:
         identities = []
         root = manifest.parent.resolve()
         for entry in data["files"]:
+            if health is not None:
+                health()
             relative = Path(entry["path"])
             path = (root / relative).resolve()
             if relative.is_absolute() or not path.is_relative_to(root):
@@ -70,7 +75,12 @@ class LocalParquetDocuments:
                 raise ValueError("local Parquet size mismatch")
             digest = hashlib.sha256()
             with path.open("rb") as source:
-                for chunk in iter(lambda: source.read(8 * 1024 * 1024), b""):
+                while True:
+                    if health is not None:
+                        health()
+                    chunk = source.read(_CHECKSUM_CHUNK_BYTES)
+                    if not chunk:
+                        break
                     digest.update(chunk)
             if digest.hexdigest() != expected:
                 raise ValueError("local Parquet checksum mismatch")
@@ -81,6 +91,8 @@ class LocalParquetDocuments:
                 rows = source.metadata.num_rows
             finally:
                 source.close()
+            if health is not None:
+                health()
             self.files.append((path, rows))
             identities.append(expected)
         fingerprint = hashlib.sha256(json.dumps(identities, separators=(",", ":")).encode()).hexdigest()
@@ -127,10 +139,10 @@ class LocalParquetDocuments:
             self.shard, self.row = shard + 1, 0
 
 
-def fineweb_documents(*, cache_dir=None, local_manifest=None):
-    """Open the pinned stream. The caller controls network access through HF settings."""
+def fineweb_documents(*, cache_dir=None, local_manifest=None, health=None):
+    """Open the pinned stream. Local checksum admission calls health without arguments."""
     if local_manifest is not None:
-        return LocalParquetDocuments(local_manifest)
+        return LocalParquetDocuments(local_manifest, health=health)
     from datasets import load_dataset
     return load_dataset(DATASET_ID, DATASET_CONFIG, revision=DATASET_REVISION,
                         split="train", streaming=True, cache_dir=cache_dir)

@@ -48,7 +48,7 @@ def test_short_aggregate_window_retains_admission_floor(tmp_path, monkeypatch, r
     clock = Clock()
     args = SimpleNamespace(max_wall_seconds=150 + remaining, prior_wall_seconds=100, run_seconds=None)
     monkeypatch.setattr(training.time, "monotonic", clock)
-    training._fallback_reserve(args, progress, 0)
+    training._startup_deadline(args, progress, 0)
 
     def forward(*_):
         clock.value = remaining - 60
@@ -102,7 +102,7 @@ def test_setup_and_run_cap_cannot_spend_the_reserve(tmp_path, monkeypatch, check
     monkeypatch.setattr(training.time, "monotonic", clock)
     args = SimpleNamespace(max_wall_seconds=36000, prior_wall_seconds=100, run_seconds=reserve + 5)
     with pytest.raises(ValueError, match="reserve"):
-        training._fallback_reserve(args, progress, 0)
+        training._startup_deadline(args, progress, 0)
 
 
 def test_observed_export_cost_controls_next_invocation(tmp_path, monkeypatch):

@@ -417,15 +417,17 @@ _MODEL_FIELDS = ("model_id", "model_hash", "revision", "layers", "width", "laten
 _TEXT_FIELDS = ("dataset_id", "dataset_config", "dataset_revision", "split", "partitions", "source_id")
 
 
-def _fallback_reserve(args, progress, started):
+def _startup_deadline(args, progress, started):
+    """Reserve final writes within the aggregate and invocation time limits."""
     elapsed = progress.get("elapsed_seconds", 0)
     if type(elapsed) not in (int, float) or not math.isfinite(elapsed) or elapsed < 0:
-        raise ValueError("invalid fallback elapsed time or checkpoint reserve")
+        raise ValueError("invalid elapsed time or checkpoint reserve")
     reserve = _save_reserve(progress)
-    remaining = min(args.max_wall_seconds - args.prior_wall_seconds - elapsed,
-                    args.run_seconds or args.max_wall_seconds) - (time.monotonic() - started)
-    if remaining <= reserve:
+    deadline = started + min(args.max_wall_seconds - (args.prior_wall_seconds or 0) - elapsed,
+                             args.run_seconds or args.max_wall_seconds) - reserve
+    if time.monotonic() >= deadline:
         raise ValueError("aggregate wall time has no model-load and checkpoint reserve")
+    return deadline
 
 
 def _source_quality_state(folder, metadata, identity):
@@ -585,70 +587,67 @@ def _run(args, started, stop, resources):
     fallback = args.upper_half_from is not None
     if record is not None and bool(fallback_metadata(record["metadata"])) != fallback:
         raise ValueError("resume requires the original all-layer or upper-half mode")
+    deadline = _startup_deadline(args, record["progress"] if record else {}, started)
+    if record is not None and not fallback:
+        _validate_token_budget(record["metadata"], args.tokens, resume=True)
+        requested = {**record["metadata"], "latents": args.latents, "k": args.k}
+        validate_checkpoint(record, trainer_settings(requested, **_trainer_arguments(args)),
+                            requested, record["stream"]["source_id"])
+    memory = MemoryGuard(args.memory_gb, args.device)
+
+    def health(stage="source admission", *, force=False):
+        stop.check()
+        if time.monotonic() >= deadline:
+            raise CleanStop("wall time reserve")
+        memory.check(stage, force=force)
+        stop.check()
+        if time.monotonic() >= deadline:
+            raise CleanStop("wall time reserve")
+
+    health("start", force=True)
     stream, prepared = None, None
     if fallback:
-        _fallback_reserve(args, record["progress"] if record else {}, started)
         # Source identity is established before the model, with no token consumption.
-        stop.check()
-        stream = _training_stream(args, None, resources)
-        stop.check()
+        stream = _training_stream(args, None, resources, health=health)
+        health()
         prepared = prepare_upper_half(args, source_id=stream.source_id, record=record)
-        stop.check()
-        _fallback_reserve(args, record["progress"] if record else {}, started)
-    if args.resume:
-        prior = record["progress"]
-        remaining = min(args.max_wall_seconds - prior["elapsed_seconds"],
-                        args.run_seconds or args.max_wall_seconds) - (time.monotonic() - started)
-        if remaining <= _save_reserve(prior):
-            raise ValueError("wall time budget has no model-load and checkpoint reserve")
-        if not fallback:
-            _validate_token_budget(record["metadata"], args.tokens, resume=True)
-            requested = {**record["metadata"], "latents": args.latents, "k": args.k}
-            validate_checkpoint(record, trainer_settings(requested, **_trainer_arguments(args)),
-                                requested, record["stream"]["source_id"])
+        health()
     random.seed(args.seed)
     np.random.seed(args.seed)
     torch.manual_seed(args.seed)
-    stop.check()
-    memory = MemoryGuard(args.memory_gb, args.device)
-    memory.check("start")
-    stop.check()
+    health("before model")
     model, tokenizer = load_text_model(device=args.device, memory=memory)
-    stop.check()
+    health("after model", force=True)
     metadata = make_manifest(model, args.latents, args.k)
     if prepared is not None:
         if any(metadata[key] != prepared[key] for key in _MODEL_FIELDS):
             raise ValueError("fallback source differs from the loaded model")
         metadata = prepared
     metadata["training"]["seed"] = args.seed
-    stop.check()
+    health("before dictionary")
     trainer = Trainer(metadata, device=args.device, **_trainer_arguments(args))
-    stop.check()
+    health("after_dictionary_init", force=True)
     if fallback and not args.resume:
         trainer.initialize_upper(args.upper_half_from)
-        stop.check()
-    memory.check("after_dictionary_init")
-    stop.check()
+        health("after warm start", force=True)
     if stream is None:
-        stream = _training_stream(args, tokenizer, resources)
+        stream = _training_stream(args, tokenizer, resources, health=health)
     else:
         stream.tokenizer = tokenizer
-    stop.check()
+    health()
     trainer.metadata["training"]["source_id"] = stream.source_id
     progress = restore_checkpoint(args.output / "checkpoints", trainer, stream) if args.resume else None
     if trainer.metadata.get("fallback_source") != trainer.fallback_source:
         raise ValueError("admitted fallback source changed across resume")
-    stop.check()
-    memory.check("after_resume")
-    stop.check()
+    health("after_resume", force=True)
     result = train_online(model, trainer, stream, args.output, token_budget=args.tokens, progress=progress,
                           memory=memory, stop=stop, save_seconds=args.save_seconds,
                           max_wall_seconds=args.max_wall_seconds, run_seconds=args.run_seconds, started=started)
     return 0 if result["tokens"] == args.tokens and result["dictionary_export"] == "complete" else 2
 
 
-def _training_stream(args, tokenizer, resources):
-    source = fineweb_documents(cache_dir=args.dataset_cache, local_manifest=args.local_dataset_manifest)
+def _training_stream(args, tokenizer, resources, *, health=None):
+    source = fineweb_documents(cache_dir=args.dataset_cache, local_manifest=args.local_dataset_manifest, health=health)
     if hasattr(source, "close"):
         resources.callback(source.close)
     return resources.enter_context(TextStream(source, tokenizer, "train"))
