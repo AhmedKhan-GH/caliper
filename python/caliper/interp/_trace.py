@@ -240,12 +240,20 @@ def _prune(effects, weights, target_indices, scores, normalized, *, max_nodes, m
 
 
 class Tracer:
-    """Trace the fixture or Qwen3.5 with an eight-entry state-keyed graph cache."""
+    """Trace the fixture or Qwen3.5 with an eight-entry state-keyed graph cache.
 
-    def __init__(self, model, tokenizer, dictionary):
+    ``controls`` supplies the model's intervention owner. Standalone callers use
+    the global owner when this keyword is absent.
+    """
+
+    def __init__(self, model, tokenizer, dictionary, *, controls=None):
         if dictionary is None:
             raise ValueError("trace requires a dictionary")
+        if controls is None:
+            from .._controls import CONTROLS
+            controls = CONTROLS
         self.model, self.tokenizer, self.dictionary = model, tokenizer, dictionary
+        self.controls = controls
         self.target_batch_size = 64
         self._cache = OrderedDict()
         self._forward_cache = None
@@ -253,8 +261,7 @@ class Tracer:
         self.guard = MemoryGuard(next(model.parameters()).device)
 
     def _service(self):
-        from .._controls import CONTROLS
-        service = getattr(CONTROLS, "intervention_service", None)
+        service = getattr(self.controls, "intervention_service", None)
         return service if service is not None and service.model is self.model else None
 
     def _intervention_state(self):
@@ -268,12 +275,11 @@ class Tracer:
             return {"specifications": specifications, "rows": selected_rows(self.model),
                     "dictionary": None if bound is None else (id(bound), _versions(bound)),
                     "tokenizer": id(service.executor.tokenizer) if patch_effect else None}
-        from .._controls import CONTROLS
-        with CONTROLS.lock:
-            watched = CONTROLS._iv_model
+        with self.controls.lock:
+            watched = self.controls._iv_model
             if watched is None or watched.model is not self.model:
                 return []
-            return [dict(iv.entry(), error=iv.error, clear=iv.clear) for iv in CONTROLS._ivs.values()]
+            return [dict(iv.entry(), error=iv.error, clear=iv.clear) for iv in self.controls._ivs.values()]
 
     def _new_prompt(self, prompt):
         if prompt != self._prompt:

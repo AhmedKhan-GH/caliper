@@ -444,3 +444,51 @@ def test_nested_source_forward_preserves_outer_frozen_capture():
     assert actual.forward_residual < 1e-9
     for a, b in zip(actual.inputs + actual.outputs, baseline.inputs + baseline.outputs):
         torch.testing.assert_close(a, b, atol=0, rtol=0)
+
+
+@pytest.mark.parametrize("legacy_owner", [True, False])
+def test_trace_uses_separate_controls_owner_for_ablation(monkeypatch, legacy_owner):
+    from caliper import _controls
+    from caliper.interp import Tracer
+    from caliper.interp._trace import _versions
+    from .fixture import TinyLM, TinyTokenizer
+    if legacy_owner:
+        # M7 exposes the ablation owner without the M8 service property.
+        monkeypatch.delattr(_controls.Controls, "intervention_service", raising=False)
+    owner = _controls.Controls()
+    monkeypatch.setattr(_controls, "CONTROLS", _controls.Controls())
+    model = TinyLM(layers=1, width=8, heads=2, latents=8, k=2)
+    watched = owner.interventions_on(model)
+    tracer = Tracer(model, TinyTokenizer(), exact_dictionary(model), controls=owner)
+    forwards = []
+    handle = model.register_forward_hook(lambda *args: forwards.append(True))
+    try:
+        assert tracer.controls is owner and tracer.controls is not _controls.CONTROLS
+        initial_state = tracer._intervention_state()
+        baseline = tracer.trace("A", 0)
+        baseline_logits = tracer._forward_cache[1].logits.clone()
+        assert tracer.trace("A", 0) is baseline and len(forwards) == 1
+        versions = _versions(model)
+        with owner.lock:
+            assert owner._intervene({"set": {"point": "layers.0.mlp", "op": "ablate"}}) is None
+        owner.step()
+        state = tracer._intervention_state()
+        assert state != initial_state
+        records = state if isinstance(state, list) else state["specifications"]
+        assert len(records) == 1
+        assert records[0]["point"] == "layers.0.mlp" and records[0]["op"] == "ablate"
+        assert _versions(model) == versions
+        ablated = tracer.trace("A", 0)
+        assert ablated is not baseline and ablated.trace_id != baseline.trace_id
+        assert len(forwards) == 2
+        assert not torch.equal(tracer._forward_cache[1].logits, baseline_logits)
+        assert ablated.completeness["max_absolute_residual"] < 1e-9
+        assert tracer.trace("A", 0) is ablated and len(forwards) == 2
+        with owner.lock:
+            assert owner._intervene({"clear_all": True}) is None
+        owner.step()
+        assert tracer._intervention_state() == initial_state
+        assert tracer.trace("A", 0) is baseline and len(forwards) == 2
+    finally:
+        handle.remove()
+        watched.remove()
