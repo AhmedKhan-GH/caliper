@@ -368,13 +368,19 @@ def instrument_layout(session, *, expanded):
     # Flat control groups stay within the spec's eight-level layout limit.
     ratio = .74 if expanded else (.90 if override else .95)
     nodes = [{"id": "instrument", "split": "vertical", "ratio": ratio, "children": ["main", "methods"]},
-             {"id": "main", "split": "vertical", "ratio": .055, "children": ["prompt", "status_body"]},
-             {"id": "status_body", "split": "vertical", "ratio": .05, "children": ["clamp_status", "body"]},
+             {"id": "main", "split": "vertical", "ratio": .10225, "children": ["header", "body"]},
+             {"id": "header", "split": "vertical", "children": ["prompt", "clamp_status"]},
              {"id": "body", "split": "vertical", "ratio": .64 if expanded else .70, "children": ["plots", "examples"]},
              {"id": "plots", "split": "horizontal", "ratio": .67, "children": ["graph", "right"]},
              {"id": "right", "split": "vertical", "ratio": .55, "children": ["output", "controls"]}]
     control_ids = ["clamp", "apply_clamp", "reset", "retrace", "generate", "page", "baseline_text", "steered_text"]
-    nodes.append({"id": "controls", "split": "vertical", "children": control_ids})
+    if expanded:
+        # Two columns preserve bar-label height beside the expanded disclosures.
+        nodes.extend([{"id": "controls", "split": "horizontal", "children": ["primary_controls", "secondary_controls"]},
+                      {"id": "primary_controls", "split": "vertical", "children": control_ids[:4]},
+                      {"id": "secondary_controls", "split": "vertical", "children": control_ids[4:]}])
+    else:
+        nodes.append({"id": "controls", "split": "vertical", "children": control_ids})
     method_ids = ["method_details"]
     if expanded:
         method_ids.extend("method_" + name for name in METHOD_DISCLOSURES)
@@ -596,6 +602,11 @@ def acceptance(session, args, result):
     if not s.show:
         bridge.details(True)
         expanded_png, expanded_meta = s.capture("methods-expanded", dict(expected_steps))
+        gates, _ = capture_checks(s.out / "captures", expanded_meta, expanded_png, graph, after,
+                                  selected=selected, expanded=True)
+        for gate in gates:
+            gate["name"] = "methods-expanded." + gate["name"]
+        result["checks"].extend(gates)
         result["method_details_capture"] = expanded_png.name
         bridge.details(False)
         result["checks"].append(check("method_details_toggle", not bridge.details_expanded,

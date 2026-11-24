@@ -1164,7 +1164,8 @@ def test_instrument_uses_three_panels_and_confirmed_bindings(override):
     assert nodes["body"]["children"] == ["plots", "examples"]
     assert nodes["body"]["ratio"] == .70
     assert nodes["plots"]["ratio"] == .67
-    assert nodes["status_body"]["children"] == ["clamp_status", "body"]
+    assert nodes["main"]["children"] == ["header", "body"]
+    assert nodes["header"]["children"] == ["prompt", "clamp_status"]
     assert nodes["controls"]["children"][1:3] == ["apply_clamp", "reset"]
     graph = next(program for program in spec["program"] if program["id"] == "attribution")
     assert graph["bind"]["graph_counts"] == "live:trace.counts"
@@ -1180,6 +1181,12 @@ def test_instrument_uses_three_panels_and_confirmed_bindings(override):
     groups = {node["id"]: node for node in expanded["nodes"]}
     assert groups["instrument"]["ratio"] == .74
     assert groups["body"]["ratio"] == .64
+    assert groups["controls"]["split"] == "horizontal"
+    assert groups["primary_controls"]["children"] == ["clamp", "apply_clamp", "reset", "retrace"]
+    assert groups["secondary_controls"]["children"] == ["generate", "page", "baseline_text", "steered_text"]
+    def depth(identifier):
+        return 1 + max((depth(child) for child in groups[identifier]["children"]), default=0) if identifier in groups else 1
+    assert depth(expanded["root"]) <= 8
     assert set(groups["methods"]["children"]) == {"method_details"} | (set(readouts) - {"clamp_status"})
 
 

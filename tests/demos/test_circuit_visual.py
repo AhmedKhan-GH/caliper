@@ -81,3 +81,15 @@ def test_visual_gates_reject_invisible_output_token():
     assert not next(gate for gate in gates if gate["name"] == "output_label_count")["passed"]
     panel["labels"][0]["text"] = r"\n"
     assert all(gate["passed"] for gate in visual_checks("output", panel, ids, metadata, node_count=3))
+
+
+def test_expanded_details_keep_output_labels_required():
+    panel, ids, metadata = scene("output")
+    panel["labels"] = []
+    gates = visual_checks("output", panel, ids, metadata, node_count=3, expanded=True)
+    assert not next(gate for gate in gates if gate["name"] == "output_label_count")["passed"]
+    panel, ids, metadata = scene("graph")
+    metadata["height"] = 300
+    gates = visual_checks("graph", panel, ids, metadata, node_count=3, expanded=True)
+    assert all(gate["passed"] for gate in gates)
+    assert {"graph_panel_share", "compact_disclosures"}.isdisjoint(gate["name"] for gate in gates)

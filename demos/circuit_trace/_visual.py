@@ -14,7 +14,7 @@ def extent(mask):
     return [int(xs.min()), int(ys.min()), int(xs.max()) + 1, int(ys.max()) + 1]
 
 
-def visual_checks(name, panel, ids, metadata, *, node_count):
+def visual_checks(name, panel, ids, metadata, *, node_count, expanded=False):
     height, width = ids.shape[:2]
     pick = panel["programs"][0]["pick_id"]
     mask = ids[:, :, 0] == pick
@@ -48,8 +48,9 @@ def visual_checks(name, panel, ids, metadata, *, node_count):
         total = sum((item[2] - item[0]) * (item[3] - item[1]) for item in rectangles)
         area = float((rect[2] - rect[0]) * (rect[3] - rect[1]) / total)
         footer = float((metadata["height"] - max(item[3] for item in rectangles)) / metadata["height"])
-        gates.append(check("graph_panel_share", area >= .50, area, ">=50 percent of the three panel areas"))
-        gates.append(check("compact_disclosures", footer <= .15, footer, "footer and status bar <=15 percent of window height"))
+        if not expanded:
+            gates.append(check("graph_panel_share", area >= .50, area, ">=50 percent of the three panel areas"))
+            gates.append(check("compact_disclosures", footer <= .15, footer, "footer and status bar <=15 percent of window height"))
         visible = set(int(value) for value in np.unique(ids[:, :, 1][mask]))
         gates.append(check("graph_visible_nodes", visible == set(range(node_count)), len(visible), node_count))
     elif name == "examples":

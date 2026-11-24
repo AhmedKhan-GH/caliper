@@ -178,7 +178,7 @@ def raw_panel(folder, metadata, name):
     return panel, ids, color
 
 
-def capture_checks(folder, metadata, png, graph, bars, *, selected):
+def capture_checks(folder, metadata, png, graph, bars, *, selected, expanded=False):
     """Read renderer targets and the exact PNG pixels from one capture."""
     root = Path(folder)
     if metadata.get("error"):
@@ -238,7 +238,7 @@ def capture_checks(folder, metadata, png, graph, bars, *, selected):
     from _visual import visual_checks
     for name in ("graph", "examples", "output"):
         target, target_ids, _ = raw_panel(root, metadata, name)
-        gates.extend(visual_checks(name, target, target_ids, metadata, node_count=len(graph["nodes"])))
+        gates.extend(visual_checks(name, target, target_ids, metadata, node_count=len(graph["nodes"]), expanded=expanded))
     return gates, {"row_ids": row_ids, "height": measured, "expected_height": expected}
 
 
