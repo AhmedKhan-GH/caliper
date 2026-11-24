@@ -240,7 +240,7 @@ def test_binding_memory_refusal_preserves_prior_publications(tmp_path):
 def test_unversioned_change_during_statistics_write_refuses_cursor(tmp_path, monkeypatch, periodic):
     model, dictionary = fixture(tmp_path)
     before = publications(tmp_path)
-    save = evaluation.save_file
+    save = evaluation._save_tensors
     if periodic:
         # A deterministic clock reaches the periodic cursor path after one batch.
         ticks = iter([0, 241, 242])
@@ -250,7 +250,7 @@ def test_unversioned_change_during_statistics_write_refuses_cursor(tmp_path, mon
         save(*args, **kwargs)
         change(tmp_path, dictionary, "unversioned_alias")
 
-    monkeypatch.setattr(evaluation, "save_file", changed)
+    monkeypatch.setattr(evaluation, "_save_tensors", changed)
     with pytest.raises(ValueError, match="artifact binding"):
         evaluate(tmp_path, model, dictionary)
     assert publications(tmp_path) == before
