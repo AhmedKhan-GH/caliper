@@ -361,7 +361,6 @@ class InterventionService:
         self.tokenizer = None
         self.resource_guard = None
         self._cache = OrderedDict()
-        self._cache_inputs = {}
         self._cache_identity = None
         self.preparing_source = False
         self._hooks = weakref.WeakSet()
@@ -424,7 +423,6 @@ class InterventionService:
     def invalidate_cache(self):
         """Release patch sources after a prompt or model change."""
         self._cache.clear()
-        self._cache_inputs.clear()
         self._cache_identity = None
 
     def _prepare_dictionary_identity(self):
@@ -634,8 +632,13 @@ class InterventionService:
         for key in list(self._cache):
             if key not in required:
                 del self._cache[key]
-        prompts = {key[0] for key in self._cache}
-        self._cache_inputs = {key: value for key, value in self._cache_inputs.items() if key in prompts}
+        self._trim_source_inputs()
+
+    def _trim_source_inputs(self):
+        if self._cache_identity is not None:
+            identity, inputs = self._cache_identity
+            prompts = {key[0] for key in self._cache}
+            self._cache_identity = identity, tuple((key, value) for key, value in inputs if key in prompts)
 
     def _source_space(self, sources):
         """Admit captures within fixed bounds without eviction of an active source."""
@@ -653,23 +656,23 @@ class InterventionService:
             raise InterventionError("active patch sources exceed the bounded source cache")
         for key in evict:
             del self._cache[key]
-        prompts = {key[0] for key in self._cache}
-        self._cache_inputs = {key: value for key, value in self._cache_inputs.items() if key in prompts}
+        self._trim_source_inputs()
 
     def _source(self, spec):
         identity = self._identity()
-        if identity != self._cache_identity:
+        if self._cache_identity is None or identity != self._cache_identity[0]:
             self.invalidate_cache()
-            self._cache_identity = identity
+            self._cache_identity = identity, ()
         prompt, point = spec["source_prompt"], spec["point"]
         key = prompt, point
         inputs = self._source_inputs(spec)
         input_identity = _content_identity(inputs, self.resource_guard)
-        if self._cache_inputs.get(prompt) != input_identity:
+        input_identities = dict(self._cache_identity[1])
+        if input_identities.get(prompt) != input_identity:
             for old_key in list(self._cache):
                 if old_key[0] == prompt:
                     del self._cache[old_key]
-            self._cache_inputs.pop(prompt, None)
+            input_identities.pop(prompt, None)
         if key not in self._cache:
             from ._memory import autorelease_scope
             from ._output import internal_forward
@@ -704,7 +707,11 @@ class InterventionService:
             finally:
                 self.preparing_source = False
             self._cache.update(sources)
-            self._cache_inputs[prompt] = input_identity
+            input_identities[prompt] = input_identity
+            # Keep model and input evidence in one immutable transaction record.
+            # Control rollback already restores this record with its cached tensors.
+            self._cache_identity = identity, tuple(input_identities.items())
+            self._trim_source_inputs()
         self._cache.move_to_end(key)
         return self._cache[key]
 

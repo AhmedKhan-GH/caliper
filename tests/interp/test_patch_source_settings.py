@@ -43,10 +43,10 @@ def test_patch_refreshes_after_scalar_or_tokenizer_change(change):
         torch.testing.assert_close(actual, expected[:, :1].expand_as(actual), rtol=0, atol=0)
         torch.testing.assert_close(service._cache["source", point], expected, rtol=0, atol=0)
         assert previous.shape != expected.shape or not torch.equal(previous, expected)
-        assert service._cache_inputs
+        assert service._cache_identity[1]
     finally:
         service.close()
-    assert not service._cache_inputs and not service._cache
+    assert service._cache_identity is None and not service._cache
 
 
 def test_unchanged_tokenized_source_reuses_cached_tensor():
@@ -57,5 +57,28 @@ def test_unchanged_tokenized_source_reuses_cached_tensor():
     try:
         first = service._source(spec)
         assert service._source(spec) is first
+    finally:
+        service.close()
+
+
+def test_source_evidence_restores_with_the_control_transaction():
+    model = TinyLM(layers=1, width=8, heads=2, latents=4, k=1).eval()
+    tokenizer = MutableTokenizer()
+    service = InterventionService(model)
+    service.configure(tokenizer=tokenizer)
+    spec = {"kind": "patch", "point": "layers.0.resid_pre", "source_prompt": "source"}
+    try:
+        original = service._source(spec)
+        cache, identity = service._cache.copy(), service._cache_identity
+        tokenizer.add_bos_token = False
+        changed = service._source(spec)
+        assert changed.shape[1] == 2
+        # Restore the same pair retained by control preparation and rollback.
+        service._cache.clear()
+        service._cache.update(cache)
+        service._cache_identity = identity
+        refreshed = service._source(spec)
+        assert refreshed is not original
+        torch.testing.assert_close(refreshed, changed, rtol=0, atol=0)
     finally:
         service.close()
