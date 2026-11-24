@@ -1102,7 +1102,8 @@ TEST_CASE("net/wire: free-text parameters preserve exact byte limits") {
     std::string multibyte;
     for (unsigned i = 0; i < 2048; ++i) multibyte += "\xc3\xa9";
     REQUIRE(multibyte.size() == 4096);
-    for (const auto& value : {std::string(), std::string(1025, 'a'), std::string(4096, 'a'), multibyte}) {
+    for (const auto& value : {std::string(), std::string(1025, 'a'), std::string(4096, 'a'), multibyte,
+                             std::string("\xed\x9f\xbf\xee\x80\x80\xf4\x8f\xbf\xbf")}) {
         Control request;
         request.request_id = 1; request.op = "set"; request.name = "prompt"; request.value = value;
         std::vector<uint8_t> bytes;
@@ -1122,13 +1123,30 @@ TEST_CASE("net/wire: free-text parameters preserve exact byte limits") {
         REQUIRE(decode_bytes(bytes, &decoded).ok());
         CHECK(std::get<ControlReply>(decoded).value.as_string() == value);
     }
-    for (const auto& value : {multibyte + "a", std::string(4097, 'a'), std::string("a\0b", 3), std::string("\xc3\x28", 2)}) {
+    for (const auto& value : {multibyte + "a", std::string(4097, 'a'), std::string("a\0b", 3),
+                             std::string("\xc3\x28"), std::string("\xc0\xaf"), std::string("\x80"),
+                             std::string("\xe2\x82"), std::string("\xed\xa0\x80"), std::string("\xf4\x90\x80\x80")}) {
         Control request;
         request.request_id = 1; request.op = "set"; request.name = "prompt"; request.value = value;
-        std::vector<uint8_t> bytes;
-        REQUIRE(encode(request, &bytes));
-        Message decoded;
-        CHECK_FALSE(decode_bytes(bytes, &decoded).ok());
+        ControlReply reply;
+        reply.request_id = 1; reply.op = "set"; reply.status = "ok"; reply.value = value;
+        for (const Message& message : {Message(request), Message(reply)}) {
+            CAPTURE(message_type(message));
+            CAPTURE(value.size());
+            std::vector<uint8_t> bytes{1};
+            std::string error;
+            CHECK_FALSE(encode(message, &bytes, &error));
+            CHECK(bytes.empty());
+            CHECK(error == "invalid parameter value");
+            // Bypass outbound message validation to check the inbound rejection.
+            Json meta = Json::object();
+            meta.set("request_id", 1); meta.set("op", "set");
+            meta.set("name", "prompt"); meta.set("value", value);
+            if (std::holds_alternative<ControlReply>(message)) meta.set("status", "ok");
+            REQUIRE(encode_frame(message_type(message), meta, {}, &bytes));
+            Message decoded;
+            CHECK_FALSE(decode_bytes(bytes, &decoded).ok());
+        }
     }
     CHECK(CALIPER_NET_TEXT_MAX == 1024);
     CHECK(CALIPER_NET_NAME_MAX == 63);
@@ -1145,5 +1163,65 @@ TEST_CASE("net/wire: M8 intervention numbers preserve raw integer limits") {
             R"({"request_id":1,"op":"intervene","intervene":{"set":)" + spec + "}}");
         Message decoded;
         CHECK(decode_bytes(bytes, &decoded).ok() == item.second);
+    }
+}
+
+TEST_CASE("net/wire: outbound set values reject invalid scalars and containers") {
+    for (const Json& value : {Json(), Json(std::numeric_limits<double>::quiet_NaN()),
+                             Json(std::numeric_limits<double>::infinity()),
+                             Json(-std::numeric_limits<double>::infinity()), Json::array(), Json::object()}) {
+        CAPTURE(static_cast<int>(value.type()));
+        Control request;
+        request.request_id = 1; request.op = "set"; request.name = "value"; request.value = value;
+        std::vector<uint8_t> bytes{1};
+        std::string error;
+        CHECK_FALSE(encode(request, &bytes, &error));
+        CHECK(bytes.empty());
+        CHECK(error == "invalid parameter value");
+        for (const char* op : {"set", "run"}) {
+            CAPTURE(op);
+            ControlReply reply;
+            reply.request_id = 1; reply.op = op; reply.status = "ok"; reply.value = value;
+            bytes = {1};
+            if (value.is_null()) {
+                // A null reply value means that the optional field is absent.
+                REQUIRE(encode(reply, &bytes));
+                Message decoded;
+                const auto result = decode_bytes(bytes, &decoded);
+                REQUIRE(result.ok());
+                CHECK(std::get<ControlReply>(decoded).value.is_null());
+                CHECK_FALSE(result.frame.meta.has("value"));
+            } else {
+                error.clear();
+                CHECK_FALSE(encode(reply, &bytes, &error));
+                CHECK(bytes.empty());
+                CHECK(error == "invalid parameter value");
+                bytes = {1};
+                CHECK_FALSE(encode(reply, &bytes));
+                CHECK(bytes.empty());
+            }
+        }
+    }
+}
+
+TEST_CASE("net/wire: legacy set values retain v3.1 round trips") {
+    for (const Json& value : {Json(0), Json(-42), Json(1.25), Json(1e20),
+                             Json(std::numeric_limits<int64_t>::min()),
+                             Json(std::numeric_limits<uint64_t>::max()),
+                             Json(std::numeric_limits<double>::max()), Json(true), Json(false),
+                             Json("choice"), Json(std::string(CALIPER_NET_NAME_MAX, 'x'))}) {
+        CAPTURE(value.dump());
+        Control request;
+        request.request_id = 1; request.op = "set"; request.name = "value"; request.value = value;
+        ControlReply reply;
+        reply.request_id = 1; reply.op = "set"; reply.status = "ok"; reply.value = value;
+        std::vector<uint8_t> bytes;
+        REQUIRE(encode(request, &bytes, nullptr, 1));
+        Message decoded;
+        REQUIRE(decode_bytes(bytes, &decoded).ok());
+        CHECK(std::get<Control>(decoded).value == value);
+        REQUIRE(encode(reply, &bytes, nullptr, 1));
+        REQUIRE(decode_bytes(bytes, &decoded).ok());
+        CHECK(std::get<ControlReply>(decoded).value == value);
     }
 }

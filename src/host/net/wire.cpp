@@ -2985,6 +2985,9 @@ bool encode(const Message& m, std::vector<uint8_t>* out, std::string* err, uint1
         return false;
     };
     if (const auto* c = std::get_if<Control>(&m);
+        c && c->op == CALIPER_NET_OP_SET && !is_set_value(c->value))
+        return refuse("invalid parameter value");
+    if (const auto* c = std::get_if<Control>(&m);
         c && c->op != CALIPER_NET_OP_INTERPRET && !c->interpretation.is_null())
         return refuse("interpretation requires op interpret");
     if (const auto* c = std::get_if<Control>(&m);
@@ -2995,6 +2998,8 @@ bool encode(const Message& m, std::vector<uint8_t>* out, std::string* err, uint1
         return false;
     }
     if (const auto* r = std::get_if<ControlReply>(&m)) {
+        if (!r->value.is_null() && !is_set_value(r->value))
+            return refuse("invalid parameter value");
         if (!r->result.is_null() && (r->op != CALIPER_NET_OP_INTERPRET || r->status != CALIPER_NET_STATUS_OK))
             return refuse("result requires a successful interpretation reply");
         if (r->op == CALIPER_NET_OP_INTERPRET && r->status == CALIPER_NET_STATUS_OK && !interpretation_object(r->result))
