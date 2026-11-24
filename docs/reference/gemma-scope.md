@@ -168,7 +168,7 @@ Qwen and fixture paths retain 12 GB, and the Qwen trainer retains 24 GB.
 
 CPU model load and device transfer have separate allocation admission checks.
 Fresh current-memory measurements govern those reserves, and the process guard also enforces the historical peak.
-Gemma omits the optional retained dictionary snapshot, but identity checks still hash all tensor content, including thresholds.
+Dictionary identity covers all tensor content, including thresholds, and content checks require memory admission.
 The budget is a limit, not a measured memory result or a speed guarantee.
 
 Gemma quality requires exactly 200,000 tokens, mean FVU at most 0.30, dead fraction at most 0.15, and cross-entropy rise at most 0.5 nats.
