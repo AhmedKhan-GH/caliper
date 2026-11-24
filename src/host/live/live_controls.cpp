@@ -483,7 +483,8 @@ caliper_net::Json RunControls::interpret(const std::string& method, const Json& 
 void RunControls::on_reply(const ControlReply& r) {
     if (r.op == CALIPER_NET_OP_INTERPRET) {
         auto it = interpretations_.find(r.request_id);
-        if (it != interpretations_.end()) it->second.second = r;
+        if (it != interpretations_.end() && it->second.second.status == CALIPER_NET_STATUS_QUEUED)
+            it->second.second = r;
         return;
     }
     ++counts_.replies;

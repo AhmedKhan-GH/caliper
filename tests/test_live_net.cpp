@@ -3301,3 +3301,29 @@ TEST_CASE("live/net: every scene piece restores its source arrays and rejects ma
         CHECK_FALSE(why.empty());
     }
 }
+
+TEST_CASE("live/controls: interpretation final replies survive late queued and duplicate replies") {
+    ScriptedSource source;
+    caliper_live::RunControls controls;
+    controls.update(&source, 0);
+    for (const bool refused : {false, true}) {
+        auto result = controls.interpret("feature.dictionary", Json::object(), 0);
+        REQUIRE(result.find("request_id"));
+        const auto request = static_cast<uint32_t>(result.find("request_id")->as_double());
+        source.reply(request, refused ? "error" : "ok", Json(), refused ? "interpret.missing_dictionary" : "");
+        source.replies.back().result = Json::object();
+        source.replies.back().result.set("metadata", "fixture");
+        controls.update(&source, 1);
+        const auto final = controls.interpret("feature.dictionary", Json::object(), request).dump();
+        source.reply(request, "queued");
+        source.reply(request, refused ? "ok" : "error", Json(), "interpret.closed");
+        controls.update(&source, 2);
+        CHECK(controls.interpret("feature.dictionary", Json::object(), request).dump() == final);
+        if (refused) {
+            CHECK(controls.interpret("feature.dictionary", Json::object(), request)
+                      .find("error")->find("code")->as_string() == "interpret.missing_dictionary");
+        } else {
+            CHECK_FALSE(controls.interpret("feature.dictionary", Json::object(), request).find("pending")->as_bool());
+        }
+    }
+}

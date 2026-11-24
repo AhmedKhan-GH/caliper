@@ -167,12 +167,14 @@ class ControlsPort:
                                                  "message": "The peer did not announce interpretation."}))
             return
         try:
-            reply = self.route.on_control(link, msg.to_meta())
+            reply = self.route.on_control(link, msg.to_meta(), acknowledge=lambda meta:
+                self._send(link, _wire.encode_frame(_wire.MsgType.CONTROL_REPLY, meta)))
         except _wire.MessageError as e:
             link.queue(_wire.Error(e.code, e.message, in_reply_to=int(_wire.MsgType.CONTROL),
                                    request_id=msg.request_id))
             return
-        self._send(link, _wire.encode_frame(_wire.MsgType.CONTROL_REPLY, reply))
+        if reply is not None:
+            self._send(link, _wire.encode_frame(_wire.MsgType.CONTROL_REPLY, reply))
 
     def on_select(self, link, msg: _wire.Event) -> None:
         """A select EVENT from ``link`` (it also goes to Python's handlers)."""

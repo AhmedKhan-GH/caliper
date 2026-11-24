@@ -39,7 +39,7 @@ class InterpretationService:
         with self.lock:
             return bool(self.queue)
 
-    def submit(self, metadata, reply):
+    def submit(self, metadata, reply, *, acknowledge=None):
         """Return a status and result; send deferred results through ``reply``."""
         if not protocol.request(metadata):
             raise Refused("interpret.bad_request", "Invalid interpretation request.")
@@ -54,6 +54,10 @@ class InterpretationService:
             if method == "trace.run":
                 if self.status["state"] in ("pending", "running"):
                     raise Refused("interpret.busy", "A trace already waits for completion.")
+            # The transport queues its acknowledgment before the run can see work.
+            if acknowledge is not None:
+                acknowledge()
+            if method == "trace.run":
                 self.status = {"state": "pending", "seconds": 0., "step": None}
             self.queue.append((method, params, reply))
         return "queued", None
