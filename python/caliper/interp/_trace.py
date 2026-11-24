@@ -8,7 +8,7 @@ import json
 
 import torch
 
-from ._dictionary import weights_hash
+from ._dictionary import _state_hash, weights_hash
 from ._frozen import FrozenPath, MemoryGuard, _validate_dictionary, _validate_ablation_points
 from ._memory import autorelease_scope
 from ._graph import Graph, bounded_integer
@@ -148,6 +148,53 @@ class _DirectEffects:
 def _versions(module):
     return [(name, id(value), value._version, str(value.device), str(value.dtype))
             for name, value in list(module.named_parameters()) + list(module.named_buffers())]
+
+
+def _forward_settings(model, memory):
+    """Snapshot settings read by the fixture and Qwen text forward paths.
+
+    Keep this admission state separate from checkpoint and dictionary hashes.
+    Capture temporarily selects eager attention. The configured backend does not
+    affect the frozen path. Recorded outputs such as ``last_scale`` are not inputs.
+    """
+    fields = (
+        "training", "eps", "variance_epsilon", "frozen_scale", "frozen_pattern",
+        # Fixture attention and TopK, then Qwen full attention.
+        "num_heads", "n_heads", "n_head", "head_dim", "in_features", "k",
+        "num_key_value_groups", "scaling", "attention_dropout",
+        # Qwen block routing, DeltaNet dimensions, and both SiLU gates.
+        "block_type", "num_v_heads", "num_k_heads", "head_k_dim", "head_v_dim",
+        "key_dim", "value_dim", "conv_dim", "conv_kernel_size", "activation",
+        # Rotary factors and the embedding's optional weight normalization.
+        "rope_type", "attention_scaling", "mrope_section", "max_seq_len_cached",
+        "original_max_seq_len", "long_inv_freq", "max_norm", "norm_type",
+        "padding_idx", "scale_grad_by_freq", "sparse", "inplace",
+    )
+    config_fields = ("model_type", "num_hidden_layers", "hidden_size", "vocab_size",
+                     "layer_types", "is_causal", "rope_parameters", "max_position_embeddings",
+                     "head_dim", "num_attention_heads")
+    settings = {}
+
+    def record(name, value):
+        if isinstance(value, torch.Tensor):
+            # Fixture overrides are plain tensors. Read bytes to catch alias writes.
+            value = {"tensor": _state_hash({name: value}, memory=memory), "device": str(value.device)}
+        settings[name] = json.dumps(value, sort_keys=True, allow_nan=False)
+
+    for name, module in model.named_modules():
+        prefix = name + "." if name else ""
+        record(prefix + "type", type(module).__module__ + "." + type(module).__qualname__)
+        for field in fields:
+            if hasattr(module, field):
+                record(prefix + field, getattr(module, field))
+        if hasattr(module, "act_fn"):
+            # The Qwen MLP calls this object, not config.hidden_act.
+            record(prefix + "act_fn", id(module.act_fn))
+        config = getattr(module, "config", None)
+        for field in config_fields:
+            if hasattr(config, field):
+                record(prefix + "config." + field, getattr(config, field))
+    return settings
 
 
 def _token_path(nodes, incoming, target):
@@ -297,6 +344,19 @@ class Tracer:
         self._forward_cache = None
         self._prompt = None
         self.guard = MemoryGuard(next(model.parameters()).device)
+        self._settings = _forward_settings(model, self.guard._guard)
+
+    def _validate_forward_settings(self):
+        try:
+            current = _forward_settings(self.model, self.guard._guard)
+            if current != self._settings:
+                changed = next(name for name in sorted(current.keys() | self._settings.keys())
+                               if current.get(name) != self._settings.get(name))
+                raise ValueError(f"trace model forward setting changed after admission: {changed}")
+        except (TypeError, ValueError):
+            self._cache.clear()
+            self._forward_cache = None
+            raise
 
     def _service(self):
         service = getattr(self.controls, "intervention_service", None)
@@ -366,6 +426,7 @@ class Tracer:
                         "interventions": state}
             state_key = hashlib.sha256(json.dumps(identity, sort_keys=True, allow_nan=False).encode()).hexdigest()
             cache_key = (state_key, max_targets, max_nodes, max_edges, self.target_batch_size)
+            self._validate_forward_settings()
             if cache_key in self._cache:
                 graph = self._cache.pop(cache_key)
                 self._cache[cache_key] = graph
@@ -377,6 +438,7 @@ class Tracer:
                 self._forward_cache = None
                 path = FrozenPath(self.model, ids.to(self.guard.device), self.dictionary,
                                   guard=self.guard, interventions=specifications)
+                self._validate_forward_settings()
                 if self._intervention_state() != identity["interventions"]:
                     raise RuntimeError("intervention state changed during the trace forward")
                 self._forward_cache = (state_key, path)
@@ -453,6 +515,7 @@ class Tracer:
             if self._intervention_state() != identity["interventions"]:
                 self._forward_cache = None
                 raise RuntimeError("intervention state changed during the trace")
+            self._validate_forward_settings()
             graph.publish()
             self._cache[cache_key] = graph
             while len(self._cache) > 8:
