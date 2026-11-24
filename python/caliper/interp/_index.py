@@ -14,6 +14,7 @@ from ._dictionary import _canonical_device, _memory_limit, load_dictionary, mode
 from ._memory import (BudgetMemory, CleanStop, MemoryGuard, allocation_bytes, family_memory_limit,
                       autorelease_scope as _device_scope)
 from ._points import capture
+from ._frozen import _trace_features
 
 INDEX_VERSION = 1
 TOP_EXAMPLES = 16
@@ -259,8 +260,8 @@ def build_index(dictionary_path, documents, *, model, tokenizer, provenance,
                     check("model batch")
                     for layer, point in enumerate(data["read_points"]):
                         weights = dictionary.layers[layer].W_enc
-                        x = saved.pop(point).to(device=weights.device, dtype=weights.dtype)
-                        activations = dictionary.encode(layer, x)
+                        x = saved.pop(point).to(device=weights.device)
+                        activations = _trace_features(dictionary.layers[layer], x, check=check)
                         table.update(layer, activations, total + begin)
                         del x, activations
                         check("dictionary batch")
@@ -610,7 +611,8 @@ class FeatureIndex:
         with torch.inference_mode(), capture(self.model, [point]) as saved:
             _forward(self.model, ids, mask)
             weights = self.dictionary.layers[layer].W_enc
-            values = self.dictionary.encode(layer, saved[point].to(device=weights.device, dtype=weights.dtype))
+            values = _trace_features(self.dictionary.layers[layer], saved[point].to(device=weights.device),
+                                     guard=self.memory)
             if not torch.isfinite(values).all().item():
                 raise ValueError("index window activations must be finite")
             result = values[..., feature].cpu().tolist()

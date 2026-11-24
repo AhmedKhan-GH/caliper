@@ -550,8 +550,9 @@ def test_cli_refuses_invalid_query_before_model_load(tmp_path, monkeypatch):
 def test_nonfinite_window_refuses_cache_entry(indexed, monkeypatch):
     index, _ = indexed
     layer, feature = map(int, np.argwhere(index.counts > 0)[0])
-    encode = index.dictionary.encode
-    monkeypatch.setattr(index.dictionary, "encode", lambda layer, x: encode(layer, x) * float("nan"))
+    encoder = index.dictionary.layers[layer]
+    encode = encoder.encode
+    monkeypatch.setattr(encoder, "encode", lambda x: encode(x) * float("nan"))
     with pytest.raises(ValueError, match="finite"):
         index.examples(layer, feature)
     assert "examples" not in index._cache[layer, feature]

@@ -51,7 +51,7 @@ def test_example_chunks_preserve_order_values_cache_and_tensor_lifetime(indexed,
     readings = {"current": base, "peak": limit - 1}
     index.memory = process_guard(limit, readings)
     batches, references, active, scopes = [], [], [], []
-    forward, encode = _index._forward, index.dictionary.encode
+    forward, encode = _index._forward, _index._trace_features
 
     @contextmanager
     def scope(device):
@@ -70,14 +70,14 @@ def test_example_chunks_preserve_order_values_cache_and_tensor_lifetime(indexed,
         batches.append(len(ids))
         return forward(model, ids, mask)
 
-    def encoded(layer, values):
-        result = encode(layer, values)
+    def encoded(layer, values, **kwargs):
+        result = encode(layer, values, **kwargs)
         references.extend([weakref.ref(values), weakref.ref(result)])
         return result
 
     monkeypatch.setattr(_index, "_device_scope", scope)
     monkeypatch.setattr(_index, "_forward", observed)
-    monkeypatch.setattr(index.dictionary, "encode", encoded)
+    monkeypatch.setattr(_index, "_trace_features", encoded)
     prefix = index.examples(0, feature, limit=1)
     actual = index.examples(0, feature)
     assert batches == [3, 3, 3, 3, 3, 1] and len(scopes) == 6 and not active
