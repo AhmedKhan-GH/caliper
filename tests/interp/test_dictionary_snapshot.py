@@ -329,6 +329,7 @@ def test_cpu_snapshot_bounds_copy_and_reads_every_live_block(device_snapshot, mo
     monkeypatch.setattr(torch, "empty", allocate)
     monkeypatch.setattr(torch.Tensor, "clone", copy)
     monkeypatch.setattr(torch, "equal", compare)
+    monkeypatch.setattr(_intervene, "_cpu_byte_equal", compare)
     case.executor._prepare_dictionary_identity()
     total = sum(t.numel() * t.element_size() for t in case.dictionary.state_dict().values())
     assert sum(allocations) == total
@@ -535,3 +536,31 @@ def test_cpu_snapshot_replay_release_and_live_weights(device_snapshot, controlle
     saved = weakref.ref(next(iter(case.executor._dictionary_snapshot.state.values())))
     case.executor.close()
     assert saved() is None
+
+
+@pytest.mark.parametrize("fallback", [False, True])
+def test_cpu_byte_comparison_checks_complete_views_and_offsets(monkeypatch, fallback):
+    if fallback:
+        monkeypatch.setattr(_intervene, "_native_byte_compare", lambda: None)
+    left = torch.arange(255, dtype=torch.uint8)
+    right = left.clone()
+    assert _intervene._cpu_byte_equal(left[7:250], right[7:250])
+    assert _intervene._cpu_byte_equal(left[:0], right[:0])
+    right[249] ^= 1
+    assert not _intervene._cpu_byte_equal(left[7:250], right[7:250])
+    assert _intervene._cpu_byte_equal(left[7:249], right[7:249])
+
+
+@pytest.mark.parametrize("fault", ["dtype", "shape", "stride"])
+def test_cpu_byte_comparison_refuses_invalid_views_before_native_call(monkeypatch, fault):
+    left = torch.arange(16, dtype=torch.uint8)
+    right = left.clone()
+    if fault == "dtype":
+        left = left.float()
+    elif fault == "shape":
+        right = right[:4]
+    else:
+        left, right = left[::2], right[::2]
+    monkeypatch.setattr(_intervene, "_native_byte_compare", lambda: pytest.fail("invalid native comparison"))
+    with pytest.raises(ValueError, match="contiguous CPU byte views"):
+        _intervene._cpu_byte_equal(left, right)

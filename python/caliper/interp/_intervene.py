@@ -5,9 +5,11 @@ from collections import OrderedDict
 from contextlib import contextmanager
 from contextvars import ContextVar
 from copy import deepcopy
+from functools import lru_cache
 import hashlib
 import json
 import math
+import sys
 import threading
 import time
 import weakref
@@ -88,6 +90,32 @@ def _dictionary_digest(dictionary, content):
         identity["activations"] = activations
     encoded = json.dumps(identity, sort_keys=True, allow_nan=False, separators=(",", ":")).encode("utf-8")
     return "sha256:" + hashlib.sha256(encoded).hexdigest()
+
+
+@lru_cache(maxsize=1)
+def _native_byte_compare():
+    if sys.platform != "darwin":
+        return None
+    import ctypes
+    compare = ctypes.CDLL("/usr/lib/libSystem.B.dylib").memcmp
+    compare.argtypes = (ctypes.c_void_p, ctypes.c_void_p, ctypes.c_size_t)
+    compare.restype = ctypes.c_int
+    return compare
+
+
+def _cpu_byte_equal(left, right):
+    """Compare complete bounded CPU byte views without a tensor reduction."""
+    if (left.device.type != "cpu" or right.device.type != "cpu"
+            or left.dtype != torch.uint8 or right.dtype != torch.uint8
+            or left.shape != right.shape or not left.is_contiguous() or not right.is_contiguous()):
+        raise ValueError("snapshot comparison requires equal contiguous CPU byte views")
+    if left.numel() == 0:
+        return True
+    compare = _native_byte_compare()
+    if compare is None:
+        return torch.equal(left, right)
+    # Both tensors retain their storage until the bounded native call returns.
+    return compare(left.data_ptr(), right.data_ptr(), left.numel()) == 0
 
 
 class _DictionarySnapshot:
@@ -199,7 +227,9 @@ class _DictionarySnapshot:
                     block = current[start:stop]
                     if tensor.device != saved.device:
                         block = block.to(device="cpu")
-                    equal = torch.equal(block, original[start:stop])
+                        equal = _cpu_byte_equal(block, original[start:stop])
+                    else:
+                        equal = torch.equal(block, original[start:stop])
                     del block
                     if not equal:
                         return False
