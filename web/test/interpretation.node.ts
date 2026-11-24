@@ -209,13 +209,16 @@ test('Finite JavaScript Values Without Numeric Tokens', () => {
     [2 ** 53, '9007199254740992.0'], [-(2 ** 53), '-9007199254740992.0'],
     [1.5e16, '1.5e+16'], [1e20, '1e+20'], [-1e20, '-1e+20'],
   ] as const) {
-    assert.equal(canonicalJson(value), expected);
-    const message = { type: 'control_reply', ...reply({ value }) } as Message;
+    assert.equal(canonicalJson(value, undefined, true), expected);
+    const message = { type: 'control_reply', ...reply({ value, nested: [value, { value }] }) } as Message;
     for (const candidate of [message, structuredClone(message)]) {
       const frame = encode(candidate);
       assert.deepEqual(plain(decode(frame)), candidate);
       assert.ok(new TextDecoder().decode(frame.subarray(HEADER_BYTES)).includes(`"value":${expected}`));
     }
+    const frame = encodeFrame(MSG.control_reply, { ...reply({ value }), value });
+    assert.ok(new TextDecoder().decode(frame.subarray(HEADER_BYTES)).includes(`"result":{"value":${expected}}`));
+    assert.ok(new TextDecoder().decode(frame.subarray(HEADER_BYTES)).endsWith(`"value":${canonicalJson(value)}}`));
     const float = decode(rawFrame(MSG.control_reply, `{"request_id":1,"op":"interpret","status":"ok","result":{"value":${expected}}}`));
     assert.deepEqual(plain(decode(encode(structuredClone(float) as Message))), plain(float));
     const control: Message = { type: 'control', request_id: 2, op: 'set', name: 'activation_max', value };
@@ -347,5 +350,30 @@ test('M8 Interpretation Result Contracts', () => {
   for (const value of [NaN, Infinity, -Infinity]) {
     assert.throws(() => encode({ type: 'control_reply', ...reply({ spearman: value }) } as Message), MessageError);
     assert.throws(() => encode({ type: 'control_reply', ...reply({ recovery: [[value]] }) } as Message), MessageError);
+  }
+});
+
+test('Fresh Legacy Integer Control Endpoints', () => {
+  for (const value of [-(2 ** 53), -Number.MAX_SAFE_INTEGER, Number.MAX_SAFE_INTEGER, 2 ** 53]) {
+    const meta = {
+      actions: [],
+      params: [{ max: 2 ** 53, min: -(2 ** 53), name: 'count', pending: -value, type: 'integer', value }],
+      run: { state: 'none' },
+    };
+    const message = { type: 'controls', ...meta } as Message;
+    // These objects are fresh. No decoded numeric source can supply the tokens.
+    for (const minor of [1, 2]) {
+      for (const frame of [encode(message, minor), encodeFrame(MSG.controls, meta, [], minor)]) {
+        assert.equal(new TextDecoder().decode(frame.subarray(HEADER_BYTES)), JSON.stringify(meta));
+        assert.deepEqual(plain(decode(frame)), message);
+      }
+    }
+    for (const type of ['control', 'control_reply'] as const) {
+      const control = { type, request_id: 1, op: 'set', name: 'count', value,
+        ...(type === 'control_reply' ? { status: 'ok' } : {}) } as Message;
+      const frame = encode(control);
+      assert.match(new TextDecoder().decode(frame.subarray(HEADER_BYTES)), new RegExp(`"value":${value}\\}`));
+      assert.deepEqual(plain(decode(frame)), control);
+    }
   }
 });

@@ -166,18 +166,22 @@ function canonicalFloat(value: number): string {
   return text.includes('.') ? text : `${text}.0`;
 }
 
-/** The canonical metadata text: compact, keys sorted, no NaN. */
-export function canonicalJson(v: unknown, source?: unknown): string {
+function canonicalObject(v: Record<string, unknown>, valueText: (value: unknown, key: string) => string): string {
+  const keys = Object.keys(v).filter((k) => v[k] !== undefined).sort();
+  return `{${keys.map((k) => `${JSON.stringify(k)}:${valueText(v[k], k)}`).join(',')}}`;
+}
+
+/** Canonical JSON has sorted keys. Only interpretation data infers unsafe integers as floats. */
+export function canonicalJson(v: unknown, source?: unknown, interpretation = false): string {
   if (v === null || typeof v !== 'object') {
     if (typeof v === 'number' && !Number.isFinite(v)) throw new TypeError('NaN and the infinities are not JSON');
     const text = JSON.stringify(v);
-    return typeof v === 'number' && (/[.eE]/.test(text) || (typeof source === 'string' ? /[.eE]/.test(source) : !Number.isSafeInteger(v)))
+    return typeof v === 'number' && (/[.eE]/.test(text) || (typeof source === 'string' ? /[.eE]/.test(source) : interpretation && !Number.isSafeInteger(v)))
       ? canonicalFloat(v) : text;
   }
   source ??= numberSources.get(v);
-  if (Array.isArray(v)) return `[${v.map((x, i) => canonicalJson(x, sourceField(source, i))).join(',')}]`;
-  const keys = Object.keys(v).filter((k) => (v as Record<string, unknown>)[k] !== undefined).sort();
-  return `{${keys.map((k) => `${JSON.stringify(k)}:${canonicalJson((v as Record<string, unknown>)[k], sourceField(source, k))}`).join(',')}}`;
+  if (Array.isArray(v)) return `[${v.map((x, i) => canonicalJson(x, sourceField(source, i), interpretation)).join(',')}]`;
+  return canonicalObject(v as Record<string, unknown>, (value, key) => canonicalJson(value, sourceField(source, key), interpretation));
 }
 
 /**
@@ -195,7 +199,10 @@ function frameAt(type: number, meta: Record<string, unknown>, sections: Section[
   if (sections.length) {
     m.sections = sections.map((s) => ({ name: s.name, dtype: s.dtype, shape: s.shape, ...(s.encoding ? { encoding: s.encoding } : {}) }));
   }
-  const mbytes = utf8.encode(canonicalJson(m, numberSources.get(meta)));
+  const source = numberSources.get(meta);
+  const interpretationKey = meta.op === 'interpret'
+    ? (type === MSG.control ? 'interpretation' : type === MSG.control_reply ? 'result' : undefined) : undefined;
+  const mbytes = utf8.encode(canonicalObject(m, (value, key) => canonicalJson(value, sourceField(source, key), key === interpretationKey)));
   if (mbytes.length > LIMITS.maxMetaBytes) throw new WireError('too_big', `metadata of ${mbytes.length} bytes`, CLOSE.tooBig);
   let pos = HEADER_BYTES + 4 * sections.length + mbytes.length;
   const offsets: number[] = [];
@@ -362,7 +369,7 @@ function isInterpretationObject(v: unknown, source?: unknown): boolean {
     return entries.length <= INTERPRET_LIMITS.maxFields && entries.every(([key, x]) =>
       interpretationText(key, 63, false) && visit(x, depth + 1, sourceField(raw, key)));
   };
-  return isObj(v) && visit(v, 0, source) && utf8.encode(canonicalJson(v, source)).length <= INTERPRET_LIMITS.maxBytes;
+  return isObj(v) && visit(v, 0, source) && utf8.encode(canonicalJson(v, source, true)).length <= INTERPRET_LIMITS.maxBytes;
 }
 
 const INTERPRET_PARAMS: Record<string, readonly string[]> = {
