@@ -377,6 +377,7 @@ jobs:
             --out "$RUNNER_TEMP/draw-parity-views"
           cd web
           npm ci
+          node build.mjs
           npx playwright install chromium-headless-shell
           log="$RUNNER_TEMP/draw-parity-browser.log"
           # CTest exports the interpretation fixtures before this browser step.
@@ -413,7 +414,6 @@ jobs:
             exit 1
           fi
           cd web
-          node build.mjs
           dlog="$RUNNER_TEMP/dashboard-parity-browser.log"
           CALIPER_WASM_DIR="$RUNNER_TEMP/draw-parity-views" CALIPER_DASHBOARD_PARITY_DIR="$dash" \
           CALIPER_DRAW_PARITY_CAPTURES="$RUNNER_TEMP/draw-parity-captures" \
