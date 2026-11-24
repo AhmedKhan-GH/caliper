@@ -8,8 +8,9 @@
 // space, tab, CR and LF; numbers follow the RFC grammar exactly (no NaN,
 // Infinity, leading zeros, '+' or bare '.'); strings refuse raw control
 // characters and unknown escapes. A number without a fraction or an exponent
-// is an integer (kept exactly when it fits int64, or uint64 above that); any
-// other number is a double. Objects keep their members in order; a repeated
+// is an integer (kept exactly when it fits int64, or uint64 above that).
+// Larger integers use a double with integer-token metadata; other numbers
+// use a double. Objects keep their members in order; a repeated
 // name keeps its first position and its last value. Containers nest at most
 // `max_depth` deep (the top-level container is depth 1). These are the rules
 // of python/caliper/_wire.py (json.loads after a strict UTF-8 decode), so the
@@ -60,7 +61,10 @@ public:
     Type type() const { return type_; }
     bool is_null() const { return type_ == Type::Null; }
     bool is_bool() const { return type_ == Type::Bool; }
-    bool is_int() const { return type_ == Type::Int || type_ == Type::UInt; }   // no fraction, no exponent
+    bool is_int() const { return type_ == Type::Int || type_ == Type::UInt; }   // stored exactly
+    // Integer values and parsed tokens without a fraction or exponent, even after overflow.
+    // This metadata does not change the value, equality, or canonical encoding.
+    bool is_integer_token() const { return is_int() || integer_token_; }
     bool is_number() const { return is_int() || type_ == Type::Double; }
     bool is_string() const { return type_ == Type::String; }
     bool is_array() const { return type_ == Type::Array; }
@@ -102,9 +106,11 @@ public:
     bool operator!=(const Json& o) const { return !(*this == o); }
 
 private:
+    friend struct JsonParser;
     void set_unsigned(uint64_t v);
     Type type_ = Type::Null;
     bool b_ = false;
+    bool integer_token_ = false;
     int64_t i_ = 0;
     uint64_t u_ = 0;
     double d_ = 0.0;

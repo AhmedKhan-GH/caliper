@@ -593,7 +593,7 @@ bool interpretation_value(const Json& v, unsigned depth, size_t& count) {
     if (depth > 8 || ++count > 16384) return false;
     if (v.is_null() || v.is_bool()) return true;
     if (v.is_string()) return interpretation_text(v, CALIPER_NET_INTERPRET_STRING_MAX);
-    if (v.is_int()) return is_int53(v) && std::abs(v.as_double()) <= double(kSafeInt);
+    if (v.is_integer_token()) return is_int53(v) && std::abs(v.as_double()) <= double(kSafeInt);
     if (v.is_number()) return is_finite(v);
     if (v.is_array()) {
         if (v.size() > 512) return false;
