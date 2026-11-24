@@ -69,11 +69,22 @@ def _trace_features(layer, x, guard=None, check=_no_check):
         memory.check("dictionary encoder admission")
     latents, width = layer.W_enc.shape
     rows = max(1, _ENCODER_BLOCK_ELEMENTS // width)
+    if memory is not None:
+        positions, itemsize = math.prod(x.shape[:-1]), x.element_size()
+        output_bytes = positions * latents * itemsize
+        # Include converted weights, linear output, activation copies, and TopK indices.
+        scratch = max(min(rows, latents) * (width + 1 + positions) * itemsize,
+                      positions * latents * (4 * itemsize + 8) + latents * itemsize)
+        initial = allocation_bytes(memory)
+        if initial + output_bytes + scratch > memory.limit:
+            raise CleanStop("dictionary encoder allocation exceeds the process memory limit")
     preactivation = x.new_empty(*x.shape[:-1], latents)
     for start in range(0, latents, rows):
         with autorelease_scope(x.device):
             if memory is not None:
                 memory.check("dictionary encoder block", force=False)
+                if allocation_bytes(memory, floor=initial + output_bytes) + scratch > memory.limit:
+                    raise CleanStop("dictionary encoder allocation exceeds the process memory limit")
             check("dictionary encoder block")
             stop = min(start + rows, latents)
             preactivation[..., start:stop] = F.linear(
@@ -81,6 +92,8 @@ def _trace_features(layer, x, guard=None, check=_no_check):
                 layer.b_enc.detach()[start:stop].to(x.dtype))
             if memory is not None:
                 memory.check("dictionary encoder block complete", force=False)
+                if allocation_bytes(memory, floor=initial + output_bytes) + scratch > memory.limit:
+                    raise CleanStop("dictionary encoder allocation exceeds the process memory limit")
             check("dictionary encoder block complete")
     if callable(getattr(layer, "activate", None)):
         return layer.activate(preactivation)

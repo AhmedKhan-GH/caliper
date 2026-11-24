@@ -11,7 +11,7 @@ from .fixture import TinyLM, TinyTokenizer
 from .test_dictionary import write_fixture
 from .test_gemma_runtime import gemma_model, local_gemma
 from .test_memory_phases import process_guard
-from .test_trace import random_dictionary
+from .test_trace import qwen_for_trace, random_dictionary
 
 
 def test_public_dictionary_load_preserves_supplied_history(tmp_path):
@@ -40,8 +40,10 @@ def test_validation_refuses_wrong_device_before_prompt(monkeypatch, explicit):
                                  prompt="A", guard=guard, memory_limit_gb=12 if explicit else None)
 
 
-def test_validation_caps_implicit_family_budget_and_tracks_dynamic_lower_limit():
-    model = TinyLM(layers=2, width=8, heads=2, latents=8, k=2)
+@pytest.mark.parametrize("family", ["tiny", "qwen"])
+def test_validation_caps_implicit_family_budget_and_tracks_dynamic_lower_limit(family):
+    model = (TinyLM(layers=2, width=8, heads=2, latents=8, k=2) if family == "tiny"
+             else qwen_for_trace(layers=4))
     dictionary = random_dictionary(model, latents=8, k=2)
     readings = {"current": 1_000, "peak": 2_000}
     supplied = process_guard(28_000_000_000, readings)
@@ -119,3 +121,21 @@ def test_hosted_gemma_factory_retains_owner_guard(monkeypatch):
         return "tracer"
     monkeypatch.setattr(caliper.interp, "Tracer", tracer)
     assert service._gemma_tracer() == "tracer"
+
+
+def test_evaluation_cli_uses_one_guard_through_real_dictionary_load(tmp_path, monkeypatch):
+    import json
+    from tools.interp import eval_dictionary as command
+    from .test_training_stream import documents
+    model, _ = write_fixture(tmp_path, TinyLM(layers=2, width=8, heads=2, latents=8, k=2, dtype=torch.float32))
+    memory = process_guard(12_000_000_000, {"current": 1_000, "peak": 2_000})
+    monkeypatch.setattr(command, "MemoryGuard", lambda *a: memory)
+    monkeypatch.setattr(command, "load_text_model", lambda **kw: (model, TinyTokenizer()))
+    monkeypatch.setattr(command, "fineweb_documents", lambda **kw: documents())
+    monkeypatch.setattr(_dictionary, "MemoryGuard", lambda *a: pytest.fail("dictionary replaced the supplied guard"))
+    result = command.main(["--dictionary", str(tmp_path), "--device", "cpu", "--tokens", "4",
+                           "--context", "2", "--batch-tokens", "2", "--chunk-tokens", "1"])
+    quality = json.loads((tmp_path / "dictionary.json").read_text())["quality"]
+    assert quality["evaluated_tokens"] == 4
+    assert result == (0 if quality["status"] == "passed" else 2)
+    assert memory.limit == 12_000_000_000 and memory.peak == 2_000

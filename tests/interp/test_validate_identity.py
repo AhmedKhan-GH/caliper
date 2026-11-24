@@ -148,7 +148,7 @@ def test_snapshot_admission_falls_back_to_bounded_full_content_checks(case, monk
                             check=lambda stage, **kwargs: stages.append(stage))
     content = _intervene._content_identity
     def hashed(state, memory):
-        assert memory is guard
+        assert memory.memory is guard and memory.limit == guard.limit
         hashes.append(1)
         return content(state, memory)
     monkeypatch.setattr(_intervene, "_content_identity", hashed)
@@ -171,12 +171,13 @@ def test_snapshot_refuses_inference_tensor_alias_mutation(case):
 
 
 @pytest.mark.parametrize("device", ["mps", "cuda"])
-@pytest.mark.parametrize("location", ["model", "dictionary"])
+@pytest.mark.parametrize("location", ["model", "dictionary", "both"])
 def test_default_device_guard_precedes_prompt_setup_without_device_allocation(monkeypatch, device, location):
     # Device labels exercise admission only. No device tensor or API is used.
     cpu, accelerator = (SimpleNamespace(device=torch.device(d)) for d in ("cpu", device))
-    model = SimpleNamespace(parameters=lambda: iter([accelerator if location == "model" else cpu]))
-    dictionary = SimpleNamespace(state_dict=lambda: {"weight": accelerator if location == "dictionary" else cpu})
+    model = SimpleNamespace(config=SimpleNamespace(model_type="caliper_tiny"),
+                            parameters=lambda: iter([accelerator if location in ("model", "both") else cpu]))
+    dictionary = SimpleNamespace(state_dict=lambda: {"weight": accelerator if location in ("dictionary", "both") else cpu})
     failure = CleanStop("default admission")
     calls = []
     def guard(limit, selected):
@@ -184,18 +185,24 @@ def test_default_device_guard_precedes_prompt_setup_without_device_allocation(mo
         raise failure
     monkeypatch.setattr(_validate, "MemoryGuard", guard)
     monkeypatch.setattr(_validate, "prompt_inputs", lambda *a: pytest.fail("prompt preceded guard setup"))
-    with pytest.raises(CleanStop) as caught:
-        _validate.validate_trace(model, None, dictionary, SimpleNamespace(), None, prompt="AB")
-    assert caught.value is failure and calls == [(12, torch.device(device))]
+    if location == "both":
+        with pytest.raises(CleanStop) as caught:
+            _validate.validate_trace(model, None, dictionary, SimpleNamespace(), None, prompt="AB")
+        assert caught.value is failure and calls == [(12, torch.device(device))]
+    else:
+        with pytest.raises(ValueError, match="must share one device"):
+            _validate.validate_trace(model, None, dictionary, SimpleNamespace(), None, prompt="AB")
+        assert not calls
 
 
 def test_guard_selection_preserves_unguarded_cpu_and_matching_owner(case, monkeypatch):
     model, _, dictionary, _, service, _ = case
     monkeypatch.setattr(_validate, "MemoryGuard", lambda *a: pytest.fail("CPU gained an implicit memory guard"))
     assert _validate._validation_guard(model, dictionary, service, None) is None
-    owned = SimpleNamespace(check=lambda stage: None)
+    owned = SimpleNamespace(device=torch.device("cpu"), limit=12_000_000_000, peak=0, check=lambda stage: None)
     service.executor.resource_guard = owned
-    assert _validate._validation_guard(model, dictionary, service, None) is owned
-    explicit = SimpleNamespace(check=lambda stage: None)
-    assert _validate._validation_guard(model, dictionary, service, explicit) is explicit
+    assert _validate._validation_guard(model, dictionary, service, None).memory is owned
+    explicit = SimpleNamespace(device=torch.device("cpu"), limit=6_000_000_000, peak=0, check=lambda stage: None)
+    selected = _validate._validation_guard(model, dictionary, service, explicit)
+    assert selected.memory is explicit and selected.limit == explicit.limit
     assert _validate._validation_guard(model, dictionary_for(model), service, None) is None

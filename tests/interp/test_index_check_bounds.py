@@ -127,3 +127,24 @@ def test_encoder_keeps_dynamic_limits_and_stage_only_stop_callbacks(tmp_path, mo
     with pytest.raises(CleanStop):
         _frozen._trace_features(dictionary.layers[0], torch.ones(2, 8, dtype=torch.float64), guard, check)
     assert len(completed) == 1
+
+
+@pytest.mark.parametrize("lower_after_first", [False, True])
+def test_encoder_reserves_output_and_scratch_before_copy(tmp_path, monkeypatch, lower_after_first):
+    _, dictionary = mixed_resources(tmp_path)
+    memory, state = counted_guard()
+    state.peak = state.current
+    monkeypatch.setattr(_frozen, "_ENCODER_BLOCK_ELEMENTS", 8)
+    # Two rows and sixteen features require more than this spare budget.
+    limit = state.current + 1_000
+    if not lower_after_first:
+        memory.limit = limit
+        monkeypatch.setattr(torch.Tensor, "new_empty", lambda *a, **k: pytest.fail("output preceded admission"))
+    completed = []
+    def check(stage):
+        if stage == "dictionary encoder block complete":
+            completed.append(stage)
+            memory.limit = limit
+    with pytest.raises(CleanStop, match="encoder allocation"):
+        _frozen._trace_features(dictionary.layers[0], torch.ones(2, 8, dtype=torch.float64), memory, check)
+    assert len(completed) == int(lower_after_first)
