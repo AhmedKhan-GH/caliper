@@ -281,6 +281,23 @@ def test_external_snapshot_verification_and_subsequent_change(tmp_path, memory, 
         dictionary.model_identity(model)
 
 
+def test_external_settings_reference_has_no_tensor_storage(tmp_path, memory, monkeypatch):
+    model = hf_model()
+    snapshot = local_snapshot(tmp_path, model)
+    initialize = FixtureHFModel.__init__
+    devices = []
+
+    def reference(instance, config):
+        initialize(instance, config)
+        devices.extend(value.device.type for value in list(instance.parameters()) + list(instance.buffers()))
+
+    monkeypatch.setattr(FixtureHFModel, "__init__", reference)
+    rng = torch.get_rng_state()
+    assert dictionary.verify_hf_model(model, snapshot).startswith("hf:")
+    assert devices and set(devices) == {"meta"}
+    assert torch.equal(torch.get_rng_state(), rng)
+
+
 class FixtureTextModel(torch.nn.Module):
     def __init__(self, config):
         super().__init__()
