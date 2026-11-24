@@ -17,7 +17,7 @@ classifiers = [
 torch = ["torch"]
 test = ["pytest", "torch"]
 notebook = ["anywidget"]
-interp = ["torch>=2.15.0", "safetensors", "transformers==5.24.0"]
+interp = ["torch>=2.15.0", "safetensors", "transformers==5.24.0", "psutil", "datasets"]
 
 [tool.scikit-build]
 minimum-version = "0.10"
