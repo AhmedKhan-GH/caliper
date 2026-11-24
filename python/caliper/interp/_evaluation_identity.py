@@ -11,7 +11,7 @@ from safetensors import safe_open
 
 from ._dictionary import _canonical_device, _checkpoint_slices, _dense_state, _hf_digest, _state_hash, weight_names
 from ._forward_identity import forward_settings
-from ._memory import CleanStop, autorelease_scope
+from ._memory import CleanStop, allocation_bytes, autorelease_scope
 from ._trace import _forward_settings
 
 
@@ -27,7 +27,7 @@ def _admit_dictionary_tensor(tensor, memory):
             raise ValueError("evaluation tensor and memory guard devices differ")
     if memory:
         memory.check("evaluation_binding", force=False)
-        if memory.peak + 4 * _CHUNK_BYTES > memory.limit:
+        if allocation_bytes(memory) + 4 * _CHUNK_BYTES > memory.limit:
             raise CleanStop("evaluation binding exceeds the process memory limit")
 
 

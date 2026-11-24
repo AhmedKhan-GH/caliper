@@ -31,6 +31,23 @@ def evaluate(folder, model, dictionary, **kwargs):
                                folder, tokens=8, context=4, batch_tokens=4, chunk_tokens=2, **kwargs)
 
 
+def test_live_evidence_reserve_uses_current_memory_and_retains_peak_limit(tmp_path, monkeypatch):
+    from caliper.interp._memory import MemoryGuard
+    _, dictionary = fixture(tmp_path)
+    sample = {"current": 100, "peak": 9_999_999}
+    memory = MemoryGuard(.01, "cpu", resident=lambda: sample["current"],
+                         footprint=lambda: sample["current"], peak=lambda: sample["peak"],
+                         pressure=lambda: 80, driver=lambda: 0, interval=0)
+    assert identity_module.evaluation_dictionary_evidence(dictionary, memory=memory)
+    monkeypatch.setattr(torch.Tensor, "to", lambda *a, **kw: pytest.fail("readback preceded admission"))
+    sample["current"] = 9_999_999
+    with pytest.raises(CleanStop, match="evaluation binding exceeds"):
+        identity_module.evaluation_dictionary_evidence(dictionary, memory=memory)
+    sample.update(current=100, peak=10_000_001)
+    with pytest.raises(CleanStop, match="memory limit"):
+        identity_module.evaluation_dictionary_evidence(dictionary, memory=memory)
+
+
 def publications(folder):
     paths = [folder / "dictionary.json", folder / "evaluation" / "state.json"]
     return [path.read_bytes() if path.exists() else None for path in paths]
