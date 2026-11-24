@@ -245,6 +245,8 @@ def test_digest_chunks_and_admission(memory, monkeypatch):
     assert len(transfers) == 3
     assert max(transfers) <= dictionary._HASH_CHUNK_BYTES
     memory.peak = memory.limit - 1
+    dictionary.weights_hash(model, memory=memory)
+    memory.footprint = lambda: memory.limit - 1
     transfers.clear()
     with pytest.raises(CleanStop, match="identity allocation"):
         dictionary.weights_hash(model, memory=memory)
@@ -451,6 +453,8 @@ def test_verified_digest_honors_lower_load_limit(memory, monkeypatch):
     model = hf_model()
     dictionary._record_verified_hf_load(model, memory=memory)
     memory.peak = 6_000_000_000
+    dictionary.model_identity(model, memory_limit_gb=6)
+    memory.footprint = lambda: 6_000_000_000
     monkeypatch.setattr(torch.Tensor, "to", lambda *_a, **_k: pytest.fail("weight transfer ran"))
     with pytest.raises(CleanStop, match="identity allocation"):
         dictionary.model_identity(model, memory_limit_gb=6)
