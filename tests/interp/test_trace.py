@@ -69,13 +69,27 @@ def test_graph_fixed_shapes_padding_and_paging():
 
 def exact_dictionary(model):
     from caliper.interp._dictionary import Dictionary, TopKTranscoder
-    return Dictionary({}, [TopKTranscoder(**{name: getattr(block.mlp, name).detach().clone()
-                                            for name in ("W_enc", "b_enc", "W_dec", "b_dec")},
-                                         k=block.mlp.k) for block in model.layers])
+    from .test_dictionary import fixture_manifest
+    layers = [TopKTranscoder(**{name: getattr(block.mlp, name).detach().clone()
+                               for name in ("W_enc", "b_enc", "W_dec", "b_dec")},
+                            k=block.mlp.k) for block in model.layers]
+    return Dictionary(fixture_manifest(model), layers)
+
+
+def qwen_for_trace(layers=4):
+    from caliper.interp._dictionary import weights_hash
+    from .test_points import qwen
+    model = qwen(layers=layers)
+    # Synthetic checkpoint metadata identifies these random CPU test weights.
+    model.config._name_or_path = "caliper-test/random-qwen"
+    model.config._commit_hash = weights_hash(model).split(":", 1)[1][:40]
+    return model
 
 
 def random_dictionary(model, *, latents=12, k=3):
-    from caliper.interp._dictionary import Dictionary, TopKTranscoder
+    from caliper.interp._dictionary import Dictionary, TopKTranscoder, model_identity
+    from caliper.interp._points import semantic_points
+    from .test_dictionary import fixture_manifest
     width = model.config.hidden_size
     with torch.random.fork_rng(devices=[]):
         torch.manual_seed(29)
@@ -84,7 +98,100 @@ def random_dictionary(model, *, latents=12, k=3):
                                 W_dec=torch.randn(latents, width) * .03,
                                 b_dec=torch.randn(width) * .01, k=k)
                   for _ in range(model.config.num_hidden_layers)]
-    return Dictionary({}, layers).to(dtype=next(model.parameters()).dtype)
+    if model.config.model_type == "caliper_tiny":
+        metadata = fixture_manifest(model)
+    else:
+        metadata = {"format_version": 1, "model_id": model.config._name_or_path,
+                    "model_hash": model_identity(model), "revision": model.config._commit_hash,
+                    "layers": model.config.num_hidden_layers, "width": width,
+                    "activation": "topk",
+                    "training": {"dataset_id": "fixture", "dataset_config": "random-inputs",
+                                 "dataset_revision": "seed-29", "split": "train", "partitions": {},
+                                 "tokens": 0, "elapsed_seconds": 0, "peak_memory_bytes": 0},
+                    "quality": {"fvu": None, "dead_fraction": None, "cross_entropy_delta": None,
+                                "evaluated_tokens": 0}}
+    probes = semantic_points(model)
+    metadata.update(latents=latents, k=k,
+                    read_points=[p["point"] for p in probes if p["probe"] == "mlp_in"],
+                    write_points=[p["point"] for p in probes if p["probe"] == "mlp_out"])
+    return Dictionary(metadata, layers).to(dtype=next(model.parameters()).dtype)
+
+
+@pytest.mark.parametrize("expected_hash_only", [False, True])
+@pytest.mark.parametrize("family", ["fixture", "qwen"])
+def test_trace_rejects_loaded_dictionary_for_other_model(tmp_path, monkeypatch, expected_hash_only, family):
+    from safetensors.torch import save_file
+    from caliper.interp import Tracer, load_dictionary
+    from caliper.interp._frozen import FrozenPath
+    from .fixture import TinyLM, TinyTokenizer
+    if family == "fixture":
+        options = dict(layers=1, width=8, heads=2, latents=8, k=2)
+        model, other = TinyLM(**options), TinyLM(seed=11, **options)
+        source = exact_dictionary(model)
+    else:
+        model, other = qwen_for_trace(layers=1), qwen_for_trace(layers=1)
+        other.config._commit_hash = "f" * 40
+        source = random_dictionary(model, latents=8, k=2)
+    (tmp_path / "dictionary.json").write_text(json.dumps(source.metadata), encoding="utf-8")
+    save_file(source.layers[0].state_dict(), tmp_path / "layer_00.safetensors")
+    identity = {"model_hash": source.metadata["model_hash"]} if expected_hash_only else {"model": model}
+    dictionary = load_dictionary(tmp_path, **identity)
+    assert Tracer(model, TinyTokenizer(), dictionary).dictionary is dictionary
+    assert [(name, tuple(p.shape)) for name, p in model.named_parameters()] == [
+        (name, tuple(p.shape)) for name, p in other.named_parameters()]
+    def forbidden(*args, **kwargs):
+        raise AssertionError("identity refusal must precede the model forward")
+    monkeypatch.setattr(other, "forward", forbidden)
+    with pytest.raises(ValueError, match="dictionary model identity mismatch"):
+        Tracer(other, TinyTokenizer(), dictionary)
+    with pytest.raises(ValueError, match="dictionary model identity mismatch"):
+        FrozenPath(other, torch.tensor([[1, 2]]), dictionary)
+    assert not any(m._forward_hooks or m._forward_pre_hooks for m in other.modules())
+
+
+@pytest.mark.parametrize("field,value,message", [
+    ("model_hash", None, "identity mismatch"),
+    ("read_points", ["other.0.mlp_in"], "read_points differ from model probes"),
+    ("write_points", ["other.0.mlp_out"], "write_points differ from model probes"),
+    ("width", 9, "dimensions differ"),
+    ("latents", 9, "shape differs"),
+    ("k", 1, "TopK differs"),
+])
+def test_trace_rejects_incompatible_dictionary_metadata(monkeypatch, field, value, message):
+    from caliper.interp import Tracer
+    from caliper.interp._frozen import FrozenPath
+    from .fixture import TinyLM, TinyTokenizer
+    model = TinyLM(layers=1, width=8, heads=2, latents=8, k=2)
+    dictionary = exact_dictionary(model)
+    dictionary.metadata[field] = value
+    def forbidden(*args, **kwargs):
+        raise AssertionError("compatibility refusal must precede the model forward")
+    monkeypatch.setattr(model, "forward", forbidden)
+    with pytest.raises(ValueError, match=message):
+        Tracer(model, TinyTokenizer(), dictionary)
+    with pytest.raises(ValueError, match=message):
+        FrozenPath(model, torch.tensor([[1, 2]]), dictionary)
+    assert not any(m._forward_hooks or m._forward_pre_hooks for m in model.modules())
+
+
+@pytest.mark.parametrize("changed_resource", ["model", "dictionary"])
+def test_trace_rechecks_compatibility_before_cache_use(monkeypatch, changed_resource):
+    from caliper.interp import Tracer
+    from .fixture import TinyLM, TinyTokenizer
+    options = dict(layers=1, width=8, heads=2, latents=8, k=2)
+    model = TinyLM(**options)
+    dictionary = exact_dictionary(model)
+    tracer = Tracer(model, TinyTokenizer(), dictionary)
+    tracer.trace("A", 0)
+    if changed_resource == "model":
+        tracer.model = TinyLM(seed=11, **options)
+    else:
+        dictionary.metadata.clear()
+    def forbidden(*args, **kwargs):
+        raise AssertionError("changed identity must fail before another model forward")
+    monkeypatch.setattr(tracer.model, "forward", forbidden)
+    with pytest.raises(ValueError, match="identity mismatch"):
+        tracer.trace("A", 0)
 
 
 def test_fixture_frozen_forward_linearity_and_zero_errors():
@@ -108,8 +215,7 @@ def test_fixture_frozen_forward_linearity_and_zero_errors():
 
 def test_real_qwen_modules_forward_and_linearity():
     from caliper.interp._frozen import FrozenPath
-    from .test_points import qwen
-    model = qwen()
+    model = qwen_for_trace()
     # Cover nonzero full-attention biases with actual primary module code.
     full = model.model.layers[3].self_attn
     for projection in (full.v_proj, full.o_proj):
@@ -241,13 +347,12 @@ def test_imperfect_dictionary_and_explicit_bias_accounting():
 
 def test_small_real_qwen_trace_with_all_twenty_four_blocks():
     from caliper.interp import Tracer
-    from .test_points import qwen
     class Tokenizer:
         def __call__(self, text, **kwargs):
             return {"input_ids": torch.tensor([[1, 2, 3]])}
         def decode(self, ids):
             return str(ids[0])
-    model = qwen(layers=24)
+    model = qwen_for_trace(layers=24)
     assert sum(b.block_type == "linear_attention" for b in model.model.layers) == 18
     dictionary = random_dictionary(model, latents=8, k=2)
     graph = Tracer(model, Tokenizer(), dictionary).trace("small real architecture", max_targets=16)
@@ -334,6 +439,10 @@ def test_trace_cache_identity_full_state_and_lru(monkeypatch):
     assert tracer.trace("A", 0) is initial and tracer._forward_cache is None
     with torch.no_grad():
         model.lm_head.weight[0, 0] += .1
+    with pytest.raises(ValueError, match="identity mismatch"):
+        tracer.trace("A", 0)
+    # A new dictionary must establish identity for the changed fixture weights.
+    dictionary = tracer.dictionary = exact_dictionary(model)
     model_changed = tracer.trace("A", 0)
     assert model_changed is not initial
     with torch.no_grad():
@@ -350,8 +459,7 @@ def test_trace_cache_identity_full_state_and_lru(monkeypatch):
 def test_full_replacement_keeps_active_masks_and_constant_errors(real_qwen):
     from caliper.interp._frozen import FrozenPath
     from .fixture import TinyLM
-    from .test_points import qwen
-    model = qwen() if real_qwen else TinyLM(layers=2)
+    model = qwen_for_trace() if real_qwen else TinyLM(layers=2)
     dictionary = random_dictionary(model)
     path = FrozenPath(model, torch.tensor([[1, 2, 3]]), dictionary)
     x = path.embedding

@@ -8,7 +8,7 @@ import json
 
 import torch
 
-from ._frozen import FrozenPath, MemoryGuard
+from ._frozen import FrozenPath, MemoryGuard, _validate_dictionary
 from ._memory import autorelease_scope
 from ._graph import Graph, bounded_integer
 from ._influence import influence
@@ -249,6 +249,7 @@ class Tracer:
     def __init__(self, model, tokenizer, dictionary, *, controls=None):
         if dictionary is None:
             raise ValueError("trace requires a dictionary")
+        _validate_dictionary(model, dictionary)
         if controls is None:
             from .._controls import CONTROLS
             controls = CONTROLS
@@ -295,6 +296,7 @@ class Tracer:
         with autorelease_scope(next(self.model.parameters()).device):
             if self.model.training:
                 raise ValueError("trace requires an evaluation model")
+            _validate_dictionary(self.model, self.dictionary)
             device = next(self.model.parameters()).device
             if device != self.guard.device:
                 self.guard = MemoryGuard(device)
