@@ -486,5 +486,15 @@ def test_m8_live_service_cache_clamp_and_nested_patch(monkeypatch):
         assert tracer.trace("AB", 16) is patched
         # A cache hit for a new external prompt still releases the clean-source cache.
         assert not service.executor._cache
+        # A rebound intervention dictionary changes the same clamp specification's effect.
+        other_dictionary = exact_dictionary(model)
+        other_dictionary.metadata = fixture_manifest(model)
+        with torch.no_grad():
+            other_dictionary.layers[0].W_dec[0].mul_(2)
+        service.configure(dictionary=other_dictionary, tokenizer=tokenizer)
+        service.set({"kind": "clamp", "point": "layers.0.mlp_out", "feature": 0, "value": 1.})
+        controls.step()
+        rebound = tracer.trace("AB", 16)
+        assert rebound is not clamped and rebound.completeness["max_absolute_residual"] < 1e-9
     finally:
         service.remove()
