@@ -585,8 +585,11 @@ ChildSpec run_spec(const ModelRunner::Options& o, const std::string& python, con
     ChildSpec spec;
     spec.program = python;
     if (r.kind == "inference") {
-        spec.args = {"-m", "caliper.interp._hosted", "--model=" + r.model,
-                     "--dictionary=" + r.dictionary, "--prompt=" + r.prompt};
+        // Use installed packages, including editable installs, without lookup
+        // through the workspace or Python environment overrides. Keep the
+        // selected interpreter and its normal site packages.
+        spec.args = {"-E", "-P", "-u", "-m", "caliper.interp._entry", "--model=" + r.model,
+                     "--dictionary=" + r.dictionary};
     } else {
         spec.args.push_back(r.script_path);
         spec.args.insert(spec.args.end(), r.entry.args.begin(), r.entry.args.end());
@@ -597,6 +600,9 @@ ChildSpec run_spec(const ModelRunner::Options& o, const std::string& python, con
     spec.env.emplace_back("CALIPER_RUN_DIR", r.dir);
     spec.env.emplace_back("CALIPER_RUN_LINK_FILE", r.link_file);
     spec.env.emplace_back("CALIPER_RUN_APP_PID", std::to_string(current_process_id()));
+    // The private run environment already carries parameters and interventions.
+    // Keep the initial prompt separate from fork parameter overrides and argv.
+    if (r.kind == "inference") spec.env.emplace_back("CALIPER_RUN_PROMPT", r.prompt);
     if (!r.entry.params.empty()) spec.env.emplace_back("CALIPER_RUN_PARAMS", r.entry.params.dump());
     if (!r.interventions.empty()) spec.env.emplace_back("CALIPER_RUN_INTERVENTIONS", r.interventions);
     spec.env.insert(spec.env.end(), extra.begin(), extra.end());

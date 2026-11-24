@@ -49,7 +49,8 @@ using nlohmann::json;
 namespace {
 
 std::string fresh_dir(const std::string& name) {
-    const fs::path p = fs::path(CALIPER_RUNNER_TEST_TMP) / name;
+    const char* root = std::getenv("CALIPER_RUNNER_TEST_TMP");
+    const fs::path p = fs::path(root && *root ? root : CALIPER_RUNNER_TEST_TMP) / name;
     std::error_code ec;
     fs::remove_all(p, ec);
     fs::create_directories(p);
@@ -962,4 +963,87 @@ threading.Event().wait()
     CHECK(success.result.at("result").at("state") == "idle");
     auto refused = control->interpret(requests[1].first, json::object(), requests[1].second);
     CHECK(refused.error.code == "interpret.missing_dictionary");
+}
+
+TEST_CASE("runner: native inference keeps prompts out of arguments and excludes shadow packages") {
+    Workspace w("inference-entry");
+    if (const char* python = std::getenv("CALIPER_INTERPRET_PYTHON")) w.python = python;
+    REQUIRE(!w.python.empty());
+    std::string installation;
+    SUBCASE("installed package") { installation = "installed"; }
+    SUBCASE("editable package") { installation = "editable"; }
+    cr::ChildSpec setup;
+    setup.program = w.python;
+    setup.args = {(fs::path(CALIPER_RUNNER_STAND_IN).parent_path() / "inference_probe.py").u8string(),
+                  w.ws, CALIPER_RUNNER_PYTHONPATH, installation};
+    setup.env = cr::current_environment();
+    setup.output = w.ws + "/setup.log";
+    std::string error;
+    auto child = cr::start_child(setup, &error);
+    REQUIRE_MESSAGE(child, error);
+    struct ChildGuard {
+        cr::ChildProcess& child;
+        ~ChildGuard() { child.kill(); std::int64_t code = 0; child.wait(2000, &code); }
+    } child_guard{*child};
+    std::int64_t code = 0;
+    REQUIRE(child->wait(15000, &code));
+    REQUIRE_MESSAGE(code == 0, read_file(setup.output));
+
+    struct Environment {
+        std::vector<std::pair<std::string, std::optional<std::string>>> values;
+        void set(const std::string& name, const std::string& value) {
+            const char* old = std::getenv(name.c_str());
+            values.emplace_back(name, old ? std::optional<std::string>(old) : std::nullopt);
+            setenv(name.c_str(), value.c_str(), 1);
+        }
+        ~Environment() {
+            for (const auto& [name, value] : values) {
+                if (value) setenv(name.c_str(), value->c_str(), 1);
+                else unsetenv(name.c_str());
+            }
+        }
+    } environment;
+    environment.set("PYTHONPATH", w.ws + "/shadow-path");
+    environment.set("CALIPER_RUN_PROMPT", "stale inherited prompt");
+    environment.set("CALIPER_RUN_PYTHON", "");
+    cr::ModelRunner::Options options;
+    options.workspace = w.ws;   // Exercise normal workspace interpreter selection.
+    cr::ModelRunner runner(options);
+    struct Guard { cr::ModelRunner& runner; ~Guard() { runner.shutdown(); } } guard{runner};
+    cb::RunStartRequest request;
+    request.kind = "inference";
+    request.id = "inference-probe";
+    request.model = "fixture model";
+    request.dictionary = "fixture dictionary";
+    request.prompt = u8"native prompt marker: 'quotes' \"double\" $value $(literal)\n\u03bb";
+    request.params = json{{"prompt", "parameter override"}};
+    cb::RunEntry entry;
+    REQUIRE(!runner.start(request, &entry));
+    REQUIRE(runner.wait_for(state_is(entry.id, "exited"), 15000));
+    const auto observed = json::parse(read_file(w.ws + "/runs/" + entry.id + "/output.log"));
+    CHECK(observed.at("prompt") == request.prompt);
+    CHECK(observed.at("model") == request.model);
+    CHECK(observed.at("dictionary") == request.dictionary);
+    CHECK(observed.at("params") == request.params);
+    CHECK(observed.at("prompt_removed") == true);
+    CHECK(observed.at("executable") == w.ws + "/.venv/bin/python");
+    const auto arguments = observed.at("original_argv").get<std::vector<std::string>>();
+    CHECK(arguments == std::vector<std::string>{w.ws + "/.venv/bin/python", "-E", "-P", "-u", "-m",
+          "caliper.interp._entry", "--model=" + request.model, "--dictionary=" + request.dictionary});
+    for (const char* key : {"original_argv", "argv"}) {
+        CHECK(observed.at(key).dump().find("native prompt marker") == std::string::npos);
+        CHECK(observed.at(key).dump().find("--prompt") == std::string::npos);
+    }
+    CHECK(runner.running_pids().empty());
+
+    auto script = w.start({"ordinary script argument"}, json::object(), "script-probe");
+    script.script = "script_probe.py";
+    script.script_path = w.ws + "/script_probe.py";
+    REQUIRE(!runner.start(script, &entry));
+    REQUIRE(runner.wait_for(state_is(entry.id, "exited"), 15000));
+    const auto ordinary = json::parse(read_file(w.ws + "/runs/" + entry.id + "/output.log"));
+    CHECK(ordinary.at("argv") == script.args);
+    CHECK(ordinary.at("value") == "script path retained");
+    CHECK(ordinary.at("prompt_removed") == true);
+    CHECK(runner.running_pids().empty());
 }
