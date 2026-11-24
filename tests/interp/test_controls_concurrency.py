@@ -449,3 +449,22 @@ def test_cancelled_boundary_does_not_report_or_reset_linger(controlled, monkeypa
         ctl.step()
     assert not service.specifications() and old.removed
     assert ctl.counters["interventions_lingered"] == 1
+
+
+def test_request_during_shape_refresh_retains_admitted_point_metadata(controlled, monkeypatch):
+    model, tokenizer, ctl, service = controlled
+    model(**tokenizer("ABC"))
+    original = service.adapter.points
+    expected = list(original(model))
+    assert any(point["shape"] is not None for point in expected)
+
+    def points(model):
+        service.set(add_spec(from_step=100))
+        return original(model)
+
+    monkeypatch.setattr(service.adapter, "points", points)
+    ctl.step()
+    assert service.points == expected
+    assert service.specifications() == []
+    assert service.specifications(active_only=False)[0]["from_step"] == 100
+    assert service._shapes_off is None

@@ -2154,6 +2154,7 @@ class Controls:
             cache, identity = m.executor._cache.copy(), m.executor._cache_identity
             committed = False
             reports = []
+            points_changed = False
             try:
                 if m._shapes_off is not None and self.state != RUN_NONE:
                     shapes_off, m._shapes_off = m._shapes_off, None
@@ -2161,9 +2162,12 @@ class Controls:
                         with self._outside_lock():
                             shapes_off()
                             points = list(m.adapter.points(m.model))[:MAX_POINTS_LISTED]
-                        m._check_revision(revision)
-                        self._check_metadata_budget(points=points)
-                        m.points = points
+                        # Shapes describe the model, independent of queued effects.
+                        # Admit them against the latest metadata even if requests changed.
+                        if self._iv_model is m:
+                            self._check_metadata_budget(points=points)
+                            m.points = points
+                            points_changed = True
                     except ValueError as error:
                         warnings.warn(f"caliper: point metadata update refused: {error}",
                                       RuntimeWarning, stacklevel=2)
@@ -2174,7 +2178,7 @@ class Controls:
                     prepared, reports = self._prepare_interventions(m, records, originals, step)
                     changed = prepared or changed
                 if self._iv_model is not m or self._iv_revision != revision:
-                    return False
+                    return points_changed
                 self._check_metadata_budget(ivs=records)
                 for key, iv in originals.items():
                     if key not in records:
