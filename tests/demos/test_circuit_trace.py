@@ -169,6 +169,114 @@ def test_publication_wait_rejects_a_stale_step():
     session.ready_programs.assert_called_once_with(["probabilities"])
 
 
+@pytest.mark.parametrize("platform,text,expected", [
+    ("darwin", "4863754240 maximum resident set size\n12412946880 peak memory footprint\n", 12412946880),
+    ("linux", "Maximum resident set size (kbytes): 12345\n", 12641280),
+])
+def test_process_high_water_uses_platform_measurement(tmp_path, platform, text, expected):
+    (tmp_path / "run-memory.txt").write_text(text)
+    assert driver.memory_bytes(tmp_path, platform=platform) == expected
+
+
+def test_macos_footprint_refuses_rss_fallback(tmp_path):
+    (tmp_path / "run-memory.txt").write_text("4863754240 maximum resident set size\n")
+    with pytest.raises(Failure, match="No peak memory footprint"):
+        driver.memory_bytes(tmp_path, platform="darwin")
+
+
+def stdio_child(tmp_path, *, refuse=False):
+    """Create a bounded standard-library transport child, with no Caliper import."""
+    path = tmp_path / "stdio-child"
+    path.write_text(f"#!{sys.executable}\n" + "\n".join([
+        "import json, os, pathlib, sys",
+        "pathlib.Path(sys.argv[-1]).with_suffix('.pid').write_text(str(os.getpid()))",
+        "for line in sys.stdin:",
+        "    request = json.loads(line)",
+        f"    reply = {{'id': request['id'], {'error' if refuse else 'result'!r}: {{}}}}",
+        "    print(json.dumps(reply), flush=True)",
+    ]) + "\n")
+    path.chmod(0o700)
+    return path
+
+
+def test_mcp_startup_failure_reaps_owned_standard_library_child(tmp_path):
+    from _mcp import MCP
+    import psutil
+    path = stdio_child(tmp_path, refuse=True)
+    with pytest.raises(Failure, match="server/discover"):
+        MCP(path, tmp_path / "api.json", tmp_path, os.environ.copy())
+    pid = int((tmp_path / "api.pid").read_text())
+    assert not psutil.pid_exists(pid)
+
+
+def test_mcp_close_failure_still_reaps_child_and_closes_other_files(tmp_path):
+    from _mcp import MCP
+    from unittest.mock import patch
+    client = MCP(stdio_child(tmp_path), tmp_path / "api.json", tmp_path, os.environ.copy())
+    original = client.process.stdin
+    class FailedClose:
+        def close(self):
+            raise OSError("injected input close failure")
+    try:
+        with patch.object(client.process, "stdin", FailedClose()):
+            with pytest.raises(Failure, match="injected input close failure"):
+                client.close()
+        assert client.process.poll() is not None
+        assert all(f.closed for f in (client.log, client.journal, client.event_journal, client.process.stdout))
+    finally:
+        original.close()
+        if client.process.poll() is None:
+            driver.stop(client.process)
+
+
+def test_session_event_and_mcp_close_faults_preserve_app_cleanup(tmp_path):
+    from types import SimpleNamespace
+    from unittest.mock import Mock, patch
+    import psutil
+    app = subprocess.Popen([sys.executable, "-c", "import sys; sys.stdin.buffer.read()"], stdin=subprocess.PIPE)
+    session = driver.Session.__new__(driver.Session)
+    session.out, session.app, session.app_process = tmp_path, app, None
+    session.app_owner = psutil.Process(app.pid)
+    session.app_process = session.app_owner
+    session.app_log = (tmp_path / "app.log").open("w")
+    session.started, session.cleanup_error = False, None
+    session.events = SimpleNamespace(history=[])
+    session.mcp = Mock()
+    session.mcp.close.side_effect = OSError("injected MCP close failure")
+    try:
+        with patch.object(driver, "save", side_effect=OSError("injected event save failure")):
+            session.close()
+        assert app.poll() is not None and session.app_log.closed
+        assert "event save" in session.cleanup_error and "MCP close" in session.cleanup_error
+    finally:
+        driver.stop(app)
+        app.stdin.close()
+
+
+def test_session_ready_failure_reaps_owned_standard_library_child(tmp_path):
+    from types import SimpleNamespace
+    from unittest.mock import patch
+    import psutil
+    child = tmp_path / "ready-child"
+    child.write_text(f"#!{sys.executable}\n" + "\n".join([
+        "import json, os, pathlib, signal",
+        "folder = pathlib.Path(os.environ['CALIPER_DATA_DIR'])",
+        "(folder / 'probe.json').write_text(json.dumps({'pid': os.getpid()}))",
+        "signal.pause()",
+    ]) + "\n")
+    child.chmod(0o700)
+    actual_wait = driver.wait_file
+    def fail_ready(path, **kwargs):
+        actual_wait(path.parent / "probe.json", timeout=5, **kwargs)
+        raise Failure("injected ready-file failure")
+    args = SimpleNamespace(model="tiny-lm", dictionary=str(tmp_path), prompt=FIXTURE_PROMPT)
+    with patch.object(driver, "executable", return_value=child), patch.object(driver, "wait_file", side_effect=fail_ready):
+        with pytest.raises(Failure, match="injected ready-file failure"):
+            driver.Session(args, tmp_path / "owned")
+    pid = json.loads((tmp_path / "owned/data/probe.json").read_text())["pid"]
+    assert not psutil.pid_exists(pid)
+
+
 def test_instrument_uses_three_panels_and_confirmed_bindings():
     from unittest.mock import Mock
     import jsonschema

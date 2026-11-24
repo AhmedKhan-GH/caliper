@@ -69,7 +69,7 @@ jobs:
       - name: Make the instrument test Python
         run: |
           python3 -m venv "$RUNNER_TEMP/acceptance-py"
-          "$RUNNER_TEMP/acceptance-py/bin/pip" install "torch==$ACCEPTANCE_TORCH_VERSION" numpy Pillow websockets nanobind pytest safetensors "transformers==5.24.0" psutil datasets watchdog jsonschema
+          "$RUNNER_TEMP/acceptance-py/bin/pip" install "torch==$ACCEPTANCE_TORCH_VERSION" numpy Pillow websockets nanobind pytest safetensors "transformers==5.24.0" psutil datasets watchdog jsonschema scikit-build-core
           "$RUNNER_TEMP/acceptance-py/bin/python" scripts/build_netio.py
           PYTHONPATH=python "$RUNNER_TEMP/acceptance-py/bin/python" -c "import torch, caliper, caliper._netio; print('Instrument test Python ready, torch', torch.__version__)"
       # The runtime WGSL compiler (tools/shaders/caliper-wgsl) is built from source in this job
@@ -398,6 +398,10 @@ jobs:
             grep -q "dashboard: comparison skipped: no Metal device" "$dlog"
             echo "Dashboard parity: the browser side RAN and passed; the comparison SKIPPED because the runner has no Metal device"
           fi
+      - name: Install the isolated inference package
+        run: |
+          "$RUNNER_TEMP/acceptance-py/bin/python" -m pip install --no-deps --no-build-isolation -e . -Cwheel.cmake=false
+          "$RUNNER_TEMP/acceptance-py/bin/python" -E -P -c "import importlib.util; s = importlib.util.find_spec('caliper.interp._hosted'); assert s is not None; print(s.origin)"
       - name: Circuit trace fixture acceptance
         env:
           CALIPER_WASM_DIR: ${{ runner.temp }}/draw-parity-views

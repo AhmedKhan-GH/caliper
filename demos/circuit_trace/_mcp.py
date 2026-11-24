@@ -13,6 +13,14 @@ class Failure(RuntimeError):
     pass
 
 
+def attempt(errors, label, operation):
+    """Run one cleanup action without suppressing the remaining actions."""
+    try:
+        return operation()
+    except Exception as exc:
+        errors.append(f"{label}: {exc}")
+
+
 def wait_file(path, *, process=None, timeout=120):
     """Wait for a complete JSON file through filesystem notifications."""
     from watchdog.events import FileSystemEventHandler
@@ -57,22 +65,52 @@ def stop(process):
         process.wait(timeout=10)
 
 
+def run_owned(command, *, stdout, timeout, env=None):
+    """Reap the command and its owned children after an interrupted wait."""
+    import psutil
+    process = subprocess.Popen(command, env=env, stdout=stdout, stderr=subprocess.STDOUT)
+    try:
+        code = process.wait(timeout=timeout)
+        if code:
+            raise subprocess.CalledProcessError(code, command)
+    finally:
+        if process.poll() is None:
+            errors = []
+            try:
+                owner = psutil.Process(process.pid)
+                children = owner.children(recursive=True)
+                for child in reversed(children):
+                    if child.is_running():
+                        attempt(errors, "comparison child stop", child.terminate)
+                _, alive = psutil.wait_procs(children, timeout=10)
+                for child in alive:
+                    attempt(errors, "comparison child kill", child.kill)
+            finally:
+                attempt(errors, "comparison process stop", lambda: stop(process))
+            if errors:
+                raise Failure("; ".join(errors))
+
+
 class MCP:
     def __init__(self, executable, api_file, out, env):
-        self.log = (out / "mcp.log").open("w", encoding="utf-8")
-        self.journal = (out / "commands.jsonl").open("w", encoding="utf-8")
-        self.event_journal = (out / "events.jsonl").open("w", encoding="utf-8")
-        self.process = subprocess.Popen([str(executable), "--api-file", str(api_file)],
-                                        stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                                        stderr=self.log, text=True, encoding="utf-8", env=env)
+        self.log = self.journal = self.event_journal = self.process = self.reader = None
         self.messages = queue.Queue()
         self.counter = 0
-        self.reader = threading.Thread(target=self._read, daemon=True)
-        self.reader.start()
         try:
+            self.log = (out / "mcp.log").open("w", encoding="utf-8")
+            self.journal = (out / "commands.jsonl").open("w", encoding="utf-8")
+            self.event_journal = (out / "events.jsonl").open("w", encoding="utf-8")
+            self.process = subprocess.Popen([str(executable), "--api-file", str(api_file)],
+                                            stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                            stderr=self.log, text=True, encoding="utf-8", env=env)
+            self.reader = threading.Thread(target=self._read, daemon=True)
+            self.reader.start()
             self.request("server/discover", {})
-        except BaseException:
-            self.close()
+        except BaseException as exc:
+            try:
+                self.close()
+            except Exception as cleanup:
+                raise Failure(f"MCP startup failed: {exc}; {cleanup}") from exc
             raise
 
     def _read(self):
@@ -124,16 +162,20 @@ class MCP:
         return self.call(name, **args).get("structuredContent", {})
 
     def close(self):
-        if self.process.poll() is None:
-            self.process.stdin.close()
-            try:
-                self.process.wait(timeout=10)
-            except subprocess.TimeoutExpired:
-                stop(self.process)
-        self.reader.join(10)
-        self.log.close()
-        self.journal.close()
-        self.event_journal.close()
+        errors = []
+        if self.process is not None:
+            if self.process.stdin is not None:
+                attempt(errors, "MCP input close", self.process.stdin.close)
+            attempt(errors, "MCP process stop", lambda: stop(self.process))
+        if self.reader is not None:
+            attempt(errors, "MCP reader join", lambda: self.reader.join(10))
+        for name, file in (("MCP output", getattr(self.process, "stdout", None)),
+                           ("MCP log", self.log), ("command journal", self.journal),
+                           ("event journal", self.event_journal)):
+            if file is not None:
+                attempt(errors, name + " close", file.close)
+        if errors:
+            raise Failure("; ".join(errors))
 
 
 class Events:

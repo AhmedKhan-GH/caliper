@@ -14,7 +14,7 @@ import subprocess
 import sys
 import time
 
-from _mcp import Events, Failure, MCP, stop, wait_file
+from _mcp import Events, Failure, MCP, attempt, stop, wait_file
 from _checks import (FIXTURE_HASH, FIXTURE_PROMPT, QWEN_PROMPT, bar_rows, capture_checks,
                      check, finish, math_checks, selected_feature)
 
@@ -32,17 +32,22 @@ def executable(variable, relative):
     return value
 
 
-def memory_bytes(folder):
+def memory_bytes(folder, *, platform=None):
+    platform = platform or sys.platform
     peaks = []
     for path in folder.glob("*memory*.txt"):
         text = path.read_text()
-        mac = re.search(r"(\d+)\s+maximum resident set size", text)
-        linux = re.search(r"Maximum resident set size \(kbytes\):\s*(\d+)", text)
-        if mac:
+        mac = re.search(r"^\s*(\d+)\s+peak memory footprint\s*$", text, re.MULTILINE)
+        linux = re.search(r"^\s*Maximum resident set size \(kbytes\):\s*(\d+)\s*$", text, re.MULTILINE)
+        if platform == "darwin":
+            if mac is None:
+                raise Failure(f"No peak memory footprint in {path.name}.")
             peaks.append(int(mac[1]))
-        elif linux:
+        elif linux is not None:
             peaks.append(int(linux[1]) * 1024)
-    if not peaks:
+        else:
+            raise Failure(f"No process high-water measurement in {path.name}.")
+    if not peaks or min(peaks) <= 0:
         raise Failure("No completed process memory measurement exists.")
     return max(peaks)
 
@@ -53,6 +58,7 @@ class Session:
         self.out, self.show = out, show
         self.app = self.mcp = self.events = None
         self.app_process = None
+        self.app_owner = None
         self.run_id = "circuit-trace"
         self.started = False
         self.capture_number = 0
@@ -89,16 +95,17 @@ class Session:
         else:
             env.pop("CALIPER_TEST_CIRCUIT_CAPTURE_DIR", None)
         self.env = env
-        self.app_log = (out / "app.log").open("w")
         app = executable("CALIPER_APP_EXE", "cmake-build-release/caliper")
         mcp = executable("CALIPER_MCP_EXE", "cmake-build-release/src/builder/mcp/caliper-mcp")
+        self.app_log = (out / "app.log").open("w")
         command = ["/usr/bin/time", *flags, "-o", str(out / "app-memory.txt"), str(app),
                    *([] if show else ["--hidden"]), "--api", "--api-port", "0"]
         try:
             self.app = subprocess.Popen(command, env=env, stdout=self.app_log, stderr=subprocess.STDOUT)
-            endpoint = wait_file(out / "data" / "api.json", process=self.app)
             import psutil
-            children = psutil.Process(self.app.pid).children()
+            self.app_owner = psutil.Process(self.app.pid)
+            wait_file(out / "data" / "api.json", process=self.app)
+            children = self.app_owner.children()
             if len(children) != 1:
                 raise Failure("The owned app process cannot be identified.")
             self.app_process = children[0]
@@ -191,41 +198,52 @@ class Session:
         return png, metadata
 
     def close(self):
-        error = None
+        errors = []
         if self.mcp is not None and self.live() and self.started:
-            try:
-                save(self.out / "run-logs.json", self.mcp.body("run.logs", run=self.run_id, lines=200))
+            attempt(errors, "run logs", lambda: save(self.out / "run-logs.json",
+                    self.mcp.body("run.logs", run=self.run_id, lines=200)))
+            def stop_run():
                 self.mcp.body("run.stop", run=self.run_id, kill_after_s=10)
                 self.events.until("hosted run exit", lambda: all(
                     r["state"] in ("failed", "exited") for r in self.mcp.body("run.list")["runs"]), timeout=30)
-            except Exception as exc:
-                error = str(exc)
+            attempt(errors, "run stop", stop_run)
         if self.events is not None:
-            save(self.out / "events.json", self.events.history)
+            attempt(errors, "event save", lambda: save(self.out / "events.json", self.events.history))
         if self.mcp is not None:
-            self.mcp.close()
+            attempt(errors, "MCP close", self.mcp.close)
             self.mcp = None
         if self.app is not None:
-            if self.app_process is not None:
-                import psutil
+            import psutil
+            children = []
+            for owner in {self.app_owner, self.app_process} - {None}:
+                if owner.is_running():
+                    found = attempt(errors, "owned child list", lambda owner=owner: owner.children(recursive=True)) or []
+                    children.extend(child for child in found if child not in children)
+            if self.app_process is not None and self.app_process not in children:
+                children.append(self.app_process)
+            def stop_child(owned):
                 try:
-                    owned = self.app_process
                     owned.terminate()
                     try:
                         owned.wait(timeout=10)
                     except psutil.TimeoutExpired:
                         owned.kill()
+                        owned.wait(timeout=10)
                 except psutil.NoSuchProcess:
                     pass
-            try:
-                self.app.wait(timeout=10)
-            except subprocess.TimeoutExpired:
-                stop(self.app)
+            for child in reversed(children):
+                attempt(errors, "owned child stop", lambda child=child: stop_child(child))
+            def reap():
+                try:
+                    self.app.wait(timeout=10)
+                except subprocess.TimeoutExpired:
+                    stop(self.app)
+            attempt(errors, "app wrapper stop", reap)
             self.app = None
-        self.app_log.close()
-        if error:
-            self.cleanup_error = error
-            save(self.out / "cleanup-error.json", {"error": error})
+        attempt(errors, "app log close", self.app_log.close)
+        if errors:
+            self.cleanup_error = "; ".join(errors)
+            attempt(errors, "cleanup report", lambda: save(self.out / "cleanup-error.json", {"error": self.cleanup_error}))
 
 
 def read_graph(session):
@@ -483,9 +501,17 @@ def main(argv=None):
             raise Failure("The bounded app case exceeds the process memory limit.")
         session = Session(args, out / "acceptance", show=args.show)
         bridge = acceptance(session, args, result)
-        if args.model == "tiny-lm":
-            from parity import run_parity
-            result["checks"].append(run_parity(session, out / "parity"))
+        if args.model == "tiny-lm" and not args.show:
+            from parity import export_resources, run_parity
+            export_resources(session, out / "parity")
+            session.close()
+            if session.cleanup_error:
+                raise Failure(session.cleanup_error)
+            session = None
+            result["checks"].extend(run_parity(out / "parity"))
+            result["parity_evidence_collected"] = True
+        elif args.model == "tiny-lm":
+            result["parity_evidence_collected"] = False
         if args.show:
             result["lifetime"] = "live bridge until the owned app closes"
             finish(result)

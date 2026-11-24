@@ -148,7 +148,10 @@ Edges refer to displayed node rows.
 Bind its `graph_counts` input to `live:trace.counts` and its other structural inputs to the corresponding tensors above.
 Signed edges show direct effects, and node picks identify graph rows.
 The `selected_node` parameter reads shared state with the same name.
-Prompt tokens appear as host text, and the `selected_node` and `hovered_node` parameters select additional labels.
+
+Prompt tokens appear as host text, and `selected_node` selects the persistent node label.
+Actual local pointer hits select hover labels in the app and browser.
+The `hovered_node` parameter remains compatibility metadata.
 
 `token_strip@1` uses the five `live:examples.*` sources documented in the [example bindings](../agents/interpretation.md#example-panel-bindings).
 Its `page` parameter selects zero or one.
@@ -234,6 +237,17 @@ It requires the built app, `caliper-mcp`, and the native Python sender and produ
 The fixture comparison also requires `caliper_circuit_parity`, the browser WebAssembly files, and local headless Chromium from the web test setup.
 `CALIPER_APP_EXE`, `CALIPER_MCP_EXE`, `CALIPER_CIRCUIT_PARITY_EXE`, and `CALIPER_WASM_DIR` can override the corresponding resource paths.
 
+The selected interpreter needs an installed or editable Caliper package because inference launch ignores `PYTHONPATH`.
+After the native module build, install the editable package without another native build:
+
+```sh
+uv pip install --python .venv/bin/python scikit-build-core watchdog psutil
+uv pip install --python .venv/bin/python --no-deps --no-build-isolation \
+  -e . --config-settings=wheel.cmake=false
+.venv/bin/python -E -P -c \
+  "import importlib.util; assert importlib.util.find_spec('caliper.interp._hosted')"
+```
+
 Create fixture resources once in an empty task folder:
 
 ```sh
@@ -279,6 +293,7 @@ The driver saves `result.json` and each available graph, command log, event log,
 Hidden runs also save `before.png`, `after.png`, and the second example page capture under the acceptance folder.
 A bounded hidden diagnostic reads actual renderer IDs, color pixels, panel rectangles, generations, and text anchors from those captures.
 The fixture comparison uses the actual published graph resources with the existing native and browser parity harness.
+It exports those resources, closes the hidden app and run, then starts the native and browser comparisons in sequence.
 The process exits with code one when a required check fails.
 
 Qwen acceptance requires feature share of at least 0.30, between 20 and 512 nodes, and a token path to the top logit.
@@ -286,6 +301,10 @@ It also requires 16 positive sorted examples, at least eight correct signs among
 The top-token probability must fall by at least 0.05, or the top token must change.
 Every target residual must remain at most 0.02.
 The trace limit is 20 seconds, the steering limit is one second, and the process limit is 12 GB.
+
+macOS process checks use the peak memory footprint from `/usr/bin/time`, which includes unified memory.
+Linux checks use maximum resident set size.
+Missing high-water measurements fail acceptance, and the native parity process has the same 12 GB limit.
 
 Pixel checks require all visible node IDs and bar heights within two pixels of probability times scale.
 The top bar must become shorter after the Qwen clamp.

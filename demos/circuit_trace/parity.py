@@ -2,13 +2,13 @@
 import json
 import os
 from pathlib import Path
-import subprocess
+import sys
 
 import numpy as np
 from PIL import Image
 
 from _checks import check
-from _mcp import Failure
+from _mcp import Failure, run_owned
 
 
 def compare(app, app_ids, web, web_ids):
@@ -37,8 +37,8 @@ def compare(app, app_ids, web, web_ids):
             "edge_share": float(edge_bad.mean())}
 
 
-def run_parity(session, out):
-    from run import ROOT, executable, save
+def export_resources(session, out):
+    from run import save
     out.mkdir()
     snapshot = {"selected_node": session.mcp.body("state.get", ids=["selected_node"])["states"][0]["value"], "resources": {}}
     step = None
@@ -57,13 +57,28 @@ def run_parity(session, out):
             rows.extend(page["elements"])
         snapshot["resources"][name] = {"count": total, "elements": rows}
     save(out / "resources.json", snapshot)
+
+
+def run_parity(out):
+    """Run each comparison process after the acceptance app and run close."""
+    from run import executable, memory_bytes, save
     native = executable("CALIPER_CIRCUIT_PARITY_EXE", "cmake-build-release/caliper_circuit_parity")
+    flags = ["-l"] if sys.platform == "darwin" else ["-v"]
     with (out / "native.log").open("w") as log:
-        subprocess.run([str(native), str(out / "resources.json"), str(out)], check=True, stdout=log, stderr=subprocess.STDOUT, timeout=90)
+        run_owned(["/usr/bin/time", *flags, "-o", str(out / "native-memory.txt"),
+                        str(native), str(out / "resources.json"), str(out)],
+                       stdout=log, timeout=90)
+    native_peak = memory_bytes(out)
+    save(out / "memory.json", {"native_peak_bytes": native_peak})
+    if native_peak > 12_000_000_000:
+        raise Failure(f"Native parity peak {native_peak} exceeds 12,000,000,000 bytes.")
     env = dict(os.environ, CI="1")
     with (out / "browser.log").open("w") as log:
-        subprocess.run(["node", str(Path(__file__).with_name("browser.mjs")), str(out)], env=env,
-                       check=True, stdout=log, stderr=subprocess.STDOUT, timeout=180)
+        run_owned(["/usr/bin/time", *flags, "-o", str(out / "browser-memory.txt"),
+                        "node", str(Path(__file__).with_name("browser.mjs")), str(out)], env=env,
+                       stdout=log, timeout=180)
+    peak = memory_bytes(out)
+    save(out / "memory.json", {"native_peak_bytes": native_peak, "comparison_peak_bytes": peak})
     app = np.fromfile(out / "native.rgba", dtype=np.uint8).reshape(512, 512, 4)
     web = np.fromfile(out / "browser.rgba", dtype=np.uint8).reshape(512, 512, 4)
     a_ids = np.fromfile(out / "native.id", dtype="<u4").reshape(512, 512, 2)
@@ -72,6 +87,7 @@ def run_parity(session, out):
     save(out / "comparison.json", metrics)
     Image.fromarray(app).save(out / "native.png")
     Image.fromarray(web).save(out / "browser.png")
-    return check("fixture_parity", metrics["interior_over"] == 0 and metrics["interior_id_mismatch"] == 0
+    return [check("fixture_parity", metrics["interior_over"] == 0 and metrics["interior_id_mismatch"] == 0
                  and metrics["edge_share"] <= .01, metrics,
-                 "interior color <=2 levels, exact interior IDs, edge difference <=1%")
+                 "interior color <=2 levels, exact interior IDs, edge difference <=1%"),
+            check("parity_process_memory", peak <= 12_000_000_000, peak, 12_000_000_000)]
