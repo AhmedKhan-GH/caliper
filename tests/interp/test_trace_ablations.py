@@ -41,7 +41,7 @@ def test_valid_untraced_ablation_refuses_before_model_work(point, monkeypatch):
     dictionary = exact_dictionary(model)
     tracer = Tracer(model, TinyTokenizer(), dictionary)
     spec = {"point": point, "op": "ablate", "state": "active"}
-    monkeypatch.setattr(tracer, "_intervention_state", lambda: [spec])
+    monkeypatch.setattr(tracer, "_intervention_state", lambda *_: [spec])
 
     def refuse(*args, **kwargs):
         pytest.fail("unsupported ablations must fail before identity checks or model work")

@@ -7,7 +7,7 @@ import torch
 from caliper.interp import Tracer
 from caliper.interp._frozen import FrozenPath
 from caliper.interp._trace import _DirectEffects
-from .test_output_affine import setup, feature_at, specs_for, qwen_oracle
+from .test_output_affine import setup, feature_at, specs_for, qwen_oracle, fixed_patch_sources
 
 
 def direct_oracle(model, dictionary, ids, path, effects, source, target, *, coefficient=1., constant=0.):
@@ -61,7 +61,7 @@ def test_tiny_incoming_and_outgoing_edges_match_module_derivatives(case):
         node = next(i for i in effects.feature_nodes if effects.nodes[i]["id"] == f"feature:1:1:{feature}")
         logit = effects.logit_nodes[0]
         weights, diagnostics = effects.backward([node, logit])
-        with model.frozen_attention(norms=True):
+        with fixed_patch_sources(model, tokenizer, service), model.frozen_attention(norms=True):
             incoming = direct_oracle(model, dictionary, ids, path, effects, 0, node,
                                      coefficient=coefficient, constant=constant)
             outgoing = direct_oracle(model, dictionary, ids, path, effects, node, logit)
@@ -107,7 +107,7 @@ def test_tiny_attention_output_order_and_position_derivatives(case):
         with torch.no_grad():
             target_logits = model(input_ids=ids).logits[:, -1]
         torch.testing.assert_close(target_logits, path.logits, atol=1e-9, rtol=0)
-        with model.frozen_attention(norms=True):
+        with fixed_patch_sources(model, tokenizer, service), model.frozen_attention(norms=True):
             expected = torch.stack([direct_oracle(model, dictionary, ids, path, effects, source, target)
                                     for target in targets])
         torch.testing.assert_close(weights[source], expected, atol=1e-9, rtol=0)
@@ -140,7 +140,7 @@ def test_qwen_attention_patch_and_add_match_value_and_direct_derivatives(layer, 
         targets = [next(i for i in effects.feature_nodes if effects.nodes[i]["layer"] == layer
                         and effects.nodes[i]["position"] == position) for position in (1, 2)]
         weights, _ = effects.backward(targets)
-        with qwen_oracle(model, dictionary, ids, monkeypatch):
+        with fixed_patch_sources(model, tokenizer, service), qwen_oracle(model, dictionary, ids, monkeypatch):
             expected = torch.stack([direct_oracle(model, dictionary, ids, path, effects, 0, target)
                                     for target in targets])
             torch.testing.assert_close(weights[0], expected, atol=2e-5, rtol=1e-5)

@@ -10,6 +10,7 @@ from caliper.interp._frozen import FrozenPath
 from caliper.interp._trace import _DirectEffects
 from .fixture import make_fixture
 from .test_trace import exact_dictionary
+from .test_output_affine import fixed_patch_sources
 
 
 @contextmanager
@@ -62,7 +63,7 @@ def test_frozen_input_path_matches_independent_model_perturbations(point, kind):
         ids = tokenizer("AB")["input_ids"]
         path = FrozenPath(model, ids, dictionary, interventions=service.specifications())
         direction = torch.linspace(-.3, .4, path.embedding.numel(), dtype=path.dtype).reshape_as(path.embedding)
-        with model.frozen_attention(norms=True), torch.no_grad():
+        with fixed_patch_sources(model, tokenizer, service), model.frozen_attention(norms=True), torch.no_grad():
             for sign in (-1, 1):
                 embedding = path.embedding + sign * 1e-6 * direction
                 expected = model(inputs_embeds=embedding).logits[:, -1]

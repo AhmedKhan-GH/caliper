@@ -1,12 +1,13 @@
 """Independent CPU oracles for ordered output intervention derivatives."""
 from contextlib import ExitStack, contextmanager
+from unittest.mock import patch
 
 import pytest
 import torch
 from torch.nn import functional as F
 
 from caliper._controls import Controls
-from caliper.interp import Tracer
+from caliper.interp import Tracer, capture
 from caliper.interp._frozen import FrozenPath
 from caliper.interp._trace import _DirectEffects
 from .fixture import TinyLM, TinyTokenizer
@@ -33,6 +34,33 @@ def setup(*, qwen=False):
         yield model, tokenizer, dictionary, owner, service
     finally:
         service.remove()
+
+
+@contextmanager
+def fixed_patch_sources(model, tokenizer, service):
+    """Keep original clean tensors fixed while the oracle changes target math.
+
+    A clean prompt must not run under the target's frozen norm denominators or
+    temporary oracle hooks. Capture it independently from the unmodified model.
+    """
+    specs = [spec for spec in service.specifications() if spec.get("op", spec.get("kind")) == "patch"]
+    saved = [(module, name, getattr(module, name)) for module in model.modules()
+             for name in ("last_scale", "last_pattern") if hasattr(module, name)]
+    sources = {}
+    try:
+        for prompt in sorted({spec["source_prompt"] for spec in specs}):
+            points = sorted({spec["point"] for spec in specs if spec["source_prompt"] == prompt})
+            with service.suspend(), capture(model, points) as values, torch.no_grad():
+                model(**tokenizer(prompt), use_cache=False)
+                sources.update({(prompt, point): values[point].detach().clone() for point in points})
+        for spec in specs:
+            torch.testing.assert_close(service.executor._source(spec), sources[spec["source_prompt"], spec["point"]],
+                                       rtol=0, atol=0)
+    finally:
+        for module, name, value in saved:
+            setattr(module, name, value)
+    with patch.object(service.executor, "_source", lambda spec: sources[spec["source_prompt"], spec["point"]]):
+        yield
 
 
 def feature_at(model, dictionary, ids, layer=1, *, inactive=False):
@@ -96,7 +124,7 @@ def test_tiny_output_affine_matches_live_frozen_oracle(case):
                 assert diagnostics[0]["biases"]["intervention"] == pytest.approx(constant)
 
         direction = torch.linspace(-.3, .4, path.embedding.numel(), dtype=path.dtype).reshape_as(path.embedding)
-        with model.frozen_attention(norms=True), torch.no_grad():
+        with fixed_patch_sources(model, tokenizer, service), model.frozen_attention(norms=True), torch.no_grad():
             # Two small perturbations exercise actual live output hooks and the nonlinear TinyLM.
             for sign in (-1, 1):
                 embedding = path.embedding + sign * 1e-6 * direction
