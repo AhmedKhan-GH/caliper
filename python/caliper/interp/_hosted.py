@@ -558,6 +558,9 @@ class HostedInference:
         self.dictionary_path = str(Path(dictionary_path).resolve())
         self.model, self.tokenizer, self.dictionary, self.index, self.guard = (
             load_resources(model_name, dictionary_path) if resources is None else resources)
+        if display_guard is not None and self.guard is None:
+            from ._memory import MemoryGuard
+            self.guard = MemoryGuard(12, next(self.model.parameters()).device)
         self.guard = (_RunGuard(self.guard, extra=display_guard, on_stop=self._latch_failure)
                       if self.guard is not None or display_guard is not None else None)
         self.fixture_display = _FixtureDisplay(self.guard) if display_guard is not None else None

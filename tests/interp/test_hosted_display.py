@@ -42,11 +42,15 @@ def test_fixture_display_refuses_invalid_opt_in_and_missing_mps(monkeypatch):
         _hosted._fixture_display_guard("tiny-lm")
 
 
-def test_fixture_opt_in_adds_the_shared_twelve_gb_guard_without_changes_to_math(tmp_path, monkeypatch):
+@pytest.mark.parametrize("supplied_guard", [False, True])
+def test_fixture_opt_in_adds_the_shared_twelve_gb_guard_without_changes_to_math(tmp_path, monkeypatch, supplied_guard):
+    from caliper.interp._validate import _validation_guard
     stages, limits, original_stages = [], [], []
     def memory_guard(limit, device):
         limits.append((limit, device))
-        return SimpleNamespace(check=lambda stage, **kwargs: stages.append(stage))
+        calls = stages if torch.device(device).type == "mps" else original_stages
+        return SimpleNamespace(check=lambda stage, **kwargs: calls.append(stage),
+                               device=torch.device(device), limit=limit * 1e9)
     monkeypatch.setenv("CALIPER_FIXTURE_DISPLAY_MPS", "1")
     monkeypatch.setattr(torch.backends.mps, "is_available", lambda: True)
     monkeypatch.setattr(_memory, "MemoryGuard", memory_guard)
@@ -55,12 +59,18 @@ def test_fixture_opt_in_adds_the_shared_twelve_gb_guard_without_changes_to_math(
     expected = forward_hash(model)
     run = _hosted.HostedInference("tiny-lm", tmp_path, "AB", resources=(
         model, tokenizer, dictionary, SimpleNamespace(close=lambda: None),
-        SimpleNamespace(check=lambda stage, **kwargs: original_stages.append(stage))))
+        SimpleNamespace(check=lambda stage, **kwargs: original_stages.append(stage),
+                        device=torch.device("cpu"), limit=12e9) if supplied_guard else None))
     try:
-        assert limits == [(12, "mps")]
+        assert limits == [(12, "mps")] + ([] if supplied_guard else [(12, torch.device("cpu"))])
         assert run.fixture_display.guard is run.guard
+        assert run.guard.device == torch.device("cpu")
+        assert run.guard.extra.device == torch.device("mps")
         run.guard.check("test")
         assert stages == original_stages == ["test"]
+        run.guard.extra.limit = 11e9
+        validation = _validation_guard(model, dictionary, None, run.guard)
+        assert validation.device == torch.device("cpu") and validation.limit == 11e9
         assert forward_hash(model) == expected
         assert all(parameter.device.type == "cpu" and parameter.dtype == torch.float64 for parameter in model.parameters())
     finally:
