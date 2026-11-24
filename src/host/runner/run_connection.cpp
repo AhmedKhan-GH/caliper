@@ -163,11 +163,14 @@ void RunConnection::on_message(const std::vector<std::uint8_t>& bytes) {
     const wire::DecodeResult r = wire::decode(bytes.data(), bytes.size(), &msg);
     if (!r.ok()) {
         const auto* op = r.frame.meta.find("op");
-        if (r.type == CALIPER_NET_MSG_CONTROL_REPLY && op && op->is_string() &&
-            op->as_string() == CALIPER_NET_OP_INTERPRET) {
+        const bool interpretation = op && op->is_string() && op->as_string() == CALIPER_NET_OP_INTERPRET;
+        const bool missing_operation = !op || !op->is_string() || op->as_string().empty();
+        if (r.type == CALIPER_NET_MSG_CONTROL_REPLY && (interpretation || missing_operation)) {
             const auto* id = r.frame.meta.find("request_id");
             std::uint64_t request = 0;
             const bool identified = id && id->get_u64(&request) && request <= std::numeric_limits<std::uint32_t>::max();
+            // Only a known request ID can identify a reply without an operation.
+            if (!identified && !interpretation) return;
             for (auto& [pending_id, entry] : interpretation_replies_) {
                 auto& reply = entry.second;
                 if ((identified && pending_id != request) || reply.status != CALIPER_NET_STATUS_QUEUED) continue;

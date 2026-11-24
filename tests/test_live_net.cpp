@@ -98,6 +98,7 @@ public:
     // answered and applied at once, and a select event with a space becomes
     // that space's SELECTION, with details.
     bool script31 = false;
+    bool defer_controls = false;
     std::string run_state = CALIPER_NET_RUN_RUNNING;
     double lr = 0.001;
     int saves = 0;
@@ -363,6 +364,7 @@ public:
 private:
     void on_control(const wire::Control& c) {
         controls_in.push_back(c);
+        if (defer_controls) return;
         wire::ControlReply r;
         r.request_id = c.request_id;
         r.op = c.op;
@@ -3362,6 +3364,48 @@ TEST_CASE("live/net: every scene piece restores its source arrays and rejects ma
         CHECK_FALSE(caliper_live::scene_piece_arrays(piece, dims, &arrays, &owned, &why));
         CHECK_FALSE(why.empty());
     }
+}
+
+TEST_CASE("live/net: malformed replies without an operation resolve their known request") {
+    std::string no_gpu;
+    CaliperCore* core = net_core(64, 64, &no_gpu);
+    if (!core) CALIPER_SKIP_NO_GPU("no embeddable GPU: " << no_gpu);
+    FakeProducer producer;
+    producer.welcome_caps = {CALIPER_NET_CAP_CONTROLS, CALIPER_NET_CAP_INTERPRETATION};
+    producer.welcome_control = true;
+    producer.script31 = true;
+    producer.defer_controls = true;
+    producer.start();
+    REQUIRE(caliper_core_live_attach_url(core, producer.url().c_str()) == 1);
+    auto* controls = caliper_live_controls(core);
+    REQUIRE(controls != nullptr);
+    REQUIRE(poll_until(core, [&] { return controls->have(); }));
+    for (int form = 0; form < 3; ++form) {
+        const auto queued = controls->interpret("trace.status", Json::object(), 0);
+        REQUIRE(queued.find("request_id"));
+        const auto request = uint32_t(queued.find("request_id")->as_double());
+        REQUIRE(poll_until(core, [&] {
+            return producer.call([&](FakeProducer& f) {
+                return !f.controls_in.empty() && f.controls_in.back().request_id == request;
+            });
+        }));
+        producer.call([&](FakeProducer& f) {
+            auto meta = Json::object();
+            meta.set("request_id", request); meta.set("status", "ok");
+            if (form == 1) meta.set("op", 7);
+            if (form == 2) meta.set("op", "");
+            std::vector<uint8_t> bytes;
+            REQUIRE(wire::encode_frame(CALIPER_NET_MSG_CONTROL_REPLY, meta, {}, &bytes));
+            f.send_raw(bytes);
+            return 0;
+        });
+        REQUIRE(poll_until(core, [&] {
+            return controls->interpret("trace.status", Json::object(), request).find("error") != nullptr;
+        }));
+        const auto result = controls->interpret("trace.status", Json::object(), request);
+        CHECK(result.find("error")->find("code")->as_string() == CALIPER_NET_ERR_BAD_REQUEST);
+    }
+    caliper_core_shutdown(core);
 }
 
 TEST_CASE("live/controls: interpretation final replies survive late queued and duplicate replies") {

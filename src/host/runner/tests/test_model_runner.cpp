@@ -174,12 +174,33 @@ TEST_CASE("runner: native interpretation validation and protocol errors need no 
         meta.set("request_id", id); meta.set("op", "interpret"); meta.set("status", "ok");
         raw_reply(meta);
     }
+    SUBCASE("malformed CONTROL_REPLY without an operation") {
+        auto meta = caliper_net::Json::object();
+        meta.set("request_id", id); meta.set("status", "ok");
+        raw_reply(meta);
+    }
+    SUBCASE("malformed CONTROL_REPLY with a non-string operation") {
+        auto meta = caliper_net::Json::object();
+        meta.set("request_id", id); meta.set("op", 7); meta.set("status", "ok");
+        raw_reply(meta);
+    }
+    SUBCASE("malformed CONTROL_REPLY with an empty operation") {
+        auto meta = caliper_net::Json::object();
+        meta.set("request_id", id); meta.set("op", ""); meta.set("status", "ok");
+        raw_reply(meta);
+    }
     SUBCASE("malformed CONTROL_REPLY without a usable request ID") {
         auto meta = caliper_net::Json::object();
         meta.set("request_id", "invalid"); meta.set("op", "interpret"); meta.set("status", "ok");
         raw_reply(meta);
     }
     SUBCASE("unrelated errors preserve the pending request") {
+        for (const auto& request : {caliper_net::Json(id + 100), caliper_net::Json("invalid"), caliper_net::Json()}) {
+            auto meta = caliper_net::Json::object();
+            if (!request.is_null()) meta.set("request_id", request);
+            meta.set("status", "invalid");
+            raw_reply(meta);
+        }
         for (const auto* op : {"set", "run", "pause", "intervene"}) {
             for (const auto& request : {caliper_net::Json(id), caliper_net::Json("invalid"), caliper_net::Json()}) {
                 auto meta = caliper_net::Json::object();

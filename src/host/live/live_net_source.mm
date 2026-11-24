@@ -922,7 +922,7 @@ private:
                 reply.error_code = CALIPER_NET_ERR_BAD_REQUEST;
                 reply.error_message = "The producer sent an invalid control reply. Check its protocol version.";
                 if ((!identified && reply.op == CALIPER_NET_OP_INTERPRET) ||
-                    (identified && request != 0 && !reply.op.empty()))
+                    (identified && request != 0))
                     push_reply(std::move(reply));
             }
             wire::Error e;
