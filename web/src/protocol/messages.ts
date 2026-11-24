@@ -823,6 +823,21 @@ export const PROGRAM_STATES: readonly string[] = ['waiting', 'review', 'compiled
 export const PROGRAM_ARRAYS: readonly string[] = ['positions', 'colors', 'values', 'radii'];
 /** The states of an entry of CONTROLS "interventions" "active". */
 export const INTERVENTION_STATES: readonly string[] = ['pending', 'active', 'ended'];
+/** M8 specification limits (python/caliper/_intervention_protocol.py). */
+export const INTERVENTION_LIMITS = { maxVector: 16384, maxPositions: 32, maxBytes: 262144 } as const;
+
+type InterventionTag<K extends string> = { kind: K; op?: K | null } | { op: K; kind?: K | null };
+type FeatureIntervention = { feature: number; dictionary?: string; positions?: number[] };
+export type InterventionSpec = { point: string; from_step?: number | null; until_step?: number | null } & (
+  | InterventionTag<'ablate'> | InterventionTag<'steer'>
+  | (InterventionTag<'add'> & { vector: number[]; coefficient: number; positions?: number[] })
+  | (InterventionTag<'scale'> & FeatureIntervention & { multiplier: number })
+  | (InterventionTag<'clamp'> & FeatureIntervention & { value: number })
+  | (InterventionTag<'patch'> & { source_prompt: string; source_position?: number; positions?: number[] })
+);
+export type InterventionStatus = InterventionSpec & {
+  state: 'pending' | 'active' | 'ended'; since_step?: number | null; error?: string; error_code?: string;
+};
 
 /** The declaration of a program, checked on decode as the Python codec checks it and re-emitted unchanged (`design/gpu-programs.md`). */
 export type ProgramDeclaration = Record<string, unknown>;
@@ -830,12 +845,12 @@ export type ProgramDeclaration = Record<string, unknown>;
 export type ProgramStatus = Record<string, unknown>;
 /** CONTROL "intervene": exactly one of set, clear and clear_all. */
 export interface InterveneRequest {
-  set?: { point: string; op: string; from_step?: number | null; until_step?: number | null };
-  clear?: string;
-  clear_all?: true;
+  set?: InterventionSpec | null;
+  clear?: string | null;
+  clear_all?: true | null;
 }
 /** CONTROLS "interventions": the points an intervention may use and the interventions in force. Re-emitted unchanged. */
-export interface InterventionsInfo { points: Record<string, unknown>[]; active: Record<string, unknown>[] }
+export interface InterventionsInfo { points: Record<string, unknown>[]; active: InterventionStatus[] }
 
 /** Viewer to producer: install or replace (op set), remove (op remove) or change the parameters of (op params) one GPU program. A set carries the declaration without its source, the scene of a geometry output, the SHA-256 of the source and the section "wgsl". */
 export interface ProgramMsg {
