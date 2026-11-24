@@ -50,8 +50,22 @@ def validate_trace(model, tokenizer, dictionary, interventions, graph, *, prompt
     position, token_id = top["position"], top["token_id"]
     features = sorted((n for n in graph.nodes if n["kind"] == "feature" and n["activation"] > 0),
                       key=lambda n: (-n["influence"], n["layer"], n["position"], n["feature"]))[:10]
-    probes = {p.layer: p for p in _architecture(model).values() if p.point.endswith(".mlp_out")}
+    architecture = _architecture(model)
+    probes = {p.layer: p for p in architecture.values() if p.point.endswith(".mlp_out")}
     specifications = interventions.specifications()
+    modules = dict(model.named_modules())
+
+    def write_module(point):
+        probe = architecture.get(point)
+        if probe is not None:
+            return modules[probe.module] if probe.event == "output" else None
+        # Legacy module points write to the module output. Head points differ.
+        try:
+            return model.get_submodule(point)
+        except AttributeError:
+            return None
+
+    effective_points = [(spec, write_module(spec["point"])) for spec in specifications]
 
     def centered(logits):
         row = logits[0, -1 if position == inputs["input_ids"].shape[1] - 1 else position]
@@ -68,7 +82,7 @@ def validate_trace(model, tokenizer, dictionary, interventions, graph, *, prompt
                 with autorelease_scope(next(model.parameters()).device):
                     layer, feature, selected = node["layer"], node["feature"], node["position"]
                     probe = probes[layer]
-                    related = [s for s in specifications if s["point"] == probe.point
+                    related = [s for s, module in effective_points if module is modules[probe.module]
                                and selected in s.get("positions", range(inputs["input_ids"].shape[1]))]
                     if any(s["op"] in ("patch", "ablate") for s in related):
                         raise ValueError("validation cannot separate a feature from an output patch or ablation at its point")

@@ -11,8 +11,11 @@ from .test_dictionary import fixture_manifest
 from .test_intervene import dictionary_for, explicit_forward
 
 
-def validation_case():
+def validation_case(*, decoder_scale=1):
     model, tokenizer = make_fixture()
+    with torch.no_grad():
+        for block in model.layers:
+            block.mlp.W_dec.mul_(decoder_scale)
     dictionary = dictionary_for(model)
     dictionary.metadata = fixture_manifest(model)
     controls = Controls()
@@ -88,20 +91,37 @@ def test_validation_preserves_active_pending_and_ended_state_on_failure(monkeypa
         service.remove()
 
 
-def test_validation_uses_ten_features_and_reports_failed_criteria():
-    model, tokenizer, dictionary, controls, service = validation_case()
+def test_real_trace_measurements_match_independent_nonlinear_ablations():
+    model, tokenizer, dictionary, controls, service = validation_case(decoder_scale=8)
     from caliper.interp import Tracer
     try:
-        graph = Tracer(model, tokenizer, dictionary).trace("AB", max_targets=16)
+        graph = Tracer(model, tokenizer, dictionary, controls=controls).trace("AB", max_targets=32)
         result = validate_trace(model, tokenizer, dictionary, service, graph, prompt="AB")
         expected_count = min(10, sum(n["kind"] == "feature" and n["activation"] > 0 for n in graph.nodes))
-        assert result["count"] == expected_count
+        assert result["count"] == expected_count == 10
         assert len(result["measurements"]) == expected_count
         assert all(row["predicted"] == -next(n["effect"] for n in graph.nodes if
                    n["kind"] == "feature" and (n["layer"], n["position"], n["feature"]) ==
                    (row["layer"], row["position"], row["feature"])) for row in result["measurements"])
         assert result["passed"] == (expected_count == 10 and result["correct_signs"] >= 8
                                      and result["spearman"] is not None and result["spearman"] >= .6)
+        # Manual MLP edits independently check the real nonlinear measurements.
+        # These unit oracles do not establish the circuit demo acceptance gates.
+        ids = tokenizer("AB")["input_ids"]
+        baseline, _ = explicit_forward(model, ids)
+        def centered(logits):
+            row = logits[0, result["position"]]
+            return float((row[result["token"]] - row.mean()).detach())
+        assert result["baseline_centered_logit"] == pytest.approx(centered(baseline), abs=1e-10)
+        for measurement in result["measurements"]:
+            def ablate(layer, activations):
+                if layer == measurement["layer"]:
+                    activations = activations.clone()
+                    activations[0, measurement["position"], measurement["feature"]] = 0
+                return activations
+            edited, _ = explicit_forward(model, ids, edit=ablate)
+            assert measurement["measured"] == pytest.approx(centered(edited) - centered(baseline), abs=1e-10)
+        assert all(abs(row["measured"]) > 1e-9 for row in result["measurements"])
         with pytest.raises(ValueError, match="does not match"):
             validate_trace(model, tokenizer, dictionary, service, graph, prompt="CD")
     finally:
@@ -114,19 +134,54 @@ def test_spearman_handles_ties_and_zero_variance():
     assert spearman([], []) is None
 
 
-def test_validation_measures_ten_distinct_feature_positions():
-    model, tokenizer, dictionary, controls, service = validation_case()
-    graph = frozen_graph(model, tokenizer, "AB")
-    _, activations = explicit_forward(model, tokenizer("AB")["input_ids"])
-    for feature in activations[-1][0, 1].nonzero().flatten().tolist()[:2]:
-        graph.nodes.append({"kind": "feature", "layer": 3, "position": 1, "feature": feature,
-                            "activation": float(activations[-1][0, 1, feature].detach()), "influence": .01, "effect": 0.})
+@pytest.mark.parametrize("alias", [False, True])
+@pytest.mark.parametrize("kind", ["ablate", "patch"])
+def test_validation_refuses_effective_output_aliases_after_a_real_trace(alias, kind):
+    from caliper.interp import Tracer, capture
+    model, tokenizer, dictionary, controls, service = validation_case(decoder_scale=8)
+    inputs = tokenizer("AB")
     try:
-        with model.frozen_attention(norms=True):
-            result = validate_trace(model, tokenizer, dictionary, service, graph, prompt="AB")
-        assert result["count"] == 10 and result["passed"]
-        assert result["correct_signs"] == 10
-        assert result["spearman"] == pytest.approx(1)
+        tracer = Tracer(model, tokenizer, dictionary, controls=controls)
+        graph = tracer.trace("AB", max_targets=32)
+        layer = next(node["layer"] for node in graph.nodes if node["kind"] == "feature")
+        semantic = f"layers.{layer}.mlp_out"
+        point = f"layers.{layer}.mlp" if alias else semantic
+        # The ordinary module point needs an observed output width for patch.
+        with capture(model, [semantic]) as source:
+            model(**tokenizer("AC"))
+            clean = source[semantic].detach().clone()
+        spec = {"kind": kind, "point": point}
+        if kind == "patch":
+            spec["source_prompt"] = "AC"
+        service.set(spec)
+        controls.step()
+        with capture(model, [semantic]) as observed:
+            model(**inputs)
+            expected = torch.zeros_like(clean) if kind == "ablate" else clean
+            torch.testing.assert_close(observed[semantic], expected, rtol=0, atol=0)
+        before = service.state_dict()
+        with pytest.raises(ValueError, match="output patch or ablation"):
+            validate_trace(model, tokenizer, dictionary, service, graph, prompt="AB")
+        # The real graph retains features at this overwritten output point.
+        changed = tracer.trace("AB", max_targets=32)
+        assert any(node["kind"] == "feature" and node["layer"] == layer for node in changed.nodes)
+        with pytest.raises(ValueError, match="output patch or ablation"):
+            validate_trace(model, tokenizer, dictionary, service, changed, prompt="AB")
+        assert service.state_dict() == before
+    finally:
+        service.remove()
+
+
+def test_validation_keeps_input_events_distinct_from_module_output():
+    from caliper.interp import Tracer
+    model, tokenizer, dictionary, controls, service = validation_case(decoder_scale=8)
+    try:
+        graph = Tracer(model, tokenizer, dictionary, controls=controls).trace("AB", max_targets=32)
+        layer = next(node["layer"] for node in graph.nodes if node["kind"] == "feature")
+        service.set({"kind": "patch", "point": f"layers.{layer}.mlp_in", "source_prompt": "AB"})
+        controls.step()
+        result = validate_trace(model, tokenizer, dictionary, service, graph, prompt="AB")
+        assert any(row["layer"] == layer for row in result["measurements"])
     finally:
         service.remove()
 
