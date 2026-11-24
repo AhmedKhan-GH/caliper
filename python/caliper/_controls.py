@@ -1227,10 +1227,18 @@ class Controls:
         """caliper.step(); see there."""
         if self._iv_model is not None and self._iv_model.executor.preparing_source:
             return  # A clean patch-source forward is internal to the current boundary.
-        if step is None:
-            self.n += 1
+        prospective = self.n + 1 if step is None else step
+        if (isinstance(prospective, numbers.Integral) and not isinstance(prospective, bool)
+                and prospective >= _INT_EXACT):
+            # Ordinary counters fit the headroom reserved by every admission.
+            # Larger counters retain support, but must fit before any state changes.
+            with self.lock:
+                meta = self._controls_meta()
+                meta["run"]["step"] = int(prospective)
+                _check_controls_budget(meta)
+                self.n = prospective
         else:
-            self.n = step
+            self.n = prospective
         if self.busy:
             self.checkpoint()
 

@@ -46,3 +46,65 @@ def test_encoder_stop_cleans_hook_before_forward_continues(controlled, kind, fat
         assert service.specifications() == []
     finally:
         observer.remove()
+
+
+@pytest.mark.parametrize("started", [False, True])
+def test_prospective_step_overflow_preserves_all_control_state(started):
+    from caliper._controls import Controls
+    from python.tests.test_controls_budget import control, encoded, fill_budget
+
+    ctl = Controls()
+    param = ctl.param("text", "original")
+    calls = []
+    action = ctl.action("queued", lambda: calls.append(True))
+    if started:
+        ctl.step()
+        assert control(ctl, "set", name=param.name, value="pending")["status"] == "ok"
+    assert control(ctl, "run", name=action.name)["status"] == "queued"
+    fill_budget(ctl)
+    before = ctl.controls_meta()
+    pending = (ctl.n, ctl.busy, ctl._npending, param._version, list(ctl.queue))
+    with pytest.raises(ValueError, match="wire limit"):
+        ctl.step(10**1000)
+    assert ctl.controls_meta() == before
+    assert (ctl.n, ctl.busy, ctl._npending, param._version, list(ctl.queue)) == pending
+    assert calls == [] and action.queued
+    encoded(ctl)
+    ctl.step()
+    assert calls == [True]
+    assert param.value == ("pending" if started else "original")
+    encoded(ctl)
+
+
+def test_large_step_and_implicit_increment_remain_supported():
+    from caliper._controls import Controls
+    from python.tests.test_controls_budget import encoded
+
+    ctl = Controls()
+    ctl.step(10**100)
+    ctl.param("text", "ordinary value")
+    ctl.step()
+    assert ctl.n == 10**100 + 1
+    encoded(ctl)
+
+
+def test_implicit_step_growth_is_admitted_before_counter_change():
+    from caliper._controls import Controls
+    from python.tests.test_controls_budget import encoded, fill_budget
+
+    ctl = Controls()
+    ctl.step(10**100 - 1)
+    pad = fill_budget(ctl)
+    # Escaped padding leaves at most five bytes. Consume each remaining byte.
+    for _ in range(6):
+        try:
+            pad.set(pad.value + "x")
+        except ValueError:
+            break
+    else:
+        pytest.fail("metadata did not reach its admission bound")
+    before = ctl.controls_meta()
+    with pytest.raises(ValueError, match="wire limit"):
+        ctl.step()
+    assert ctl.n == 10**100 - 1 and ctl.controls_meta() == before
+    encoded(ctl)
