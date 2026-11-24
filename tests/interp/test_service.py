@@ -468,3 +468,87 @@ def test_resource_stop_survives_failed_terminal_delivery():
     assert caught.value is failure and replies[0][2]["code"] == "interpret.stopped"
     assert not service.running and not service.queue
     service.close()
+
+
+@pytest.mark.parametrize("stops", [True, False])
+def test_action_stop_replies_once_and_prevents_later_work(stops):
+    from caliper.interp._memory import CleanStop
+    controls, transport = _controls.Controls(), Transport()
+    route = controls.attach(transport)
+    service = register_service(controls=controls)
+    failure = CleanStop("action admission") if stops else ValueError("ordinary failure")
+    calls = []
+
+    def first():
+        calls.append("first")
+        raise failure
+
+    first_action = controls.action("first", first)
+    second_action = controls.action("second", lambda: calls.append("second"))
+    for rid, name in ((1, "first"), (2, "first"), (3, "second")):
+        assert route.on_control(None, _wire.Control(rid, "run", name=name).to_meta())["status"] == "queued"
+    try:
+        if stops:
+            with pytest.raises(CleanStop) as caught:
+                controls.checkpoint()
+            assert caught.value is failure and service.failure is failure
+            assert calls == ["first"]
+            with pytest.raises(CleanStop):
+                controls.checkpoint()
+            assert route.on_control(None, _wire.Control(4, "run", name="second").to_meta())["error"]["code"] == "interpret.stopped"
+        else:
+            with pytest.warns(RuntimeWarning, match="ordinary failure"):
+                controls.checkpoint()
+            assert calls == ["first", "second"] and service.failure is None
+        replies = transport.replies
+        assert [reply.request_id for reply in replies] == [1, 2, 3]
+        assert [reply.status for reply in replies] == ["error", "error", "error" if stops else "ok"]
+        assert not first_action.running and not second_action.queued and not controls.queue
+    finally:
+        unregister_service(service, controls=controls)
+        first_action.remove()
+        second_action.remove()
+        route.detach()
+
+
+def test_service_stop_cancels_actions_before_their_callbacks():
+    from caliper.interp._memory import CleanStop
+    controls, transport = _controls.Controls(), Transport()
+    route = controls.attach(transport)
+    failure = CleanStop("tracer admission")
+    service = register_service(InterpretationService(
+        tracer_factory=lambda: (_ for _ in ()).throw(failure)), controls=controls)
+    action = controls.action("later", lambda: pytest.fail("later action ran"))
+    try:
+        call(route, "trace.run", {"prompt": "AB"}, 1)
+        route.on_control(None, _wire.Control(2, "run", name="later").to_meta())
+        with pytest.raises(CleanStop):
+            controls.checkpoint()
+        assert [(r.request_id, r.status) for r in transport.replies] == [(1, "error"), (2, "error")]
+        assert not controls.queue and not action.queued
+    finally:
+        unregister_service(service, controls=controls)
+        action.remove()
+        route.detach()
+
+
+def test_ordinary_controls_actions_need_no_torch_installation():
+    from pathlib import Path
+    import subprocess
+    import sys
+    source = Path(__file__).resolve().parents[2] / "python"
+    script = '''
+import sys
+sys.path.insert(0, sys.argv[1])
+from caliper._controls import Controls
+assert "torch" not in sys.modules
+controls = Controls()
+action = controls.action("plain", lambda: "done")
+assert controls._run_action(action) == (True, "done")
+controls.checkpoint()
+assert "torch" not in sys.modules
+action.remove()
+'''
+    result = subprocess.run([sys.executable, "-S", "-c", script, str(source)],
+                            text=True, capture_output=True, timeout=15)
+    assert result.returncode == 0, result.stdout + result.stderr

@@ -37,6 +37,8 @@ class InterpretationService:
         self.running_thread = None
         self.closed = False
         self.failure = None
+        from ._memory import CleanStop
+        self.stop_exception = CleanStop
 
     @property
     def pending(self):
