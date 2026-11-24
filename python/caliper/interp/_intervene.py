@@ -16,6 +16,8 @@ from ._points import _architecture, _input, capture
 MAX_POSITIONS = 32
 MAX_VECTOR = 16384
 MAX_PROMPT_BYTES = 4096
+MAX_SOURCE_BYTES = 16 * 1024 * 1024
+MAX_SOURCE_ENTRIES = 64
 KINDS = ("ablate", "add", "scale", "clamp", "patch")
 _SUSPENDED = ContextVar("caliper_interventions_suspended", default=frozenset())
 _ROWS = ContextVar("caliper_intervention_rows", default={})
@@ -324,7 +326,7 @@ class InterventionService:
             raise InterventionError("tokenizer output values must be tensors")
         return inputs
 
-    def _identity(self, prompt):
+    def _identity(self):
         # Version counters detect optimizer steps and normal in-place weight updates.
         tensors = []
         for value in (*self.model.parameters(), *self.model.buffers()):
@@ -333,19 +335,49 @@ class InterventionService:
             except RuntimeError:  # tensors created inside inference_mode have no counter
                 version = None
             tensors.append((id(value), version, value.device, value.dtype, tuple(value.shape)))
-        return (id(self.model), id(self.tokenizer), prompt,
+        return (id(self.model), id(self.tokenizer),
                 tuple((id(m), m.training) for m in self.model.modules()), tuple(tensors))
 
+    def _source_keys(self):
+        return {(hook.spec["source_prompt"], hook.spec["point"]) for hook in self._hooks
+                if isinstance(hook, Intervention) and not hook.removed and hook.spec["op"] == "patch"}
+
+    def _discard_unused_sources(self):
+        required = self._source_keys()
+        for key in list(self._cache):
+            if key not in required:
+                del self._cache[key]
+
+    def _source_space(self, sources):
+        """Admit captures within fixed bounds without eviction of an active source."""
+        sizes = {key: value.numel() * value.element_size() for key, value in self._cache.items()}
+        extra = sum(value.numel() * value.element_size() for value in sources.values())
+        total, count = sum(sizes.values()) + extra, len(sizes) + len(sources)
+        pinned, evict = self._source_keys(), []
+        for key, size in sizes.items():
+            if total <= MAX_SOURCE_BYTES and count <= MAX_SOURCE_ENTRIES:
+                break
+            if key not in pinned:
+                evict.append(key)
+                total, count = total - size, count - 1
+        if total > MAX_SOURCE_BYTES or count > MAX_SOURCE_ENTRIES:
+            raise InterventionError("active patch sources exceed the bounded source cache")
+        for key in evict:
+            del self._cache[key]
+
     def _source(self, spec):
-        identity = self._identity(spec["source_prompt"])
+        identity = self._identity()
         if identity != self._cache_identity:
             self.invalidate_cache()
             self._cache_identity = identity
-        point = spec["point"]
-        if point not in self._cache:
+        prompt, point = spec["source_prompt"], spec["point"]
+        key = prompt, point
+        if key not in self._cache:
             from ._memory import autorelease_scope
             from ._output import internal_forward
             inputs = self._source_inputs(spec)
+            missing = {key} | {item for item in self._source_keys()
+                               if item[0] == prompt and item not in self._cache}
             device = next(self.model.parameters()).device
             inputs = {k: v.to(device) for k, v in inputs.items()}
             config = getattr(self.model, "config", None)
@@ -355,7 +387,7 @@ class InterventionService:
             self.preparing_source = True
             try:
                 with internal_forward(), self.suspend(), torch.no_grad(), autorelease_scope(device):
-                    with capture(self.model, [point]) as values:
+                    with capture(self.model, sorted(item[1] for item in missing)) as values:
                         if self.resource_guard is not None:
                             self.resource_guard.check("patch source forward start")
                         try:
@@ -363,17 +395,19 @@ class InterventionService:
                         finally:
                             if self.resource_guard is not None:
                                 self.resource_guard.check("patch source forward complete")
-                        source = values[point].detach().clone()
+                        sources = {item: values[item[1]] for item in sorted(missing)}
+                        if any(value.ndim != 3 or not torch.isfinite(value).all().item()
+                               for value in sources.values()):
+                            raise InterventionError("patch source must be a finite batch-token-width tensor")
+                        self._source_space(sources)
+                        # Admission precedes clones, and a failed capture retains no partial entries.
+                        sources = {item: value.detach().clone() for item, value in sources.items()}
                     values.close(clear=True)
             finally:
                 self.preparing_source = False
-            if source.ndim != 3 or not torch.isfinite(source).all().item():
-                raise InterventionError("patch source must be a finite batch-token-width tensor")
-            self._cache[point] = source
-            if len(self._cache) > 8:
-                self._cache.popitem(last=False)
-        self._cache.move_to_end(point)
-        return self._cache[point]
+            self._cache.update(sources)
+        self._cache.move_to_end(key)
+        return self._cache[key]
 
     def install(self, request, *, on_error=None):
         """Install a validated hook. The caller selects the step boundary."""
@@ -467,9 +501,15 @@ class Intervention:
         return not self.handles
 
     def __call__(self):
+        self._remove()
+
+    def _remove(self, *, retain_source=False):
         while self.handles:
             self.handles.pop().remove()
-        self.service.invalidate_cache()
+        if self.spec["op"] == "patch" and not retain_source:
+            key = self.spec["source_prompt"], self.spec["point"]
+            if key not in self.service._source_keys():
+                self.service._cache.pop(key, None)
         self.on_error = None
 
     def _failed(self, error):

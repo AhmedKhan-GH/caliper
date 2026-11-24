@@ -269,7 +269,7 @@ class SourceGuard:
 
 
 def patch_spec(**fields):
-    return dict(kind="patch", point="layers.0.resid_pre", source_prompt="AB", **fields)
+    return dict({"kind": "patch", "point": "layers.0.resid_pre", "source_prompt": "AB"}, **fields)
 
 
 def test_clean_source_obeys_latched_guard_before_forward(controlled):
@@ -282,6 +282,68 @@ def test_clean_source_obeys_latched_guard_before_forward(controlled):
             service.executor.install(patch_spec())
         assert calls == [] and not service.executor._cache
         assert not service.executor.preparing_source
+    finally:
+        handle.remove()
+
+
+@pytest.mark.parametrize("limit", ["bytes", "entries"])
+def test_source_cache_refuses_overflow_without_evicting_active_sources(controlled, monkeypatch, limit):
+    from caliper.interp import _intervene
+    model, tokenizer, _, service = controlled
+    executor = service.executor
+    expected = model(**tokenizer("AB")).logits
+    if limit == "bytes":
+        monkeypatch.setattr(_intervene, "MAX_SOURCE_BYTES", 3 * 64 * 8)
+    else:
+        monkeypatch.setattr(_intervene, "MAX_SOURCE_ENTRIES", 1)
+    first = executor.install(patch_spec())
+    source = executor._cache["AB", "layers.0.resid_pre"]
+    with pytest.raises(InterventionError, match="bounded source cache"):
+        executor.install(patch_spec(point="layers.1.resid_pre"))
+    assert executor._cache["AB", "layers.0.resid_pre"] is source and not first.removed
+    assert sum(value.numel() * value.element_size() for value in executor._cache.values()) <= _intervene.MAX_SOURCE_BYTES
+    assert len(executor._cache) <= _intervene.MAX_SOURCE_ENTRIES
+    torch.testing.assert_close(model(**tokenizer("XY")).logits, expected, rtol=0, atol=0)
+    first()
+    assert not executor._cache
+    second = executor.install(patch_spec(point="layers.1.resid_pre"))
+    assert not second.removed and len(executor._cache) == 1
+
+
+def test_source_cache_evicts_only_unused_sources(controlled, monkeypatch):
+    from caliper.interp import _intervene
+    _, _, _, service = controlled
+    monkeypatch.setattr(_intervene, "MAX_SOURCE_ENTRIES", 1)
+    executor = service.executor
+    executor._source(patch_spec())
+    hook = executor.install(patch_spec(source_prompt="CD"))
+    assert list(executor._cache) == [("CD", "layers.0.resid_pre")]
+    with pytest.raises(InterventionError, match="bounded source cache"):
+        executor._source(patch_spec())
+    assert list(executor._cache) == [("CD", "layers.0.resid_pre")] and not hook.removed
+
+
+def test_order_rebind_and_unrelated_removal_retain_active_patch_sources(controlled):
+    model, tokenizer, ctl, service = controlled
+    ablation = {"kind": "ablate", "point": "layers.0.mlp_out"}
+    service.set(ablation)
+    service.set(patch_spec(point="layers.1.resid_pre"))
+    service.set(patch_spec(point="layers.2.resid_pre", source_prompt="CD"))
+    ctl.step()
+    cached = dict(service.executor._cache)
+    sources = []
+    handle = model.register_forward_pre_hook(
+        lambda *_: sources.append(1) if service.executor.preparing_source else None)
+    try:
+        service.set(dict(ablation, until_step=40))
+        ctl.step()
+        model(**tokenizer("XY"))
+        assert sources == []
+        assert all(service.executor._cache[key] is value for key, value in cached.items())
+        service.clear("layers.1.resid_pre")
+        ctl.step()
+        assert list(service.executor._cache) == [("CD", "layers.2.resid_pre")]
+        assert service.executor._cache["CD", "layers.2.resid_pre"] is cached["CD", "layers.2.resid_pre"]
     finally:
         handle.remove()
 
@@ -368,5 +430,36 @@ def test_source_refill_checks_guard_and_isolates_hook_failure(controlled):
         assert calls == [1]
         assert ctl.summary()["interventions"][0]["state"] == "ended"
         assert not service.executor._cache and not service.executor.preparing_source
+    finally:
+        handle.remove()
+
+
+@pytest.mark.parametrize("multiple_prompts", [False, True])
+def test_active_patch_sources_do_not_thrash_and_refill_once_per_prompt(controlled, multiple_prompts):
+    model, tokenizer, ctl, service = controlled
+    if multiple_prompts:
+        specs = [patch_spec(), patch_spec(point="layers.2.resid_pre", source_prompt="CD")]
+        expected = model(**tokenizer("CD")).logits
+    else:
+        specs = [patch_spec(point=f"layers.{layer}.{suffix}") for layer in range(3)
+                 for suffix in ("resid_pre", "mlp_in", "mlp_out")]
+        expected = model(**tokenizer("AB")).logits
+    sources = []
+    handle = model.register_forward_pre_hook(
+        lambda *_: sources.append(1) if service.executor.preparing_source else None)
+    try:
+        for spec in specs:
+            service.set(spec)
+        ctl.step()
+        sources.clear()
+        first = model(**tokenizer("XY")).logits
+        second = model(**tokenizer("XY")).logits
+        torch.testing.assert_close(first, expected, rtol=0, atol=0)
+        torch.testing.assert_close(second, expected, rtol=0, atol=0)
+        assert sources == []
+        service.invalidate_source_cache()
+        torch.testing.assert_close(model(**tokenizer("XY")).logits, expected, rtol=0, atol=0)
+        assert len(sources) == (2 if multiple_prompts else 1)
+        assert len(service.executor._cache) == len(specs)
     finally:
         handle.remove()

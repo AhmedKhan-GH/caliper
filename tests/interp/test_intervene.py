@@ -139,7 +139,7 @@ def test_patch_all_residual_positions_gives_clean_downstream_logits(case):
     assert other.calls == 0 and hook.errors == 0
     torch.testing.assert_close(model(corrupt).logits, expected, rtol=0, atol=0)
     assert other.calls == 1
-    cached = weakref.ref(service._cache["layers.2.resid_pre"])
+    cached = weakref.ref(service._cache["abc", "layers.2.resid_pre"])
     hook()
     assert cached() is None and not service._cache
 
@@ -164,7 +164,7 @@ def test_patch_cache_invalidates_on_weight_or_prompt_change(case):
     model, tokenizer, service = case
     spec = {"kind": "patch", "point": "layers.0.resid_pre", "source_prompt": "abc"}
     service.install(spec)
-    first = service._cache[spec["point"]]
+    first = service._cache[spec["source_prompt"], spec["point"]]
     assert service._source(spec) is first
     with torch.no_grad():
         model.embed_tokens.weight.add_(0.01)
@@ -172,7 +172,7 @@ def test_patch_cache_invalidates_on_weight_or_prompt_change(case):
     assert second is not first
     torch.testing.assert_close(second, first + 0.01)
     third = service._source(dict(spec, source_prompt="xyz"))
-    assert third is not second and len(service._cache) == 1
+    assert third is not second and len(service._cache) == 2
 
 
 def test_hook_failure_removes_it_immediately_and_reports_without_throw(case):
@@ -425,7 +425,7 @@ def test_watch_replacement_releases_patch_sources_and_old_handles(controlled):
     model, _, ctl, service = controlled
     service.set({"kind": "patch", "point": "layers.0.resid_pre", "source_prompt": "abc"})
     ctl.step()
-    source = weakref.ref(service.executor._cache["layers.0.resid_pre"])
+    source = weakref.ref(service.executor._cache["abc", "layers.0.resid_pre"])
     hook = next(iter(ctl._ivs.values())).hook
     next_model, _ = make_fixture()
     replacement = ctl.interventions_on(next_model)

@@ -1694,12 +1694,16 @@ class Controls:
         self._publish()
 
     @staticmethod
-    def _unhook(iv: _Intervention) -> None:
+    def _unhook(iv: _Intervention, *, retain_source=False) -> None:
         hook, iv.hook = iv.hook, None
         iv.applied_spec = None
         if hook is not None:
             try:
-                hook()
+                from .interp._intervene import Intervention
+                if retain_source and isinstance(hook, Intervention):
+                    hook._remove(retain_source=True)
+                else:
+                    hook()
             except Exception:                     # a hook handle's remove() does not fail
                 _log.debug("removing the hook of %s failed", iv.point, exc_info=True)
 
@@ -1860,7 +1864,7 @@ class Controls:
                 warnings.warn(f"caliper: the intervention at {iv.point!r} failed and ended: {iv.error}",
                               RuntimeWarning, stacklevel=2)
             if iv.replace:
-                self._unhook(iv)
+                self._unhook(iv, retain_source=True)
                 iv.replace = False
                 changed = True
             if iv.clear:
@@ -1878,7 +1882,7 @@ class Controls:
             if on and (iv.hook is None or reinstall):
                 # Keep registration order equal to record order, including a late
                 # activation or replacement before an existing overlapping effect.
-                self._unhook(iv)
+                self._unhook(iv, retain_source=True)
                 try:
                     self._install_intervention(m, iv, iv.spec)
                     reinstall = True
@@ -1898,6 +1902,7 @@ class Controls:
                 if failed:
                     warnings.warn(f"caliper: the intervention at {iv.point!r} failed and ended: "
                                   f"{iv.error}", RuntimeWarning, stacklevel=2)
+        m.executor._discard_unused_sources()
         self._iv_due = m._shapes_off is not None or any(
             iv.clear or iv.state != IV_ENDED for iv in self._ivs.values())
         return changed

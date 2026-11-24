@@ -155,7 +155,7 @@ def test_replay_patch_source_is_clean_and_cache_is_private(controlled):
     service.set({"kind": "ablate", "point": "layers.0.mlp"})
     service.set({"kind": "patch", "point": "layers.0.resid_pre", "source_prompt": "xyz"})
     ctl.step()
-    cached = service.executor._cache["layers.0.resid_pre"]
+    cached = service.executor._cache["xyz", "layers.0.resid_pre"]
     original = hook_objects(model)
     traced = snapshot(add_spec(), {"kind": "patch", "point": "layers.2.resid_pre", "source_prompt": "abc"})
     live = service.state_dict()
@@ -171,12 +171,12 @@ def test_replay_patch_source_is_clean_and_cache_is_private(controlled):
         with service.temporary_state(traced) as replay:
             assert replay.executor._cache is not service.executor._cache
             torch.testing.assert_close(model(**tokenizer("xyz")).logits, clean, rtol=0, atol=0)
-            assert replay.executor._cache["layers.2.resid_pre"] is not cached
+            assert replay.executor._cache["abc", "layers.2.resid_pre"] is not cached
     finally:
         observer.remove()
     assert forwards == [live, live]
     assert not replay.executor._cache and hook_objects(model) == original
-    assert service.executor._cache["layers.0.resid_pre"] is cached
+    assert service.executor._cache["xyz", "layers.0.resid_pre"] is cached
 
 
 def test_replay_allows_private_validation_clamp_and_nested_scopes(controlled):
