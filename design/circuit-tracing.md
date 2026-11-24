@@ -39,8 +39,10 @@ It also holds encoder bias, decoder bias, and a JumpReLU threshold. A two-row en
 This verifies the artifact format, not a complete fallback model run.
 
 Gemma Scope folds pre-MLP normalization gains and predicts the output after the post-MLP normalization.
-A fallback converter must preserve those points and transpose the encoder into the Caliper format.
-Gemma remains a documented fallback. Qwen remains the acceptance target.
+A compatible converter needs those points and the encoder in the Caliper orientation.
+This release contains no Gemma converter or fallback model run.
+The founder accepted the existing Qwen dictionary and prohibited further dictionary training.
+Qwen remains the acceptance target.
 
 ### Existing Interfaces
 
