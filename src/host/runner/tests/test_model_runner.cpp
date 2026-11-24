@@ -19,6 +19,7 @@
 #include "net/wire.h"
 #include "net/ws.h"
 #include "../../../../tests/probe_metadata.h"
+#include "../../../../tests/intervention_metadata.h"
 
 #include <caliper_builder/session/events.h>
 #include <caliper_builder/session/session.h>
@@ -1101,6 +1102,98 @@ TEST_CASE("runner: semantic probe metadata survives the managed connection") {
     const auto* descriptor = cb::find_command_descriptor(command.name);
     REQUIRE(descriptor);
     CHECK(cb::validate_command_value(descriptor->result, reply.result).ok());
+}
+
+TEST_CASE("runner: intervention discriminators survive the managed route") {
+    namespace wire = caliper_net::wire;
+    caliper_net::Server server;
+    std::string why;
+    REQUIRE(server.listen(0, &why));
+    Workspace workspace("intervention-discriminators");
+    REQUIRE(!workspace.python.empty());
+    // This bounded child supplies only the process contract. The native fixture serves the wire.
+    std::ofstream script(workspace.ws + "/scripts/discriminator_fixture.py");
+    script << "import os, threading\nfrom pathlib import Path\n"
+              "print('fixture_pid=' + str(os.getpid()), flush=True)\n"
+              "Path(os.environ['CALIPER_RUN_LINK_FILE']).write_text('ws://127.0.0.1:"
+           << server.port() << "/v3/stream?token=native_fixture_0123456789')\n"
+              "threading.Event().wait(60)\n";
+    script.close();
+    cr::ModelRunner::Options options;
+    options.workspace = workspace.ws;
+    options.python = workspace.python;
+    options.start_limit_s = 10;
+    options.kill_grace_s = 0.1;
+    cr::ModelRunner runner(options);
+    struct ExitEvidence {
+        cr::ModelRunner& runner;
+        std::string workspace;
+        ~ExitEvidence() {
+            runner.shutdown();
+            json result = json::array();
+            for (const auto& run : runner.list())
+                result.push_back({{"state", run.state}, {"exit_code", run.exit_code ? json(*run.exit_code) : json()}});
+            std::ofstream(workspace + "/fixture-exit.json") << result.dump() << '\n';
+        }
+    } evidence{runner, workspace.ws};
+    const auto records = caliper_test::intervention_records();
+    const auto controls = caliper_test::intervention_controls(records);
+    cb::RunEntry entry;
+    auto request = workspace.start({}, json::object(), "discriminator-fixture");
+    request.script = "scripts/discriminator_fixture.py";
+    request.script_path = workspace.ws + "/" + request.script;
+    REQUIRE(runner.start(request, &entry).ok());
+    std::vector<wire::Control> received;
+    const auto pump = [&] {
+        for (auto& event : server.poll(5)) {
+            if (event.type == caliper_net::Event::Type::Request) REQUIRE(server.accept(event.conn));
+            if (event.type != caliper_net::Event::Type::Message) continue;
+            wire::Message message;
+            REQUIRE(wire::decode(event.data.data(), event.data.size(), &message).ok());
+            const auto send = [&](const wire::Message& outgoing) {
+                std::vector<std::uint8_t> bytes;
+                REQUIRE(wire::encode(outgoing, &bytes));
+                REQUIRE(server.send(event.conn, bytes.data(), bytes.size()));
+            };
+            if (std::holds_alternative<wire::Hello>(message)) {
+                wire::Welcome welcome;
+                welcome.role = CALIPER_NET_ROLE_PRODUCER;
+                welcome.session = wire::Identity{"discriminator-fixture", "fixture.py", 1, 1}.to_json();
+                welcome.capabilities = {CALIPER_NET_CAP_CONTROLS, CALIPER_NET_CAP_INTERVENTIONS};
+                welcome.control = true;
+                send(welcome);
+                send(controls);
+            } else if (const auto* control = std::get_if<wire::Control>(&message)) {
+                received.push_back(*control);
+            }
+        }
+    };
+    const auto until = [&](const std::function<bool()>& ready) {
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+        while (!ready() && std::chrono::steady_clock::now() < deadline) pump();
+        REQUIRE(ready());
+    };
+    cb::RunControl* control = nullptr;
+    until([&] {
+        cb::Error error;
+        control = runner.control_of(entry.id, &error);
+        return control && control->state().control && control->interventions_supported();
+    });
+    auto opened = cb::Session::open(workspace.ws);
+    REQUIRE(opened.session);
+    opened.session->set_run_control(control);
+    const auto interventions = caliper_test::check_intervention_records(*control, *opened.session, records);
+    for (const auto& intervention : interventions) REQUIRE(control->intervene_set(intervention).ok());
+    until([&] { return received.size() == interventions.size(); });
+    for (std::size_t index = 0; index < received.size(); ++index) {
+        CHECK(received[index].op == "intervene");
+        CHECK(json::parse(received[index].intervene.dump()).at("set") == cb::intervention_set_spec(interventions[index]));
+    }
+    runner.shutdown();
+    CHECK(runner.running_pids().empty());
+    const auto ended = runner.list();
+    REQUIRE(ended.size() == 1);
+    REQUIRE(ended[0].exit_code);
 }
 
 TEST_CASE("runner: interpretation uses the managed connection without attachment") {

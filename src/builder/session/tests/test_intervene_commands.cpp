@@ -332,6 +332,23 @@ TEST_CASE("interventions: all supported kinds retain their fields and reject inc
     session->set_run_control(nullptr);
 }
 
+TEST_CASE("interventions: command handlers refuse null discriminator fields") {
+    auto run = training();
+    run.pts.clear();
+    const auto* descriptor = find_command_descriptor("intervene.set");
+    REQUIRE(descriptor);
+    for (const bool null_kind : {false, true}) {
+        CommandInvocation request;
+        request.name = "intervene.set";
+        request.args = {{"point", "layers.0.mlp_out"}, {"feature", 0}, {"value", 0.},
+                        {"kind", null_kind ? json() : json("clamp")},
+                        {"op", null_kind ? json("clamp") : json()}};
+        const auto result = intervene_command(CommandContext{request, *descriptor}, &run);
+        CHECK(result.error.code == "command.invalid_args");
+        CHECK(run.sets.empty());
+    }
+}
+
 TEST_CASE("interpretation: one approval admits a request and polling cannot submit work") {
     auto session = open_session(fresh_dir("interpret_poll") + "/workspace");
     auto run = training();

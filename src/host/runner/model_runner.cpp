@@ -357,7 +357,7 @@ std::vector<cb::Intervention> ConnectionControl::interventions() {
         cb::Intervention i;
         i.specification = a;
         i.point = a["point"].get<std::string>();
-        i.op = a.value("op", std::string("ablate"));
+        i.op = cb::intervention_op(a);
         i.from_step = opt_int(a, "from_step");
         i.until_step = opt_int(a, "until_step");
         i.since_step = opt_int(a, "since_step");

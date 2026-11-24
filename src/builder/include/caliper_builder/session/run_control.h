@@ -122,11 +122,21 @@ struct Intervention {
     nlohmann::json specification = nlohmann::json::object();
 };
 
+// Validated wire records prefer a non-null kind, then the legacy op.
+inline std::string intervention_op(const nlohmann::json& specification) {
+    for (const auto* key : {"kind", "op"}) {
+        const auto it = specification.find(key);
+        if (it != specification.end() && !it->is_null()) return it->get<std::string>();
+    }
+    return "ablate";
+}
+
 inline nlohmann::json intervention_set_spec(const Intervention& i) {
     auto result = i.specification.is_object() ? i.specification : nlohmann::json::object();
     for (const auto* key : {"since_step", "state", "error", "error_code"}) result.erase(key);
     result["point"] = i.point;
     result["op"] = i.op;
+    if (result.contains("kind")) result["kind"] = i.op;
     result["from_step"] = i.from_step ? nlohmann::json(*i.from_step) : nlohmann::json();
     result["until_step"] = i.until_step ? nlohmann::json(*i.until_step) : nlohmann::json();
     return result;

@@ -21,6 +21,7 @@
 #include "job_system.h"
 #include "test_temp.h"
 #include "probe_metadata.h"
+#include "intervention_metadata.h"
 #ifndef _WIN32
 #include "test_proc.h"
 #endif
@@ -1613,4 +1614,22 @@ TEST_CASE("app session: structured intervention fields survive both adapters") {
     for (auto it = specification.begin(); it != specification.end(); ++it) CHECK(sent[it.key()] == it.value());
     CHECK_FALSE(sent.contains("state"));
     CHECK_FALSE(sent.contains("since_step"));
+}
+
+TEST_CASE("app session: intervention discriminators survive the attached route") {
+    TempDir temp("intervention-discriminators");
+    FakeLink link;
+    const auto records = caliper_test::intervention_records();
+    link.ctl.interventions = caliper_test::intervention_controls(records).interventions;
+    caliper_host::AppRunControl control(&link);
+    auto opened = cb::Session::open(temp.str("workspace"));
+    REQUIRE(opened.session);
+    opened.session->set_run_control(&control);
+    const auto interventions = caliper_test::check_intervention_records(control, *opened.session, records);
+    for (const auto& intervention : interventions) REQUIRE(control.intervene_set(intervention).ok());
+    REQUIRE(link.sent.size() == interventions.size());
+    for (std::size_t index = 0; index < link.sent.size(); ++index) {
+        CHECK(link.sent[index].op == "intervene");
+        CHECK(json::parse(link.sent[index].value).at("set") == cb::intervention_set_spec(interventions[index]));
+    }
 }

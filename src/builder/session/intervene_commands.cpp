@@ -84,6 +84,7 @@ json intervention_json(const Intervention& i) {
     json result = i.specification.is_object() ? i.specification : json::object();
     result.update(json{{"point", i.point}, {"op", i.op}, {"from_step", opt_json(i.from_step)},
                        {"until_step", opt_json(i.until_step)}, {"since_step", opt_json(i.since_step)}, {"state", i.state}});
+    if (result.contains("kind")) result["kind"] = i.op;
     return result;
 }
 
@@ -138,11 +139,11 @@ CommandOutput set(const json& args, RunControl& control) {
     if (Error e = check(state, control, true)) return CommandOutput::fail(std::move(e));
     Intervention i;
     i.point = str_arg(args, "point");
-    i.op = str_arg(args, args.contains("kind") ? "kind" : "op");
     i.specification = args;
     i.from_step = step_arg(args, "from_step");
     i.until_step = step_arg(args, "until_step");
     if (Error e = check_intervention_spec(args, "args")) return CommandOutput::fail(std::move(e));
+    i.op = intervention_op(args);
     if (Error e = check_point(control.intervention_points(), i.point, "args.point"))
         return CommandOutput::fail(std::move(e));
     if (i.from_step && i.until_step && *i.until_step <= *i.from_step)
