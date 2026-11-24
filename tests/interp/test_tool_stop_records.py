@@ -16,7 +16,7 @@ REASONS = ["normal stop", "nul\0removed", "invalid\ud800unicode", "😀" * 3000,
 
 
 def index_metadata(folder):
-    metadata = {"layers": 2, "latents": 8, "training": {
+    metadata = {"model_id": "tiny-lm", "layers": 2, "latents": 8, "training": {
         "dataset_id": DATASET_ID, "dataset_config": DATASET_CONFIG,
         "dataset_revision": DATASET_REVISION, "split": "train",
         "partitions": partition_metadata(), "source_id": "fixture-source",

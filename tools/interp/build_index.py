@@ -2,6 +2,11 @@
 
 Run with ``python -m tools.interp.build_index --help``. Real jobs require the
 shared heavy-job wrapper. Model and tokenizer loads use the local cache only.
+
+Indexes require the exact training source and the disjoint index partition.
+The JSONL option serves only tiny-lm fixture dictionaries in CPU test harnesses,
+which supply a fixture model loader. Their manifests must record the JSONL
+SHA256 source identity and the same document partition rules.
 """
 from __future__ import annotations
 
@@ -34,6 +39,8 @@ def validate_partitions(metadata):
                 "partitions": partition_metadata()}
     if any(training.get(key) != value for key, value in expected.items()):
         raise ValueError("dictionary text source or partitions differ from the training dataset")
+    if not isinstance(training.get("source_id"), str) or not training["source_id"]:
+        raise ValueError("dictionary requires training source identity")
     return expected
 
 
@@ -77,7 +84,7 @@ def stream_documents(stream, *, batch_tokens=4096, check=None):
 
 
 def jsonl_documents(path):
-    """Read a staged source without retention of raw text between rows."""
+    """Read a fixture source without retention of raw text between rows."""
     with Path(path).open(encoding="utf-8") as source:
         for line in source:
             if not line.strip():
@@ -86,6 +93,36 @@ def jsonl_documents(path):
             if not isinstance(row, dict) or not isinstance(row.get("text"), str):
                 raise ValueError("each source row requires a text field")
             yield {"text": row["text"]}
+
+
+def _index_stream(args, metadata, provenance, resources):
+    """Admit the exact source before model load, without token consumption."""
+    provenance["partition"] = args.partition
+    provenance["duplicate_documents"] = "first occurrence only"
+    if args.text_jsonl is not None:
+        if metadata.get("model_id") != "tiny-lm":
+            raise ValueError("--text-jsonl is only supported for tiny-lm fixture dictionaries. Use the exact training source.")
+        source_hash = _hash_file(args.text_jsonl)
+        source = jsonl_documents(args.text_jsonl)
+        source_id = "jsonl:sha256:" + source_hash
+        provenance.update(source_kind="staged_jsonl", source_hash=source_hash)
+    elif args.local_dataset_manifest is not None:
+        source = fineweb_documents(local_manifest=args.local_dataset_manifest)
+        source_id = None
+        provenance["source_kind"] = "pinned_local_parquet"
+    else:
+        source = fineweb_documents(cache_dir=args.dataset_cache)
+        source_id = None
+        provenance["source_kind"] = "pinned_dataset"
+    if hasattr(source, "close"):
+        resources.callback(source.close)
+    if args.local_dataset_manifest is not None:
+        source_id = source.source_id
+    stream = resources.enter_context(TextStream(source, None, args.partition, source_id=source_id))
+    if stream.source_id != metadata["training"]["source_id"]:
+        raise ValueError("index source differs from the training source")
+    provenance["source_id"] = stream.source_id
+    return stream
 
 
 def _bounded_int(maximum):
@@ -114,7 +151,8 @@ def parser():
     result.add_argument("--partition", choices=("index",), default="index")
     result.add_argument("--dataset-cache", type=Path)
     source = result.add_mutually_exclusive_group()
-    source.add_argument("--text-jsonl", type=Path, help="Optional staged source with one text field per row")
+    source.add_argument("--text-jsonl", type=Path,
+                        help="Fixture harness only: tiny-lm source with one text field per row and the exact training SHA256 identity")
     source.add_argument("--local-dataset-manifest", type=Path, help="Pinned local Parquet source manifest")
     result.add_argument("--query", type=int, nargs=2, metavar=("LAYER", "FEATURE"))
     result.add_argument("--limit", type=int, choices=range(17), default=16)
@@ -142,6 +180,11 @@ def main(argv=None):
                 # Resource checks occur before and after each bounded model batch.
                 memory.check(stage, force=stage in ("dictionary", "before batch", "model batch", "table", "before completion"))
 
+            stream = None
+            if args.query is None:
+                stream = _index_stream(args, metadata, provenance, resources)
+                check("source")
+                stop.check()
             model, tokenizer = load_text_model(device=args.device, memory=memory)
             stop.check()
             dictionary = load_dictionary(args.dictionary, model=model, memory_limit_gb=args.memory_gb)
@@ -155,32 +198,7 @@ def main(argv=None):
                 memory.check("query")
                 print(json.dumps(response, ensure_ascii=False, allow_nan=False), flush=True)
                 return 0
-            provenance["partition"] = args.partition
-            provenance["duplicate_documents"] = "first occurrence only"
-            if args.text_jsonl is not None:
-                source_hash = _hash_file(args.text_jsonl)
-                source = jsonl_documents(args.text_jsonl)
-                source_id = "jsonl:sha256:" + source_hash
-                provenance.update(source_kind="staged_jsonl", source_hash=source_hash)
-            elif args.local_dataset_manifest is not None:
-                source = fineweb_documents(local_manifest=args.local_dataset_manifest)
-                source_id = None
-                provenance["source_kind"] = "pinned_local_parquet"
-            else:
-                source = fineweb_documents(cache_dir=args.dataset_cache)
-                source_id = None
-                provenance["source_kind"] = "pinned_dataset"
-            if hasattr(source, "close"):
-                resources.callback(source.close)
-            stop.check()
-            if args.local_dataset_manifest is not None:
-                source_id = source.source_id
-                provenance["source_id"] = source_id
-            stream = resources.enter_context(TextStream(source, tokenizer, args.partition, source_id=source_id))
-            stop.check()
-            trained_source = metadata["training"].get("source_id")
-            if trained_source is not None and stream.source_id != trained_source:
-                raise ValueError("index source differs from the training source")
+            stream.tokenizer = tokenizer
             documents = stream_documents(stream, check=check)
             resources.callback(documents.close)
             manifest = build_index(

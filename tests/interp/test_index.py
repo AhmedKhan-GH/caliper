@@ -376,19 +376,32 @@ def _t2_source_manifest(folder, model):
     from tools.interp.text_stream import DATASET_CONFIG, DATASET_ID, DATASET_REVISION, partition_metadata
     _, metadata = write_fixture(folder, model)
     metadata["training"].update(dataset_id=DATASET_ID, dataset_config=DATASET_CONFIG,
-                                 dataset_revision=DATASET_REVISION, split="train", partitions=partition_metadata())
+                                 dataset_revision=DATASET_REVISION, split="train", partitions=partition_metadata(),
+                                 source_id=f"{DATASET_ID}/{DATASET_CONFIG}@{DATASET_REVISION}:train")
     (folder / "dictionary.json").write_text(json.dumps(metadata))
     return metadata
 
 
-def test_cli_fixture_build_and_query(tmp_path, monkeypatch, capsys):
+@pytest.mark.parametrize("source_kind", ["jsonl", "dataset"])
+def test_cli_fixture_build_and_query(tmp_path, monkeypatch, capsys, source_kind):
+    import hashlib
     import json
     from tools.interp import build_index as command
+    from tools.interp.text_stream import document_identity
     from .fixture import TinyLM
     model = TinyLM()
-    _t2_source_manifest(tmp_path, model)
-    source = tmp_path / "source.jsonl"
-    source.write_text("\n".join(json.dumps({"text": f"Example document {i} describes a blue square and a green circle."}) for i in range(100)))
+    metadata = _t2_source_manifest(tmp_path, model)
+    records = [{"text": f"Example document {i} describes a blue square and a green circle."} for i in range(300)]
+    source_args = []
+    if source_kind == "jsonl":
+        source = tmp_path / "source.jsonl"
+        source.write_text("\n".join(json.dumps(row) for row in records))
+        metadata["training"]["source_id"] = "jsonl:sha256:" + hashlib.sha256(source.read_bytes()).hexdigest()
+        source_args = ["--text-jsonl", str(source)]
+    else:
+        monkeypatch.setattr(command, "fineweb_documents", lambda **kwargs: records)
+    source_id = metadata["training"]["source_id"]
+    (tmp_path / "dictionary.json").write_text(json.dumps(metadata))
     monkeypatch.setattr(command, "load_text_model", lambda **kwargs: (model, TinyTokenizer()))
     stages = []
     class Memory:
@@ -401,11 +414,24 @@ def test_cli_fixture_build_and_query(tmp_path, monkeypatch, capsys):
             stages.append(stage)
     monkeypatch.setattr(command, "MemoryGuard", Memory)
     args = ["--dictionary", str(tmp_path), "--device", "cpu"]
-    assert command.main([*args, "--text-jsonl", str(source), "--tokens", "73", "--context", "17"]) == 0
+    assert command.main([*args, *source_args, "--tokens", "73", "--context", "17"]) == 0
     index = FeatureIndex(tmp_path, model=model, tokenizer=TinyTokenizer())
     assert index.metadata["tokens"] == 73
     assert index.metadata["provenance"]["partition"] == "index"
-    assert index.metadata["provenance"]["source_kind"] == "staged_jsonl"
+    assert index.metadata["provenance"]["source_kind"] == ("staged_jsonl" if source_kind == "jsonl" else "pinned_dataset")
+    assert index.metadata["provenance"]["source_id"] == source_id
+    groups = {name: set() for name in ("train", "quality", "index")}
+    for row in records:
+        partition, identity = document_identity(row["text"])
+        groups[partition].add(str(identity))
+    assert all(groups.values())
+    indexed_ids = {bytes(identity).decode("utf-8") for identity in index.documents["id"]}
+    assert indexed_ids and indexed_ids <= groups["index"]
+    assert not indexed_ids & (groups["train"] | groups["quality"])
+    index.close()
+    if source_kind == "jsonl":
+        source.unlink()
+    monkeypatch.setattr(command, "fineweb_documents", lambda **kwargs: pytest.fail("query reopened the source"))
     assert "before batch" in stages and "model batch" in stages and "table" in stages
     capsys.readouterr()
     assert command.main([*args, "--query", "0", "0", "--limit", "1"]) == 0
@@ -668,9 +694,11 @@ def test_cli_local_parquet_preserves_source_and_closes_stream(tmp_path, monkeypa
         assert index.metadata["provenance"]["source_kind"] == "pinned_local_parquet"
 
 
-def test_cli_refuses_a_different_training_source(tmp_path, monkeypatch):
+@pytest.mark.parametrize("source_kind", ["dataset", "local_parquet", "jsonl"])
+def test_cli_refuses_a_different_training_source(tmp_path, monkeypatch, source_kind):
     import json
     from tools.interp import build_index as command
+    from tools.interp.text_stream import TextStream
     from .fixture import TinyLM
     from .test_training_stream import local_manifest
 
@@ -678,9 +706,68 @@ def test_cli_refuses_a_different_training_source(tmp_path, monkeypatch):
     metadata = _t2_source_manifest(tmp_path, model)
     metadata["training"]["source_id"] = "different-source"
     (tmp_path / "dictionary.json").write_text(json.dumps(metadata))
-    manifest = local_manifest(tmp_path)
-    monkeypatch.setattr(command, "load_text_model", lambda **kwargs: (model, TinyTokenizer()))
+    args = ["--dictionary", str(tmp_path), "--device", "cpu"]
+    if source_kind == "local_parquet":
+        args.extend(["--local-dataset-manifest", str(local_manifest(tmp_path))])
+    elif source_kind == "jsonl":
+        source = tmp_path / "source.jsonl"
+        source.write_text('{"text": "fixture"}\n')
+        args.extend(["--text-jsonl", str(source)])
+    else:
+        monkeypatch.setattr(command, "fineweb_documents", lambda **kwargs: [])
+    opened = []
+    def stream(source, tokenizer, *args, **kwargs):
+        assert tokenizer is None
+        value = TextStream(source, tokenizer, *args, **kwargs)
+        opened.append(value)
+        return value
+    monkeypatch.setattr(command, "TextStream", stream)
+    monkeypatch.setattr(command, "load_text_model", lambda **kwargs: pytest.fail("source mismatch loaded a model"))
     with pytest.raises(ValueError, match="source differs"):
-        command.main(["--dictionary", str(tmp_path), "--device", "cpu",
-                      "--local-dataset-manifest", str(manifest)])
+        command.main(args)
+    assert len(opened) == 1 and opened[0].closed
+    assert opened[0].state_dict()["rows"] == 0
+    assert not (tmp_path / "index").exists()
+
+
+@pytest.mark.parametrize("source_id", [None, "", 17])
+def test_cli_requires_training_source_identity(tmp_path, monkeypatch, source_id):
+    import json
+    from tools.interp import build_index as command
+    from .fixture import TinyLM
+
+    metadata = _t2_source_manifest(tmp_path, TinyLM())
+    if source_id is None:
+        del metadata["training"]["source_id"]
+    else:
+        metadata["training"]["source_id"] = source_id
+    (tmp_path / "dictionary.json").write_text(json.dumps(metadata))
+    monkeypatch.setattr(command, "load_text_model", lambda **kwargs: pytest.fail("missing source identity loaded a model"))
+    with pytest.raises(ValueError, match="requires training source identity"):
+        command.main(["--dictionary", str(tmp_path), "--device", "cpu"])
+    assert not (tmp_path / "index").exists()
+
+
+@pytest.mark.parametrize("source_kind", ["dataset", "local_parquet", "jsonl"])
+def test_cli_jsonl_requires_fixture_dictionary(tmp_path, monkeypatch, source_kind):
+    import hashlib
+    import json
+    from tools.interp import build_index as command
+    from tools.interp.model_load import MODEL_ID
+    from tools.interp.text_stream import fineweb_documents
+    from .fixture import TinyLM
+    from .test_training_stream import local_manifest
+
+    metadata = _t2_source_manifest(tmp_path, TinyLM())
+    metadata["model_id"] = MODEL_ID
+    source = tmp_path / "source.jsonl"
+    source.write_text('{"text": "fixture"}\n')
+    if source_kind == "local_parquet":
+        metadata["training"]["source_id"] = fineweb_documents(local_manifest=local_manifest(tmp_path)).source_id
+    elif source_kind == "jsonl":
+        metadata["training"]["source_id"] = "jsonl:sha256:" + hashlib.sha256(source.read_bytes()).hexdigest()
+    (tmp_path / "dictionary.json").write_text(json.dumps(metadata))
+    monkeypatch.setattr(command, "load_text_model", lambda **kwargs: pytest.fail("incompatible JSONL source loaded a model"))
+    with pytest.raises(ValueError, match="only supported for tiny-lm fixture dictionaries"):
+        command.main(["--dictionary", str(tmp_path), "--device", "cpu", "--text-jsonl", str(source)])
     assert not (tmp_path / "index").exists()
