@@ -77,13 +77,40 @@ class _IdentityMemory:
             self._checked_peak = max(self._checked_peak, current)
 
 
-def _content_identity(state, guard):
-    from ._dictionary import _state_hash
+def _identity_memory(state, guard):
     memory = _IdentityMemory(guard) if guard is not None else None
     if any(value.device.type != "cpu" for value in state.values()):
         if memory is None or not math.isfinite(memory.limit):
             raise ValueError("device content identity requires a bounded process memory guard")
-    return _state_hash(state, memory=memory)
+    return memory
+
+
+def _content_identity(state, guard):
+    from ._dictionary import _state_hash
+    return _state_hash(state, memory=_identity_memory(state, guard))
+
+
+def _source_input_identity(inputs, guard):
+    """Canonicalize admitted prompt views without a change to weight admission."""
+    from ._dictionary import _hash_admission, _state_hash
+    # The shared prompt contract permits two tensors with at most 32 elements.
+    if (set(inputs) - {"input_ids", "attention_mask"}
+            or any(value.layout != torch.strided or value.ndim != 2
+                   or value.shape[0] != 1 or not 1 <= value.shape[1] <= MAX_POSITIONS
+                   for value in inputs.values())):
+        raise InterventionError("patch source inputs exceed the canonicalization bounds")
+    copies = {key for key, value in inputs.items()
+              if not value.is_contiguous() or value.is_conj() or value.is_neg()}
+    reserve = sum(inputs[key].numel() * inputs[key].element_size() for key in copies)
+    memory = _identity_memory(inputs, guard)
+    if memory is not None and reserve:
+        memory.check("patch source input copy")
+        # Retain the copy reserve even if the supplied guard reports stale usage.
+        memory.floor = allocation_bytes(memory) + reserve
+        _hash_admission(memory)
+    canonical = {key: value.detach().clone(memory_format=torch.contiguous_format)
+                 if key in copies else value for key, value in inputs.items()}
+    return canonical, _state_hash(canonical, memory=memory)
 
 
 def _dictionary_identifier(dictionary, guard):
@@ -677,8 +704,7 @@ class InterventionService:
             self._cache_identity = identity, ()
         prompt, point = spec["source_prompt"], spec["point"]
         key = prompt, point
-        inputs = self._source_inputs(spec)
-        input_identity = _content_identity(inputs, self.resource_guard)
+        inputs, input_identity = _source_input_identity(self._source_inputs(spec), self.resource_guard)
         input_identities = dict(self._cache_identity[1])
         if input_identities.get(prompt) != input_identity:
             for old_key in list(self._cache):
