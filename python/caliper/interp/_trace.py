@@ -151,7 +151,7 @@ def _versions(module):
 
 
 def _token_path(nodes, incoming, target):
-    """Find a shortest token path with at most one visit per retained node."""
+    """Find a shortest token path with at most one visit per reachable node."""
     pending = deque([target])
     next_step = {target: None}
     while pending:
@@ -169,7 +169,38 @@ def _token_path(nodes, incoming, target):
     return None
 
 
+def _supported_token_path(effects, weights, target_indices):
+    """Find a shortest path before display caps remove its intermediate features.
+
+    Only visited features can have incoming edges. Thus the CPU search holds at
+    most 544 sources and 513 targets, independent of the full source count.
+    Edge magnitude and then source index resolve ties. Each node enters once.
+    """
+    top_logit = effects.logit_nodes[0]
+    columns = [column for column, target in enumerate(target_indices)
+               if target == top_logit or effects.nodes[target]["kind"] == "feature"]
+    sources = sorted(set(range(effects.path.tokens)) | {
+        target for target in target_indices if effects.nodes[target]["kind"] == "feature"})
+    rows = torch.tensor(sources, device=weights.device, dtype=torch.long)
+    selected_columns = torch.tensor(columns, device=weights.device, dtype=torch.long)
+    compact = weights[rows][:, selected_columns].abs().T.tolist()
+    incoming = {}
+    for column, values in zip(columns, compact):
+        target = target_indices[column]
+        ranked = sorted((i for i, value in enumerate(values) if value > 0),
+                        key=lambda i: (-values[i], sources[i]))
+        incoming[target] = [(sources[i], (sources[i], target)) for i in ranked]
+    return _token_path(effects.nodes, incoming, top_logit)
+
+
 def _prune(effects, weights, target_indices, scores, normalized, *, max_nodes, max_edges):
+    """Reserve a supported path, then apply influence thresholds within caps.
+
+    If caps cannot hold the shortest path, retain the top logit and ranked
+    sources without a connectivity guarantee. The result reports that limit.
+    An unavailable path means no path exists through the visited targets.
+    Secondary logits never consume the last source slot when influence exists.
+    """
     nodes = effects.nodes
     logits = effects.logit_nodes
     device = weights.device
@@ -178,26 +209,30 @@ def _prune(effects, weights, target_indices, scores, normalized, *, max_nodes, m
     top_effects = weights[:, 0].tolist()
     # Terminal logit seeds weight source influence but do not count as sources.
     total = float(scores[:logits[0]].sum())
-    selected = set(logits[:max_nodes])
-    retained = 0.
+    path = _supported_token_path(effects, weights, target_indices)
+    path_nodes = {index for edge in path for index in edge} if path is not None else set()
+    fits = path is not None and len(path_nodes) <= max_nodes and len(path) <= max_edges
+    connectivity = {"status": "retained" if fits else "unavailable" if path is None else "capped",
+                    "minimum_nodes": len(path_nodes) if path is not None else None,
+                    "minimum_edges": len(path) if path is not None else None}
+    selected = {logits[0]}
+    if fits:
+        selected.update(path_nodes)
+    elif max_nodes > 1:
+        source = next((i for i in rank if i < logits[0] and score_values[i] > 0), None)
+        if source is not None:
+            selected.add(source)
+    for index in logits[1:]:
+        if len(selected) >= max_nodes:
+            break
+        selected.add(index)
+    retained = sum(score_values[i] for i in selected if i < logits[0])
     for index in rank:
         if retained >= .8 * total or len(selected) >= max_nodes:
             break
         if index < logits[0] and index not in selected and score_values[index] > 0:
             selected.add(index)
             retained += score_values[index]
-    # A real token edge can preserve a supported path without a synthetic link.
-    required_edge = None
-    if max_nodes >= 2 and max_edges and logits[0] in selected:
-        token_edges = weights[:effects.path.tokens, 0].abs()
-        token = int(torch.argmax(token_edges))
-        if token_edges[token] > 0 and score_values[token] > 0:
-            if token not in selected:
-                if len(selected) == max_nodes:
-                    removable = [i for i in selected if i != logits[0]]
-                    selected.remove(min(removable, key=lambda i: (score_values[i], -i)))
-                selected.add(token)
-            required_edge = (token, logits[0])
     order = sorted(selected)
     selected_tensor = torch.tensor(order, device=device, dtype=torch.long)
     column_list = [j for j, i in enumerate(target_indices) if i in selected]
@@ -217,22 +252,12 @@ def _prune(effects, weights, target_indices, scores, normalized, *, max_nodes, m
     else:
         chosen = []
     coordinate_list = coordinates.tolist()
-    if required_edge is not None:
-        required = next((i for i, (s, t) in enumerate(coordinate_list)
-                         if (order[s], target_indices[column_list[t]]) == required_edge), None)
-        if required is not None and required not in chosen:
-            if len(chosen) == max_edges:
-                chosen.pop()
-            chosen.append(required)
-    # Resolve a supported multihop path within the retained nodes when no direct token edge exists.
-    if required_edge is None and max_edges:
-        incoming = {}
-        for i in edge_rank.tolist():
-            s, t = coordinate_list[i]
-            incoming.setdefault(target_indices[column_list[t]], []).append((order[s], i))
-        path = _token_path(nodes, incoming, logits[0]) if logits[0] in selected else None
-        if path is not None and len(path) <= max_edges:
-            chosen = path + [i for i in chosen if i not in path][:max_edges - len(path)]
+    if fits:
+        required_pairs = set(path)
+        required = [i for i, (s, t) in enumerate(coordinate_list)
+                    if (order[s], target_indices[column_list[t]]) in required_pairs]
+        required_indices = set(required)
+        chosen = required + [i for i in chosen if i not in required_indices][:max_edges - len(required)]
     row = {old: new for new, old in enumerate(order)}
     display_nodes = [dict(nodes[i], index=row[i], influence=score_values[i], effect=top_effects[i]) for i in order]
     value_list = values.tolist()
@@ -248,7 +273,7 @@ def _prune(effects, weights, target_indices, scores, normalized, *, max_nodes, m
     global_edge_total = float((normalized.sum(0) * scores[torch.tensor(target_indices, device=device)]).sum())
     retained_edges = float(importance[chosen].sum()) if chosen else 0.
     edge_omitted = max(0., 1. - retained_edges / global_edge_total) if global_edge_total else 0.
-    return display_nodes, display_edges, omitted, edge_omitted
+    return display_nodes, display_edges, omitted, edge_omitted, connectivity
 
 
 class Tracer:
@@ -397,7 +422,7 @@ class Tracer:
             feature_share = float(top_scores[feature_mask].sum()) / source_total if source_total else 0.
             error_mask = torch.tensor([n["kind"] == "error" for n in effects.nodes], device=path.device)
             error_share = float(top_scores[error_mask].sum()) / source_total if source_total else 0.
-            display_nodes, display_edges, omitted, edge_omitted = _prune(
+            display_nodes, display_edges, omitted, edge_omitted, connectivity = _prune(
                 effects, weights, target_indices, scores, normalized, max_nodes=max_nodes, max_edges=max_edges)
             completeness = {"max_absolute_residual": max(d["absolute_residual"] for d in diagnostics),
                             "max_relative_residual": max(d["relative_residual"] for d in diagnostics),
@@ -408,7 +433,8 @@ class Tracer:
                             "feature_targets": len(target_indices) - len(effects.logit_nodes),
                             "logit_targets": len(effects.logit_nodes), "logit_probability_mass": float(seeds.sum()),
                             "unvisited_feature_influence": float(scores[feature_mask & ~visited].sum()),
-                            "omitted_edge_influence": edge_omitted, "targets": diagnostics}
+                            "omitted_edge_influence": edge_omitted, "token_path": connectivity,
+                            "targets": diagnostics}
             tolerance = 1e-9 if path.dtype == torch.float64 else 2e-2
             if completeness["max_absolute_residual"] > tolerance:
                 raise ValueError(f"direct-effect completeness residual exceeds {tolerance}")
