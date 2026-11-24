@@ -90,20 +90,25 @@ class InterpretationService:
         return record["layer"], record["feature"]
 
     def _baseline(self):
-        # M7 has no intervention dependency. M8 supplies this optional owner.
         from .._controls import CONTROLS
         owner = getattr(self, "controls", CONTROLS)
         service = getattr(owner, "intervention_service", None)
-        return service.suspend() if service is not None else nullcontext()
+        if service is not None:
+            return service.suspend()
+        # Legacy M7 hooks have no suspension API. Refuse before any index access.
+        with owner.lock:
+            if any(iv.hook is not None for iv in owner._ivs.values()):
+                raise Refused("interpret.baseline_required", "Clear active ablations before a baseline feature query.")
+        return nullcontext()
 
     def _execute(self, method, params, step):
         if method == "feature.dictionary":
             return {"metadata": deepcopy(self._resource("dictionary").metadata)}
         if method in ("feature.show", "feature.examples"):
-            self._resource("dictionary")
-            index = self._resource("index")
-            layer, feature = self._feature(params)
             with self._baseline():
+                self._resource("dictionary")
+                index = self._resource("index")
+                layer, feature = self._feature(params)
                 if method == "feature.show":
                     return index.show(layer, feature)
                 rows = index.examples(layer, feature, limit=params.get("limit", 16))

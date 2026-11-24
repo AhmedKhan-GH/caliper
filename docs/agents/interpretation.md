@@ -74,6 +74,8 @@ An inference runner must also suppress its own forward checkpoint callback durin
 Other requests execute at the next boundary and send a deferred reply.
 Feature queries suspend active interventions when the run supplies an intervention service.
 Thus example activations refer to the indexed baseline.
+With legacy ablation hooks, feature queries return `interpret.baseline_required` before index access.
+Clear those ablations at a step boundary before the query.
 Unregistration refuses outstanding requests. Resource ownership remains with the script, which closes its index.
 
 Missing resources produce structured errors, including `interpret.missing_dictionary`, `interpret.missing_index`, and `interpret.missing_model`.

@@ -169,3 +169,42 @@ def test_lazy_factory_runs_only_at_boundary_and_status_does_not_wait():
     release.set()
     thread.join(5)
     assert not thread.is_alive() and replies[0][0] == "error"
+
+
+@pytest.mark.parametrize("method", ["feature.show", "feature.examples"])
+def test_legacy_ablation_refuses_before_index_access(actual, monkeypatch, method):
+    import torch
+    controls, transport = _controls.Controls(), Transport()
+    route = controls.attach(transport)
+    handle = controls.interventions_on(actual.model)
+    # M7 has no public suspension property. Keep its actual hook lifecycle.
+    monkeypatch.delattr(_controls.Controls, "intervention_service", raising=False)
+    register_service(actual, controls=controls)
+    index, factories = actual.index, []
+    feature = int(index.counts[1].argmax())
+    expected = index.examples(1, feature)
+    index.clear_cache()
+    actual.index = None
+    actual.factories["index"] = lambda: factories.append("index") or index
+    ids = actual.tokenizer("AB")["input_ids"]
+    baseline = actual.model(ids).logits.detach()
+    try:
+        route.on_control(None, {"request_id": 1, "op": "intervene",
+            "intervene": {"set": {"point": "layers.0.mlp_out", "op": "ablate"}}})
+        controls.step()
+        assert not torch.equal(actual.model(ids).logits, baseline)
+        assert call(route, method, {"layer": 1, "feature": feature})["status"] == "queued"
+        controls.step()
+        assert transport.replies[-1].error["code"] == "interpret.baseline_required"
+        assert not factories
+        assert actual.index is None
+        route.on_control(None, {"request_id": 2, "op": "intervene", "intervene": {"clear_all": True}})
+        controls.step()
+        assert call(route, "feature.examples", {"layer": 1, "feature": feature})["status"] == "queued"
+        controls.step()
+        assert transport.replies[-1].status == "ok", transport.replies[-1].error
+        assert transport.replies[-1].result["examples"] == expected
+        assert factories == ["index"]
+    finally:
+        unregister_service(actual, controls=controls)
+        handle.remove()
