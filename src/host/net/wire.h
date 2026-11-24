@@ -322,6 +322,7 @@ struct Control {    // pause, resume, step, set, run, intervene (3.2 draft)
     std::optional<std::string> name;       // set, run
     Json value;                            // set: a number, a boolean or a choice; null otherwise
     std::optional<uint32_t> count;         // step: at least 1; absent means 1
+    Json interpretation;                   // capability interpretation: {version, method, params}
     Json intervene;                        // intervene: exactly one of set, clear and clear_all, as given; null otherwise
 };
 struct ControlReply {
@@ -332,6 +333,7 @@ struct ControlReply {
     std::optional<std::string> name;
     Json value;                            // set with ok: the accepted value; null when absent
     std::optional<std::string> message;    // run with ok: the action's result text
+    Json result;                           // capability interpretation: bounded object
     Json error;                            // status error: {"code", "message"}; null otherwise
 };
 struct Selection {  // the selection of one item space

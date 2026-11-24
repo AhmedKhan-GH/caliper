@@ -248,3 +248,20 @@ TEST_CASE("interventions: the effect run asks an agent, with a rule key for one 
 }
 
 #endif
+
+TEST_CASE("interpretation: every command binds with bounded schema and correct effects") {
+    auto session = open_session(fresh_dir("interpret_bound") + "/workspace");
+    for (const char* name : {"feature.dictionary", "feature.show", "feature.examples", "trace.run", "trace.status", "trace.read"}) {
+        CAPTURE(name);
+        const auto* descriptor = find_command_descriptor(name);
+        REQUIRE(descriptor);
+        CHECK(descriptor->effect == (std::string(name) == "trace.run" ? CommandEffect::run : CommandEffect::read));
+        CHECK(descriptor->frame_thread);
+        auto result = invoke(*session, name, descriptor->examples.front());
+        CHECK_FALSE(result.ok);
+        CHECK(result.error.code == "interpret.unsupported");
+    }
+    CHECK(err(*session, "trace.read", {{"node_limit", 257}}) == "command.invalid_args");
+    CHECK(err(*session, "feature.examples", {{"layer", 0}, {"feature", 0}, {"limit", 17}}) == "command.invalid_args");
+    CHECK(err(*session, "trace.run", {{"prompt", "x"}, {"max_nodes", true}}) == "command.invalid_args");
+}

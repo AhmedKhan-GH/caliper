@@ -1742,6 +1742,8 @@ struct Session::Impl {
     }
 
     // The intervention commands (design/gpu-programs.md).
+    CommandOutput interpretation_cmd(const CommandContext& ctx) { return interpretation_command(ctx, run_control.load()); }
+
     CommandOutput intervene_cmd(const CommandContext& ctx) { return intervene_command(ctx, run_control.load()); }
 
     // ---- the approval feed
@@ -1845,6 +1847,8 @@ struct Session::Impl {
         bind("program.read", &Impl::resource_cmd);
         for (const char* name : {"intervene.points", "intervene.set", "intervene.clear", "intervene.list"})
             bind(name, &Impl::intervene_cmd);
+        for (const char* name : {"feature.dictionary", "feature.show", "feature.examples", "trace.run", "trace.status", "trace.read"})
+            bind(name, &Impl::interpretation_cmd);
         // The run commands and events.wait (design/instruments.md).
         for (const char* name : {"run.state", "run.set_param", "run.action", "run.pause"}) bind(name, &Impl::run_cmd);
         for (const char* name : {"run.list", "run.start", "run.fork", "run.stop", "run.logs"})

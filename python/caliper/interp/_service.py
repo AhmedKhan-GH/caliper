@@ -1,5 +1,6 @@
 """Step-boundary service for real feature indexes and attribution graphs."""
 from collections import deque
+from contextlib import nullcontext
 from copy import deepcopy
 import threading
 import time
@@ -84,6 +85,13 @@ class InterpretationService:
         record = self.graph.nodes[node]
         return record["layer"], record["feature"]
 
+    def _baseline(self):
+        # M7 has no intervention dependency. M8 supplies this optional owner.
+        from .._controls import CONTROLS
+        owner = getattr(self, "controls", CONTROLS)
+        service = getattr(owner, "intervention_service", None)
+        return service.suspend() if service is not None else nullcontext()
+
     def _execute(self, method, params, step):
         if method == "feature.dictionary":
             return {"metadata": deepcopy(self._resource("dictionary").metadata)}
@@ -91,9 +99,10 @@ class InterpretationService:
             self._resource("dictionary")
             index = self._resource("index")
             layer, feature = self._feature(params)
-            if method == "feature.show":
-                return index.show(layer, feature)
-            rows = index.examples(layer, feature, limit=params.get("limit", 16))
+            with self._baseline():
+                if method == "feature.show":
+                    return index.show(layer, feature)
+                rows = index.examples(layer, feature, limit=params.get("limit", 16))
             result = {"layer": layer, "feature": feature, "examples": rows,
                       "bindings": {k: "live:examples." + k for k in
                                    ("tokens", "activations", "example_ids", "valid_tokens", "label_text")}}
@@ -111,6 +120,7 @@ class InterpretationService:
                       **{k: v for k, v in summary.items() if k not in ("nodes", "edges", "tokens")}}
             if not protocol.bounded(result):
                 raise Refused("interpret.result_limit", "The trace result exceeds the metadata limits.")
+            self._publish_trace_panels(graph)
             with self.lock:
                 self.graph, self.status = graph, result
             return result
@@ -185,6 +195,42 @@ class InterpretationService:
                                (tokens, activations, ids, valid, labels)):
             publish("examples." + name, value.to(device))
 
+    @staticmethod
+    def _pack_labels(values, count):
+        import torch
+        labels = torch.zeros((count, 16), dtype=torch.uint32)
+        for i, value in enumerate(values):
+            raw = str(value).encode("utf-8")[:63].decode("utf-8", errors="ignore").encode("utf-8")
+            raw = raw.ljust(64, b"\0")
+            labels[i] = torch.tensor([int.from_bytes(raw[j:j + 4], "little") for j in range(0, 64, 4)],
+                                     dtype=torch.uint32)
+        return labels
+
+    def _publish_trace_panels(self, graph):
+        """Publish display labels and the existing traced probabilities without a forward."""
+        import math
+        import torch
+        from . import publish
+        device = graph.tensors["trace.counts"].device
+        labels = [token["text"] for token in graph.tokens]
+        labels.extend([""] * (32 - len(labels)))
+        for node in graph.nodes:
+            labels.append(node.get("label") or node["id"])
+        logits = [node for node in graph.nodes if node["kind"] == "logit"][:10]
+        probabilities = [float(node["probability"]) for node in logits]
+        if any(not math.isfinite(p) or not 0 <= p <= 1 for p in probabilities):
+            raise Refused("interpret.result_limit", "Traced probabilities must be finite values from zero to one.")
+        probs = torch.zeros((2, 10), dtype=torch.float32)
+        tokens = torch.full((10,), -1, dtype=torch.int32)
+        if logits:
+            probs[:, :len(logits)] = torch.tensor(probabilities, dtype=torch.float32)
+            tokens[:len(logits)] = torch.tensor([node["token_id"] for node in logits], dtype=torch.int32)
+        values = {"label_text": self._pack_labels(labels, 544), "probs": probs,
+                  "logit_tokens": tokens,
+                  "logit_label_text": self._pack_labels([node["label"] for node in logits], 10)}
+        for name, value in values.items():
+            publish("trace." + name, value.to(device))
+
 
 def register_service(service=None, *, controls=None, **resources):
     """Register one service; Controls checkpoints call its step after interventions."""
@@ -195,6 +241,7 @@ def register_service(service=None, *, controls=None, **resources):
     with controls.lock:
         old = controls.interpretation_service
         controls.interpretation_service = service
+        service.controls = controls
         controls.busy = True
     if old is not None and old is not service:
         old.close()

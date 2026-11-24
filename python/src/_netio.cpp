@@ -236,6 +236,8 @@ struct Link {
     bool cap_programs = false;                // 3.2 draft: both sides announced "programs"
     bool cap_resources = false;               // 3.2 draft: "resources" beside "programs" (pieces)
     bool cap_scene_pieces = false;            // 3.2 draft: "scene_pieces" beside "scenes"
+    bool cap_text_params = false;
+    bool cap_interpretation = false;
     bool cap_interventions = false;           // 3.2 draft: both sides announced "interventions"
     bool may_control = false;                 // 3.1: a CONTROL from it is accepted
     std::deque<QueuedFrame> after_views;      // 3.1: frames that follow the next VIEWS
@@ -504,6 +506,8 @@ public:
 
     // 3.1: announce "controls" and "selection" from now on; ``allow``: whether
     // viewers may control (WELCOME's "control").
+    void enable_interpretation(bool enabled) { std::lock_guard<std::mutex> g(mu_); interpretation_ = enabled; }
+
     void enable_controls(bool allow) {
         std::lock_guard<std::mutex> g(mu_);
         controls_ = true;
@@ -916,15 +920,20 @@ private:
     // 3.1 (under mu_): the server's capabilities, and what a peer announced as
     // the JSON of its "opened" message for Python.
     std::vector<std::string> capabilities() const {
-        if (!controls_)
-            return {CALIPER_NET_CAP_EVENTS, CALIPER_NET_CAP_SCENE_PIECES, CALIPER_NET_CAP_SCENES,
-                    CALIPER_NET_CAP_TIMELINES};
-        if (g_watch_caps.load())
-            return {CALIPER_NET_CAP_CONTROLS,  CALIPER_NET_CAP_EVENTS, CALIPER_NET_CAP_INTERVENTIONS,
-                    CALIPER_NET_CAP_PROGRAMS,  CALIPER_NET_CAP_RESOURCES, CALIPER_NET_CAP_SCENE_PIECES,
-                    CALIPER_NET_CAP_SCENES,    CALIPER_NET_CAP_SELECTION, CALIPER_NET_CAP_TIMELINES};
-        return {CALIPER_NET_CAP_CONTROLS, CALIPER_NET_CAP_EVENTS, CALIPER_NET_CAP_SCENE_PIECES,
-                CALIPER_NET_CAP_SCENES,   CALIPER_NET_CAP_SELECTION, CALIPER_NET_CAP_TIMELINES};
+        std::vector<std::string> caps = {CALIPER_NET_CAP_EVENTS, CALIPER_NET_CAP_SCENE_PIECES,
+                                       CALIPER_NET_CAP_SCENES, CALIPER_NET_CAP_TIMELINES};
+        if (controls_) {
+            caps.push_back(CALIPER_NET_CAP_TEXT_PARAMS);
+            caps.push_back(CALIPER_NET_CAP_CONTROLS);
+            caps.push_back(CALIPER_NET_CAP_SELECTION);
+            if (interpretation_) caps.push_back(CALIPER_NET_CAP_INTERPRETATION);
+            if (g_watch_caps.load()) {
+                caps.push_back(CALIPER_NET_CAP_INTERVENTIONS);
+                caps.push_back(CALIPER_NET_CAP_PROGRAMS);
+                caps.push_back(CALIPER_NET_CAP_RESOURCES);
+            }
+        }
+        return caps;
     }
     // 3.2 draft: the timelines of the VIEWS to a peer that announced "timelines", as the
     // Python sender declares them (caliper/_net.py, views_msg()).
@@ -951,6 +960,8 @@ private:
         o.set("resources", l.cap_resources);
         o.set("scene_pieces", l.cap_scene_pieces);
         o.set("interventions", l.cap_interventions);
+        o.set("interpretation", l.cap_interpretation);
+        o.set("text_params", l.cap_text_params);
         o.set("control", l.may_control);
         o.set("upstream", l.upstream);
         const std::string t = o.dump();
@@ -1109,6 +1120,8 @@ private:
                 return;
             }
             l.helloed = true;
+            l.cap_text_params = controls_ && announces(h->capabilities, CALIPER_NET_CAP_TEXT_PARAMS);
+            l.cap_interpretation = interpretation_ && announces(h->capabilities, CALIPER_NET_CAP_INTERPRETATION);
             l.cap_controls = controls_ && announces(h->capabilities, CALIPER_NET_CAP_CONTROLS);
             l.cap_selection = controls_ && announces(h->capabilities, CALIPER_NET_CAP_SELECTION);
             l.cap_scenes = announces(h->capabilities, CALIPER_NET_CAP_SCENES);
@@ -1445,6 +1458,8 @@ private:
                         l.helloed = true;
                         l.follows_default = false;
                         l.opened_ms = caliper_net::monotonic_ms();
+                        l.cap_text_params = controls_ && announces(w->capabilities, CALIPER_NET_CAP_TEXT_PARAMS);
+                        l.cap_interpretation = interpretation_ && announces(w->capabilities, CALIPER_NET_CAP_INTERPRETATION);
                         l.cap_controls = controls_ && announces(w->capabilities, CALIPER_NET_CAP_CONTROLS);
                         l.cap_selection = controls_ && announces(w->capabilities, CALIPER_NET_CAP_SELECTION);
                         l.cap_scenes = announces(w->capabilities, CALIPER_NET_CAP_SCENES);
@@ -1556,6 +1571,7 @@ private:
     Json views_sel_;                          // 3.1: views_ with item spaces (an array), or null
     Json views_plain_ = Json::array();        // 3.2 draft: views_ without the scenes
     Json views_sel_plain_;                    // 3.2 draft: views_sel_ without the scenes, or null
+    bool interpretation_ = false;
     bool controls_ = false;                   // 3.1: announce "controls" and "selection"
     bool allow_control_ = false;              // 3.1: viewers may control
     std::vector<float> scratch_;
@@ -1637,6 +1653,7 @@ NB_MODULE(_netio, m) {
                  nb::gil_scoped_release release;
                  return self.send_after_views(c, std::move(f));
              })
+        .def("enable_interpretation", &NetIO::enable_interpretation, nb::arg("enabled"), R())
         .def("enable_controls", &NetIO::enable_controls, nb::arg("allow"), R())
         .def("data_pending", &NetIO::data_pending, R())
         .def("queued", &NetIO::queued, R())

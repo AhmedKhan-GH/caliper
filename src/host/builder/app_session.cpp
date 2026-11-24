@@ -332,6 +332,16 @@ std::vector<cb::Intervention> interventions_of(const json& interventions) {
     return pending;
 }
 
+cb::CommandOutput AppRunControl::interpret(const std::string& method, const json& params, std::uint32_t request) {
+    if (!link_ || !link_->attached()) return cb::CommandOutput::fail(cb::Error(cb::kRunNotAttached, "No stream is attached."));
+    const auto result = from_net_json(link_->interpret(method, to_net_json(params), request));
+    if (result.contains("error")) {
+        const auto& error = result["error"];
+        return cb::CommandOutput::fail(cb::Error(error.value("code", "interpret.refused"), error.value("message", "The request failed.")));
+    }
+    return cb::CommandOutput::ok(result);
+}
+
 bool AppRunControl::interventions_supported() {
     return link_ && link_->attached() && interventions_json(link_->controls()).is_object();
 }

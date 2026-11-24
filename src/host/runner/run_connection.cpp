@@ -75,6 +75,8 @@ RunConnection::~RunConnection() = default;
 bool RunConnection::open(const std::string& link, std::string* error) {
     const std::string url = stream_url_of(link, error);
     if (url.empty()) return false;
+    interpretation_ = false;
+    interpretation_replies_.clear();
     client_ = std::make_unique<caliper_net::Client>();
     std::string err;
     if (!client_->connect(url, &err)) {
@@ -115,7 +117,7 @@ bool RunConnection::poll(int timeout_ms) {
                 changed = true;
                 wire::Hello hello;
                 hello.role = CALIPER_NET_ROLE_VIEWER;
-                hello.capabilities = {CALIPER_NET_CAP_CONTROLS, CALIPER_NET_CAP_INTERVENTIONS};
+                hello.capabilities = {CALIPER_NET_CAP_CONTROLS, CALIPER_NET_CAP_INTERVENTIONS, CALIPER_NET_CAP_INTERPRETATION, CALIPER_NET_CAP_TEXT_PARAMS};
                 Json software = Json::object();
                 software.set("name", "caliper-runner");
                 software.set("version", "1");
@@ -127,13 +129,14 @@ bool RunConnection::poll(int timeout_ms) {
             case caliper_net::Event::Type::Message:
                 if (e.binary) {
                     const std::size_t before = replies_.size();
+                    const auto revision = interpretation_revision_;
                     const json old_controls = controls_;
                     std::uint64_t totals = 0;
                     for (const auto& s : series_) totals += s.second.total;
                     on_message(e.data);
                     std::uint64_t after = 0;
                     for (const auto& s : series_) after += s.second.total;
-                    if (replies_.size() != before || controls_ != old_controls || after != totals) changed = true;
+                    if (interpretation_revision_ != revision || replies_.size() != before || controls_ != old_controls || after != totals) changed = true;
                 }
                 break;
             case caliper_net::Event::Type::Closed:
@@ -157,6 +160,7 @@ void RunConnection::on_message(const std::vector<std::uint8_t>& bytes) {
     if (!r.ok()) return;
     if (const auto* w = std::get_if<wire::Welcome>(&msg)) {
         control_allowed_ = w->control.value_or(false);
+        interpretation_ = std::find(w->capabilities.begin(), w->capabilities.end(), CALIPER_NET_CAP_INTERPRETATION) != w->capabilities.end();
         if (const Json* id = w->session.find("id"); id && id->is_string()) session_ = id->as_string();
     } else if (const auto* v = std::get_if<wire::Views>(&msg)) {
         for (const wire::ViewInfo& info : v->list) {
@@ -216,11 +220,15 @@ void RunConnection::on_message(const std::vector<std::uint8_t>& bytes) {
         rep.status = cr->status;
         rep.name = cr->name.value_or("");
         rep.message = cr->message.value_or("");
+        rep.result = from_net(cr->result);
         if (cr->error.is_object()) {
             if (const Json* code = cr->error.find("code"); code && code->is_string()) rep.error_code = code->as_string();
             if (const Json* m = cr->error.find("message"); m && m->is_string()) rep.error_message = m->as_string();
         }
-        replies_.push_back(std::move(rep));
+        if (rep.op == CALIPER_NET_OP_INTERPRET) {
+            auto it = interpretation_replies_.find(rep.request_id);
+            if (it != interpretation_replies_.end()) { it->second.second = rep; ++interpretation_revision_; }
+        } else replies_.push_back(std::move(rep));
     } else if (const auto* p = std::get_if<wire::Ping>(&msg)) {
         std::vector<std::uint8_t> out;
         if (wire::encode(wire::Pong{p->nonce}, &out)) send_bytes(out);
@@ -238,7 +246,12 @@ void RunConnection::on_message(const std::vector<std::uint8_t>& bytes) {
             rep.status = "error";
             rep.error_code = e->code;
             rep.error_message = e->message;
-            replies_.push_back(std::move(rep));
+            auto it = interpretation_replies_.find(rep.request_id);
+            if (it != interpretation_replies_.end()) {
+                rep.op = CALIPER_NET_OP_INTERPRET;
+                it->second.second = rep;
+                ++interpretation_revision_;
+            } else replies_.push_back(std::move(rep));
         }
     } else if (std::get_if<wire::Bye>(&msg)) {
         close_reason_ = "The run's stream said goodbye.";
@@ -258,6 +271,7 @@ std::uint32_t RunConnection::send_control(const std::string& op, const std::stri
     if (op == CALIPER_NET_OP_SET) c.value = to_net(value);
     if (op == CALIPER_NET_OP_STEP) c.count = std::max<std::uint32_t>(1, count);
     if (op == CALIPER_NET_OP_INTERVENE) c.intervene = to_net(value);
+    if (op == CALIPER_NET_OP_INTERPRET) c.interpretation = to_net(value);
     std::vector<std::uint8_t> out;
     std::string err;
     if (!wire::encode(c, &out, &err)) {
@@ -266,6 +280,37 @@ std::uint32_t RunConnection::send_control(const std::string& op, const std::stri
     }
     send_bytes(out);
     return c.request_id;
+}
+
+json RunConnection::interpret(const std::string& method, const json& params, std::uint32_t request) {
+    auto error = [](const std::string& code, const std::string& message) {
+        return json{{"error", {{"code",code},{"message",message}}}};
+    };
+    if (!interpretation_) return error("interpret.unsupported", "The producer did not announce interpretation.");
+    if (state_ != State::open) return error("run.not_attached", "The run connection is closed.");
+    const bool read = method.rfind("feature.",0) == 0 || method == "trace.read" || method == "trace.status";
+    if (!read && !control_allowed_) return error("run.control_not_allowed", "The connection cannot change the run.");
+    if (!request) {
+        if (interpretation_replies_.size() >= 64) {
+            auto it = std::find_if(interpretation_replies_.begin(), interpretation_replies_.end(), [](const auto& x) {
+                return x.second.second.status != "queued";
+            });
+            if (it == interpretation_replies_.end()) return error("interpret.busy", "Too many requests await completion.");
+            interpretation_replies_.erase(it);
+        }
+        std::string reason;
+        request = send_control(CALIPER_NET_OP_INTERPRET, "", {{"version",1},{"method",method},{"params",params}}, 0, &reason);
+        if (!request) return error("interpret.refused", reason);
+        Reply pending;
+        pending.request_id = request; pending.status = "queued";
+        interpretation_replies_[request] = {method,pending};
+    }
+    auto it = interpretation_replies_.find(request);
+    if (it == interpretation_replies_.end() || it->second.first != method)
+        return error("interpret.unknown_request", "No matching request is retained.");
+    const auto& reply = it->second.second;
+    if (reply.status == "error") return error(reply.error_code, reply.error_message);
+    return {{"request_id",request},{"pending",reply.status == "queued"},{"result",reply.result}};
 }
 
 std::vector<RunConnection::Reply> RunConnection::take_replies() {

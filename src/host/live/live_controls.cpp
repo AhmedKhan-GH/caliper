@@ -11,6 +11,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <array>
 
 namespace caliper_live {
 
@@ -122,6 +123,11 @@ void draw_param(RunControls& rc, const ControlsLook& look, const ControlParam& p
     if (p.type == CALIPER_NET_PARAM_BOOLEAN) {
         bool on = shown.is_bool() && shown.as_bool();
         if (ImGui::Checkbox("##v", &on)) rc.set(p.name, Json(on));
+    } else if (p.type == CALIPER_NET_PARAM_TEXT) {
+        std::array<char, CALIPER_NET_TEXT_MAX + 1> buffer{};
+        if (shown.is_string()) std::memcpy(buffer.data(), shown.as_string().data(), std::min(shown.as_string().size(), buffer.size() - 1));
+        ImGui::SetNextItemWidth(kSliderW);
+        if (ImGui::InputText("##v", buffer.data(), buffer.size())) rc.set(p.name, Json(std::string(buffer.data())));
     } else if (p.type == CALIPER_NET_PARAM_CHOICE) {
         const std::string cur = shown.is_string() ? shown.as_string() : "";
         ImGui::SetNextItemWidth(kSliderW);
@@ -249,6 +255,7 @@ void RunControls::update(Source* src, uint64_t now_ns) {
         locals_.clear();
         runs_.clear();
         ops_.clear();
+        interpretations_.clear();
         selections_.clear();
         item_axes_.clear();
         return;
@@ -440,7 +447,45 @@ void RunControls::send_set(const std::string& name, Local& l) {
     l.replied = false;
 }
 
+caliper_net::Json RunControls::interpret(const std::string& method, const Json& params, uint32_t request) {
+    auto error = [](const std::string& code, const std::string& message) {
+        Json out = Json::object(), e = Json::object();
+        e.set("code",code); e.set("message",message); out.set("error",e); return out;
+    };
+    if (!src_) return error("run.not_attached", "No stream is attached.");
+    if (!request) {
+        if (interpretations_.size() >= 64) {
+            auto it = std::find_if(interpretations_.begin(), interpretations_.end(), [](const auto& item) {
+                return item.second.second.status != "queued";
+            });
+            if (it == interpretations_.end()) return error("interpret.busy", "Too many requests await completion.");
+            interpretations_.erase(it);
+        }
+        Json envelope = Json::object();
+        envelope.set("version",1); envelope.set("method",method); envelope.set("params",params);
+        std::string reason;
+        request = src_->send_control(CALIPER_NET_OP_INTERPRET, "", envelope, 0, &reason);
+        if (!request) return error("interpret.unsupported", reason);
+        ControlReply pending;
+        pending.request_id = request; pending.status = "queued";
+        interpretations_[request] = {method, pending};
+    }
+    auto it = interpretations_.find(request);
+    if (it == interpretations_.end() || it->second.first != method)
+        return error("interpret.unknown_request", "No matching request is retained.");
+    const auto& reply = it->second.second;
+    if (reply.status == "error") return error(reply.error_code, reply.error_message);
+    Json out = Json::object();
+    out.set("request_id",request); out.set("pending",reply.status == "queued"); out.set("result",reply.result);
+    return out;
+}
+
 void RunControls::on_reply(const ControlReply& r) {
+    if (r.op == CALIPER_NET_OP_INTERPRET) {
+        auto it = interpretations_.find(r.request_id);
+        if (it != interpretations_.end()) it->second.second = r;
+        return;
+    }
     ++counts_.replies;
     if (r.status == CALIPER_NET_STATUS_ERROR) ++counts_.refused;
     if (r.op == CALIPER_NET_OP_SET) {
@@ -972,6 +1017,11 @@ void RunControls::link_views(CaliperCore* core, const std::function<uint64_t(con
 bool AttachmentRunLink::attached() const { return att_.attached(); }
 
 std::string AttachmentRunLink::script() const { return att_.status().script; }
+
+Json AttachmentRunLink::interpret(const std::string& method, const Json& params, uint32_t request) {
+    auto* rc = att_.controls();
+    return rc ? rc->interpret(method, params, request) : RunLink::interpret(method, params, request);
+}
 
 const Controls* AttachmentRunLink::controls() const {
     const RunControls* rc = att_.controls();

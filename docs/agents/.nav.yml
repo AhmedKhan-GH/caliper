@@ -13,6 +13,7 @@ nav:
       - widget-agent-conformance.md
       - mcp-server.md
       - run-control-and-events.md
+      - interpretation.md
       - managed-runs.md
       - gpu-programs.md
       - pieces.md

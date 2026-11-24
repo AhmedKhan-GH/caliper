@@ -252,7 +252,7 @@ def test_parameter_types(ctl):
 
 
 @pytest.mark.parametrize("args, kw, exc", [
-    (("x", "adam"), {}, TypeError),
+    (("x", "adam"), {"min": 0}, ValueError),
     (("x", [1]), {}, TypeError),
     (("x", "c"), {"choices": ["a", "b"]}, ValueError),
     (("x", "a"), {"choices": []}, ValueError),
@@ -959,3 +959,24 @@ def test_controls_panel_with_its_module(server, monkeypatch, tmp_path):
     assert panel._esm == module and panel.height == 200
     with pytest.raises(Exception):
         caliper.controls(height=0)
+
+
+def test_free_text_parameter_round_trip_and_utf8_bounds(ctl):
+    prompt = caliper.param("prompt", "")
+    assert prompt.type == "text" and prompt.value == ""
+    transport = Fake()
+    route = ctl.attach(transport)
+    text = "A café near the river " * 20
+    reply = route.on_control(None, {"request_id": 1, "op": "set", "name": "prompt", "value": text})
+    assert reply["status"] == "ok" and prompt.value == text
+    ctl.step(1)
+    route.on_control(None, {"request_id": 2, "op": "set", "name": "prompt", "value": "next"})
+    assert prompt.value == text and prompt.pending == "next"
+    ctl.step(2)
+    assert prompt.value == "next"
+    for value in ("é" * 513, "\ud800", "a\0b"):
+        with pytest.raises(ValueError):
+            caliper.param("invalid", value)
+        with pytest.raises(w.MessageError):
+            route.on_control(None, {"request_id": 3, "op": "set", "name": "prompt", "value": value})
+    assert caliper.param("choice", "yes", choices=["yes", "no"]).type == "choice"

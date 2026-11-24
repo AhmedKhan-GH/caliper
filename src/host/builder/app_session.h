@@ -149,6 +149,8 @@ public:
     // "interventions", which a script sends only when it announced the
     // capability "interventions"; a change goes out as CONTROL op
     // "intervene" through the link, and fails as the requests above do.
+    caliper_builder::CommandOutput interpret(const std::string& method, const nlohmann::json& params,
+                                               std::uint32_t request) override;
     bool interventions_supported() override;
     std::vector<caliper_builder::InterventionPoint> intervention_points() override;
     std::vector<caliper_builder::Intervention> interventions() override;

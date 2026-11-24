@@ -361,7 +361,14 @@ public:
         {
             std::lock_guard<std::mutex> g(mu_);
             const ControlAccess a = access_locked();
-            if (!a.allowed) {
+            const bool read = op == CALIPER_NET_OP_INTERPRET && value.find("method") &&
+                (value.find("method")->as_string().rfind("feature.", 0) == 0 ||
+                 value.find("method")->as_string() == "trace.read" || value.find("method")->as_string() == "trace.status");
+            if (op == CALIPER_NET_OP_INTERPRET && !has_cap(session_caps_, CALIPER_NET_CAP_INTERPRETATION)) {
+                if (err) *err = "The script did not announce interpretation.";
+                return 0;
+            }
+            if ((!a.allowed && !read) || failed_ || !connected_ || !attached_ || ended_) {
                 if (err) *err = a.why;
                 return 0;
             }
@@ -375,6 +382,7 @@ public:
         if (op == CALIPER_NET_OP_SET) o.control.value = value;
         if (op == CALIPER_NET_OP_STEP && count > 0) o.control.count = count;
         if (op == CALIPER_NET_OP_INTERVENE) o.control.intervene = value;
+        if (op == CALIPER_NET_OP_INTERPRET) o.control.interpretation = value;
         const uint32_t id = o.control.request_id;
         if (!enqueue(std::move(o))) {
             if (err) *err = "too many controls wait to be sent";
@@ -754,7 +762,7 @@ private:
                         wire::Hello h;
                         h.role = CALIPER_NET_ROLE_VIEWER;
                         h.capabilities = {CALIPER_NET_CAP_CONTROLS, CALIPER_NET_CAP_SELECTION, CALIPER_NET_CAP_SCENES,
-                                          CALIPER_NET_CAP_PROGRAMS, CALIPER_NET_CAP_INTERVENTIONS,
+                                          CALIPER_NET_CAP_PROGRAMS, CALIPER_NET_CAP_INTERVENTIONS, CALIPER_NET_CAP_INTERPRETATION, CALIPER_NET_CAP_TEXT_PARAMS,
                                           CALIPER_NET_CAP_TIMELINES, CALIPER_NET_CAP_RESOURCES, CALIPER_NET_CAP_SCENE_PIECES};
                         Json sw = Json::object();
                         sw.set("name", "caliper-app");
@@ -1063,6 +1071,7 @@ private:
         out.status = r.status;
         out.name = r.name.value_or("");
         out.value = r.value;
+        out.result = r.result;
         out.message = r.message.value_or("");
         if (!r.error.is_null()) {
             out.error_code = str_or(r.error.find("code"), "");

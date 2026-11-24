@@ -751,7 +751,13 @@ std::map<std::string, std::string>& text_edits() {
 // focus, cut at `max_length` bytes.
 bool draw_text_field(const spec::Control& c, const Row& row, SpecInstrumentHost& host) {
     const std::string key = key_of(c);
-    const json now = current(host, c);
+    const auto target = spec::parse_control_target(c.bind);
+    const bool script = target && target->kind == spec::ControlTarget::Kind::param;
+    const cb::RunState state = script && host.run ? host.run->state() : cb::RunState{};
+    const auto* param = script ? find_param(state, target->name) : nullptr;
+    std::string why = script ? why_disabled(host, state) : std::string();
+    if (script && why.empty() && (!param || param->type != "text")) why = "The script has no text parameter with this name.";
+    const json now = param ? (param->pending.is_null() ? param->value : param->pending) : current(host, c);
     const std::size_t limit = c.options.max_length
                                   ? static_cast<std::size_t>(std::max<std::int64_t>(*c.options.max_length, 0))
                                   : spec::limits::kStateTextBytes;
@@ -761,7 +767,11 @@ bool draw_text_field(const spec::Control& c, const Row& row, SpecInstrumentHost&
     auto it = edits.find(key);
     if (it == edits.end()) {
         std::string start = now.is_string() ? now.get<std::string>() : std::string();
-        if (start.size() > limit) start.resize(limit);
+        if (start.size() > limit) {
+            auto end = limit;
+            while (end && (static_cast<unsigned char>(start[end]) & 0xc0) == 0x80) --end;
+            start.resize(end);
+        }
         start.resize(limit + 1, '\0');
         it = edits.emplace(key, std::move(start)).first;
     }
@@ -769,11 +779,20 @@ bool draw_text_field(const spec::Control& c, const Row& row, SpecInstrumentHost&
     ImGui::SetCursorScreenPos(row.widget.Min);
     ImGui::SetNextItemWidth(row.widget.GetWidth());
     const std::string hint = c.options.placeholder.value_or("");
-    ImGui::InputTextWithHint("##text", hint.c_str(), buf.data(), buf.size());
-    const bool done = ImGui::IsItemDeactivatedAfterEdit();
+    ImGui::BeginDisabled(!why.empty());
+    const bool enter = ImGui::InputTextWithHint("##text", hint.c_str(), buf.data(), buf.size(), ImGuiInputTextFlags_EnterReturnsTrue);
+    const bool done = enter || ImGui::IsItemDeactivatedAfterEdit();
     const bool editing = ImGui::IsItemActive();
+    ImGui::EndDisabled();
+    disabled_tooltip(why);
     bool changed = false;
-    if (done) changed = write(host, c, std::string(buf.c_str()), true);
+    if (done && why.empty()) {
+        const std::string value(buf.c_str());
+        if (script) {
+            changed = host.run->set_param(target->name, value).ok();
+            if (changed) push_control_event(host, c, value);
+        } else changed = write(host, c, value, true);
+    }
     if (!editing) edits.erase(key);   // shows the session's value again
     return changed;
 }

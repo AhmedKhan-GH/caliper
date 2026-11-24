@@ -630,6 +630,17 @@ static inline uint32_t caliper_net_align(uint32_t n) {
 #define CALIPER_NET_PIECE_SEGMENTS_MAX   16u          /* items of "segments"                */
 #define CALIPER_NET_TENSOR_NAME_MAX      255u         /* bytes of an input's "source"       */
 
+/* Structured interpretation metadata uses CONTROL and CONTROL_REPLY framing.
+ * Both peers announce interpretation. Requests carry interpretation={version:1,
+ * method,params}; successful replies carry result as an object. Model work runs
+ * at a run boundary. queued has one later ok/error reply with the same ID. */
+#define CALIPER_NET_CAP_TEXT_PARAMS "text_params"
+#define CALIPER_NET_PARAM_TEXT "text"
+#define CALIPER_NET_CAP_INTERPRETATION "interpretation"
+#define CALIPER_NET_OP_INTERPRET "interpret"
+#define CALIPER_NET_INTERPRET_MAX_BYTES 262144u
+#define CALIPER_NET_INTERPRET_STRING_MAX 4096u
+
 #ifdef __cplusplus
 }  /* extern "C" */
 #endif

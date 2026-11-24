@@ -263,7 +263,7 @@ const std::pair<const char*, const char*> kFragments[] = {
 
     // Spec version 1 controls (design/instruments.md, Control Table).
     {"control_bind", R"json({"type": "string", "minLength": 5, "maxLength": 320, "pattern": "^(param:.{1,63}|action:.{1,63}|run:pause|value|state:[a-z][a-z0-9_-]{0,63}|cursor|intervene:.{1,255})$",
-      "description": "The one target of the control: param:<name> for a parameter the script registered with caliper.param, action:<name> for an action it registered with caliper.action, run:pause for the run's pause and resume, value for a value the spec holds, state:<id> for a state variable of the spec, cursor for the time cursor, or intervene:<point> for an intervention point that intervene.points lists. A slider binds param:, value or state:; a range, a picker, a text and a segmented group bind value or state:; a button binds action: or run:pause; a toggle binds intervene:<point>, param:<name>, value or state:; a transport binds cursor. run.state lists the names of parameters and actions."})json"},
+      "description": "The one target of the control: param:<name> for a parameter the script registered with caliper.param, action:<name> for an action it registered with caliper.action, run:pause for the run's pause and resume, value for a value the spec holds, state:<id> for a state variable of the spec, cursor for the time cursor, or intervene:<point> for an intervention point that intervene.points lists. A slider or text binds param:, value or state:; a range, a picker and a segmented group bind value or state:; a button binds action: or run:pause; a toggle binds intervene:<point>, param:<name>, value or state:; a transport binds cursor. run.state lists the names of parameters and actions."})json"},
 
     {"control_options", R"json({
       "type": "object", "additionalProperties": false, "required": [],
@@ -298,7 +298,7 @@ const std::pair<const char*, const char*> kFragments[] = {
       "type": "object", "additionalProperties": false, "required": ["name", "type", "value", "pending"],
       "properties": {
         "name": {"type": "string", "description": "The parameter's name, as the script registered it with caliper.param."},
-        "type": {"type": "string", "enum": ["number", "integer", "boolean", "choice"], "description": "The parameter's type."},
+        "type": {"type": "string", "enum": ["number", "integer", "boolean", "choice", "text"], "description": "The parameter's type."},
         "value": {"type": ["number", "integer", "boolean", "string"], "description": "The value the script uses now."},
         "pending": {"type": ["number", "integer", "boolean", "string", "null"], "description": "A value that was sent and applies at the script's next step, or null."},
         "min": {"type": "number", "description": "The lowest value the script accepts; absent when it set none."},
@@ -1893,6 +1893,38 @@ const Row kRows[] = {
      R"json({"type": "object", "additionalProperties": false, "required": ["id", "resource", "step", "count", "elements", "kept"], "properties": {"id": {"type": "string", "description": "The program's id."}, "resource": {"type": "string", "description": "The resource's id."}, "step": {"type": ["integer", "null"], "description": "The step of the version, or null when no version is kept."}, "count": {"type": "integer", "minimum": 0, "description": "The valid elements of the version."}, "elements": {"type": "array", "maxItems": 1024, "items": {"type": "array", "items": {"type": "number"}}, "description": "Each element read, as the numbers of its fields in their order; a vector field gives one number for each component."}, "kept": {"type": "object", "additionalProperties": false, "required": ["versions", "first", "last"], "properties": {"versions": {"type": "integer", "minimum": 0, "description": "The count of kept versions."}, "first": {"type": ["integer", "null"], "description": "The step of the oldest kept version."}, "last": {"type": ["integer", "null"], "description": "The step of the newest kept version."}}, "description": "The versions that the step history keeps."}}})json",
      R"json({"id": "tower_arcs", "resource": "arcs", "count": 4})json"},
 
+    // Interpretation commands use bounded CONTROL metadata.
+    {"feature.dictionary", false, false, true,
+     "Reads the registered dictionary metadata at a run boundary.",
+     R"json({"type": "object", "additionalProperties": false, "required": [], "properties": {"request_id": {"type": "integer", "minimum": 1, "maximum": 4294967295, "description": "Poll a prior request of this command without another model operation."}}})json",
+     R"json({"type": "object", "additionalProperties": false, "required": ["request_id", "pending", "result"], "properties": {"request_id": {"type": "integer", "minimum": 1, "maximum": 4294967295, "description": "The transport request ID."}, "pending": {"type": "boolean", "description": "True until the deferred reply arrives."}, "result": {"type": ["object", "null"], "additionalProperties": true, "description": "The bounded structured result, or null while pending."}}})json",
+     R"json({})json"},
+    {"feature.show", false, false, true,
+     "Reads the real feature label, count, maximum, and promoted tokens.",
+     R"json({"type": "object", "additionalProperties": false, "required": [], "properties": {"layer": {"type": "integer", "minimum": 0, "maximum": 4095, "description": "The dictionary layer."}, "feature": {"type": "integer", "minimum": 0, "maximum": 2147483647, "description": "The feature index."}, "node": {"type": "integer", "minimum": 0, "maximum": 511, "description": "The selected graph row. Supply node or layer and feature."}, "request_id": {"type": "integer", "minimum": 1, "maximum": 4294967295, "description": "Poll a prior request of this command without another model operation."}}})json",
+     R"json({"type": "object", "additionalProperties": false, "required": ["request_id", "pending", "result"], "properties": {"request_id": {"type": "integer", "minimum": 1, "maximum": 4294967295, "description": "The transport request ID."}, "pending": {"type": "boolean", "description": "True until the deferred reply arrives."}, "result": {"type": ["object", "null"], "additionalProperties": true, "description": "The bounded structured result, or null while pending."}}})json",
+     R"json({"layer": 0, "feature": 0})json"},
+    {"feature.examples", false, false, true,
+     "Reads up to sixteen 33-token windows and publishes real rows and UTF-8 labels for token_strip.",
+     R"json({"type": "object", "additionalProperties": false, "required": [], "properties": {"layer": {"type": "integer", "minimum": 0, "maximum": 4095, "description": "The dictionary layer."}, "feature": {"type": "integer", "minimum": 0, "maximum": 2147483647, "description": "The feature index."}, "node": {"type": "integer", "minimum": 0, "maximum": 511, "description": "The selected graph row. Supply node or layer and feature."}, "limit": {"type": "integer", "minimum": 0, "maximum": 16, "description": "The maximum example count. The default is 16."}, "request_id": {"type": "integer", "minimum": 1, "maximum": 4294967295, "description": "Poll a prior request of this command without another model operation."}}})json",
+     R"json({"type": "object", "additionalProperties": false, "required": ["request_id", "pending", "result"], "properties": {"request_id": {"type": "integer", "minimum": 1, "maximum": 4294967295, "description": "The transport request ID."}, "pending": {"type": "boolean", "description": "True until the deferred reply arrives."}, "result": {"type": ["object", "null"], "additionalProperties": true, "description": "The bounded structured result, or null while pending."}}})json",
+     R"json({"node": 1})json"},
+    {"trace.run", false, false, true,
+     "Queues a trace for the next run boundary. Poll its request_id or use trace.status to read progress.",
+     R"json({"type": "object", "additionalProperties": false, "required": [], "properties": {"prompt": {"type": "string", "minLength": 1, "maxLength": 4096, "description": "The prompt, at most 4096 UTF-8 bytes and 32 model tokens."}, "max_targets": {"type": "integer", "minimum": 0, "maximum": 512, "description": "The feature target cap."}, "max_nodes": {"type": "integer", "minimum": 1, "maximum": 512, "description": "The node cap."}, "max_edges": {"type": "integer", "minimum": 0, "maximum": 8192, "description": "The edge cap."}, "request_id": {"type": "integer", "minimum": 1, "maximum": 4294967295, "description": "Poll a prior request of this command without another model operation."}}})json",
+     R"json({"type": "object", "additionalProperties": false, "required": ["request_id", "pending", "result"], "properties": {"request_id": {"type": "integer", "minimum": 1, "maximum": 4294967295, "description": "The transport request ID."}, "pending": {"type": "boolean", "description": "True until the deferred reply arrives."}, "result": {"type": ["object", "null"], "additionalProperties": true, "description": "The bounded structured result, or null while pending."}}})json",
+     R"json({"prompt": "The capital of France is"})json"},
+    {"trace.status", false, false, true,
+     "Reads the last trace state without a model forward or a wait on the model.",
+     R"json({"type": "object", "additionalProperties": false, "required": [], "properties": {"request_id": {"type": "integer", "minimum": 1, "maximum": 4294967295, "description": "Poll a prior request of this command without another model operation."}}})json",
+     R"json({"type": "object", "additionalProperties": false, "required": ["request_id", "pending", "result"], "properties": {"request_id": {"type": "integer", "minimum": 1, "maximum": 4294967295, "description": "The transport request ID."}, "pending": {"type": "boolean", "description": "True until the deferred reply arrives."}, "result": {"type": ["object", "null"], "additionalProperties": true, "description": "The bounded structured result, or null while pending."}}})json",
+     R"json({})json"},
+    {"trace.read", false, false, true,
+     "Reads a bounded page from the completed graph.",
+     R"json({"type": "object", "additionalProperties": false, "required": [], "properties": {"node_offset": {"type": "integer", "minimum": 0, "maximum": 512, "description": "The first node."}, "node_limit": {"type": "integer", "minimum": 0, "maximum": 256, "description": "The node page size. The default is 128."}, "edge_offset": {"type": "integer", "minimum": 0, "maximum": 8192, "description": "The first edge."}, "edge_limit": {"type": "integer", "minimum": 0, "maximum": 256, "description": "The edge page size. The default is 256."}, "request_id": {"type": "integer", "minimum": 1, "maximum": 4294967295, "description": "Poll a prior request of this command without another model operation."}}})json",
+     R"json({"type": "object", "additionalProperties": false, "required": ["request_id", "pending", "result"], "properties": {"request_id": {"type": "integer", "minimum": 1, "maximum": 4294967295, "description": "The transport request ID."}, "pending": {"type": "boolean", "description": "True until the deferred reply arrives."}, "result": {"type": ["object", "null"], "additionalProperties": true, "description": "The bounded structured result, or null while pending."}}})json",
+     R"json({"node_limit": 128})json"},
+
     // interventions (design/gpu-programs.md)
     {"intervene.points", false, false, true,
      "Lists the intervention points of the model that the attached script watches: each module's output by its dotted "
@@ -2096,6 +2128,12 @@ const std::pair<const char*, CommandEffect> kEffects[] = {
     {"piece.remove", E::change},
     {"program.read", E::read},
     {"intervene.points", E::read},
+    {"feature.dictionary", E::read},
+    {"feature.show", E::read},
+    {"feature.examples", E::read},
+    {"trace.run", E::run},
+    {"trace.status", E::read},
+    {"trace.read", E::read},
     {"intervene.set", E::run},  // acts on the running script at its next step
     {"intervene.clear", E::run},
     {"intervene.list", E::read},
@@ -2179,7 +2217,10 @@ std::string command_table_json_text() {
 }
 
 std::vector<std::pair<std::string, std::string>> command_table_open_paths() {
-    return {{"spec.get", "result.json"}, {"panel.data", "result.data"}};
+    return {{"spec.get", "result.json"}, {"panel.data", "result.data"},
+            {"feature.dictionary", "result.result"}, {"feature.show", "result.result"},
+            {"feature.examples", "result.result"}, {"trace.run", "result.result"},
+            {"trace.status", "result.result"}, {"trace.read", "result.result"}};
 }
 
 }  // namespace caliper_builder

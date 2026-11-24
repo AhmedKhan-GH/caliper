@@ -453,6 +453,7 @@ protected:
                 queued_runs.push_back(c->request_id);
             } else {
                 r.status = CALIPER_NET_STATUS_OK;
+                if (c->op == CALIPER_NET_OP_INTERPRET) { r.result = Json::object(); r.result.set("state", "idle"); }
                 if (c->op == CALIPER_NET_OP_SET) r.value = Json(std::min(0.1, c->value.as_double()));
             }
             send(r);
@@ -1346,6 +1347,7 @@ const std::vector<std::string> kCaps31 = {CALIPER_NET_CAP_CONTROLS, CALIPER_NET_
 // The hub forwards controls, scenes and selections, and the 3.2 draft's programs and interventions.
 const std::vector<std::string> kHubCaps = {CALIPER_NET_CAP_CONTROLS, CALIPER_NET_CAP_SCENES, CALIPER_NET_CAP_SELECTION,
                                            CALIPER_NET_CAP_PROGRAMS, CALIPER_NET_CAP_INTERVENTIONS,
+                                           CALIPER_NET_CAP_INTERPRETATION, CALIPER_NET_CAP_TEXT_PARAMS,
                                            CALIPER_NET_CAP_RESOURCES, CALIPER_NET_CAP_SCENE_PIECES};
 const std::vector<std::string> kProducer31 = {CALIPER_NET_CAP_EVENTS, CALIPER_NET_CAP_CONTROLS,
                                               CALIPER_NET_CAP_SELECTION};
@@ -2278,3 +2280,33 @@ TEST_CASE("app: the hidden app's run bar controls a script through a hub with --
     CHECK(selected);
 }
 #endif
+
+TEST_CASE("net/hub: interpretation reads preserve capability gates and write permissions") {
+    HubRunner hub;
+    World world;
+    auto caps = kProducer31;
+    caps.push_back(CALIPER_NET_CAP_INTERPRETATION);
+    auto producer_link = producer(world, hub, "interpretation", 1, 1, caps, true);
+    auto reader = viewer(world, hub, caps);
+    REQUIRE(world.until([&] { return reader->views() && reader->views()->session; }));
+    wire::Control request;
+    request.request_id = 1;
+    request.op = CALIPER_NET_OP_INTERPRET;
+    request.interpretation = obj({{"version",1},{"method","trace.status"},{"params",Json::object()}});
+    reader->send(request);
+    REQUIRE(world.until([&] { return reader->control_replies(1).size() == 1; }));
+    CHECK(reader->control_replies(1)[0]->result.find("state")->as_string() == "idle");
+    request.request_id = 2;
+    request.interpretation = obj({{"version",1},{"method","trace.run"},{"params",obj({{"prompt","A"}})}});
+    reader->send(request);
+    REQUIRE(world.until([&] { return reader->control_replies(2).size() == 1; }));
+    CHECK(reader->control_replies(2)[0]->error.find("code")->as_string() == CALIPER_NET_ERR_FORBIDDEN);
+    auto legacy = viewer(world, hub, kCaps31);
+    REQUIRE(world.until([&] { return legacy->views() && legacy->views()->session; }));
+    request.request_id = 3;
+    request.interpretation = obj({{"version",1},{"method","trace.status"},{"params",Json::object()}});
+    legacy->send(request);
+    REQUIRE(world.until([&] { return legacy->control_replies(3).size() == 1; }));
+    CHECK(legacy->control_replies(3)[0]->error.find("code")->as_string() == CALIPER_NET_ERR_UNSUPPORTED);
+    CHECK(producer_link->controls_in.size() == 1);
+}
