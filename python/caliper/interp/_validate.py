@@ -6,7 +6,7 @@ import torch
 from ._memory import autorelease_scope
 from ._output import forward_logits, prompt_inputs
 from ._points import _architecture, capture
-from ._intervene import InterventionService
+from ._intervene import InterventionService, selected_rows
 
 
 def _ranks(values):
@@ -40,6 +40,9 @@ def validate_trace(model, tokenizer, dictionary, interventions, graph, *, prompt
     Temporary output hooks leave the intervention lifecycle and caches intact.
     Ordered output resets, scale effects, and clamp effects define the live value.
     """
+    rows = selected_rows(model)
+    if rows is not None and 0 not in rows:
+        raise ValueError("validation requires interventions on row zero")
     inputs = prompt_inputs(model, tokenizer, prompt)
     if inputs["input_ids"][0].tolist() != [t["token_id"] for t in graph.tokens]:
         raise ValueError("validation prompt does not match the trace")
@@ -53,6 +56,9 @@ def validate_trace(model, tokenizer, dictionary, interventions, graph, *, prompt
     architecture = _architecture(model)
     probes = {p.layer: p for p in architecture.values() if p.point.endswith(".mlp_out")}
     specifications = interventions.specifications()
+    if (any(s["op"] in ("scale", "clamp") for s in specifications)
+            and interventions.dictionary is not dictionary):
+        raise ValueError("feature interventions require the same dictionary instance as validation")
     modules = dict(model.named_modules())
 
     def write_module(point):

@@ -84,3 +84,29 @@ def test_validation_uses_applied_clamp_before_pending_replacement():
         actual = validate_trace(model, tokenizer, dictionary, service, graph, prompt="AB")
         assert actual == baseline
         assert service.state_dict() == pending
+
+
+@pytest.mark.parametrize("suspended", [False, True])
+def test_validation_refuses_an_excluded_intervention_row(suspended, monkeypatch):
+    with setup() as (model, tokenizer, dictionary, owner, service):
+        graph = Tracer(model, tokenizer, dictionary, controls=owner).trace("AB", max_targets=0)
+        def forbidden(*args, **kwargs):
+            raise AssertionError("row refusal must precede the validation forward")
+        monkeypatch.setattr(model, "forward", forbidden)
+        with service.suspend() if suspended else service.rows([]):
+            with pytest.raises(ValueError, match="requires interventions on row zero"):
+                validate_trace(model, tokenizer, dictionary, service, graph, prompt="AB")
+
+
+def test_validation_refuses_a_different_active_feature_basis(monkeypatch):
+    from .test_trace import exact_dictionary
+    with setup() as (model, tokenizer, dictionary, owner, service):
+        graph = Tracer(model, tokenizer, dictionary, controls=owner).trace("AB", max_targets=0)
+        service.configure(dictionary=exact_dictionary(model), tokenizer=tokenizer)
+        service.set({"kind": "clamp", "point": "layers.1.mlp_out", "feature": 0, "value": .4})
+        owner.step()
+        def forbidden(*args, **kwargs):
+            raise AssertionError("dictionary refusal must precede the validation forward")
+        monkeypatch.setattr(model, "forward", forbidden)
+        with pytest.raises(ValueError, match="same dictionary instance as validation"):
+            validate_trace(model, tokenizer, dictionary, service, graph, prompt="AB")
