@@ -287,9 +287,10 @@ def capture_checks(folder, metadata, png, graph, bars, *, selected, baseline_top
 def finish(result):
     has_evidence = any(g["name"] != "dictionary_qualification" for g in result.get("checks", []))
     qualification = dictionary_qualification(result.get("dictionary_evidence"),
-                                              quality_override=result.get("dictionary_quality_override"))
+                                              quality_override=result.get("dictionary_quality_override"),
+                                              family="gemma" if result["mode"] == "gemma" else "qwen")
     result["dictionary_qualification"] = qualification
-    if result["mode"] == "qwen":
+    if result["mode"] in ("qwen", "gemma"):
         # Recompute this gate from evidence. A cached status cannot qualify a run.
         result["checks"] = [g for g in result.get("checks", []) if g["name"] != "dictionary_qualification"]
         result["checks"].append(check("dictionary_qualification", qualification["qualified"], qualification,
@@ -302,4 +303,6 @@ def finish(result):
                                  and qualification["qualified"] and result.get("pixel_evidence_collected", False))
     result["qwen_acceptance_scope"] = qualification["scope"] if result["qwen_acceptance"] else None
     result["qwen_full_mlp_acceptance"] = result["qwen_acceptance"] and qualification["scope"] == "all_layers"
+    result["gemma_acceptance"] = (result["passed"] and result["mode"] == "gemma"
+                                 and qualification["qualified"] and result.get("pixel_evidence_collected", False))
     return 0 if result["passed"] else 1

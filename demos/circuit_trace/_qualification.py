@@ -7,6 +7,12 @@ import re
 MODEL_ID = "Qwen/Qwen3.5-0.8B"
 MODEL_REVISION = "2fc06364715b967f1860aea9cf38778875588b17"
 MODEL_HASH = f"hf:{MODEL_ID}@{MODEL_REVISION}"
+GEMMA_ID = "google/gemma-2-2b"
+GEMMA_REVISION = "c5ebcd40d208330abc697524c919956e692655cf"
+GEMMA_HASH = f"hf:{GEMMA_ID}@{GEMMA_REVISION}"
+GEMMA_SCOPE_REVISION = "50eec2f25c60545a9a74c1c3a26a0afdd0b4b872"
+GEMMA_SELECTION_REVISION = "9250a2d4860ce5ed5c96c14d5882b7d8162809a3"
+GEMMA_L0 = (76, 65, 49, 54, 88, 87, 95, 70, 52, 72, 88, 5, 6, 8, 8, 8, 10, 12, 13, 12, 11, 13, 15, 25, 37, 41)
 QUALITY_TOKENS = 200_000
 INDEX_TOKENS = 2_000_000
 
@@ -46,7 +52,7 @@ def validate_quality_override(record):
     return {**record, "failed_gates": list(failures)}
 
 
-def _quality(metadata, fingerprint, *, fallback=False, failed=False, override=None):
+def _quality(metadata, fingerprint, *, fallback=False, failed=False, override=None, fvu_limit=.40):
     quality = metadata["quality"]
     layers = metadata["layers"]
     active = list(range(layers // 2, layers)) if fallback else list(range(layers))
@@ -84,7 +90,7 @@ def _quality(metadata, fingerprint, *, fallback=False, failed=False, override=No
              and _number(original) and original >= 0 and _number(replaced) and replaced >= 0
              and _number(delta) and math.isclose(delta, replaced - original, rel_tol=1e-9, abs_tol=1e-12),
              "Quality cross-entropy evidence is invalid.")
-    passes = quality["fvu"] <= .40 and quality["dead_fraction"] <= .15 and delta <= .5
+    passes = quality["fvu"] <= fvu_limit and quality["dead_fraction"] <= .15 and delta <= .5
     _require(passes != (failed or override is not None), "Quality metrics contradict the required status.")
     if override is not None:
         approved = validate_quality_override(override)
@@ -112,6 +118,51 @@ def _completed_training(training, budget):
              and _integer(training.get("tokens"), budget)
              and training.get("stop_reason") == "token_budget",
              "Qwen requires a complete training budget of 20000000 or 40000000 tokens.")
+
+
+def _gemma_source(metadata):
+    """Bind the published Scope selection and keep publisher training unknown."""
+    _require(_integer(metadata.get("width"), 2304) and _integer(metadata.get("latents"), 16384)
+             and metadata.get("activation") == "jumprelu" and "k" in metadata and metadata["k"] is None,
+             "Gemma requires the complete JumpReLU dictionary dimensions.")
+    imported = metadata["import_source"]
+    _require(imported.get("kind") == "gemma_scope" and imported.get("license") == "CC-BY-4.0"
+             and imported.get("source") == {"repo": "google/gemma-scope-2b-pt-transcoders",
+                                            "revision": GEMMA_SCOPE_REVISION}
+             and imported.get("selection") == {"repo": "mntss/gemma-scope-transcoders",
+                 "revision": GEMMA_SELECTION_REVISION, "file": "config.yaml"},
+             "Gemma Scope source or selection differs from the pinned set.")
+    _require(imported.get("original_input") == "pure_rms_normalized_pre_mlp_before_learned_gain"
+             and imported.get("input_conversion") == "W_enc.T / (1 + pre_feedforward_layernorm.weight)[None, :]"
+             and imported.get("output") == "after_post_feedforward_layernorm"
+             and imported.get("output_conversion") == "none",
+             "Gemma Scope normalization coordinates differ.")
+    layers = imported["layers"]
+    _require(isinstance(layers, list) and len(layers) == 26, "Gemma Scope requires every source layer.")
+    for i, (row, l0) in enumerate(zip(layers, GEMMA_L0)):
+        _require(_integer(row.get("layer"), i) and _integer(row.get("width"), 2304)
+                 and _integer(row.get("latents"), 16384) and _integer(row.get("average_l0"), l0)
+                 and row.get("source_file") == f"layer_{i}/width_16k/average_l0_{l0}/params.npz"
+                 and row.get("file") == f"layer_{i:02d}.safetensors"
+                 and _digest(row.get("source_sha256")) and _digest(row.get("sha256"))
+                 and isinstance(row.get("input_gain_hash"), str)
+                 and row["input_gain_hash"].startswith("sha256:") and _digest(row["input_gain_hash"][7:]),
+                 "Gemma Scope layer provenance is incomplete or differs from the selected set.")
+    training = metadata["training"]
+    _require(training.get("origin") == "imported" and training.get("local_training") is False
+             and _integer(training.get("tokens"), 0) and training.get("partitions") == {}
+             and "fallback" not in training and training.get("publisher_training_disjointness") == "unknown",
+             "Gemma Scope must retain its imported training provenance.")
+    source = metadata["evaluation_source"]
+    _require(all(source.get(k) == v for k, v in {
+        "dataset_id": "HuggingFaceFW/fineweb-edu", "dataset_config": "sample-10BT",
+        "dataset_revision": "87f09149ef4734204d70ed1d046ddc9ca3f2b8f9", "split": "train",
+    }.items()), "Gemma evaluation requires the pinned held-out text source.")
+    _partitions(source)
+    _require(metadata["quality"].get("evaluation_source") == source
+             and metadata["quality"].get("publisher_training_overlap") == "unknown",
+             "Gemma quality must bind the evaluation source and unknown publisher overlap.")
+    return source
 
 
 def _fallback(metadata, response):
@@ -154,20 +205,26 @@ def _fallback(metadata, response):
              "Fallback source evaluation is incomplete or stale.")
 
 
-def dictionary_qualification(response, *, quality_override=None):
+def dictionary_qualification(response, *, quality_override=None, family="qwen"):
     """Refuse absent or stale evidence without model, tensor, or file access."""
     result = {"qualified": False, "scope": None, "status": "unverified"}
     try:
         _require(isinstance(response, dict), "The feature.dictionary response is absent.")
+        _require(family in ("qwen", "gemma"), "Unsupported acceptance model family.")
         metadata = response["metadata"]
+        gemma = family == "gemma"
         fallback = "fallback" in metadata["training"]
         result.update(scope="upper_half" if fallback else "all_layers",
                       status="fallback_unverified" if fallback else "unverified",
                       reported_status=metadata["quality"].get("status"))
         index, identity = response["index"], response["identity"]
-        _require(metadata.get("model_id") == MODEL_ID and metadata.get("revision") == MODEL_REVISION
-                 and metadata.get("model_hash") == identity.get("model_hash") == MODEL_HASH
-                 and _integer(metadata.get("layers"), 24), "The current model identity differs from pinned Qwen.")
+        expected_id, revision, model_hash, layers = ((GEMMA_ID, GEMMA_REVISION, GEMMA_HASH, 26) if gemma else
+                                                    (MODEL_ID, MODEL_REVISION, MODEL_HASH, 24))
+        _require(metadata.get("model_id") == expected_id and metadata.get("revision") == revision
+                 and metadata.get("model_hash") == identity.get("model_hash") == model_hash
+                 and _integer(metadata.get("layers"), layers), "The current model identity differs from the pinned family.")
+        _require(not gemma or (quality_override is None and not fallback),
+                 "The Qwen quality override and fallback do not apply to Gemma.")
         _require(all(_digest(identity.get(key)) for key in
                      ("dictionary_hash", "dictionary_fingerprint", "index_hash", "tokenizer_hash")),
                  "Current dictionary and index identities are absent or invalid.")
@@ -178,15 +235,21 @@ def dictionary_qualification(response, *, quality_override=None):
         _require(index.get("complete") is True and _integer(index.get("tokens"), INDEX_TOKENS)
                  and _integer(index.get("token_budget"), INDEX_TOKENS),
                  "Acceptance requires a complete 2000000-token index.")
-        training, provenance = metadata["training"], index["provenance"]
+        training = _gemma_source(metadata) if gemma else metadata["training"]
+        provenance = index["provenance"]
         _partitions(training)
-        _completed_training(training, training.get("token_budget"))
+        if gemma:
+            _require(provenance.get("publisher_training_overlap") == "unknown",
+                     "Gemma index must retain unknown publisher training overlap.")
+        else:
+            _completed_training(training, training.get("token_budget"))
         _require(provenance.get("partition") == "index" and all(provenance.get(k) == training[k] for k in
                  ("dataset_id", "dataset_config", "dataset_revision", "split", "partitions")),
                  "The index source or held-out partition differs.")
-        if "source_id" in provenance:
+        if gemma or "source_id" in provenance:
             _require(provenance["source_id"] == training["source_id"], "The index source identity differs.")
-        _quality(metadata, identity["dictionary_fingerprint"], fallback=fallback, override=quality_override)
+        _quality(metadata, identity["dictionary_fingerprint"], fallback=fallback, override=quality_override,
+                 fvu_limit=.30 if gemma else .40)
         if fallback:
             _fallback(metadata, response)
         result.update(qualified=True, status="fallback_passed" if fallback else "passed", identity=dict(identity))

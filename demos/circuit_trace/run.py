@@ -19,7 +19,8 @@ from _checks import (FIXTURE_HASH, FIXTURE_PROMPT, QWEN_PROMPT, bar_direction_ch
                      check, finish, math_checks, program_budget_checks, secondary_selection, selected_feature)
 from _inference_evidence import (bound_completion, comparison_evidence, generation_baseline,
                                  generation_evidence, inference_state)
-from _qualification import dictionary_qualification, validate_quality_override
+from _qualification import (GEMMA_REVISION, MODEL_REVISION, dictionary_qualification,
+                             validate_quality_override)
 from _spec import scene_programs
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -673,10 +674,26 @@ def parser():
     return p
 
 
+def acceptance_profile(model):
+    """Select a budget only for an exact supported local snapshot path."""
+    if model == "tiny-lm":
+        return "fixture", 12_000_000_000
+    snapshot = Path(model).resolve()
+    for revision, repository, family, limit in (
+        (MODEL_REVISION, "models--Qwen--Qwen3.5-0.8B", "qwen", 12_000_000_000),
+        (GEMMA_REVISION, "models--google--gemma-2-2b", "gemma", 28_000_000_000),
+    ):
+        if (snapshot.name == revision and snapshot.parent.name == "snapshots"
+                and snapshot.parent.parent.name == repository):
+            return family, limit
+    raise Failure("Acceptance requires tiny-lm or an exact supported local snapshot path.")
+
+
 def main(argv=None):
     args = parser().parse_args(argv)
+    family, memory_limit = acceptance_profile(args.model)
     if args.quality_override is not None:
-        if args.model == "tiny-lm" or args.quality_override.stat().st_size > 4096:
+        if family != "qwen" or args.quality_override.stat().st_size > 4096:
             raise Failure("A quality override requires Qwen and at most 4096 JSON bytes.")
         args.quality_override = validate_quality_override(json.loads(args.quality_override.read_text(encoding="utf-8")))
     args.prompt = args.prompt or (FIXTURE_PROMPT if args.model == "tiny-lm" else QWEN_PROMPT)
@@ -686,7 +703,7 @@ def main(argv=None):
     out.mkdir(parents=True, exist_ok=True)
     if any(out.iterdir()):
         raise Failure("The output folder must be empty to preserve earlier evidence.")
-    result = {"mode": "fixture" if args.model == "tiny-lm" else "qwen", "prompt": args.prompt,
+    result = {"mode": family, "prompt": args.prompt, "memory_limit_bytes": memory_limit,
               "method_disclosures": dict(METHOD_DISCLOSURES),
               "fixture_forward_hash": FIXTURE_HASH if args.model == "tiny-lm" else None,
               "checks": [], "passed": False, "qwen_acceptance": False}
@@ -704,8 +721,8 @@ def main(argv=None):
         if preflight.cleanup_error:
             raise Failure(preflight.cleanup_error)
         peak = memory_bytes(out / "bounded")
-        result["checks"].append(check("bounded_memory", peak <= 12_000_000_000, peak, 12_000_000_000))
-        if peak > 12_000_000_000:
+        result["checks"].append(check("bounded_memory", peak <= memory_limit, peak, memory_limit))
+        if peak > memory_limit:
             raise Failure("The bounded app case exceeds the process memory limit.")
         session = Session(args, out / "acceptance", show=args.show)
         bridge = acceptance(session, args, result)
@@ -742,9 +759,9 @@ def main(argv=None):
                 result["error"] = session.cleanup_error
         try:
             peak = memory_bytes(out / "acceptance")
-            result["checks"].append(check("process_memory", peak <= 12_000_000_000, peak, 12_000_000_000))
+            result["checks"].append(check("process_memory", peak <= memory_limit, peak, memory_limit))
         except Failure as exc:
-            result["checks"].append(check("process_memory", False, str(exc), 12_000_000_000))
+            result["checks"].append(check("process_memory", False, str(exc), memory_limit))
         code = finish(result)
         save(out / "result.json", result)
     return code
