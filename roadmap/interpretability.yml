@@ -354,7 +354,7 @@ features:
 
   - id: INT-40
     title: Feature Steering
-    status: built
+    status: shipped
     scope: core
     summary: Feature interventions add vectors, scale activations, or clamp features on the live model at selected positions.
     depends_on: [INT-34, INT-36]
@@ -363,7 +363,7 @@ features:
 
   - id: INT-41
     title: Activation Patching
-    status: built
+    status: shipped
     scope: core
     summary: Activation patches replace selected values from a clean prompt, and a bounded sweep measures recovery across layers and positions.
     depends_on: [INT-35, INT-40]
@@ -372,7 +372,7 @@ features:
 
   - id: INT-42
     title: Inference Runs
-    status: built
+    status: shipped
     scope: core
     summary: Hosted inference runs expose prompt controls, traced features, paired output probabilities, and greedy generation.
     depends_on: [INT-38, INT-39, INT-40, INT-41]
