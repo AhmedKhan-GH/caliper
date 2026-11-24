@@ -25,10 +25,6 @@ jobs:
       PYTHONPATH: python
       CALIPER_AGENT_OFFLINE: '1'
       CALIPER_TEST_RUN: '1'
-      CALIPER_DATA_DIR: ${{ runner.temp }}/caliper-interp/data
-      TMPDIR: ${{ runner.temp }}/caliper-interp/temp
-      TEMP: ${{ runner.temp }}/caliper-interp/temp
-      TMP: ${{ runner.temp }}/caliper-interp/temp
       HF_HUB_OFFLINE: '1'
       HF_DATASETS_OFFLINE: '1'
       HF_HUB_DISABLE_TELEMETRY: '1'
@@ -38,7 +34,11 @@ jobs:
     steps:
       - name: Fixture Directories
         shell: bash
-        run: mkdir -p "$TMPDIR" "$CALIPER_DATA_DIR"
+        run: |
+          fixture_root="$RUNNER_TEMP/caliper-interp"
+          mkdir -p "$fixture_root/temp" "$fixture_root/data"
+          printf 'CALIPER_DATA_DIR=%s/data\nTMPDIR=%s/temp\nTEMP=%s/temp\nTMP=%s/temp\n' \
+            "$fixture_root" "$fixture_root" "$fixture_root" "$fixture_root" >> "$GITHUB_ENV"
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
         with:
