@@ -199,8 +199,8 @@ def _evaluate_batch(model, dictionary, ids, count, *, chunk_tokens, health, chec
             captured.close(clear=True)
 
 
-def save_evaluation(folder, stats, stream, pending, identity, settings, elapsed, binding):
-    """Atomically publish small statistics and an exact quality cursor."""
+def prepare_evaluation(folder, stats, stream, pending, identity, settings, elapsed, binding):
+    """Write statistics and a staged cursor without replacing published evidence."""
     stream_state = stream.state_dict()
     binding.verify()
     folder = Path(folder)
@@ -211,11 +211,20 @@ def save_evaluation(folder, stats, stream, pending, identity, settings, elapsed,
     _save_tensors({"mean": stats.mean, "variance_sum": stats.variance_sum,
                    "error_sum": stats.error_sum, "hits": stats.hits}, folder / name)
     binding.verify()
-    write_json(folder / "state.json", {"version": 1, "identity": identity, "settings": settings,
-               "tensor_binding": binding.evidence, "model_binding": binding.model_evidence,
-               "tensors": name, "stream": stream_state, "pending_ids": pending,
-               "count": stats.count, "original_ce": stats.original_ce,
-               "replaced_ce": stats.replaced_ce, "ce_tokens": stats.ce_tokens, "elapsed_seconds": elapsed})
+    staged = folder / "state.pending.json"
+    write_json(staged, {"version": 1, "identity": identity, "settings": settings,
+                       "tensor_binding": binding.evidence, "model_binding": binding.model_evidence,
+                       "tensors": name, "stream": stream_state, "pending_ids": pending,
+                       "count": stats.count, "original_ce": stats.original_ce,
+                       "replaced_ce": stats.replaced_ce, "ce_tokens": stats.ce_tokens,
+                       "elapsed_seconds": elapsed})
+    return staged
+
+
+def save_evaluation(folder, stats, stream, pending, identity, settings, elapsed, binding):
+    """Atomically publish small statistics and an exact quality cursor."""
+    staged = prepare_evaluation(folder, stats, stream, pending, identity, settings, elapsed, binding)
+    staged.replace(Path(folder) / "state.json")
 
 
 def restore_evaluation(folder, stats, stream, identity, settings, binding):
@@ -327,9 +336,12 @@ def evaluate(model, dictionary, stream, folder, *, tokens=200_000, context=256,
     if memory:
         quality["peak_memory_bytes"] = memory.peak
     if ready:
-        save_evaluation(state_folder, stats, stream, pending, identity, settings,
-                        elapsed_before + time.monotonic() - started, binding)
+        staged = prepare_evaluation(state_folder, stats, stream, pending, identity, settings,
+                                     elapsed_before + time.monotonic() - started, binding)
+    # Keep the prior cursor and quality until every final memory and identity check passes.
     binding.verify()
+    if ready:
+        staged.replace(state_folder / "state.json")
     metadata["quality"] = quality
     write_json(folder / "dictionary.json", metadata)
     print(json.dumps({"stage": "quality_end", **quality}), flush=True)

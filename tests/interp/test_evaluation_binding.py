@@ -258,21 +258,20 @@ def test_unversioned_change_during_statistics_write_refuses_cursor(tmp_path, mon
     assert publications(tmp_path) == before
 
 
-def test_change_after_cursor_refuses_quality_publication(tmp_path, monkeypatch):
+def test_change_after_cursor_preparation_refuses_publication(tmp_path, monkeypatch):
     model, dictionary = fixture(tmp_path)
-    prior_quality = publications(tmp_path)[0]
-    save = evaluation.save_evaluation
+    before = publications(tmp_path)
+    prepare = evaluation.prepare_evaluation
 
     def changed(*args, **kwargs):
-        save(*args, **kwargs)
+        state = prepare(*args, **kwargs)
         change(tmp_path, dictionary, "unversioned_alias")
+        return state
 
-    monkeypatch.setattr(evaluation, "save_evaluation", changed)
+    monkeypatch.setattr(evaluation, "prepare_evaluation", changed)
     with pytest.raises(ValueError, match="artifact binding"):
         evaluate(tmp_path, model, dictionary)
-    assert publications(tmp_path)[0] == prior_quality
-    # The cursor predates the mutation. Its tensor evidence now prevents resume.
-    assert (tmp_path / "evaluation" / "state.json").exists()
+    assert publications(tmp_path) == before
     with pytest.raises(ValueError, match="artifact binding"):
         evaluate(tmp_path, model, dictionary, resume=True)
 
@@ -372,7 +371,7 @@ def test_model_drift_refuses_cursor_and_quality(tmp_path, monkeypatch, boundary,
             model.evaluation_buffer.data.add_(1)
 
     attribute = {"batch": "evaluate_batch", "stop": "evaluate_batch", "metrics": "metrics",
-                 "statistics": "_save_tensors", "cursor": "save_evaluation"}[boundary]
+                 "statistics": "_save_tensors", "cursor": "prepare_evaluation"}[boundary]
     target = evaluation.QualityStats if boundary == "metrics" else evaluation
     original = getattr(target, attribute)
 
@@ -386,9 +385,7 @@ def test_model_drift_refuses_cursor_and_quality(tmp_path, monkeypatch, boundary,
     monkeypatch.setattr(target, attribute, changed)
     with pytest.raises(ValueError, match="model identity mismatch"):
         evaluate(tmp_path, model, dictionary)
-    assert publications(tmp_path)[0] == before[0]
-    if boundary != "cursor":
-        assert publications(tmp_path)[1] == before[1]
+    assert publications(tmp_path) == before
 
 
 def test_model_verification_runs_after_mlp_restoration(tmp_path, monkeypatch):

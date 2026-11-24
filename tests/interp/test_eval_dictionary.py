@@ -12,7 +12,7 @@ from tools.interp.memory_limits import CleanStop
 from tools.interp.model_load import hidden_forward
 from tools.interp.text_stream import TextStream
 from .fixture import TinyLM, TinyTokenizer
-from .test_dictionary import write_fixture
+from .test_dictionary import memory_readers, write_fixture
 from .test_training_stream import documents
 
 
