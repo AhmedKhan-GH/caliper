@@ -97,6 +97,7 @@ from contextlib import contextmanager
 import collections
 import heapq
 import itertools
+import json
 import logging
 import math
 import numbers
@@ -118,6 +119,7 @@ RUN_NONE, RUN_RUNNING, RUN_PAUSING, RUN_PAUSED, RUN_STEPPING = (
 NAME_MAX = 63
 MAX_PARAMS = 64
 MAX_ACTIONS = 64
+MAX_META_BYTES = 1 << 20
 MAX_CHOICES = 64
 TEXT_MAX = 1024
 PARAM_TEXT_MAX = 4096
@@ -203,6 +205,32 @@ def _check_help(help) -> str | None:
     if not isinstance(help, str) or len(help.encode("utf-8")) > TEXT_MAX:
         raise ValueError(f"help must be a str of at most {TEXT_MAX} UTF-8 bytes")
     return help
+
+
+def _check_controls_budget(meta):
+    """Check a detached prospective message with space for automatic state changes."""
+    from ._intervention_protocol import MAX_BYTES
+
+    def size(value):
+        return len(json.dumps(value, ensure_ascii=False, allow_nan=False,
+                              separators=(",", ":")).encode("utf-8"))
+
+    # Steps and action flags can change without a new admission request.
+    run = meta["run"]
+    meta["run"] = {"state": RUN_STEPPING, "step": max(_INT_EXACT - 1, run.get("step", 0)),
+                   "steps_left": max(_INT_EXACT - 1, run.get("steps_left", 0))}
+    for action in meta["actions"]:
+        action.update(running=False, queued=False)
+    for entry in meta.get("interventions", {}).get("active", []):
+        if entry["state"] != IV_ENDED:
+            # One UTF-8 byte can require six JSON bytes. Reserve the full error
+            # bounds, even when every live hook fails at the same boundary.
+            entry.update(state=IV_PENDING, since_step=_INT_EXACT - 1,
+                         error="\x01" * TEXT_MAX, error_code="\x01" * NAME_MAX)
+        if size(entry) > MAX_BYTES:
+            raise ValueError("intervention metadata exceeds the wire limit with lifecycle headroom")
+    if size(meta) > MAX_META_BYTES:
+        raise ValueError("CONTROLS metadata exceeds the wire limit with lifecycle headroom")
 
 
 def _scalar(v):
@@ -714,7 +742,9 @@ class _Intervention:
         if self.op == "ablate":
             entry.pop("kind", None)  # Preserve the original ablation CONTROLS entry.
         if self.error is not None:
-            entry.update(error=self.error, error_code=self.error_code)
+            entry["error"] = self.error
+        if self.error_code is not None:
+            entry["error_code"] = self.error_code
         return entry
 
 
@@ -947,10 +977,10 @@ class Interventions:
                 if old is None:
                     raise InterventionError("too many live intervention records", _w().ERR_LIMIT)
                 del records[old]
-            self._restore_records(list(records.values()), restore_active=True)
+            self._restore_records(list(records.values()), restore_active=True, evict_ended=True)
         self._ctl._publish()
 
-    def _restore_records(self, records, *, restore_active):
+    def _restore_records(self, records, *, restore_active, evict_ended=False):
         """Restore validated records while the controls lock is held."""
         from .interp._intervene import InterventionError
         restored = {}
@@ -965,6 +995,10 @@ class Interventions:
             iv.applied_spec = applied
             iv.replace = applied is not None and spec != applied
             restored[key] = iv
+        try:
+            restored = self._ctl._admit_interventions(restored, evict_ended=evict_ended)
+        except ValueError as error:
+            raise InterventionError(str(error), _w().ERR_LIMIT) from None
         if restore_active:
             try:
                 for iv in restored.values():
@@ -1365,6 +1399,7 @@ class Controls:
                 raise ValueError(f"at most {MAX_PARAMS} parameters")
             p = Param(self, name, *spec)
             _run_value(p)
+            self._check_metadata_budget(params={**self.params, name: p})
             if old is not None:
                 old.removed = True
                 if old._pending is not _NO:
@@ -1381,6 +1416,11 @@ class Controls:
         except w.MessageError as e:
             raise ValueError(e.message) from None
         with self.lock:
+            if self.params.get(p.name) is p:
+                entry = p.entry()
+                entry["value"] = v
+                entry.pop("pending", None)
+                self._check_param_budget(p, entry)
             p._value = v
             p._version += 1
             if p._pending is not _NO:
@@ -1416,6 +1456,7 @@ class Controls:
             if old is None and len(self.actions) >= MAX_ACTIONS:
                 raise ValueError(f"at most {MAX_ACTIONS} actions")
             a = Action(self, name, fn, help)
+            self._check_metadata_budget(actions={**self.actions, name: a})
             if old is not None:
                 # a run of the old one that waits becomes a run of the new one
                 old.removed = True
@@ -1609,6 +1650,16 @@ class Controls:
                     v = w.param_value(p.entry(), msg.value)
                 except w.MessageError as e:
                     return error(e.code, e.message)
+                entry = p.entry()
+                if self.state == RUN_NONE:
+                    entry["value"] = v
+                    entry.pop("pending", None)
+                else:
+                    entry["pending"] = v
+                try:
+                    self._check_param_budget(p, entry)
+                except ValueError as e:
+                    return error(w.ERR_LIMIT, str(e))
                 if self.state == RUN_NONE:
                     p._value = v
                     p._version += 1
@@ -1757,14 +1808,16 @@ class Controls:
         m.points = pts[:MAX_POINTS_LISTED]
         m.names = frozenset(p["point"] for p in pts)
         m.executor._ablation_points = m.names
-        old = self._iv_model
-        if old is not None:
-            self._interventions_off(old)
-        try:
-            m._shapes_off = _ablate.record_shapes(model)
-        except Exception:
-            _log.debug("the shape hooks failed", exc_info=True)
         with self.lock:
+            self._check_metadata_budget(points=m.points, ivs={})
+            old = self._iv_model
+            if old is not None:
+                self._close_interventions(old, self._ivs.values())
+            self._ivs = {}
+            try:
+                m._shapes_off = _ablate.record_shapes(model)
+            except Exception:
+                _log.debug("the shape hooks failed", exc_info=True)
             self._iv_model = m
             self._iv_due = m._shapes_off is not None
             self._update_busy()
@@ -1780,16 +1833,19 @@ class Controls:
                 return
             self._iv_model = None
             ivs, self._ivs = list(self._ivs.values()), {}
-            shapes_off, m._shapes_off = m._shapes_off, None
             self._iv_due = False
             self._update_busy()
+        self._close_interventions(m, ivs)
+        self._publish()
+
+    def _close_interventions(self, m, ivs):
+        shapes_off, m._shapes_off = m._shapes_off, None
         for iv in ivs:
             self._unhook(iv)
         m.executor.close()
         m.executor.dictionary = m.executor.tokenizer = None
         if shapes_off is not None:
             shapes_off()
-        self._publish()
 
     @staticmethod
     def _unhook(iv: _Intervention, *, retain_source=False) -> None:
@@ -1840,21 +1896,24 @@ class Controls:
                 return (ERR_BAD_RANGE, f"until_step {until} is in the past: the next step is {nxt}")
             key = (point, op)
             iv = self._ivs.get(key)
-            if iv is None:
-                live = sum(1 for x in self._ivs.values() if x.state != IV_ENDED)
-                if live >= MAX_INTERVENTIONS:
-                    return (_w().ERR_LIMIT, f"the script holds {MAX_INTERVENTIONS} interventions")
-                while len(self._ivs) >= MAX_INTERVENTIONS:
-                    old = next(k for k, x in self._ivs.items() if x.state == IV_ENDED)
-                    del self._ivs[old]
-                self._ivs[key] = _Intervention(point, op, frm, until, spec)
-            else:
+            candidate = _Intervention(point, op, frm, until, spec)
+            if iv is not None and iv.state != IV_ENDED:
+                candidate.state, candidate.since_step = iv.state, iv.since_step
+            try:
+                prospective = self._admit_interventions({**self._ivs, key: candidate}, evict_ended=True)
+            except ValueError as error:
+                return _w().ERR_LIMIT, str(error)
+            if iv is not None:
+                # Keep the record identity: an installed hook's callback owns it.
                 iv.replace = iv.applied_spec is not None and spec != iv.applied_spec
                 iv.spec = spec
                 iv.from_step, iv.until_step = frm, until
                 iv.clear, iv.error, iv.error_code = False, None, None
                 if iv.state == IV_ENDED:
                     iv.state, iv.since_step = IV_PENDING, None
+                prospective[key] = iv
+            self._ivs.clear()
+            self._ivs.update(prospective)
         elif req.get("clear") is not None:
             point = req["clear"]
             if not isinstance(point, str) or point not in m.names:
@@ -1911,7 +1970,9 @@ class Controls:
                 continue
             self._unhook(iv)
             iv.state = IV_ENDED
-            iv.error = (f"ended: no connection that may control the run stayed for {LINGER_S:g} s")
+            iv.error = self._stop_message(
+                f"ended: no connection that may control the run stayed for {LINGER_S:g} s")
+            iv.error_code = "intervene.no_controller"
             ended.append(iv.point)
         if ended:
             self.counters["interventions_lingered"] += len(ended)
@@ -1926,7 +1987,7 @@ class Controls:
             if self._ivs.get((iv.point, iv.op)) is not iv:
                 return
             self._unhook(iv)
-            iv.state, iv.error = IV_ENDED, message
+            iv.state, iv.error = IV_ENDED, self._stop_message(message)
             iv.error_code, iv.report = "intervene.hook_failed", True
             self._iv_due = True
             self._update_busy()
@@ -1948,7 +2009,12 @@ class Controls:
             shapes_off, m._shapes_off = m._shapes_off, None
             try:
                 shapes_off()
-                m.points = list(m.adapter.points(m.model))[:MAX_POINTS_LISTED]
+                points = list(m.adapter.points(m.model))[:MAX_POINTS_LISTED]
+                self._check_metadata_budget(points=points)
+                m.points = points
+            except ValueError as error:
+                warnings.warn(f"caliper: point metadata update refused: {error}",
+                              RuntimeWarning, stacklevel=2)
             except Exception:
                 _log.debug("the shapes of the points failed", exc_info=True)
             changed = True
@@ -1974,7 +2040,8 @@ class Controls:
                 continue
             failed = iv.hook is not None and getattr(iv.hook, "errors", 0)
             if failed:
-                iv.error = getattr(iv.hook, "error", None) or "the hook failed"
+                iv.error = self._stop_message(getattr(iv.hook, "error", None) or "the hook failed")
+                iv.error_code = "intervene.hook_failed"
             ended = failed or (iv.until_step is not None and iv.until_step <= s)
             on = not ended and (iv.from_step is None or iv.from_step <= s)
             if on and (iv.hook is None or reinstall):
@@ -1989,7 +2056,7 @@ class Controls:
                         self._unhook(iv)
                         iv.state = IV_ENDED
                         raise
-                    iv.error = f"{type(e).__name__}: {e}"[:TEXT_MAX]
+                    iv.error = self._stop_message(f"{type(e).__name__}: {e}")
                     iv.error_code = "intervene.hook_failed"
                     ended, on = True, False
                     warnings.warn(f"caliper: the intervention at {iv.point!r} failed: {iv.error}",
@@ -2025,16 +2092,48 @@ class Controls:
             return self._controls_meta()
 
     def _controls_meta(self) -> dict:
-        w = _w()
-        extra = {}
+        meta = {"run": self._run_obj(), "params": [p.entry() for p in self.params.values()],
+                "actions": [a.entry() for a in self.actions.values()]}
         if self._iv_model is not None:   # a training or inference watch
-            extra["interventions"] = self._interventions_obj()
-        return w.Controls(self._run_obj(), [p.entry() for p in self.params.values()],
-                          [a.entry() for a in self.actions.values()], **extra).to_meta()
+            meta["interventions"] = self._interventions_obj()
+        return meta
+
+    def _check_metadata_budget(self, *, params=None, actions=None, ivs=None, points=None):
+        """Check prospective collections without state changes, with the lock held."""
+        meta = self._controls_meta()
+        if params is not None:
+            meta["params"] = [p.entry() for p in params.values()]
+        if actions is not None:
+            meta["actions"] = [a.entry() for a in actions.values()]
+        if points is not None:
+            meta.setdefault("interventions", {"active": []})["points"] = points
+        if ivs is not None:
+            meta["interventions"]["active"] = [iv.entry() for iv in ivs.values()]
+        _check_controls_budget(meta)
+
+    def _check_param_budget(self, param, entry):
+        meta = self._controls_meta()
+        meta["params"] = [entry if p is param else p.entry() for p in self.params.values()]
+        _check_controls_budget(meta)
+
+    def _admit_interventions(self, ivs, *, evict_ended=False):
+        """Return a bounded collection. Evict history only after complete admission."""
+        ivs = dict(ivs)
+        while True:
+            try:
+                if len(ivs) > MAX_INTERVENTIONS:
+                    raise ValueError(f"the script holds {MAX_INTERVENTIONS} interventions")
+                self._check_metadata_budget(ivs=ivs)
+                return ivs
+            except ValueError:
+                old = next((key for key, iv in ivs.items() if iv.state == IV_ENDED), None)
+                if not evict_ended or old is None:
+                    raise
+                del ivs[old]
 
     def _interventions_obj(self) -> dict:
         return {"points": list(self._iv_model.points),
-                "active": [iv.entry() for iv in self._ivs.values()][:MAX_INTERVENTIONS]}
+                "active": [iv.entry() for iv in self._ivs.values()]}
 
     def _selection_meta(self, sp: ItemSpace) -> dict:
         w = _w()
