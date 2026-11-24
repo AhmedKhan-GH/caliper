@@ -217,16 +217,14 @@ class MemoryGuard:
         if current + size > self.limit:
             raise CleanStop(f"{stage} allocation exceeds the trace memory limit")
 
-    def batch_size(self, requested, *, layers, tokens, width, mixer_width):
-        if self.device.type != "mps":
-            return requested
+    def batch_size(self, requested, *, layers, tokens, width, mixer_width, itemsize=4):
         current = self.check("target batch admission")
         # Bound live values, adjoints, convolution work, and allocator headroom.
-        per_target = 4 * tokens * (width * (layers + 1) * 12 + mixer_width * layers * 8)
+        per_target = max(4, itemsize) * tokens * (width * (layers + 1) * 12 + mixer_width * layers * 8)
         available = self.limit - current - 512_000_000
         admitted = min(requested, int(available // max(1, per_target)))
         if admitted < 1:
-            raise CleanStop("no target batch fits the MPS memory limit")
+            raise CleanStop("no target batch fits the process memory limit")
         return admitted
 
 

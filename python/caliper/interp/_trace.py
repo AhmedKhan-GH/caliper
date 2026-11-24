@@ -595,7 +595,8 @@ class Tracer:
                 with autorelease_scope(path.device):
                     check("target selection")
                     size = self.guard.batch_size(self.target_batch_size, layers=path.layers, tokens=path.tokens,
-                                                 width=path.width, mixer_width=path.mixer_width)
+                                                 width=path.width, mixer_width=path.mixer_width,
+                                                 itemsize=path.embedding.element_size())
                     if completed < len(effects.logit_nodes):
                         batch = target_indices[completed:min(completed + size, len(effects.logit_nodes))]
                     else:
