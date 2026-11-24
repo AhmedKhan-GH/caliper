@@ -49,7 +49,7 @@ from . import _controls, _net_programs, _wire
 __all__ = ["ControlsPort", "capabilities"]
 
 _CAPS = frozenset((_wire.CAP_CONTROLS, _wire.CAP_SELECTION, _wire.CAP_PROGRAMS,
-                   _wire.CAP_INTERVENTIONS))
+                   _wire.CAP_INTERVENTIONS, _wire.CAP_INTERPRETATION))
 ORDER_WAIT_S = _wire.ORDER_WAIT_MS / 1000    # the longest a pause's run state waits for data
 COPY_WAIT_S = 1.0                            # the longest a pause waits for the device's copies
 RECHECK_S = 0.002                            # how often a held run state looks again
@@ -61,7 +61,8 @@ def capabilities(controls: bool) -> list:
     if not controls:
         return [_wire.CAP_EVENTS]
     return sorted([_wire.CAP_CONTROLS, _wire.CAP_EVENTS, _wire.CAP_SELECTION]
-                  + _net_programs.capabilities())
+                  + _net_programs.capabilities()
+                  + ([_wire.CAP_INTERPRETATION] if _controls.CONTROLS.interpretation_service is not None else []))
 
 
 def peer_caps(announced) -> frozenset:
@@ -155,6 +156,11 @@ class ControlsPort:
                                    "a CONTROL needs the capability controls in HELLO",
                                    in_reply_to=int(_wire.MsgType.CONTROL),
                                    request_id=msg.request_id))
+            return
+        if msg.op == _wire.OP_INTERPRET and _wire.CAP_INTERPRETATION not in link.caps:
+            link.queue(_wire.ControlReply(msg.request_id, msg.op, _wire.STATUS_ERROR,
+                                          error={"code": "interpret.unsupported",
+                                                 "message": "The peer did not announce interpretation."}))
             return
         try:
             reply = self.route.on_control(link, msg.to_meta())

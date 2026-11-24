@@ -537,3 +537,54 @@ def test_step_stays_cheap_with_a_viewer(server, ctl):
             print(f"caliper.step() with a viewer attached: {best * 1e9:.1f} ns per call")
             assert best < 1e-6
     run(go())
+
+
+def test_interpretation_capability_and_real_service_round_trip(mode, ctl, make_server, tmp_path, monkeypatch):
+    from tests.interp.test_dictionary import write_fixture
+    from tests.interp.fixture import TinyTokenizer
+    from caliper.interp import load_dictionary
+    from caliper.interp._index import FeatureIndex, build_index
+    from caliper.interp._service import register_service, unregister_service
+    import caliper.interp
+
+    model, _ = write_fixture(tmp_path)
+    tokenizer = TinyTokenizer()
+    dictionary = load_dictionary(tmp_path, model=model)
+    build_index(tmp_path, [("fixture", [65, 66, 67] * 16)], model=model, tokenizer=tokenizer,
+                dictionary=dictionary, provenance={"partition": "fixture"}, context_length=17)
+    index = FeatureIndex(tmp_path, model=model, tokenizer=tokenizer, dictionary=dictionary)
+    feature = int(index.counts[0].argmax())
+    published = {}
+    monkeypatch.setattr(caliper.interp, "publish", lambda name, tensor: published.update({name: tensor}))
+    service = register_service(model=model, tokenizer=tokenizer, dictionary=dictionary, index=index, controls=ctl)
+    server = make_server()
+
+    async def check():
+        async with Viewer(server, CAPS + [w.CAP_INTERPRETATION]) as viewer:
+            assert w.CAP_INTERPRETATION in viewer.welcome.capabilities
+            requests = [("feature.dictionary", {}), ("feature.show", {"layer": 0, "feature": feature}),
+                        ("feature.examples", {"layer": 0, "feature": feature}),
+                        ("trace.run", {"prompt": "AB", "max_targets": 4, "max_nodes": 64, "max_edges": 128}),
+                        ("trace.status", {}), ("trace.read", {"node_limit": 2})]
+            for rid, (method, params) in enumerate(requests, 1):
+                await viewer.send(w.Control(rid, "interpret", interpretation={"version": 1, "method": method, "params": params}))
+                reply = await viewer.expect(w.ControlReply, lambda x: x.request_id == rid)
+                if method != "trace.status":
+                    assert reply.status == "queued"
+                    # The socket thread has returned. Execute only at a run boundary.
+                    ctl.step(rid)
+                    reply = await viewer.expect(w.ControlReply, lambda x: x.request_id == rid and x.status != "queued")
+                assert reply.status == "ok", reply.error
+                assert reply.result
+        async with Viewer(server) as old:
+            await old.send(w.Control(20, "interpret", interpretation={"version": 1, "method": "trace.status", "params": {}}))
+            reply = await old.expect(w.ControlReply, lambda x: x.request_id == 20)
+            assert reply.status == "error" and reply.error["code"] == "interpret.unsupported"
+            await old.send(w.Control(21, "resume"))
+            assert (await old.expect(w.ControlReply, lambda x: x.request_id == 21)).status == "ok"
+
+    try:
+        run(check())
+        assert published["examples.example_ids"].tolist() == list(range(16))
+    finally:
+        unregister_service(service, controls=ctl)
