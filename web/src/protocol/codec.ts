@@ -171,7 +171,7 @@ export function canonicalJson(v: unknown, source?: unknown): string {
   if (v === null || typeof v !== 'object') {
     if (typeof v === 'number' && !Number.isFinite(v)) throw new TypeError('NaN and the infinities are not JSON');
     const text = JSON.stringify(v);
-    return typeof v === 'number' && (/[.eE]/.test(text) || (typeof source === 'string' && /[.eE]/.test(source)))
+    return typeof v === 'number' && (/[.eE]/.test(text) || (typeof source === 'string' ? /[.eE]/.test(source) : !Number.isSafeInteger(v)))
       ? canonicalFloat(v) : text;
   }
   source ??= numberSources.get(v);
@@ -351,7 +351,9 @@ function isInterpretationObject(v: unknown, source?: unknown): boolean {
     if (depth > INTERPRET_LIMITS.maxDepth || ++count > INTERPRET_LIMITS.maxValues) return false;
     if (value === null || isBool(value)) return true;
     if (typeof value === 'number')
-      return Number.isFinite(value) && (/[.eE]/.test(numericSource(value, raw)) || Number.isSafeInteger(value));
+      // Only a decoded integer token has integer semantics. Plain JS numbers
+      // outside the safe integer range use the finite float representation.
+      return Number.isFinite(value) && (typeof raw !== 'string' || /[.eE]/.test(raw) || Number.isSafeInteger(value));
     if (typeof value === 'string') return interpretationText(value);
     if (Array.isArray(value))
       return value.length <= INTERPRET_LIMITS.maxList && value.every((x, i) => visit(x, depth + 1, sourceField(raw, i)));
