@@ -6,6 +6,9 @@ import json
 import torch
 
 
+_MAX_CHECKPOINT_BUFFER_BYTES = 1024 * 1024
+
+
 _MODULE_FIELDS = (
     "training", "eps", "variance_epsilon", "layer_norm_epsilon", "frozen_scale", "frozen_pattern",
     "num_heads", "n_heads", "n_head", "head_dim", "in_features", "out_features", "k",
@@ -63,8 +66,57 @@ def forward_settings(model, *, tensor_hash):
     return settings
 
 
-def checkpoint_settings(model, data, *, tensor_hash):
-    """Derive settings from trusted config bytes without checkpoint tensor storage."""
+def nonpersistent_buffers(model):
+    """Include every buffer registration, even aliases and absent buffers."""
+    return {f"{name}.{key}" if name else key: value
+            for name, module in model.named_modules(remove_duplicate=False)
+            for key, value in module._buffers.items()
+            if key in module._non_persistent_buffers_set}
+
+
+def _checkpoint_buffers(reference, model, *, admit):
+    """Reconstruct supported buffers on CPU after a bounded meta inspection."""
+    expected = nonpersistent_buffers(reference)
+    actual = nonpersistent_buffers(model)
+    if expected.keys() != actual.keys():
+        raise ValueError("model nonpersistent buffers differ from the local checkpoint")
+    if not expected:
+        return {}
+    total = 0
+    for name, value in expected.items():
+        live = actual[name]
+        if (not isinstance(value, torch.Tensor) or not isinstance(live, torch.Tensor)
+                or live.shape != value.shape or live.dtype not in
+                (torch.float16, torch.bfloat16, torch.float32, torch.float64)):
+            raise ValueError("unsupported checkpoint nonpersistent buffers")
+        total += value.numel() * max(value.element_size(), live.element_size())
+    if total > _MAX_CHECKPOINT_BUFFER_BYTES:
+        raise ValueError("checkpoint nonpersistent buffers exceed the reconstruction limit")
+    # Cover the result, constructor intermediates, and dtype conversion together.
+    admit(4 * _MAX_CHECKPOINT_BUFFER_BYTES)
+
+    from transformers.models.qwen3_5.modeling_qwen3_5 import Qwen3_5TextRotaryEmbedding
+
+    buffers = {}
+    for name, module in reference.named_modules(remove_duplicate=False):
+        keys = module._non_persistent_buffers_set
+        if not keys:
+            continue
+        # This constructor uses only two frequency vectors. Unknown constructors
+        # must not allocate model parameters or establish an unchecked baseline.
+        if (type(module) is not Qwen3_5TextRotaryEmbedding or module.rope_type != "default"
+                or keys != {"inv_freq", "original_inv_freq"}):
+            raise ValueError("unsupported checkpoint nonpersistent buffers")
+        with torch.device("cpu"):
+            rotary = Qwen3_5TextRotaryEmbedding(module.config)
+        for key, value in rotary.named_buffers():
+            full_name = f"{name}.{key}" if name else key
+            buffers[full_name] = value.to(dtype=actual[full_name].dtype)
+    return buffers
+
+
+def checkpoint_settings(model, data, *, tensor_hash, admit_buffers):
+    """Derive settings and buffer identity without checkpoint parameter storage."""
     # The text-only class uses the nested text config of a multimodal snapshot.
     if getattr(model.config, "model_type", None) == "qwen3_5_text" and "text_config" in data:
         data = data["text_config"]
@@ -76,4 +128,5 @@ def checkpoint_settings(model, data, *, tensor_hash):
     config._attn_implementation = "eager"
     with torch.random.fork_rng(devices=[]), torch.device("meta"):
         reference = type(model)(config).eval()
-    return forward_settings(reference, tensor_hash=tensor_hash)
+    settings = forward_settings(reference, tensor_hash=tensor_hash)
+    return settings, tensor_hash(_checkpoint_buffers(reference, model, admit=admit_buffers))

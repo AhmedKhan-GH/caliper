@@ -16,7 +16,7 @@ from torch import nn
 from torch.nn import functional as F
 
 from ._memory import CleanStop, MemoryGuard, autorelease_scope
-from ._forward_identity import checkpoint_settings, forward_settings
+from ._forward_identity import checkpoint_settings, forward_settings, nonpersistent_buffers
 
 
 _WEIGHTS = ("W_enc", "b_enc", "W_dec", "b_dec")
@@ -140,7 +140,7 @@ def _hf_identity(config):
 def _hf_digest(model, *, memory=None, limit_gb=None):
     state = model.state_dict()
     # Nonpersistent buffers can affect the forward but do not occur in state_dict.
-    buffers = {name: value for name, value in model.named_buffers() if name not in state}
+    buffers = nonpersistent_buffers(model)
     persistent = _state_hash(state, memory=memory, limit_gb=limit_gb)
     transient = _state_hash(buffers, memory=memory, limit_gb=limit_gb)
     return hashlib.sha256((persistent + transient).encode("ascii")).hexdigest()
@@ -241,9 +241,11 @@ def verify_hf_model(model, snapshot, *, key_mapping=None, checkpoint_subset=None
     ``checkpoint_subset="qwen3.5-0.8b-text"`` declares the text weights of the
     pinned Qwen3.5-0.8B revision. It supplies the prefix mapping and excludes
     exactly 153 vision and 15 MTP keys. All other unexpected keys remain errors.
-    Tied parameters can share one checkpoint entry. Nonpersistent buffers form
-    part of the baseline for subsequent checks. Forward settings must match an
-    evaluation-mode reference from the local config. Eager and SDPA are supported.
+    Tied parameters can share one checkpoint entry. Nonpersistent buffers must
+    match a bounded trusted reconstruction. Qwen3.5 default text RoPE buffers
+    are supported. Other nonpersistent buffers are refused.
+    Forward settings must match an evaluation-mode reference from the local
+    config. Eager and SDPA are supported.
 
     Converted slices and CPU transfers stay within fixed chunk limits. The
     function returns the verified HF identity and records private provenance for
@@ -268,13 +270,23 @@ def verify_hf_model(model, snapshot, *, key_mapping=None, checkpoint_subset=None
     memory = MemoryGuard(memory_limit_gb, next(iter(devices)))
     _hash_admission(memory)
     config_data, _ = _read_metadata(snapshot / "config.json", memory)
-    settings = checkpoint_settings(model, config_data, tensor_hash=_state_hash)
+
+    def admit_buffers(size):
+        memory.check("checkpoint_buffers", force=True)
+        if memory.peak + size > memory.limit:
+            raise CleanStop("checkpoint buffer reconstruction exceeds the process memory limit")
+
+    settings, buffers = checkpoint_settings(
+        model, config_data, tensor_hash=lambda state: _state_hash(state, memory=memory),
+        admit_buffers=admit_buffers)
 
     def current_settings():
         return forward_settings(model, tensor_hash=lambda state: _state_hash(state, memory=memory))
 
     if current_settings() != settings:
         raise ValueError("model forward settings differ from the local checkpoint")
+    if _state_hash(nonpersistent_buffers(model), memory=memory) != buffers:
+        raise ValueError("model nonpersistent buffers differ from the local checkpoint")
     mapping, excluded = _checkpoint_subset(model, identity, checkpoint_subset, key_mapping)
     if (not isinstance(mapping, dict) or any(not isinstance(k, str) or not k
             or not isinstance(v, str) for k, v in mapping.items())):
@@ -329,6 +341,8 @@ def verify_hf_model(model, snapshot, *, key_mapping=None, checkpoint_subset=None
         raise ValueError("model weights changed during checkpoint verification")
     if current_settings() != settings:
         raise ValueError("model forward settings changed during checkpoint verification")
+    if _state_hash(nonpersistent_buffers(model), memory=memory) != buffers:
+        raise ValueError("model nonpersistent buffers changed during checkpoint verification")
     _VERIFIED_MODELS[model] = _VerifiedWeights(identity, before, settings, memory)
     return identity
 

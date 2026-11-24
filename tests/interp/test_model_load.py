@@ -37,7 +37,6 @@ class FixtureHFModel(torch.nn.Linear):
         self.config = config
         self.variance_epsilon = config.rms_norm_eps
         self.register_buffer("persistent", torch.arange(3, dtype=torch.float32))
-        self.register_buffer("transient", torch.arange(2, dtype=torch.float32), persistent=False)
 
 
 def hf_model():
@@ -85,6 +84,8 @@ CHANGES = ["inplace", "optimizer", "parameter", "data_replace", "data_mutate",
 @pytest.mark.parametrize("change", CHANGES)
 def test_verified_identity_rejects_all_weight_changes(memory, change):
     model = hf_model()
+    if change == "transient":
+        model.register_buffer("transient", torch.arange(2, dtype=torch.float32), persistent=False)
     dictionary._record_verified_hf_load(model, memory=memory)
     identity = f"hf:{model_load.MODEL_ID}@{model_load.MODEL_REVISION}"
     assert dictionary.model_identity(model) == identity
@@ -104,6 +105,8 @@ def test_verified_identity_rejects_all_weight_changes(memory, change):
 @pytest.mark.parametrize("change", CHANGES)
 def test_unverified_config_cannot_hide_changed_weights(change):
     model = hf_model()
+    if change == "transient":
+        model.register_buffer("transient", torch.arange(2, dtype=torch.float32), persistent=False)
     original = dictionary.model_identity(model)
     assert original.startswith("sha256:")
     change_weights(model, change)
