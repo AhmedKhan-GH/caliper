@@ -264,7 +264,7 @@ def register_service(service=None, *, controls=None, **resources):
     service = service or InterpretationService(**resources)
     with controls.lock:
         old = controls.interpretation_service
-    if old is not None and old is not service:
+    if old is not None:
         old._check_close_thread()
     with controls.interpretation_registration_lock:
         with service.lock:
