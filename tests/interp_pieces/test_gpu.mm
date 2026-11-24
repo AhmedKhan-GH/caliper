@@ -199,6 +199,32 @@ Json pick_at(float x, float y, unsigned item) {
 }
 }
 
+TEST_CASE("small graph silhouettes retain a pixel at subpixel centers") {
+    @autoreleasepool {
+        mr::Metal metal;
+        if (!metal.backend) CALIPER_SKIP_NO_GPU(metal.why);
+        const auto piece=ip::load("attribution_graph");
+        auto data=mr::run_derive(metal.device,piece,graph_tensors(),{});
+        for (auto& resource:data) if (resource.id=="nodes") {
+            for (unsigned i=0;i<resource.count;++i) {
+                const float radius=0.00001f;
+                std::memcpy(resource.bytes.data()+i*48+12,&radius,4);
+            }
+        }
+        mr::PieceDraw draw(*metal.backend,size);
+        set_resources(draw,piece,data);
+        REQUIRE(draw.draw(frame(piece)));
+        const auto& nodes=resource(data,"nodes");
+        std::set<unsigned> visible;
+        for (unsigned y=0;y<size;++y) for (unsigned x=0;x<size;++x) {
+            const unsigned item=mr::identity_of(draw.ids,size,x,y);
+            if (item) visible.insert(item-1);
+        }
+        REQUIRE(visible.size()==nodes.count);
+        for (unsigned i=0;i<nodes.count;++i) CHECK(visible.count(i)==1);
+    }
+}
+
 TEST_CASE("graph layout has disjoint cells, stable bytes, labels, and sixteen center picks") {
     @autoreleasepool {
         mr::Metal metal;
