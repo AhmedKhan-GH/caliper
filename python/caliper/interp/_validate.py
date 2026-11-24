@@ -112,7 +112,7 @@ def validate_trace(model, tokenizer, dictionary, interventions, graph, *, prompt
                     # A private executor preserves the live service hooks, cache, and lifecycle.
                     temporary = InterventionService(model)
                     try:
-                        temporary.configure(dictionary=dictionary, tokenizer=tokenizer)
+                        temporary.configure(dictionary=dictionary, tokenizer=tokenizer, resource_guard=guard)
                         hook = temporary.install({"kind": "clamp", "point": probe.point, "feature": feature,
                                                   "positions": [selected], "value": activation - effective})
                         measured = centered(forward_logits(model, inputs, last_token=position == inputs["input_ids"].shape[1] - 1, guard=guard)) - baseline

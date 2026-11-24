@@ -62,6 +62,34 @@ def test_validation_matches_centered_prediction_at_selected_position():
         service.remove()
 
 
+@pytest.mark.parametrize("admitted", [False, True])
+def test_validation_temporary_executor_keeps_resource_guard(admitted):
+    from caliper.interp._dictionary import _HASH_CHUNK_BYTES
+    from caliper.interp._memory import CleanStop
+    model, tokenizer, dictionary, controls, service = validation_case()
+    graph = frozen_graph(model, tokenizer, "AB")
+    stages = []
+    guard = SimpleNamespace(limit=20_000_000 if admitted else 4 * _HASH_CHUNK_BYTES - 1,
+                            peak=0, device=torch.device("cpu"),
+                            check=lambda stage, **kwargs: stages.append(stage))
+    hooks = {name: (len(module._forward_hooks), len(module._forward_pre_hooks))
+             for name, module in model.named_modules()}
+    try:
+        with model.frozen_attention(norms=True):
+            if admitted:
+                result = validate_trace(model, tokenizer, dictionary, service, graph, prompt="AB", guard=guard)
+                assert result["count"] == 8
+            else:
+                with pytest.raises(CleanStop, match="allocation exceeds"):
+                    validate_trace(model, tokenizer, dictionary, service, graph, prompt="AB", guard=guard)
+        assert "model_identity" in stages
+        assert controls.n == 0 and service.specifications() == []
+        assert hooks == {name: (len(module._forward_hooks), len(module._forward_pre_hooks))
+                         for name, module in model.named_modules()}
+    finally:
+        service.remove()
+
+
 def test_validation_preserves_active_pending_and_ended_state_on_failure(monkeypatch):
     model, tokenizer, dictionary, controls, service = validation_case()
     graph = frozen_graph(model, tokenizer, "AB")
