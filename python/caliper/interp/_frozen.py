@@ -211,6 +211,24 @@ class FrozenPath:
                 return hook
             def install(handle):
                 stack.callback(handle.remove)
+            frames = []
+            def enter_forward(mod, args):
+                # Clean patch sources can run a nested model forward inside an intervention.
+                frames.append((dict(values), {key: dict(value) for key, value in values._pending.items()},
+                               dict(recorded)) if frames else None)
+            def exit_forward(mod, args, output):
+                frame = frames.pop()
+                if frame is not None:
+                    saved_values, saved_pending, saved_recorded = frame
+                    values.clear()
+                    values.update(saved_values)
+                    for key, pending in values._pending.items():
+                        pending.clear()
+                        pending.update(saved_pending[key])
+                    recorded.clear()
+                    recorded.update(saved_recorded)
+            install(model.register_forward_pre_hook(enter_forward, prepend=True))
+            install(model.register_forward_hook(exit_forward, always_call=True))
             install(root.norm.register_forward_pre_hook(pre("final_norm"), with_kwargs=True))
             install(root.embed_tokens.register_forward_hook(out("embedding")))
             for i, block in enumerate(self.blocks):

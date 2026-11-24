@@ -389,3 +389,28 @@ def test_mid_forward_intervention_change_is_not_cached(monkeypatch):
     finally:
         handle.remove()
     assert not tracer._cache and tracer._forward_cache is None
+
+
+def test_nested_source_forward_preserves_outer_frozen_capture():
+    from caliper.interp._frozen import FrozenPath
+    from .fixture import TinyLM
+    model = TinyLM(layers=2)
+    dictionary = exact_dictionary(model)
+    baseline = FrozenPath(model, torch.tensor([[1, 2, 3]]), dictionary)
+    nested = False
+    def clean_source(mod, args, output):
+        nonlocal nested
+        if not nested:
+            nested = True
+            try:
+                model(torch.tensor([[9, 8]]))
+            finally:
+                nested = False
+    handle = model.layers[0].mlp.register_forward_hook(clean_source)
+    try:
+        actual = FrozenPath(model, torch.tensor([[1, 2, 3]]), dictionary)
+    finally:
+        handle.remove()
+    assert actual.forward_residual < 1e-9
+    for a, b in zip(actual.inputs + actual.outputs, baseline.inputs + baseline.outputs):
+        torch.testing.assert_close(a, b, atol=0, rtol=0)
