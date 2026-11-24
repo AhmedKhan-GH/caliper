@@ -22,6 +22,10 @@ from .stop_records import clean_stop_record, stop_reason
 from .text_stream import TextStream, fineweb_documents, partition_metadata
 
 
+_QUALITY_THRESHOLDS = {"fvu": 0.40, "dead_fraction": 0.15, "cross_entropy_delta": 0.5,
+                       "evaluated_tokens": 200_000}
+
+
 @contextmanager
 def replace_all_mlps(model, dictionary):
     """Replace every active MLP for one forward and restore it on every exit."""
@@ -111,8 +115,7 @@ class QualityStats:
                   "original_cross_entropy": self.original_ce / self.ce_tokens,
                   "replaced_cross_entropy": self.replaced_ce / self.ce_tokens,
                   "per_layer_fvu": fvu, "per_layer_dead_fraction": dead.tolist(),
-                  "thresholds": {"fvu": 0.40, "dead_fraction": 0.15, "cross_entropy_delta": 0.5,
-                                 "evaluated_tokens": 200_000}}
+                  "thresholds": dict(_QUALITY_THRESHOLDS)}
         finite = (all(math.isfinite(v) for v in fvu if v is not None)
                   and torch.isfinite(dead).all().item() and math.isfinite(delta))
         if not finite:
@@ -324,13 +327,14 @@ def evaluate(model, dictionary, stream, folder, *, tokens=200_000, context=256,
         quality = {"status": "fallback_partial" if stats.scope == "upper_half" else "partial",
                    "evaluated_tokens": stats.count, "cross_entropy_tokens": stats.ce_tokens,
                    "fvu": None, "dead_fraction": None, "cross_entropy_delta": None,
+                   "original_cross_entropy": None, "replaced_cross_entropy": None,
                    "per_layer_fvu": [None] * len(dictionary.layers),
                    "per_layer_dead_fraction": [None] * len(dictionary.layers),
-                   **stats.scope_fields()}
+                   "thresholds": dict(_QUALITY_THRESHOLDS)}
     quality.update(elapsed_seconds=elapsed_before + time.monotonic() - started, stop_reason=reason,
                    dictionary_hash=identity, model_binding=binding.model_evidence, partition="quality")
     if stats.scope == "upper_half":
-        quality.update(replaced_mlps=len(stats.active_layers))
+        quality.update(stats.scope_fields(), replaced_mlps=len(stats.active_layers))
     else:
         quality.update(all_mlps_replaced=len(dictionary.layers))
     if memory:

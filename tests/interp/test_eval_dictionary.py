@@ -323,7 +323,8 @@ def test_stop_after_artifact_admission_records_partial_quality(tmp_path, monkeyp
     assert result["status"] == "partial"
     assert result["evaluated_tokens"] == (1 if stop_at == "one_token" else 0)
     assert result["fvu"] is result["dead_fraction"] is result["cross_entropy_delta"] is None
-    assert result["scope"] == "all_layers" and result["all_mlps_replaced"] == 2
+    assert not {"scope", "active_layers", "per_layer_status"} & result.keys()
+    assert result["all_mlps_replaced"] == 2
     assert result["dictionary_hash"] == identity
     assert json.loads((tmp_path / "dictionary.json").read_text())["quality"] == result
     end = json.loads(capsys.readouterr().out.splitlines()[-1])
@@ -332,3 +333,23 @@ def test_stop_after_artifact_admission_records_partial_quality(tmp_path, monkeyp
     if stop_at == "pending_batch":
         state = json.loads((tmp_path / "evaluation" / "state.json").read_text())
         assert state["pending_ids"] == [1, 1] and state["count"] == 0
+
+
+def test_early_and_observed_all_layer_quality_have_the_same_schema(tmp_path):
+    model = TinyLM(layers=2, width=4, heads=2, latents=8, k=2)
+    results = []
+    for name, source in (("early", []), ("observed", documents())):
+        folder = tmp_path / name
+        write_fixture(folder, model)
+        dictionary = load_dictionary(folder, model=model)
+        results.append(evaluation.evaluate(
+            model, dictionary, TextStream(source, TinyTokenizer(), "quality"), folder,
+            tokens=4, context=4, batch_tokens=4, chunk_tokens=2))
+    early, observed = results
+    assert early.keys() == observed.keys()
+    assert early["status"] == observed["status"] == "partial"
+    assert early["evaluated_tokens"] == 0 and observed["evaluated_tokens"] == 4
+    assert early["thresholds"] == observed["thresholds"]
+    for name in ("original_cross_entropy", "replaced_cross_entropy"):
+        assert early[name] is None and observed[name] is not None
+    assert not {"scope", "active_layers", "per_layer_status"} & early.keys()
