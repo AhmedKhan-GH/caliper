@@ -310,9 +310,9 @@ class FrozenFeatures:
                 rows[positions] = True
                 selected &= rows
                 amount = spec["multiplier"] - 1 if kind == "scale" else -1
-                self.coefficients += amount * (selected & self.region)
+                self.coefficients += amount * (selected & self.region).to(original.dtype)
                 if kind == "clamp":
-                    self.constants += spec["value"] * selected
+                    self.constants += spec["value"] * selected.to(original.dtype)
         self.activations = self.coefficients * self.original + self.constants
 
     def evaluate(self, read, layer):

@@ -120,6 +120,7 @@ def test_constant_clamp_keeps_a_signed_node_without_an_incoming_derivative(inact
         incoming, diagnostics = effects.backward([target])
         assert incoming.count_nonzero() == 0
         assert effects.nodes[target]["activation"] == pytest.approx(-.4)
+        torch.testing.assert_close(path.features[1][0, 1, feature], path.embedding.new_tensor(-.4), atol=0, rtol=0)
         assert diagnostics[0]["biases"]["intervention"] == pytest.approx(-.4)
         assert diagnostics[0]["absolute_residual"] < 1e-9
         # A constant feature still writes its decoder vector into later targets.
@@ -127,6 +128,20 @@ def test_constant_clamp_keeps_a_signed_node_without_an_incoming_derivative(inact
         assert outgoing[target].abs().max() > 1e-6
         assert path.features[1].count_nonzero() > 0
         assert path.errors[1].count_nonzero() == 0
+
+
+def test_fractional_scale_keeps_the_model_coefficient_precision():
+    with setup() as (model, tokenizer, dictionary, owner, service):
+        ids = tokenizer("AB")["input_ids"]
+        feature = feature_at(model, dictionary, ids)
+        service.set({"kind": "scale", "point": "layers.1.mlp_out", "feature": feature,
+                     "positions": [1], "multiplier": .1})
+        owner.step()
+        path = FrozenPath(model, ids, dictionary, interventions=service.specifications())
+        effects = _DirectEffects(path, dictionary, ids[0].tolist(), tokenizer)
+        target = next(i for i in effects.feature_nodes if effects.nodes[i]["id"] == f"feature:1:1:{feature}")
+        torch.testing.assert_close(effects.target(target).direction, .1 * dictionary.layers[1].W_enc[feature],
+                                   atol=1e-15, rtol=0)
 
 
 def test_pending_replacement_rows_and_cold_source_cache_keep_applied_edges():
