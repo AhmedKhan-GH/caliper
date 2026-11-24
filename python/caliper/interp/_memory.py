@@ -110,6 +110,8 @@ class MemoryGuard:
         self.interval, self.pressure, self.resident, self.clock = interval, pressure, resident, clock
         self.footprint, self.peak_reader, self.driver_reader = footprint, peak, driver
         self.last = -float("inf")
+        self._pressure_time = -float("inf")
+        self._pressure_value = None
         self.low = 0
         self.peak = 0
         if self.device.type == "mps":
@@ -131,8 +133,14 @@ class MemoryGuard:
         # A missing physical-footprint API uses a conservative sum, not a maximum.
         process = footprint if footprint is not None else rss + driver
         self.peak = max(self.peak, process, rss, driver, self.peak_reader())
-        free = self.pressure()
-        self.low = self.low + 1 if free < 20 else 0
+        # Forced stage checks refresh allocations without a pressure subprocess.
+        # A low sample bypasses the cache to confirm pressure or recovery.
+        if (self._pressure_value is None or self._pressure_value < 20
+                or now - self._pressure_time >= self.interval):
+            self._pressure_value = self.pressure()
+            self._pressure_time = now
+            self.low = self.low + 1 if self._pressure_value < 20 else 0
+        free = self._pressure_value
         print(json.dumps({"stage": stage, "process_bytes": process, "rss_bytes": rss,
                           "physical_footprint_bytes": footprint, "peak_memory_bytes": self.peak,
                           "driver_bytes": driver, "free_percent": free,
