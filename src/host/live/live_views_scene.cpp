@@ -35,6 +35,20 @@
 
 namespace caliper_live_views {
 
+#if defined(CALIPER_HAVE_DRAW)
+struct SceneProgramHover {
+    uint64_t ticket = 0, epoch = 0, asked_epoch = 0;
+    bool active = false, answered = false;
+    float x = -1, y = -1;
+    uint32_t width = 0, height = 0;
+    int frame = -1;
+    double asked_at = -1;
+    caliper_scene::Mat4 clip;
+    std::vector<std::pair<uint32_t, std::shared_ptr<const void>>> versions;
+    std::optional<caliper_draw::PickedItem> hit;
+};
+#endif
+
 static_assert(kKindScene == CALIPER_NET_KIND_SCENE, "the scene kind of the view registry and of protocol 3.2");
 
 bool ScenePress::same(const State& a, const State& b) { return a.moved == b.moved && same_camera(a.camera, b.camera); }
@@ -296,12 +310,66 @@ void adopt_view(const SceneView& view, SceneRectState& state) {
     state.program_detail.clear();
     state.click = false;
     state.seam_asked = false;
+    state.program_hover.reset();
+}
+
+// The hover shares the existing program ID readback. A click supersedes it, and the hover
+// never supersedes a click. Pointer, camera, and resource changes invalidate an old answer.
+void program_hover(SceneView& view, SceneRectState& state, bool active, float x, float y) {
+#if defined(CALIPER_HAVE_DRAW)
+    if (!state.program_hover) state.program_hover = std::make_shared<SceneProgramHover>();
+    SceneProgramHover& h = *state.program_hover;
+    std::vector<std::pair<uint32_t, std::shared_ptr<const void>>> versions;
+    bool has_hover_label = false;
+    for (const auto* rt : view.draw_runtimes()) {
+        has_hover_label = has_hover_label || rt->has_hover_label();
+        const auto shown = rt->shown_items();
+        if (shown) versions.emplace_back(rt->pick_id(), shown.version);
+    }
+    active = active && has_hover_label && !versions.empty();
+    const int frame = ImGui::GetFrameCount();
+    const auto& clip = view.program_clip();
+    if (active != h.active || x != h.x || y != h.y || view.width() != h.width || view.height() != h.height ||
+        frame != h.frame + 1 || versions != h.versions || !std::equal(clip.m, clip.m + 16, h.clip.m)) {
+        ++h.epoch;
+        h.hit.reset();
+        h.answered = false;
+    }
+    h.active = active;
+    h.x = x;
+    h.y = y;
+    h.width = view.width();
+    h.height = view.height();
+    h.frame = frame;
+    h.clip = clip;
+    h.versions = std::move(versions);
+    if (h.ticket) {
+        caliper_draw::PickedItem picked;
+        const auto result = view.poll_program_pick(h.ticket, &picked, nullptr);
+        if (result != caliper_scene::PickResult::Pending) {
+            h.ticket = 0;
+            if (active && h.asked_epoch == h.epoch) {
+                h.answered = result == caliper_scene::PickResult::Hit || result == caliper_scene::PickResult::Miss;
+                if (result == caliper_scene::PickResult::Hit) h.hit = std::move(picked);
+            }
+        }
+    }
+    const double now = ImGui::GetTime();
+    if (active && !h.ticket && !h.answered && !state.click && !state.frame_pending &&
+        now - h.asked_at >= 1.0 / 30.0) {
+        h.ticket = view.request_program_pick(x, y, nullptr);
+        h.asked_epoch = h.epoch;
+        h.asked_at = now;
+    }
+#else
+    (void)view; (void)state; (void)active; (void)x; (void)y;
+#endif
 }
 
 // The labels of the programs' text tables at the view's size: each anchor projected with the
 // programs' camera (clip space for a piece whose camera is none), those in front of the eye and
 // inside the picture, the higher priority first, at most kMaxLabels.
-std::vector<caliper_scene::LabelAnchor> program_labels(const SceneView& view) {
+std::vector<caliper_scene::LabelAnchor> program_labels(const SceneView& view, const SceneRectState& state) {
     std::vector<caliper_scene::LabelAnchor> out;
 #if defined(CALIPER_HAVE_DRAW)
     struct Ranked {
@@ -313,7 +381,8 @@ std::vector<caliper_scene::LabelAnchor> program_labels(const SceneView& view) {
     for (const caliper_draw::DrawRuntime* rt : view.draw_runtimes()) {
         const bool clip_space = rt->camera() == caliper_builder::spec::CameraMode::none;
         const caliper_scene::Mat4& clip = clip_space ? identity : view.program_clip();
-        for (caliper_draw::Label& l : rt->labels()) {
+        const auto& hover = state.program_hover;
+        for (caliper_draw::Label& l : rt->labels(hover && hover->hit ? &*hover->hit : nullptr)) {
             double h[4];
             caliper_scene::transform_h(clip, {l.position[0], l.position[1], l.position[2]}, h);
             if (!(h[3] > 0)) continue;
@@ -336,6 +405,7 @@ std::vector<caliper_scene::LabelAnchor> program_labels(const SceneView& view) {
     for (std::size_t i = 0; i < all.size() && i < caliper_host::kMaxLabels; ++i) out.push_back(std::move(all[i].anchor));
 #else
     (void)view;
+    (void)state;
 #endif
     return out;
 }
@@ -620,6 +690,9 @@ SceneRectResult draw_scene_view_in_rect(SceneView& view, float pixel_scale, cons
         state.seam_asked = false;
         state.click = false;
     }
+    const ImVec2 hover_px = valid ? target_px(io.MousePos.x, io.MousePos.y) : ImVec2(-1, -1);
+    program_hover(*sc, state, options.labels && hovered && valid && !state.down && !released &&
+                  !io.MouseDown[0] && !io.MouseDown[1] && !io.MouseDown[2], hover_px.x, hover_px.y);
 
     // ---- the selection rectangle being drawn, the scale bar and the labels
     dl->PushClipRect(p0, p1, true);
@@ -674,7 +747,7 @@ SceneRectResult draw_scene_view_in_rect(SceneView& view, float pixel_scale, cons
         }
         std::vector<int> priorities;
         for (std::size_t i = 0; i < labels.size(); ++i) priorities.push_back(int(i));
-        for (caliper_scene::LabelAnchor& a : program_labels(*sc)) {
+        for (caliper_scene::LabelAnchor& a : program_labels(*sc, state)) {
             priorities.push_back(int(caliper_host::kMaxLabels + labels.size()));
             labels.push_back(std::move(a));
         }

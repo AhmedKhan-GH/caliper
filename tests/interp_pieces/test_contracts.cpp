@@ -52,3 +52,51 @@ TEST_CASE("example, output, and recovery pieces compile within their budgets") {
         }
     }
 }
+
+TEST_CASE("hover text metadata round trips and requires bounded anchor and string indices") {
+    namespace cs = caliper_builder::spec;
+    namespace cp = caliper_builder::programs;
+    auto piece = interp_pieces::load("attribution_graph");
+    REQUIRE(piece.draw->text->hover);
+    const auto parsed = cs::piece_from_json_value(cs::to_json(piece));
+    REQUIRE(parsed.ok());
+    CHECK(parsed.piece.draw->text->hover == piece.draw->text->hover);
+    CHECK(cp::piece_hash(parsed.piece) == cp::piece_hash(piece));
+    SUBCASE("anchor outside resource") { piece.draw->text->hover->anchor = 34; }
+    SUBCASE("anchor outside panel limit") { piece.draw->text->hover->anchor = 512; }
+    SUBCASE("string offset outside table") { piece.draw->text->hover->string_offset = 33; }
+    SUBCASE("string arithmetic cannot wrap") { piece.draw->text->hover->string_offset = 0xffffffffu; }
+    SUBCASE("no item map") {
+        piece.draw->pick.reset();
+        for (auto& pass : piece.draw->passes) pass.pick = false;
+    }
+    SUBCASE("no declared string count") {
+        cs::PieceInput source;
+        source.name = "names";
+        source.kind = cs::InputKind::buffer;
+        source.layout.element = "u32";
+        piece.inputs.push_back(source);
+        piece.draw->text->strings_from = "names";
+    }
+    CHECK(cp::check_piece_manifest(piece).code == cp::kProgramBadText);
+}
+
+TEST_CASE("hover text parsing rejects malformed declarations and defaults the offset to zero") {
+    namespace cs = caliper_builder::spec;
+    const auto piece = interp_pieces::load("attribution_graph");
+    auto value = cs::to_json(piece);
+    auto& hover = value["draw"]["text"]["hover"];
+    SUBCASE("required anchor") { hover.erase("anchor"); }
+    SUBCASE("negative anchor") { hover["anchor"] = -1; }
+    SUBCASE("fractional anchor") { hover["anchor"] = 1.5; }
+    SUBCASE("unknown key") { hover["other"] = 1; }
+    SUBCASE("non-table hover") { hover = false; }
+    SUBCASE("default offset") {
+        hover.erase("string_offset");
+        const auto parsed = cs::piece_from_json_value(value);
+        REQUIRE(parsed.ok());
+        CHECK(parsed.piece.draw->text->hover->string_offset == 0);
+        return;
+    }
+    CHECK_FALSE(cs::piece_from_json_value(value).ok());
+}

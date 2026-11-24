@@ -375,6 +375,14 @@ bool read_manifest(const json& m, cs::Piece* p, std::string* why) {
                                       r.opt_str(t, "strings_from", &tt.strings_from) &&
                                       r.enum_of(t, "align", cs::text_align_from_name, &tt.align))
                                    : r.fail("the key text is not a table");
+                if (ok && t.contains("hover")) {
+                    const json& h = t["hover"];
+                    cs::TextHover hover;
+                    ok = h.is_object() && h.contains("anchor") &&
+                         r.u32(h, "anchor", &hover.anchor) && r.u32(h, "string_offset", &hover.string_offset);
+                    if (!ok) r.fail("the hover label needs an anchor and an optional string_offset");
+                    else tt.hover = hover;
+                }
                 if (ok) draw.text = tt;
             }
             ok = ok && r.opt_num(d, "frame_ms", &draw.frame_ms) && r.opt_u32(d, "memory_mb", &draw.memory_mb);

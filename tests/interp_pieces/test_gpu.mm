@@ -203,8 +203,8 @@ TEST_CASE("graph layout has disjoint cells, stable bytes, labels, and sixteen ce
             check_pick(draw,x,y,i); picks.push(pick_at(x,y,i));
         }
         const auto labels=draw.rt.labels();
-        REQUIRE(labels.size()==6);
-        CHECK(labels[0].text=="label 0"); CHECK(labels[4].text=="label 36"); CHECK(labels[5].text=="label 37");
+        REQUIRE(labels.size()==5); // A synthetic parameter alone supplies no local pointer hit.
+        CHECK(labels[0].text=="label 0"); CHECK(labels[4].text=="label 36");
         auto& output=exporter();
         output.add("graph_selected",piece,data,draw,params,picks);
         const auto selected=draw.color;
