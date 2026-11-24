@@ -390,6 +390,14 @@ class FrozenFeatures:
         return preactivation * self.coefficients + self.constants
 
 
+def _validate_intervention_positions(tokens, interventions):
+    """Refuse invalid target positions before a forward or cache change."""
+    for spec in interventions:
+        for position in spec.get("positions", ()):
+            if type(position) is not int or not 0 <= position < tokens:
+                raise ValueError(f"intervention position {position!r} is outside the prompt of {tokens} tokens")
+
+
 def _validate_interventions(model, blocks, prefix, interventions):
     """Refuse module edits outside the explicit affine paths."""
     allowed = {}
@@ -426,6 +434,7 @@ class FrozenPath:
 
     def __init__(self, model, input_ids, dictionary, *, guard=None, interventions=()):
         _validate_ablation_points(model, interventions)
+        _validate_intervention_positions(input_ids.shape[1], interventions)
         probes = _validate_dictionary(model, dictionary)
         parameter = next(model.parameters())
         self.device, self.dtype = parameter.device, parameter.dtype

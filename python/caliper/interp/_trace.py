@@ -9,7 +9,8 @@ import json
 import torch
 
 from ._dictionary import weights_hash
-from ._frozen import FrozenPath, MemoryGuard, _validate_dictionary, _validate_ablation_points
+from ._frozen import (FrozenPath, MemoryGuard, _validate_dictionary, _validate_ablation_points,
+                      _validate_intervention_positions)
 from ._memory import autorelease_scope
 from ._graph import Graph, bounded_integer
 from ._influence import influence
@@ -373,6 +374,7 @@ class Tracer:
             bounded_integer(ids.shape[1], "prompt tokens including special tokens", 1, 32)
             if ids.min() < 0 or ids.max() >= self.model.config.vocab_size:
                 raise ValueError("tokenizer returned an out-of-range token")
+            _validate_intervention_positions(ids.shape[1], specifications)
             self._new_prompt(prompt)
             identity = {"model": id(self.model), "model_weights": _versions(self.model),
                         "dictionary": id(self.dictionary), "dictionary_weights": _versions(self.dictionary),
