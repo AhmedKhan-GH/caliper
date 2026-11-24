@@ -1,4 +1,4 @@
-"""Safe TopK dictionaries with an independently supplied model identity."""
+"""Safe sparse dictionaries with an independently supplied model identity."""
 from __future__ import annotations
 
 import hashlib
@@ -20,6 +20,7 @@ from ._forward_identity import checkpoint_settings, forward_settings, nonpersist
 
 
 _WEIGHTS = ("W_enc", "b_enc", "W_dec", "b_dec")
+_GEMMA_IDENTITY = "hf:google/gemma-2-2b@c5ebcd40d208330abc697524c919956e692655cf"
 _DTYPES = {torch.float16, torch.bfloat16, torch.float32, torch.float64}
 _STORED_DTYPES = {"F16": torch.float16, "BF16": torch.bfloat16,
                   "F32": torch.float32, "F64": torch.float64}
@@ -32,6 +33,24 @@ _MAX_METADATA_DEPTH = 64
 _HASH_CHUNK_BYTES = 1024 * 1024
 _UNVERIFIED_CPU_BYTES = 64 * 1024 * 1024
 _VERIFIED_MODELS = weakref.WeakKeyDictionary()
+
+
+def weight_names(layer_or_metadata):
+    """Return the tensor names for a layer or its dictionary metadata."""
+    activation = (layer_or_metadata.get("activation") if isinstance(layer_or_metadata, dict)
+                  else layer_or_metadata.activation)
+    if activation == "topk":
+        return _WEIGHTS
+    if activation == "jumprelu":
+        return (*_WEIGHTS, "threshold")
+    raise ValueError("unsupported dictionary activation")
+
+
+def _memory_limit(limit, identity, operation):
+    if type(limit) not in (int, float) or not 0 < limit <= 28:
+        raise ValueError(f"{operation} memory limit must be positive and at most 28 GB")
+    if limit > 12 and identity != _GEMMA_IDENTITY:
+        raise ValueError(f"{operation} memory limit above 12 GB requires the pinned Gemma model")
 
 
 @dataclass(frozen=True)
@@ -254,9 +273,8 @@ def verify_hf_model(model, snapshot, *, key_mapping=None, checkpoint_subset=None
     from types import SimpleNamespace
     from safetensors import safe_open
 
-    if type(memory_limit_gb) not in (int, float) or not 0 < memory_limit_gb <= 12:
-        raise ValueError("verification memory limit must be positive and at most 12 GB")
     identity = _hf_identity(model.config)
+    _memory_limit(memory_limit_gb, identity, "verification")
     snapshot = Path(snapshot)
     source_identity = _hf_identity(SimpleNamespace(_name_or_path=str(snapshot), _commit_hash=None))
     if identity != source_identity:
@@ -350,6 +368,8 @@ def verify_hf_model(model, snapshot, *, key_mapping=None, checkpoint_subset=None
 class TopKTranscoder(nn.Module):
     """One MLP replacement with feature rows in both weight matrices."""
 
+    activation = "topk"
+
     def __init__(self, W_enc, b_enc, W_dec, b_dec, k, *, trainable=False):
         super().__init__()
         self.k = k
@@ -357,7 +377,10 @@ class TopKTranscoder(nn.Module):
             self.register_parameter(name, nn.Parameter(value, requires_grad=trainable))
 
     def encode(self, x):
-        z = F.linear(x, self.W_enc, self.b_enc).relu()
+        return self.activate(F.linear(x, self.W_enc, self.b_enc))
+
+    def activate(self, preactivation):
+        z = preactivation.relu()
         values, indices = z.topk(self.k, dim=-1)
         return torch.zeros_like(z).scatter(-1, indices, values)
 
@@ -366,6 +389,22 @@ class TopKTranscoder(nn.Module):
 
     def forward(self, x):
         return self.decode(self.encode(x))
+
+
+class JumpReLUTranscoder(TopKTranscoder):
+    """One MLP replacement with a positive threshold for each feature."""
+
+    activation = "jumprelu"
+
+    def __init__(self, W_enc, b_enc, W_dec, b_dec, threshold, *, trainable=False):
+        if (threshold.shape != b_enc.shape or not _finite(threshold)
+                or not _positive(threshold)):
+            raise ValueError("JumpReLU requires positive finite thresholds with one value per feature")
+        super().__init__(W_enc, b_enc, W_dec, b_dec, None, trainable=trainable)
+        self.register_parameter("threshold", nn.Parameter(threshold, requires_grad=trainable))
+
+    def activate(self, preactivation):
+        return preactivation * (preactivation > self.threshold)
 
 
 class Dictionary(nn.Module):
@@ -445,10 +484,16 @@ def _manifest(data):
     for field in ("model_id", "model_hash", "revision"):
         if not isinstance(data.get(field), str) or not data[field]:
             raise ValueError(f"dictionary requires {field}")
-    for field in ("layers", "width", "latents", "k"):
+    for field in ("layers", "width", "latents"):
         _integer(data.get(field), field)
-    if data.get("activation") != "topk" or data["k"] > data["latents"]:
-        raise ValueError("dictionary requires TopK activation and 1 <= k <= latents")
+    if data.get("activation") == "topk":
+        if _integer(data.get("k"), "k") > data["latents"]:
+            raise ValueError("dictionary requires TopK activation and 1 <= k <= latents")
+    elif data.get("activation") == "jumprelu":
+        if "k" not in data or data["k"] is not None:
+            raise ValueError("JumpReLU dictionary requires k=null")
+    else:
+        raise ValueError("dictionary requires TopK or JumpReLU activation")
     if data["model_hash"].startswith("hf:"):
         expected = f"hf:{data['model_id']}@{data['revision']}"
         if data["model_hash"] != expected or not re.fullmatch(r"[0-9a-f]{40}", data["revision"]):
@@ -551,7 +596,7 @@ def _read_metadata(path, memory):
 
 
 def _layer_header(source, index, shapes, dtype):
-    if set(source.keys()) != set(_WEIGHTS):
+    if set(source.keys()) != set(shapes):
         raise ValueError(f"dictionary layer {index} has unexpected tensor names")
     stored = {}
     for name, shape in shapes.items():
@@ -598,6 +643,15 @@ def _zero(value):
     return True
 
 
+def _positive(value):
+    flat = value.reshape(-1)
+    for start in range(0, flat.numel(), _FINITE_CHUNK_ELEMENTS):
+        with autorelease_scope(value.device):
+            if not (flat[start:start + _FINITE_CHUNK_ELEMENTS] > 0).all().item():
+                return False
+    return True
+
+
 def _admit(memory, required, stage):
     memory.check(stage)
     if memory.peak + required > memory.limit:
@@ -606,7 +660,9 @@ def _admit(memory, required, stage):
 
 def load_dictionary(path, *, model=None, model_hash=None, device=None, dtype=None,
                     memory_limit_gb=12):
-    """Load a matching dictionary within a total process limit of at most 12 GB.
+    """Load a matching dictionary within a default process limit of 12 GB.
+
+    The pinned Gemma model permits an explicit limit of at most 28 GB.
 
     ``memory_limit_gb`` uses decimal GB and includes current process/model memory,
     destination weights, metadata, and temporary conversion storage. Metadata has
@@ -618,14 +674,15 @@ def load_dictionary(path, *, model=None, model_hash=None, device=None, dtype=Non
     """
     from safetensors import safe_open
 
-    if type(memory_limit_gb) not in (int, float) or not 0 < memory_limit_gb <= 12:
-        raise ValueError("dictionary memory limit must be positive and at most 12 GB")
+    if type(memory_limit_gb) not in (int, float) or not 0 < memory_limit_gb <= 28:
+        raise ValueError("dictionary memory limit must be positive and at most 28 GB")
     if model is None and model_hash is None:
         from .. import _programs
         model = _programs._STATE.get("model")
     if model is None and model_hash is None:
         raise ValueError("supply a model or expected model_hash, or watch a model first")
     actual = model_identity(model, memory_limit_gb=memory_limit_gb) if model is not None else model_hash
+    _memory_limit(memory_limit_gb, actual, "dictionary")
     if model_hash is not None and actual != model_hash:
         raise ValueError("supplied model and expected model_hash differ")
     folder = Path(path)
@@ -658,6 +715,8 @@ def load_dictionary(path, *, model=None, model_hash=None, device=None, dtype=Non
     device = torch.device(device or "cpu")
     shapes = {"W_enc": (data["latents"], data["width"]), "b_enc": (data["latents"],),
               "W_dec": (data["latents"], data["width"]), "b_dec": (data["width"],)}
+    if data["activation"] == "jumprelu":
+        shapes["threshold"] = (data["latents"],)
     headers, budgets = [], []
     for index in range(data["layers"]):
         # Header inspection uses CPU mappings and never requests tensor data.
@@ -680,7 +739,7 @@ def load_dictionary(path, *, model=None, model_hash=None, device=None, dtype=Non
         ) as source:
             if _layer_header(source, index, shapes, dtype) != headers[index]:
                 raise ValueError(f"dictionary layer {index} header changed after memory admission")
-            for name in _WEIGHTS:
+            for name in weight_names(data):
                 value = source.get_tensor(name)
                 if not _finite(value):
                     raise ValueError(f"dictionary layer {index} has invalid or nonfinite {name}")
@@ -690,9 +749,12 @@ def load_dictionary(path, *, model=None, model_hash=None, device=None, dtype=Non
                 value = value.to(device=device, dtype=dtype, copy=budgets[index][2])
                 if not _finite(value):
                     raise ValueError(f"dictionary layer {index} overflows the requested dtype")
+                if name == "threshold" and not _positive(value):
+                    raise ValueError(f"dictionary layer {index} requires positive thresholds")
                 tensors[name] = value
                 del value
-        layers.append(TopKTranscoder(**tensors, k=data["k"]))
+        layers.append(JumpReLUTranscoder(**tensors) if data["activation"] == "jumprelu"
+                      else TopKTranscoder(**tensors, k=data["k"]))
         remaining -= budgets[index][0]
     memory.check("dictionary_loaded")
     return Dictionary(data, layers).eval()

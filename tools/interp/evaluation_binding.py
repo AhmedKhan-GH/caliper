@@ -9,8 +9,8 @@ import torch
 from safetensors import safe_open
 
 from caliper.interp._dictionary import (
-    _canonical_device, _checkpoint_slices, _dense_state, _hf_digest, _WEIGHTS,
-    dictionary_fingerprint, model_identity,
+    _canonical_device, _checkpoint_slices, _dense_state, _hf_digest,
+    dictionary_fingerprint, model_identity, weight_names,
 )
 from caliper.interp._trace import _forward_settings
 from .memory_limits import CleanStop, autorelease_scope
@@ -72,7 +72,7 @@ class EvaluationBinding:
         self.metadata = _metadata_bytes(dictionary.metadata)
         self.layers = tuple(dictionary.layers)
         # Retain references so a replacement cannot reuse an old tensor identity.
-        self.tensors = tuple(getattr(layer, name) for layer in self.layers for name in _WEIGHTS)
+        self.tensors = tuple(getattr(layer, name) for layer in self.layers for name in weight_names(layer))
         self.stamps = self._tensor_stamps()
         self.files = self._file_stamps()
         self.check()
@@ -98,10 +98,12 @@ class EvaluationBinding:
     def _tensor_stamps(self):
         layers = self.dictionary.layers
         data = self.dictionary.metadata
-        if len(layers) != data["layers"] or any(layer.k != data["k"] for layer in layers):
+        if len(layers) != data["layers"] or any(
+            layer.k != data["k"] or layer.activation != data["activation"] for layer in layers
+        ):
             raise ValueError(_CHANGED)
         tensors = {f"{i}.{name}": getattr(layer, name)
-                   for i, layer in enumerate(layers) for name in _WEIGHTS}
+                   for i, layer in enumerate(layers) for name in weight_names(layer)}
         _dense_state(tensors)
         return (tuple(id(layer) for layer in layers), tuple(
             (id(t), t.data_ptr(), t._version, t.dtype, t.device, tuple(t.shape), t.stride())
@@ -147,9 +149,9 @@ class EvaluationBinding:
         for i, layer in enumerate(self.layers):
             with safe_open(self.folder / f"layer_{i:02d}.safetensors",
                            framework="pt", device="cpu") as source:
-                if set(source.keys()) != set(_WEIGHTS):
+                if set(source.keys()) != set(weight_names(layer)):
                     raise ValueError(_CHANGED)
-                for name in _WEIGHTS:
+                for name in weight_names(layer):
                     tensor = getattr(layer, name)
                     stored = source.get_slice(name)
                     if list(tensor.shape) != stored.get_shape():

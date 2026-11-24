@@ -26,7 +26,10 @@ def publish(name, tensor):
 
 def load_dictionary(path, *, model=None, model_hash=None, device=None, dtype=None,
                     memory_limit_gb=12):
-    """Load a matching dictionary within a total process limit of at most 12 GB."""
+    """Load a matching dictionary with a default process limit of 12 GB.
+
+    The pinned Gemma model permits an explicit limit of at most 28 GB.
+    """
     from ._dictionary import load_dictionary as implementation
     return implementation(path, model=model, model_hash=model_hash, device=device, dtype=dtype,
                           memory_limit_gb=memory_limit_gb)
