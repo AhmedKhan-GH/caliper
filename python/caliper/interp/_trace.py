@@ -331,7 +331,13 @@ class Tracer:
                 path = self._forward_cache[1]
             else:
                 self._forward_cache = None
-                path = FrozenPath(self.model, ids.to(self.guard.device), self.dictionary, guard=self.guard)
+                state = identity["interventions"]
+                specifications = state["specifications"] if isinstance(state, dict) else [
+                    spec for spec in state if spec.get("state") == "active"]
+                if isinstance(state, dict) and state["rows"] is not None and 0 not in state["rows"]:
+                    specifications = []
+                path = FrozenPath(self.model, ids.to(self.guard.device), self.dictionary,
+                                  guard=self.guard, interventions=specifications)
                 if self._intervention_state() != identity["interventions"]:
                     raise RuntimeError("intervention state changed during the trace forward")
                 self._forward_cache = (state_key, path)

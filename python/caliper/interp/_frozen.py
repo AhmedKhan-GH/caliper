@@ -131,17 +131,53 @@ class FrozenNorm:
         return result
 
 
+class FrozenAttentionOutput:
+    """An output projection with the active module and head ablation masks."""
+
+    def __init__(self, module, *, ablated=False, heads=()):
+        self.weight = module.weight.detach()
+        self.bias = _bias(module)
+        self.head_mask = torch.zeros(module.in_features, device=self.weight.device, dtype=torch.bool)
+        for head, width in heads:
+            self.head_mask[head * width:(head + 1) * width] = True
+        self.output_mask = torch.tensor(ablated, device=self.weight.device)
+
+    def __call__(self, x, biases):
+        x = x.masked_fill(self.head_mask, 0)
+        result = F.linear(x, self.weight, self.bias if biases else None)
+        return result.masked_fill(self.output_mask, 0)
+
+
+def _attention_output(model, name, projection_name, interventions):
+    from .._ablate import _find
+    module = model.get_submodule(name)
+    projection = getattr(module, projection_name)
+    ablated, heads = False, []
+    for spec in interventions:
+        if spec.get("op", spec.get("kind")) != "ablate":
+            continue
+        point = spec["point"]
+        if point in (name, f"{name}.{projection_name}"):
+            ablated = True
+        elif point.startswith(name + "#"):
+            # Resolve the same supported slices as the live ablation interface.
+            target, head = _find(model, point)
+            if target is not projection or head is None:
+                raise ValueError("attention head does not target its output projection")
+            heads.append(head)
+    return FrozenAttentionOutput(projection, ablated=ablated, heads=heads)
+
+
 class FrozenAttention:
     """Linear values with fixed softmax and optional Qwen output gate."""
 
-    def __init__(self, module, x, pattern, *, gate_projection=None):
+    def __init__(self, module, x, pattern, *, gate_projection=None, output=None):
         self.pattern = pattern.detach()
         self.head_dim = module.head_dim
         self.heads = pattern.shape[1]
         self.v_weight = module.v_proj.weight.detach()
         self.v_bias = _bias(module.v_proj)
-        self.o_weight = module.o_proj.weight.detach()
-        self.o_bias = _bias(module.o_proj)
+        self.output = output if output is not None else FrozenAttentionOutput(module.o_proj)
         self.gate = None
         if gate_projection is not None:
             projected = gate_projection.reshape(1, x.shape[1], self.heads, self.head_dim * 2)
@@ -157,7 +193,7 @@ class FrozenAttention:
         result = (self.pattern @ values).transpose(1, 2).reshape(batch, length, -1)
         if self.gate is not None:
             result = result * self.gate
-        return F.linear(result, self.o_weight, self.o_bias if biases else None)
+        return self.output(result, biases)
 
     def __call__(self, x, bias=1.):
         return self._apply(x, False) + bias * self.offset
@@ -171,7 +207,7 @@ class FrozenDeltaNet:
     use their recorded factors. No routing gradient enters this path.
     """
 
-    def __init__(self, module, x, pattern, qkv, norm_input, output_gate):
+    def __init__(self, module, x, pattern, qkv, norm_input, output_gate, *, output=None):
         if module.activation not in ("silu", "swish"):
             raise NotImplementedError("DeltaNet tracing requires the SiLU value gate")
         start = 2 * module.key_dim
@@ -185,8 +221,7 @@ class FrozenDeltaNet:
         self.conv_weight = module.conv1d.weight.detach()[start:]
         conv_bias = _bias(module.conv1d)
         self.conv_bias = conv_bias[start:] if conv_bias is not None else None
-        self.o_weight = module.out_proj.weight.detach()
-        self.o_bias = _bias(module.out_proj)
+        self.output = output if output is not None else FrozenAttentionOutput(module.out_proj)
         self.pattern = pattern.detach()
         length = x.shape[1]
         with torch.no_grad():
@@ -211,7 +246,7 @@ class FrozenDeltaNet:
         core = (self.pattern @ values.float()).transpose(1, 2).to(x.dtype)
         normalized = (core.float() * self.norm_scale).to(x.dtype) * self.norm_weight
         result = (normalized * self.output_gate).to(x.dtype).reshape(batch, length, self.value_dim)
-        return F.linear(result, self.o_weight, self.o_bias if biases else None)
+        return self.output(result, biases)
 
     def __call__(self, x, bias=1.):
         return self._apply(x, False) + bias * self.offset
@@ -224,7 +259,7 @@ class FrozenPath:
     recorded MLP inputs. Its write arguments are independent source leaves.
     """
 
-    def __init__(self, model, input_ids, dictionary, *, guard=None):
+    def __init__(self, model, input_ids, dictionary, *, guard=None, interventions=()):
         probes = _validate_dictionary(model, dictionary)
         parameter = next(model.parameters())
         self.device, self.dtype = parameter.device, parameter.dtype
@@ -319,10 +354,12 @@ class FrozenPath:
                     if self.qwen and block.block_type == "linear_attention":
                         mixer = FrozenDeltaNet(block.linear_attn, recorded[f"{i}.input_norm"], pattern,
                                                recorded[f"{i}.qkv"], recorded[f"{i}.delta_norm"],
-                                               recorded[f"{i}.delta_norm.gate"])
+                                               recorded[f"{i}.delta_norm.gate"], output=_attention_output(
+                                                   model, f"{base}.linear_attn", "out_proj", interventions))
                     else:
                         mixer = FrozenAttention(block.self_attn, recorded[f"{i}.input_norm"], pattern,
-                                                gate_projection=recorded.get(f"{i}.q_gate"))
+                                                gate_projection=recorded.get(f"{i}.q_gate"), output=_attention_output(
+                                                    model, f"{base}.self_attn", "o_proj", interventions))
                     self.mixers.append(mixer)
                     self.guard.check(f"freeze layer {i}")
             with autorelease_scope(self.device):
