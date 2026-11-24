@@ -116,6 +116,8 @@ Set `HEAVY_WRAPPER` to the project wrapper, which accepts a job name, a log path
 The trainer defaults to 16,384 latents per layer, TopK with `k=32`, and 40 million tokens.
 The context contains 256 tokens.
 The process limit is 24 GB, and the wall-time limit is ten hours.
+The memory guard sets the MPS allocation fraction for the whole process.
+Use a separate process when another workload requires a different MPS limit.
 
 Checkpoints support `--resume`. The periodic checkpoint interval is 240 seconds after each completed save.
 A 270-second work interval forces a clean stop. Checkpoint writes consume additional time within the aggregate cap.
@@ -148,6 +150,12 @@ Two pages expose eight examples each, with stable IDs zero through 15.
 ## Attribution Graphs
 
 `caliper.interp.Tracer(model, tokenizer, dictionary).trace(prompt)` returns a `Graph`.
+Supply `index=feature_index` to include heuristic feature labels in standalone traces.
+The index must use the same model, tokenizer, and dictionary objects.
+Without an index, feature labels contain the layer and feature IDs.
+After a standalone trace, call `caliper.step()` once to derive and send its published tensors.
+The hosted `trace.run` command performs this work at its existing run boundary.
+
 The local replacement model fixes attention routing, normalization denominators, and feature masks from the prompt.
 Each MLP becomes its transcoder output plus a constant error vector.
 Qwen gates and DeltaNet routing factors also remain fixed.
@@ -163,7 +171,8 @@ A prompt contains at most 32 tokens, including special tokens.
 The tracer refuses excess tokens without truncation.
 Defaults cap feature targets at 512, displayed nodes at 512, and edges at 8,192.
 Logit targets cover 95 percent cumulative probability, with at most ten targets.
-An eight-entry cache uses the prompt and intervention state as its key.
+An eight-entry cache uses the prompt, intervention state, and feature-label index identity as its key.
+A different label index preserves compatible forward activations but requires a new graph identity.
 
 ## Graph Tensors
 
