@@ -10,12 +10,12 @@ import time
 
 import torch
 
-from ._dictionary import _state_hash, weights_hash
+from ._dictionary import _HASH_CHUNK_BYTES, _canonical_device, _state_hash, weights_hash
 from ._families import model_family
 from ._frozen import (FrozenPath, MemoryGuard, _validate_dictionary, _validate_ablation_points,
                       _validate_intervention_positions, _finite_max, _require_finite, _no_check,
                       _ENCODER_BLOCK_ELEMENTS)
-from ._memory import autorelease_scope
+from ._memory import BudgetMemory, allocation_bytes, autorelease_scope, family_memory_limit
 from ._graph import Graph, bounded_integer
 from ._influence import influence
 from ._labels import token_label
@@ -50,6 +50,29 @@ class _DeadlineMemory:
         self.deadline(stage)
         self.memory.check(stage, **kwargs)
         self.deadline(stage)
+
+
+class _SuppliedTraceGuard(MemoryGuard):
+    """Apply supplied lower limits to trace reserves and full identity checks."""
+
+    def __init__(self, device, *, memory_limit_gb, memory):
+        if _canonical_device(memory.device) != _canonical_device(device):
+            raise ValueError("trace requires a memory guard for its model device")
+        memory.check("trace supplied guard")
+        super().__init__(device, memory_limit_gb=memory_limit_gb)
+        self._guard = BudgetMemory(self._guard, memory_limit_gb, extra=memory)
+        self.check("trace supplied budget")
+
+    @property
+    def limit(self):
+        return min(self._limit, getattr(getattr(self, "_guard", None), "limit", self._limit))
+
+    @limit.setter
+    def limit(self, value):
+        self._limit = value
+
+    def check(self, stage):
+        return max(super().check(stage), allocation_bytes(self._guard))
 
 
 @dataclass
@@ -403,10 +426,13 @@ class Tracer:
     the global owner when this keyword is absent.
     """
 
-    def __init__(self, model, tokenizer, dictionary, *, controls=None, index=None, memory_limit_gb=12):
+    def __init__(self, model, tokenizer, dictionary, *, controls=None, index=None, memory_limit_gb=None, memory=None):
         if dictionary is None:
             raise ValueError("trace requires a dictionary")
-        _validate_dictionary(model, dictionary)
+        self.memory_limit_gb = family_memory_limit(model, memory_limit_gb, memory)
+        self._memory = memory
+        self.guard = self._new_guard(next(model.parameters()).device)
+        _validate_dictionary(model, dictionary, self._dictionary_check)
         if controls is None:
             from .._controls import CONTROLS
             controls = CONTROLS
@@ -417,9 +443,20 @@ class Tracer:
         self._cache = OrderedDict()
         self._forward_cache = None
         self._prompt = None
-        self.memory_limit_gb = model_family(model).memory_limit(memory_limit_gb)
-        self.guard = MemoryGuard(next(model.parameters()).device, memory_limit_gb=self.memory_limit_gb)
         self._settings = _forward_settings(model, self.guard._guard)
+
+    def _new_guard(self, device):
+        if self._memory is None:
+            return MemoryGuard(device, memory_limit_gb=self.memory_limit_gb)
+        return _SuppliedTraceGuard(device, memory_limit_gb=self.memory_limit_gb, memory=self._memory)
+
+    def _dictionary_check(self, stage):
+        if stage == "dictionary admission":
+            self.guard.reserve(stage, 4 * _HASH_CHUNK_BYTES)
+        elif stage.startswith("finite block"):
+            self.guard._guard.check(stage, force=False)
+        else:
+            self.guard.check(stage)
 
     def bind_index(self, index):
         """Bind heuristic labels to the same immutable trace resources."""
@@ -519,14 +556,17 @@ class Tracer:
             if self.model.training:
                 raise ValueError("trace requires an evaluation model")
             try:
-                _validate_dictionary(self.model, self.dictionary, check)
+                def dictionary_check(stage):
+                    check(stage)
+                    self._dictionary_check(stage)
+                _validate_dictionary(self.model, self.dictionary, dictionary_check)
             except (TypeError, ValueError):
                 self._cache.clear()
                 self._forward_cache = None
                 raise
             device = next(self.model.parameters()).device
             if device != self.guard.device:
-                self.guard = MemoryGuard(device, memory_limit_gb=self.memory_limit_gb)
+                self.guard = self._new_guard(device)
                 self._forward_cache = None
             if not isinstance(prompt, str):
                 raise TypeError("prompt must be a string")

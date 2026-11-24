@@ -10,8 +10,9 @@ from pathlib import Path
 import numpy as np
 import torch
 
-from ._dictionary import load_dictionary, model_identity, weights_hash
-from ._memory import CleanStop, MemoryGuard, allocation_bytes, autorelease_scope as _device_scope
+from ._dictionary import _canonical_device, _memory_limit, load_dictionary, model_identity, weights_hash
+from ._memory import (BudgetMemory, CleanStop, MemoryGuard, allocation_bytes, family_memory_limit,
+                      autorelease_scope as _device_scope)
 from ._points import capture
 
 INDEX_VERSION = 1
@@ -39,9 +40,12 @@ def _hash_file(path):
     return digest.hexdigest()
 
 
-def _dictionary_hash(dictionary, *, memory=None):
+def _dictionary_hash(dictionary, *, memory=None, memory_limit_gb=None):
     device = next(dictionary.parameters()).device
-    memory = memory if memory is not None else MemoryGuard(12, device)
+    limit = (12 if memory is None else memory.limit / 1e9) if memory_limit_gb is None else memory_limit_gb
+    if memory is None or memory_limit_gb is not None:
+        _memory_limit(limit, dictionary.metadata.get("model_hash"), "index")
+    memory = MemoryGuard(limit, device) if memory is None else BudgetMemory(memory, limit)
     digest = hashlib.sha256(_json(dictionary.metadata).encode())
     with _device_scope(device):
         digest.update(weights_hash(dictionary, memory=memory).encode())
@@ -72,9 +76,9 @@ def _positive_integer(value, name, maximum=None, minimum=1):
     return value
 
 
-def _compatible(model, dictionary):
+def _compatible(model, dictionary, *, memory_limit_gb=None):
     data = dictionary.metadata
-    if model_identity(model) != data["model_hash"]:
+    if model_identity(model, memory_limit_gb=memory_limit_gb) != data["model_hash"]:
         raise ValueError("index model identity mismatch")
     if model.training:
         raise ValueError("index requires a model in eval mode")
@@ -188,7 +192,7 @@ def _forward(model, input_ids, attention_mask):
 
 def build_index(dictionary_path, documents, *, model, tokenizer, provenance,
                 dictionary=None, max_tokens=MAX_TOKENS, context_length=256, memory_guard=None,
-                memory=None):
+                memory=None, memory_limit_gb=None):
     """Index ``(document_id, token_ids)`` pairs in source order.
 
     IDs must be unique UTF-8 strings of at most 128 bytes. Each pair is one nonempty document.
@@ -201,10 +205,22 @@ def build_index(dictionary_path, documents, *, model, tokenizer, provenance,
     if not isinstance(provenance, dict) or not provenance:
         raise ValueError("index requires text partition provenance")
     _json(provenance)
-    check = memory_guard if memory_guard is not None else lambda stage: None
+    limit = family_memory_limit(model, memory_limit_gb, memory)
+    device = next(model.parameters()).device
+    memory = MemoryGuard(limit, device) if memory is None else BudgetMemory(memory, limit)
+    if _canonical_device(memory.device) != _canonical_device(device):
+        raise ValueError("index requires a memory guard for its model device")
+
+    def check(stage):
+        memory.check(stage)
+        if memory_guard is not None:
+            memory_guard(stage)
+
+    check("index admission")
     root = Path(dictionary_path)
-    dictionary = dictionary if dictionary is not None else load_dictionary(root, model=model)
-    data = _compatible(model, dictionary)
+    dictionary = dictionary if dictionary is not None else load_dictionary(
+        root, model=model, memory_limit_gb=limit, memory=memory)
+    data = _compatible(model, dictionary, memory_limit_gb=limit)
     check("dictionary")
     identity = _dictionary_hash(dictionary, memory=memory)
     source_hash = _source_hash(root, data["layers"])
@@ -286,15 +302,21 @@ class FeatureIndex:
     Close and reopen the index after a resource change. Cache clearance does not admit changes.
     """
 
-    def __init__(self, dictionary_path, *, model, tokenizer, dictionary=None, memory=None):
+    def __init__(self, dictionary_path, *, model, tokenizer, dictionary=None, memory=None, memory_limit_gb=None):
         self._closed = False
         self._cache = OrderedDict()
         self._summaries = OrderedDict()
         self.root = Path(dictionary_path)
         self.model, self.tokenizer = model, tokenizer
-        self.memory = memory if memory is not None else MemoryGuard(12, next(model.parameters()).device)
-        self.dictionary = dictionary if dictionary is not None else load_dictionary(self.root, model=model)
-        data = _compatible(model, self.dictionary)
+        limit = family_memory_limit(model, memory_limit_gb, memory)
+        device = next(model.parameters()).device
+        self.memory = MemoryGuard(limit, device) if memory is None else BudgetMemory(memory, limit)
+        if _canonical_device(self.memory.device) != _canonical_device(device):
+            raise ValueError("index requires a memory guard for its model device")
+        self.memory.check("index admission")
+        self.dictionary = dictionary if dictionary is not None else load_dictionary(
+            self.root, model=model, memory_limit_gb=limit, memory=self.memory)
+        data = _compatible(model, self.dictionary, memory_limit_gb=limit)
         folder = self.root / "index"
         try:
             manifest = json.loads((folder / "index.json").read_text(encoding="utf-8"))

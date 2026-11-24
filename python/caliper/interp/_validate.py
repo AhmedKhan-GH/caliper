@@ -5,22 +5,26 @@ from contextlib import contextmanager
 import torch
 
 from ._frozen import _trace_features
-from ._memory import MemoryGuard, autorelease_scope
+from ._memory import BudgetMemory, MemoryGuard, autorelease_scope, family_memory_limit
 from ._output import forward_logits, prompt_inputs
 from ._points import _architecture, capture
 from ._intervene import InterventionError, InterventionService, selected_rows
 
 
-def _validation_guard(model, dictionary, interventions, guard):
-    if guard is not None:
-        return guard
+def _validation_guard(model, dictionary, interventions, guard, memory_limit_gb=None):
     owner = getattr(interventions, "executor", None)
-    if (owner is not None and owner.model is model and owner.dictionary is dictionary
+    if (guard is None and owner is not None and owner.model is model and owner.dictionary is dictionary
             and owner.resource_guard is not None):
-        return owner.resource_guard
+        guard = owner.resource_guard
+    if guard is not None:
+        if memory_limit_gb is None:
+            return guard
+        return BudgetMemory(guard, family_memory_limit(model, memory_limit_gb, guard))
     device = next((t.device for t in dictionary.state_dict().values() if t.device.type != "cpu"),
                   next(model.parameters()).device)
-    return MemoryGuard(12, device) if device.type != "cpu" else None
+    if memory_limit_gb is None:
+        return MemoryGuard(12, device) if device.type != "cpu" else None
+    return MemoryGuard(family_memory_limit(model, memory_limit_gb), device)
 
 
 @contextmanager
@@ -73,7 +77,7 @@ def spearman(predicted, measured):
     return sum(a * b for a, b in zip(x, y)) / denominator if denominator else None
 
 
-def validate_trace(model, tokenizer, dictionary, interventions, graph, *, prompt, guard=None):
+def validate_trace(model, tokenizer, dictionary, interventions, graph, *, prompt, guard=None, memory_limit_gb=None):
     """Zero-clamp up to ten influential features at their traced positions.
 
     Temporary output hooks leave the intervention lifecycle and caches intact.
@@ -84,7 +88,9 @@ def validate_trace(model, tokenizer, dictionary, interventions, graph, *, prompt
     rows = selected_rows(model)
     if rows is not None and 0 not in rows:
         raise ValueError("validation requires interventions on row zero")
-    guard = _validation_guard(model, dictionary, interventions, guard)
+    guard = _validation_guard(model, dictionary, interventions, guard, memory_limit_gb)
+    if guard is not None:
+        guard.check("validation admission")
     inputs = prompt_inputs(model, tokenizer, prompt)
     if inputs["input_ids"][0].tolist() != [t["token_id"] for t in graph.tokens]:
         raise ValueError("validation prompt does not match the trace")

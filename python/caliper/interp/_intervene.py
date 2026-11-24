@@ -50,6 +50,7 @@ class _IdentityMemory:
         self.inner = getattr(guard, "_guard", guard)
         self.device = getattr(guard, "device", getattr(self.inner, "device", torch.device("cpu")))
         self._checked_current = None
+        self._checked_peak = 0
         self.floor = 0
 
     @property
@@ -58,7 +59,7 @@ class _IdentityMemory:
 
     @property
     def peak(self):
-        return max(self._checked_current or 0, getattr(self.guard, "peak", 0), getattr(self.inner, "peak", 0))
+        return max(self._checked_peak, getattr(self.guard, "peak", 0), getattr(self.inner, "peak", 0))
 
     @property
     def current(self):
@@ -73,6 +74,7 @@ class _IdentityMemory:
         current = check(stage)
         if isinstance(current, (int, float)):
             self._checked_current = current
+            self._checked_peak = max(self._checked_peak, current)
 
 
 def _content_identity(state, guard):

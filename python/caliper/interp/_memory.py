@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import math
 from contextlib import contextmanager
 from functools import lru_cache
 import os
@@ -107,6 +108,75 @@ def allocation_bytes(memory, *, floor=0):
     if memory.peak > memory.limit:
         raise CleanStop("historical allocation exceeds the process memory limit")
     return max(getattr(memory, "current", memory.peak), floor)
+
+
+class BudgetMemory:
+    """Retain supplied guard checks and enforce the lowest process budget."""
+
+    def __init__(self, memory, limit_gb, *, extra=None):
+        self.memory = memory
+        self.guards = (memory,) if extra is None else (memory, extra)
+        self.cap = int(limit_gb * 1e9)
+        self.readings = {}
+        self.observed_peak = 0
+
+    def __getattr__(self, name):
+        return getattr(self.memory, name)
+
+    @property
+    def limit(self):
+        return min(self.cap, *(getattr(owner, "limit", math.inf)
+                              for guard in self.guards for owner in (guard, getattr(guard, "_guard", guard))))
+
+    @limit.setter
+    def limit(self, value):
+        if type(value) not in (int, float) or not 0 < value <= 28_000_000_000:
+            raise ValueError("memory limit must be positive and at most 28 GB")
+        self.cap = int(value)
+
+    @property
+    def peak(self):
+        return max([self.observed_peak, *self.readings.values(), *(getattr(owner, "peak", 0)
+                   for guard in self.guards for owner in (guard, getattr(guard, "_guard", guard)))])
+
+    @property
+    def current(self):
+        values = []
+        for index, guard in enumerate(self.guards):
+            readings = [getattr(owner, "current", None) for owner in (guard, getattr(guard, "_guard", guard))]
+            readings.append(self.readings.get(index))
+            readings = [value for value in readings if value is not None]
+            values.append(max(readings) if readings else max(
+                getattr(guard, "peak", 0), getattr(getattr(guard, "_guard", guard), "peak", 0)))
+        return max(values)
+
+    def check(self, stage, *, force=True):
+        for index, guard in enumerate(self.guards):
+            check = guard.check if force else getattr(guard, "_check_interval", guard.check)
+            value = check(stage)
+            if isinstance(value, (int, float)):
+                self.readings[index] = value
+        self.observed_peak = max(self.peak, self.current)
+        if max(self.peak, self.current) > self.limit:
+            raise CleanStop("allocation exceeds the supplied process memory limit")
+        return self.current
+
+    def _check_interval(self, stage):
+        return self.check(stage, force=False)
+
+
+def family_memory_limit(model, requested=None, memory=None):
+    """Select an explicit family budget without raising a supplied lower cap."""
+    from ._families import model_family
+    family = model_family(model)
+    if requested is None:
+        requested = 12 if memory is None else min(
+            family.memory_max_gb, getattr(memory, "limit", 12e9) / 1e9,
+            getattr(getattr(memory, "_guard", memory), "limit", math.inf) / 1e9)
+    limit = family.memory_limit(requested)
+    if memory is not None:
+        limit = min(limit, BudgetMemory(memory, limit).limit / 1e9)
+    return family.memory_limit(limit)
 
 
 class MemoryGuard:

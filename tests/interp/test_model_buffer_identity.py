@@ -118,7 +118,7 @@ def test_rotary_reconstruction_refuses_before_cpu_allocation(tmp_path, memory, m
     def reference(instance, config):
         initialize_model(instance, config)
         if limit == "headroom":
-            memory.peak = memory.limit - 1
+            memory.footprint = lambda: memory.limit - 1
 
     def rotary(instance, config):
         assert torch.empty(0).device.type == "meta"

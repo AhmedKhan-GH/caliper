@@ -23,9 +23,11 @@ class InterpretationService:
     """
 
     def __init__(self, *, model=None, tokenizer=None, dictionary=None, index=None, tracer=None,
-                 dictionary_factory=None, index_factory=None, tracer_factory=None, handlers=None):
+                 dictionary_factory=None, index_factory=None, tracer_factory=None, handlers=None,
+                 memory_limit_gb=None, memory=None):
         self.model, self.tokenizer = model, tokenizer
         self.dictionary, self.index, self.tracer = dictionary, index, tracer
+        self.memory_limit_gb, self.memory = memory_limit_gb, memory
         self.factories = {"dictionary": dictionary_factory, "index": index_factory, "tracer": tracer_factory}
         self.handlers = dict(handlers or {})
         self.graph = None
@@ -121,7 +123,9 @@ class InterpretationService:
                     raise Refused("interpret.missing_model", "A model and tokenizer are required.")
                 from . import Tracer
                 value = Tracer(self.model, self.tokenizer, self._resource("dictionary"),
-                               controls=getattr(self, "controls", None))
+                               controls=getattr(self, "controls", None),
+                               memory_limit_gb=self.memory_limit_gb,
+                               memory=self.memory if self.memory is not None else getattr(self.index, "memory", None))
             if value is None:
                 raise Refused("interpret.missing_" + name, "The run has no " + name + ".")
             with self.lock:

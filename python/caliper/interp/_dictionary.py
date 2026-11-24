@@ -15,7 +15,7 @@ import torch
 from torch import nn
 from torch.nn import functional as F
 
-from ._memory import CleanStop, MemoryGuard, allocation_bytes, autorelease_scope
+from ._memory import BudgetMemory, CleanStop, MemoryGuard, allocation_bytes, autorelease_scope
 from ._forward_identity import checkpoint_settings, forward_settings, nonpersistent_buffers
 
 
@@ -661,7 +661,7 @@ def _admit(memory, required, stage, *, floor=0):
 
 
 def load_dictionary(path, *, model=None, model_hash=None, device=None, dtype=None,
-                    memory_limit_gb=12):
+                    memory_limit_gb=12, memory=None):
     """Load a matching dictionary within a default process limit of 12 GB.
 
     The pinned Gemma model permits an explicit limit of at most 28 GB.
@@ -678,6 +678,10 @@ def load_dictionary(path, *, model=None, model_hash=None, device=None, dtype=Non
 
     if type(memory_limit_gb) not in (int, float) or not 0 < memory_limit_gb <= 28:
         raise ValueError("dictionary memory limit must be positive and at most 28 GB")
+    supplied = BudgetMemory(memory, memory_limit_gb) if memory is not None else None
+    if supplied is not None:
+        supplied.check("dictionary supplied guard")
+        memory_limit_gb = supplied.limit / 1e9
     if model is None and model_hash is None:
         from .. import _programs
         model = _programs._STATE.get("model")
@@ -689,7 +693,7 @@ def load_dictionary(path, *, model=None, model_hash=None, device=None, dtype=Non
         raise ValueError("supplied model and expected model_hash differ")
     folder = Path(path)
     # Metadata admission needs no device initialization or tensor header access.
-    metadata_memory = MemoryGuard(memory_limit_gb, "cpu")
+    metadata_memory = supplied if supplied is not None else MemoryGuard(memory_limit_gb, "cpu")
     data, metadata_bytes = _read_metadata(folder / "dictionary.json", metadata_memory)
     data = _manifest(data)
     fallback = fallback_metadata(data)
@@ -715,6 +719,8 @@ def load_dictionary(path, *, model=None, model_hash=None, device=None, dtype=Non
     if dtype is not None and dtype not in _DTYPES:
         raise ValueError("dictionary dtype must be floating point")
     device = torch.device(device or "cpu")
+    if supplied is not None and _canonical_device(supplied.device) != _canonical_device(device):
+        raise ValueError("dictionary requires a memory guard for its device")
     shapes = {"W_enc": (data["latents"], data["width"]), "b_enc": (data["latents"],),
               "W_dec": (data["latents"], data["width"]), "b_dec": (data["width"],)}
     if data["activation"] == "jumprelu":
@@ -729,7 +735,7 @@ def load_dictionary(path, *, model=None, model_hash=None, device=None, dtype=Non
     remaining = sum(budget[0] for budget in budgets)
     temporary = max(budget[1] for budget in budgets)
     _admit(metadata_memory, metadata_bytes + remaining + temporary, "dictionary_headers")
-    memory = MemoryGuard(memory_limit_gb, device)
+    memory = supplied if supplied is not None else MemoryGuard(memory_limit_gb, device)
     initial = _admit(memory, metadata_bytes + remaining + temporary, "dictionary_admission")
     total = remaining
     layers = []

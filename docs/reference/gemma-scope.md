@@ -15,7 +15,7 @@ These checks do not establish results for the pretrained model.
 The recorded source checks also cover the official Scope files and a conversion preflight with synthetic unit gain.
 That preflight does not verify conversion with the actual model gains.
 No completed model-bound conversion, 200,000-token quality evaluation, two-million-token Gemma index, or real Gemma acceptance result exists in this evidence.
-Gemma peak memory, trace time, and steering time remain unmeasured.
+Peak memory with the actual Gemma model, trace time, and steering time remain unmeasured.
 
 ## Pinned Sources
 
@@ -128,10 +128,13 @@ An active set that exceeds memory admission receives a refusal.
 ## Conversion And Provenance
 
 `tools/interp/convert_gemma_scope.py` converts the exact local Scope snapshot against a verified pinned Gemma model.
-Its API is `convert_gemma_scope(source, output, *, model, memory_limit_gb=12, evaluation_source=None)`.
+Its API is `convert_gemma_scope(source, output, *, model, memory_limit_gb=28, evaluation_source=None)`.
 The CLI accepts `--source`, `--output`, `--model-snapshot`, `--memory-limit-gb`, and `--evaluation-source`.
 The model and source paths must identify their exact revisions in the standard Hugging Face cache layout.
 The converter performs no download or training.
+
+The API and CLI default to 28 GB because this converter accepts only the pinned Gemma model.
+A supplied lower limit remains active and can refuse the model load before allocation.
 
 The converter checks bounded NPZ headers before array allocation and uses `allow_pickle=False`.
 It releases each layer before the next layer and publishes the complete directory through one rename.
@@ -160,19 +163,37 @@ The local affine tangent belongs only to attribution.
 ## Resource And Acceptance Limits
 
 The explicit Gemma process budget is at most 28 GB in decimal units.
-Standalone verification, dictionary conversion, dictionary loads, and traces default to 12 GB unless the caller supplies a larger permitted limit.
+Standalone verification, dictionary loads, and traces default to 12 GB unless the caller supplies a larger permitted limit.
+The Gemma converter defaults to 28 GB.
 Verification and dictionary admission permit more than 12 GB only for the exact pinned Gemma identity.
 The trace family permits an explicit limit up to 28 GB for Gemma 2.
 Hosted Gemma inference and the Gemma acceptance profile select 28 GB explicitly.
 Qwen and fixture paths retain 12 GB, and the Qwen trainer retains 24 GB.
 
-CPU model load and device transfer have separate allocation admission checks.
+Standalone `register_service`, `Tracer`, `FeatureIndex`, `build_index`, and `validate_trace` accept `memory_limit_gb=28` for Gemma.
+The service, tracer, and index APIs also accept a process guard through `memory`.
+Validation accepts that guard through `guard` and otherwise reuses a matching intervention executor guard.
+A supplied lower guard takes precedence over a larger requested budget, including subsequent limit changes and stop requests.
+Without an explicit budget or guard, existing defaults remain unchanged.
+The service also uses its index guard for a default tracer when no service guard is supplied.
+
+CPU model load, device transfer, dictionary load, and identity snapshots have separate allocation admission checks.
 Fresh current-memory measurements govern those reserves, and the process guard also enforces the historical peak.
+Pending dictionary and snapshot copies retain allocation floors until their phase completes.
+An earlier released peak below the limit does not consume the next phase reserve.
+Any historical breach still requires a clean stop.
+
 Dictionary identity covers all tensor content, including thresholds, and content checks require memory admission.
 Gemma MPS dictionaries can retain a private CPU snapshot when the complete process reserve fits.
 Each identity check reads bounded live byte blocks and compares every byte with that snapshot.
+Readbacks have a 16 MiB cap, and macOS CPU comparisons use native `memcmp`.
 The snapshot preserves source device identity and never supplies model weights.
 If the reserve does not fit, checks hash all live bytes instead.
+
+Example queries admit up to 16 windows in batches that fit current memory, including any live snapshot.
+Each batch retains the workspace reserve and releases temporary tensors within an autorelease scope before the next admission.
+Queries preserve example order and cache the complete result only after all batches succeed.
+If one window cannot fit, the query refuses before its tensor allocation.
 The budget is a limit, not a measured memory result or a speed guarantee.
 
 Gemma quality requires exactly 200,000 tokens, mean FVU at most 0.30, dead fraction at most 0.15, and cross-entropy rise at most 0.5 nats.
