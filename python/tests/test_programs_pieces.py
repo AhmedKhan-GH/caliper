@@ -930,10 +930,11 @@ def _check_two_programs_share_admission(server, monkeypatch, payload_bytes, *, b
                 assert unsent == frame_bytes + (draw_bytes if step == 1 else 0)
                 assert unsent <= P._backlog(ctl, link) <= budget
                 assert [p.skipped for p in progs] == [step // 2, (step + 1) // 2]
-            _wait(lambda: reader.closed is not None or (
+            _wait(lambda: reader.closed is not None or not reader.is_alive() or (
                 any(s == step for _p, s, _n, _sha in reader.wholes) and P._backlog(ctl, link) == 0),
                 f"the viewer gets the whole version of step {step} and the queue drains")
             assert reader.closed is None, f"the server closed the viewer with {reader.closed}"
+            assert reader.is_alive(), "the viewer reader ended before resource completion"
         expected = [("a", 1), ("b", 2), ("a", 3), ("b", 4)]
         assert reader.got == expected
         assert reader.programs == [("a", "set"), ("b", "set")]
