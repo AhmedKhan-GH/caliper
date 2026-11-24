@@ -762,6 +762,7 @@ def clamp_session():
     session.parameter = Mock()
     session.action = Mock()
     session.events = Mock()
+    session.events.until.side_effect = lambda description, read: read()
     session.read = Mock(return_value={"step": 14, "elements": [
         [0, 0, 0, 0, .1, .1, token, token - 1] for token in range(1, 11)]})
     return session, prompt, status
@@ -775,6 +776,9 @@ def test_zero_clamp_waits_for_action_output_and_resource(clamp_session, minimum_
     session.read.return_value["step"] = max(minimum_step, 14)
     session.events.complete.side_effect = [prior, prior, completed, completed]
     def until(description, read):
+        if description == "slider output comparison":
+            session.action.assert_not_called()
+            return read()
         session.action.assert_called_once_with("apply_clamp")
         assert read() is False
         session.read.assert_not_called()
@@ -785,6 +789,32 @@ def test_zero_clamp_waits_for_action_output_and_resource(clamp_session, minimum_
     session.action.assert_called_once_with("apply_clamp")
     session.read.assert_called_once_with("probabilities", "cells", minimum_step=max(minimum_step, 14))
     assert reply == session.read.return_value
+    assert evidence == completed["inference"]["comparison"]
+
+
+@pytest.mark.parametrize("fault", ["missing", "old_state"])
+def test_zero_clamp_waits_for_slider_comparison_before_action(clamp_session, fault):
+    session, prompt, prior = clamp_session
+    pending = deepcopy(prior)
+    if fault == "missing":
+        pending["inference"].pop("comparison")
+    else:
+        pending["inference"]["comparison"]["interventions_hash"] = "f" * 64
+    completed = deepcopy(prior)
+    completed["inference"]["comparison"]["completed_step"] = 14
+    session.events.complete.side_effect = [pending, prior, completed, completed]
+    def until(description, read):
+        if description == "slider output comparison":
+            session.action.assert_not_called()
+            assert read() is False
+            session.action.assert_not_called()
+            session.read.assert_not_called()
+        else:
+            session.action.assert_called_once_with("apply_clamp")
+        return read()
+    session.events.until.side_effect = until
+    _, evidence = session.ablate_selected(prompt, minimum_step=10)
+    session.action.assert_called_once_with("apply_clamp")
     assert evidence == completed["inference"]["comparison"]
 
 

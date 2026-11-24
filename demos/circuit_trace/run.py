@@ -170,15 +170,17 @@ class Session:
 
     def ablate_selected(self, prompt, *, minimum_step):
         self.parameter("clamp", 0.)
-        def comparison():
+        def comparison(*, pending=False):
             status = self.events.complete("trace.status")
             state = inference_state(status, prompt)
             record = state.get("comparison")
             if not bound_completion(record, state):
+                if pending:
+                    return False
                 raise Failure("Output comparison evidence is stale or incomplete.")
             return status, record["completed_step"]
-        # Snapshot after the slider boundary to exclude its immediate output update.
-        _, prior_step = comparison()
+        # Parameter metadata can arrive before its output comparison completes.
+        _, prior_step = self.events.until("slider output comparison", lambda: comparison(pending=True))
         self.action("apply_clamp")
         def updated():
             status, step = comparison()
