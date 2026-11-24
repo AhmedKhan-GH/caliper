@@ -64,7 +64,7 @@ def test_tool_loader_refuses_before_weight_allocation(tmp_path, monkeypatch):
 def test_example_admission_precedes_tensor_allocation_and_forward(indexed, monkeypatch):
     index, _ = indexed
     memory = guard()
-    memory.peak = memory.limit - 1
+    memory.footprint = lambda: memory.limit - 1
     index.memory = memory
     layer, feature = 0, int(index.counts[0].argmax())
     monkeypatch.setattr(torch, "full", lambda *a, **k: pytest.fail("window tensor allocation ran"))
@@ -91,10 +91,10 @@ def test_example_estimate_covers_encode_and_logits_and_checks_completion(indexed
         check(stage)
     monkeypatch.setattr(memory, "check", observed)
     result = index.examples(layer, feature)
-    assert result and stages == ["example windows admission", "example windows complete"]
+    assert result and stages == ["example windows admission", "example windows complete", "example windows released"]
     monkeypatch.setattr(_index, "_forward", lambda *a, **k: pytest.fail("cached query forwarded"))
     assert index.examples(layer, feature) == result
-    assert len(stages) == 2
+    assert len(stages) == 3
 
 
 def test_training_tool_import_has_no_hosted_runtime_dependency():
