@@ -533,12 +533,15 @@ const std::pair<const char*, const char*> kFragments[] = {
     {"intervention_point", R"json({
       "type": "object", "additionalProperties": false, "required": ["point", "kind", "module", "head", "type", "shape"],
       "properties": {
-        "point": {"type": "string", "description": "The point's name: a module's dotted name, or <module>#<h> for a head."},
-        "kind": {"type": "string", "enum": ["module", "head"], "description": "module for a module's output, head for one head of an attention module."},
+        "point": {"type": "string", "description": "The point's name: a module's dotted name, <module>#<h> for a head, or <block>.<probe> for a semantic probe."},
+        "kind": {"type": "string", "enum": ["module", "head"], "description": "module for a module or semantic probe, head for one attention head."},
         "module": {"type": "string", "description": "The module's dotted name."},
         "head": {"type": ["integer", "null"], "description": "The head's index, or null for a module."},
         "type": {"type": "string", "description": "The module's class name, such as Linear or MultiheadAttention."},
-        "shape": {"type": ["array", "null"], "items": {"type": "integer"}, "description": "The shape of the module's last output, or null before the first step."}}})json"},
+        "shape": {"type": ["array", "null"], "items": {"type": "integer"}, "description": "The shape of the module's last output, or null before the first step."},
+        "probe": {"type": "string", "enum": ["resid_pre", "mlp_in", "mlp_out", "attn_pattern"], "description": "The optional semantic form. attn_pattern is read-only."},
+        "layer": {"type": "integer", "minimum": 0, "description": "The optional decoder layer index, from zero."},
+        "pattern": {"type": ["string", "null"], "enum": ["softmax", "signed_value_mixing", null], "description": "The optional attention pattern form, or null for another semantic probe."}}})json"},
 
     {"intervention", R"json({
       "type": "object", "additionalProperties": false, "required": ["point", "op", "from_step", "until_step", "since_step", "state"],
@@ -1929,7 +1932,7 @@ const Row kRows[] = {
     {"intervene.points", false, false, true,
      "Lists the intervention points of the model that the attached script watches: each module's output by its dotted "
      "name, and each head of an attention module as <module>#<h>, with the module's class and the shape of its last "
-     "output. It changes nothing.",
+     "output. Semantic probes retain kind module and add probe, layer and pattern metadata. It changes nothing.",
      R"json({"type": "object", "additionalProperties": false, "required": [],
       "properties": {
         "match": {"type": "string", "minLength": 1, "maxLength": 255, "description": "Only the points whose names match this glob, such as blocks.*.attn*; every point when absent."}}})json",

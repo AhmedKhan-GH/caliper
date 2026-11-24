@@ -18397,19 +18397,46 @@
                   ]
                 },
                 "kind": {
-                  "description": "module for a module's output, head for one head of an attention module.",
+                  "description": "module for a module or semantic probe, head for one attention head.",
                   "enum": [
                     "module",
                     "head"
                   ],
                   "type": "string"
                 },
+                "layer": {
+                  "description": "The optional decoder layer index, from zero.",
+                  "minimum": 0,
+                  "type": "integer"
+                },
                 "module": {
                   "description": "The module's dotted name.",
                   "type": "string"
                 },
+                "pattern": {
+                  "description": "The optional attention pattern form, or null for another semantic probe.",
+                  "enum": [
+                    "softmax",
+                    "signed_value_mixing",
+                    null
+                  ],
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
                 "point": {
-                  "description": "The point's name: a module's dotted name, or <module>#<h> for a head.",
+                  "description": "The point's name: a module's dotted name, <module>#<h> for a head, or <block>.<probe> for a semantic probe.",
+                  "type": "string"
+                },
+                "probe": {
+                  "description": "The optional semantic form. attn_pattern is read-only.",
+                  "enum": [
+                    "resid_pre",
+                    "mlp_in",
+                    "mlp_out",
+                    "attn_pattern"
+                  ],
                   "type": "string"
                 },
                 "shape": {
@@ -18453,7 +18480,7 @@
         ],
         "type": "object"
       },
-      "summary": "Lists the intervention points of the model that the attached script watches: each module's output by its dotted name, and each head of an attention module as <module>#<h>, with the module's class and the shape of its last output. It changes nothing."
+      "summary": "Lists the intervention points of the model that the attached script watches: each module's output by its dotted name, and each head of an attention module as <module>#<h>, with the module's class and the shape of its last output. Semantic probes retain kind module and add probe, layer and pattern metadata. It changes nothing."
     },
     {
       "agents": true,
