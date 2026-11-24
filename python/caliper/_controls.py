@@ -1345,9 +1345,9 @@ class Controls:
         """Set pending values and interventions, then run the queued actions in order."""
         controllers = self._controllers_due()
         with self.lock:
-            # Later actions need the next pass, which applies their preceding
-            # parameter edits and interventions before any action can use them.
-            actions = {action: action.run_id for action in self.queue}
+            # A late waiter defers its entire coalesced run and all later actions.
+            # The next pass applies prior edits without a new run ID or deadline.
+            actions = {action: (action.run_id, len(action.waiters)) for action in self.queue}
             changed = self._apply_pending()
             changed = self._apply_interventions(controllers) or changed
         if changed:
@@ -1358,9 +1358,12 @@ class Controls:
         while True:
             self._raise_resource_stop()
             with self.lock:
-                if not self.queue or actions.get(self.queue[0]) != self.queue[0].run_id:
+                if not self.queue:
                     return
-                a = self.queue.popleft()
+                a = self.queue[0]
+                if actions.get(a) != (a.run_id, len(a.waiters)):
+                    return
+                self.queue.popleft()
                 a.queued, a.running = False, True
                 waiters, a.waiters = a.waiters, []
                 self._update_busy()
