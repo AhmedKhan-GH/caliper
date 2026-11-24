@@ -397,7 +397,7 @@ public:
         if (op == CALIPER_NET_OP_STEP && count > 0) o.control.count = count;
         if (op == CALIPER_NET_OP_INTERVENE) o.control.intervene = value;
         if (op == CALIPER_NET_OP_INTERPRET) o.control.interpretation = value;
-        if (op == CALIPER_NET_OP_INTERPRET) {
+        if (op == CALIPER_NET_OP_INTERPRET || op == CALIPER_NET_OP_SET) {
             std::vector<uint8_t> bytes;
             if (!wire::encode(o.control, &bytes, err)) return 0;
         }

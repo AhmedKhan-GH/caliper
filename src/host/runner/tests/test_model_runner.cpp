@@ -62,6 +62,7 @@ TEST_CASE("runner: native interpretation validation and protocol errors need no 
         "/v3/stream?token=native_fixture_0123456789", &why));
     caliper_net::ConnId peer = 0;
     std::uint32_t pong = 0;
+    bool closure_announced = false;
     std::vector<wire::Control> received;
     const auto send = [&](const wire::Message& message) {
         std::vector<std::uint8_t> bytes;
@@ -69,7 +70,8 @@ TEST_CASE("runner: native interpretation validation and protocol errors need no 
         REQUIRE(server.send(peer, bytes.data(), bytes.size()));
     };
     const auto pump = [&] {
-        connection.poll(0);
+        const auto state_before = connection.state();
+        const bool first_change = connection.poll(0);
         for (auto& event : server.poll(5)) {
             if (event.type == caliper_net::Event::Type::Request) REQUIRE(server.accept(event.conn));
             if (event.type != caliper_net::Event::Type::Message) continue;
@@ -86,13 +88,17 @@ TEST_CASE("runner: native interpretation validation and protocol errors need no 
             } else if (auto* control = std::get_if<wire::Control>(&message)) received.push_back(*control);
             else if (auto* reply = std::get_if<wire::Pong>(&message)) pong = reply->nonce;
         }
-        connection.poll(5);
+        const bool last_change = connection.poll(5);
+        if (state_before != cr::RunConnection::State::closed && connection.state() == cr::RunConnection::State::closed)
+            closure_announced = first_change || last_change;
     };
     const auto until = [&](const std::function<bool()>& ready) {
         for (unsigned i = 0; i < 200 && !ready(); ++i) pump();
         REQUIRE(ready());
     };
     until([&] { return !connection.session().empty(); });
+    CHECK(connection.send_control(CALIPER_NET_OP_SET, "prompt", json(std::string("\xc3\x28", 2)), 0, &why) == 0);
+    CHECK(why.find("UTF-8") != std::string::npos);
     const auto raw_reply = [&](const caliper_net::Json& meta) {
         std::vector<std::uint8_t> bytes;
         REQUIRE(wire::encode_frame(CALIPER_NET_MSG_CONTROL_REPLY, meta, {}, &bytes));
@@ -200,6 +206,7 @@ TEST_CASE("runner: native interpretation validation and protocol errors need no 
     SUBCASE("BYE ends pending queries before the socket closes") {
         send(wire::Bye{CALIPER_NET_BYE_NORMAL, "The fixture ended."});
         until([&] { return connection.state() == cr::RunConnection::State::closed; });
+        CHECK(closure_announced);
         CHECK(connection.interpret("trace.run", json::object(), id)["error"]["code"] == "run.not_attached");
         return;
     }

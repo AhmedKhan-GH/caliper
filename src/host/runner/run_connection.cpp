@@ -77,6 +77,7 @@ bool RunConnection::open(const std::string& link, std::string* error) {
     if (url.empty()) return false;
     interpretation_ = false;
     text_params_ = false;
+    controls_ = json();
     interpretation_replies_.clear();
     client_ = std::make_unique<caliper_net::Client>();
     std::string err;
@@ -129,6 +130,7 @@ bool RunConnection::poll(int timeout_ms) {
             }
             case caliper_net::Event::Type::Message:
                 if (e.binary) {
+                    const State previous_state = state_;
                     const std::size_t before = replies_.size();
                     const auto revision = interpretation_revision_;
                     const json old_controls = controls_;
@@ -137,7 +139,8 @@ bool RunConnection::poll(int timeout_ms) {
                     on_message(e.data);
                     std::uint64_t after = 0;
                     for (const auto& s : series_) after += s.second.total;
-                    if (interpretation_revision_ != revision || replies_.size() != before || controls_ != old_controls || after != totals) changed = true;
+                    if (state_ != previous_state || interpretation_revision_ != revision ||
+                        replies_.size() != before || controls_ != old_controls || after != totals) changed = true;
                 }
                 break;
             case caliper_net::Event::Type::Closed:
@@ -306,7 +309,14 @@ std::uint32_t RunConnection::send_control(const std::string& op, const std::stri
     c.request_id = next_request_++;
     c.op = op;
     if (!name.empty()) c.name = name;
-    if (op == CALIPER_NET_OP_SET) c.value = to_net(value);
+    if (op == CALIPER_NET_OP_SET) {
+        try {
+            c.value = to_net(value);
+        } catch (const json::exception&) {
+            if (error) *error = "The parameter value must contain valid UTF-8.";
+            return 0;
+        }
+    }
     if (op == CALIPER_NET_OP_STEP) c.count = std::max<std::uint32_t>(1, count);
     if (op == CALIPER_NET_OP_INTERVENE) c.intervene = to_net(value);
     if (op == CALIPER_NET_OP_INTERPRET) {
