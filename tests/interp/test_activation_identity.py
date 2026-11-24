@@ -108,7 +108,7 @@ def test_unknown_activation_state_refuses_identity_and_cached_source(tmp_path, c
 
 
 @pytest.mark.parametrize("approximation", ["tanh", "none"])
-def test_activation_quality_digest_is_stable_across_processes(approximation):
+def test_activation_quality_digest_is_stable_across_processes(approximation, tmp_path, monkeypatch):
     model = gemma_model()
     identity = model_identity(model)
     original = evaluation_model_evidence(model, identity)
@@ -118,6 +118,7 @@ def test_activation_quality_digest_is_stable_across_processes(approximation):
     code = """
 import json
 import sys
+sys.path[:0] = sys.argv[2:]
 from caliper.interp._dictionary import model_identity
 from caliper.interp._evaluation_identity import evaluation_model_evidence
 from tests.interp.test_gemma_runtime import gemma_model
@@ -126,6 +127,9 @@ identity = model_identity(model)
 model.model.layers[0].mlp.act_fn.act.keywords["approximate"] = sys.argv[1]
 print(json.dumps(evaluation_model_evidence(model, identity)))
 """
-    process = subprocess.run([sys.executable, "-c", code, approximation], capture_output=True,
+    from pathlib import Path
+    root = Path(__file__).resolve().parents[2]
+    monkeypatch.chdir(tmp_path)
+    process = subprocess.run([sys.executable, "-c", code, approximation, str(root / "python"), str(root)], capture_output=True,
                              text=True, check=True, timeout=30)
     assert json.loads(process.stdout) == expected

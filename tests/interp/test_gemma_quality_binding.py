@@ -162,12 +162,13 @@ def test_fresh_index_cannot_reuse_quality_from_other_settings(artifact, tmp_path
         _gemma_model_binding(result["metadata"], result)
 
 
-def test_model_binding_keeps_activation_type_stable_across_processes(artifact):
+def test_model_binding_keeps_activation_type_stable_across_processes(artifact, tmp_path, monkeypatch):
     _, model, _, snapshot = artifact
     expected = evidence(model)
     code = """
 import json
 import sys
+sys.path[:0] = sys.argv[2:]
 import torch
 from caliper.interp._dictionary import model_identity, verify_hf_model
 from caliper.interp._evaluation_identity import evaluation_model_evidence
@@ -179,7 +180,11 @@ with torch.no_grad():
 verify_hf_model(model, sys.argv[1])
 print(json.dumps(evaluation_model_evidence(model, model_identity(model))))
 """
-    process = subprocess.run([sys.executable, "-c", code, str(snapshot)], capture_output=True, text=True, check=True)
+    from pathlib import Path
+    root = Path(__file__).resolve().parents[2]
+    monkeypatch.chdir(tmp_path)
+    process = subprocess.run([sys.executable, "-c", code, str(snapshot), str(root / "python"), str(root)],
+                             capture_output=True, text=True, check=True, timeout=30)
     assert json.loads(process.stdout) == expected
 
 
