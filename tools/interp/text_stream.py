@@ -9,6 +9,9 @@ from __future__ import annotations
 import copy
 from dataclasses import dataclass
 import hashlib
+import json
+from pathlib import Path
+import re
 
 import torch
 
@@ -39,8 +42,95 @@ def document_identity(text):
     return partition, int.from_bytes(digest[:8], "big") & ((1 << 63) - 1)
 
 
-def fineweb_documents(*, cache_dir=None):
+class LocalParquetDocuments:
+    """Pinned local shards with no Arrow worker pool and an exact row cursor."""
+
+    def __init__(self, manifest):
+        import pyarrow.parquet as parquet
+        manifest = Path(manifest)
+        data = json.loads(manifest.read_text())
+        required = {"dataset_id": DATASET_ID, "dataset_config": DATASET_CONFIG,
+                    "dataset_revision": DATASET_REVISION, "split": "train"}
+        if any(data.get(key) != value for key, value in required.items()):
+            raise ValueError("local dataset manifest does not identify the pinned FineWeb source")
+        if not isinstance(data.get("files"), list) or not data["files"]:
+            raise ValueError("local dataset manifest requires ordered Parquet files")
+        self.files = []
+        identities = []
+        root = manifest.parent.resolve()
+        for entry in data["files"]:
+            relative = Path(entry["path"])
+            path = (root / relative).resolve()
+            if relative.is_absolute() or not path.is_relative_to(root):
+                raise ValueError("local Parquet files must stay below the manifest folder")
+            expected = entry.get("sha256")
+            if not isinstance(expected, str) or not re.fullmatch(r"[0-9a-f]{64}", expected):
+                raise ValueError("local Parquet files require exact SHA256 checksums")
+            if type(entry.get("size_bytes")) is not int or path.stat().st_size != entry["size_bytes"]:
+                raise ValueError("local Parquet size mismatch")
+            digest = hashlib.sha256()
+            with path.open("rb") as source:
+                for chunk in iter(lambda: source.read(8 * 1024 * 1024), b""):
+                    digest.update(chunk)
+            if digest.hexdigest() != expected:
+                raise ValueError("local Parquet checksum mismatch")
+            source = parquet.ParquetFile(path)
+            try:
+                if "text" not in source.schema_arrow.names:
+                    raise ValueError("local Parquet source has no text column")
+                rows = source.metadata.num_rows
+            finally:
+                source.close()
+            self.files.append((path, rows))
+            identities.append(expected)
+        fingerprint = hashlib.sha256(json.dumps(identities, separators=(",", ":")).encode()).hexdigest()
+        self.source_id = f"local-parquet:{DATASET_ID}/{DATASET_CONFIG}@{DATASET_REVISION}:train:{fingerprint}"
+        self.shard, self.row = 0, 0
+
+    def state_dict(self):
+        return {"version": 1, "source_id": self.source_id, "shard": self.shard, "row": self.row}
+
+    def load_state_dict(self, state):
+        shard, row = state["shard"], state["row"]
+        if (state.get("version") != 1 or state.get("source_id") != self.source_id
+                or type(shard) is not int or type(row) is not int or not 0 <= shard <= len(self.files)
+                or row < 0 or (row != 0 if shard == len(self.files) else row > self.files[shard][1])):
+            raise ValueError("invalid local Parquet cursor or source identity")
+        self.shard, self.row = shard, row
+
+    def __iter__(self):
+        import pyarrow.parquet as parquet
+        for shard in range(self.shard, len(self.files)):
+            path, _ = self.files[shard]
+            skip = self.row if shard == self.shard else 0
+            source = parquet.ParquetFile(path)
+            try:
+                # Skip whole row groups without decoding their text on resume.
+                groups = []
+                for group in range(source.num_row_groups):
+                    rows = source.metadata.row_group(group).num_rows
+                    if not groups and skip >= rows:
+                        skip -= rows
+                    else:
+                        groups.append(group)
+                for batch in source.iter_batches(batch_size=16, row_groups=groups,
+                                                 columns=["text"], use_threads=False):
+                    for text in batch.column(0).to_pylist():
+                        if skip:
+                            skip -= 1
+                            continue
+                        self.shard = shard
+                        self.row += 1
+                        yield {"text": text}
+            finally:
+                source.close()
+            self.shard, self.row = shard + 1, 0
+
+
+def fineweb_documents(*, cache_dir=None, local_manifest=None):
     """Open the pinned stream. The caller controls network access through HF settings."""
+    if local_manifest is not None:
+        return LocalParquetDocuments(local_manifest)
     from datasets import load_dataset
     return load_dataset(DATASET_ID, DATASET_CONFIG, revision=DATASET_REVISION,
                         split="train", streaming=True, cache_dir=cache_dir)
@@ -72,7 +162,7 @@ class TextStream:
         self.documents = documents
         self.tokenizer = tokenizer
         self.partition = partition
-        self.source_id = source_id or f"{DATASET_ID}/{DATASET_CONFIG}@{DATASET_REVISION}:train"
+        self.source_id = source_id or getattr(documents, "source_id", None) or f"{DATASET_ID}/{DATASET_CONFIG}@{DATASET_REVISION}:train"
         self.rows = 0
         self.emitted = 0
         self.skipped_long = 0

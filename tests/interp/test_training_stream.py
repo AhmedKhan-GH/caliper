@@ -1,5 +1,6 @@
 """CPU checks for document partitions, cursor state, and memory stops."""
 import json
+import hashlib
 
 import pytest
 import torch
@@ -194,3 +195,102 @@ def test_stream_close_releases_generator_and_keeps_cursor():
             failed.next_tokens(23)
             raise ValueError("fixture")
     assert closed == [True, True]
+
+
+def local_manifest(folder):
+    import pyarrow as arrow
+    import pyarrow.parquet as parquet
+    from tools.interp.text_stream import DATASET_ID, DATASET_CONFIG, DATASET_REVISION
+    data = {"dataset_id": DATASET_ID, "dataset_config": DATASET_CONFIG,
+            "dataset_revision": DATASET_REVISION, "split": "train", "files": []}
+    for i, rows in enumerate((documents()[:70], documents()[70:])):
+        path = folder / f"shard-{i}.parquet"
+        parquet.write_table(arrow.Table.from_pylist(rows), path, row_group_size=13)
+        data["files"].append({"path": path.name, "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+                              "size_bytes": path.stat().st_size})
+    path = folder / "source.json"
+    path.write_text(json.dumps(data))
+    return path
+
+
+def test_local_parquet_exact_resume_across_shards(tmp_path):
+    from tools.interp.text_stream import fineweb_documents
+    manifest = local_manifest(tmp_path)
+    with TextStream(fineweb_documents(local_manifest=manifest), TinyTokenizer(), "train") as first:
+        first.next_tokens(4017)
+        state = json.loads(json.dumps(first.state_dict()))
+        assert state["source_id"].startswith("local-parquet:")
+        expected = first.next_tokens(7001)
+        with TextStream(fineweb_documents(local_manifest=manifest), TinyTokenizer(), "train", state=state) as second:
+            actual = second.next_tokens(7001)
+            for name in ("input_ids", "document_ids", "positions"):
+                assert torch.equal(getattr(actual, name), getattr(expected, name))
+            assert second.state_dict() == first.state_dict()
+
+
+@pytest.mark.parametrize("rows", [0, 13, 17, 70, 71, 300])
+def test_local_parquet_row_group_and_batch_positions(tmp_path, rows):
+    from itertools import islice
+    from tools.interp.text_stream import fineweb_documents
+    manifest = local_manifest(tmp_path)
+    first = fineweb_documents(local_manifest=manifest)
+    iterator = iter(first)
+    list(islice(iterator, rows))
+    state = first.state_dict()
+    second = fineweb_documents(local_manifest=manifest)
+    second.load_state_dict(state)
+    resumed = iter(second)
+    try:
+        assert list(islice(resumed, 7)) == documents()[rows:rows + 7]
+    finally:
+        iterator.close()
+        resumed.close()
+    with TextStream(fineweb_documents(local_manifest=manifest), TinyTokenizer(), "train") as empty:
+        pass
+    assert empty.closed and empty.state_dict()["emitted"] == 0
+
+
+def test_local_parquet_is_bounded_and_unthreaded(tmp_path, monkeypatch):
+    import pyarrow.parquet as parquet
+    from tools.interp.text_stream import fineweb_documents
+    manifest = local_manifest(tmp_path)
+    original = parquet.ParquetFile
+    calls = []
+    class Observed:
+        def __init__(self, *args, **kwargs):
+            self.inner = original(*args, **kwargs)
+        def __getattr__(self, name):
+            return getattr(self.inner, name)
+        def iter_batches(self, **kwargs):
+            assert kwargs["use_threads"] is False
+            assert kwargs["columns"] == ["text"]
+            assert kwargs["batch_size"] == 16
+            calls.append("batches")
+            return self.inner.iter_batches(**kwargs)
+        def close(self):
+            calls.append("close")
+            self.inner.close()
+    monkeypatch.setattr(parquet, "ParquetFile", Observed)
+    source = fineweb_documents(local_manifest=manifest)
+    calls.clear()
+    with TextStream(source, TinyTokenizer(), "train") as stream:
+        stream.next_tokens(19)
+    assert calls == ["batches", "close"]
+
+
+@pytest.mark.parametrize("damage", ["hash", "size", "revision", "path"])
+def test_local_parquet_manifest_refusals(tmp_path, damage):
+    from tools.interp.text_stream import fineweb_documents
+    manifest = local_manifest(tmp_path)
+    data = json.loads(manifest.read_text())
+    if damage == "hash":
+        data["files"][0]["sha256"] = "0" * 64
+    elif damage == "size":
+        data["files"][0]["size_bytes"] += 1
+    elif damage == "revision":
+        data["dataset_revision"] = "main"
+    else:
+        data["files"][0]["path"] = "../outside.parquet"
+    manifest.write_text(json.dumps(data))
+    with pytest.raises(ValueError):
+        fineweb_documents(local_manifest=manifest)
