@@ -176,6 +176,7 @@ def derive_pass(step):
         return struct.unpack("<4f", data)
 
 
+@pytest.mark.gpu
 @pytest.mark.skipif(not torch.backends.mps.is_available(), reason="the producer runtime requires MPS")
 def test_named_tensor_reaches_real_derive_and_rebinds_without_cpu_copy(monkeypatch):
     # An available device must load the real backend. A missing module fails this test.
