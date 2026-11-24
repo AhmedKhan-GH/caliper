@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import json
+from contextlib import contextmanager
+from functools import lru_cache
 import os
 import re
 import signal
@@ -19,6 +21,32 @@ except ImportError:
 
 class CleanStop(RuntimeError):
     """A resource limit or signal requests a checkpoint and exit."""
+
+
+@lru_cache(maxsize=1)
+def _autorelease_functions():
+    import ctypes
+    library = ctypes.CDLL("/usr/lib/libobjc.A.dylib")
+    push, pop = library.objc_autoreleasePoolPush, library.objc_autoreleasePoolPop
+    push.argtypes, push.restype = [], ctypes.c_void_p
+    pop.argtypes, pop.restype = [ctypes.c_void_p], None
+    return push, pop
+
+
+@contextmanager
+def autorelease_scope(device):
+    """Release temporary Objective-C objects after one MPS work unit."""
+    if torch.device(device).type != "mps":
+        yield
+        return
+    if sys.platform != "darwin":
+        raise ValueError("MPS autorelease scopes require macOS")
+    push, pop = _autorelease_functions()
+    pool = push()
+    try:
+        yield
+    finally:
+        pop(pool)
 
 
 def free_percent():

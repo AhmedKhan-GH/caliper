@@ -74,6 +74,17 @@ def test_hf_style_source_cursor():
     assert torch.equal(stream.next_tokens(200).input_ids, resumed.next_tokens(200).input_ids)
 
 
+def test_installed_hf_iterable_cursor_without_download():
+    from datasets import IterableDataset
+    def source():
+        yield from documents()
+    stream = TextStream(IterableDataset.from_generator(source), TinyTokenizer(), "train")
+    stream.next_tokens(83)
+    state = json.loads(json.dumps(stream.state_dict()))
+    resumed = TextStream(IterableDataset.from_generator(source), TinyTokenizer(), "train", state=state)
+    assert torch.equal(stream.next_tokens(311).input_ids, resumed.next_tokens(311).input_ids)
+
+
 def test_no_vocabulary_projection_in_hidden_forward():
     model = TinyLM()
     tokens = torch.tensor([[2, 3, 4, 5]])
@@ -125,6 +136,23 @@ def test_physical_footprint_api():
         assert physical_footprint() > 0
     else:
         assert physical_footprint() is None
+
+
+def test_autorelease_scope_balances_success_and_failure(monkeypatch):
+    from caliper.interp import _memory
+    calls = []
+    monkeypatch.setattr(_memory.sys, "platform", "darwin")
+    monkeypatch.setattr(_memory, "_autorelease_functions", lambda: (
+        lambda: calls.append("push") or 71, lambda pool: calls.append(("pop", pool)),
+    ))
+    with _memory.autorelease_scope("cpu"):
+        assert calls == []
+    with _memory.autorelease_scope("mps"):
+        pass
+    with pytest.raises(ValueError):
+        with _memory.autorelease_scope("mps"):
+            raise ValueError("fixture")
+    assert calls == ["push", ("pop", 71), "push", ("pop", 71)]
 
 
 def test_interrupted_document_scan_keeps_buffered_tokens():
