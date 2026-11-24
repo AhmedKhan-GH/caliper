@@ -111,7 +111,9 @@ def parser():
     result.add_argument("--memory-gb", type=_memory_gb, default=MEMORY_LIMIT_GB)
     result.add_argument("--partition", choices=("index",), default="index")
     result.add_argument("--dataset-cache", type=Path)
-    result.add_argument("--text-jsonl", type=Path, help="Optional staged source with one text field per row")
+    source = result.add_mutually_exclusive_group()
+    source.add_argument("--text-jsonl", type=Path, help="Optional staged source with one text field per row")
+    source.add_argument("--local-dataset-manifest", type=Path, help="Pinned local Parquet source manifest")
     result.add_argument("--query", type=int, nargs=2, metavar=("LAYER", "FEATURE"))
     result.add_argument("--limit", type=int, choices=range(17), default=16)
     return result
@@ -155,16 +157,23 @@ def main(argv=None):
                 source = jsonl_documents(args.text_jsonl)
                 source_id = "jsonl:sha256:" + source_hash
                 provenance.update(source_kind="staged_jsonl", source_hash=source_hash)
+            elif args.local_dataset_manifest is not None:
+                source = fineweb_documents(local_manifest=args.local_dataset_manifest)
+                source_id = source.source_id
+                provenance.update(source_kind="pinned_local_parquet", source_id=source_id)
             else:
                 source = fineweb_documents(cache_dir=args.dataset_cache)
                 source_id = None
                 provenance["source_kind"] = "pinned_dataset"
-            stream = TextStream(source, tokenizer, args.partition, source_id=source_id)
-            manifest = build_index(
-                args.dictionary, stream_documents(stream, check=check), model=model, tokenizer=tokenizer,
-                dictionary=dictionary, provenance=provenance, max_tokens=args.tokens,
-                context_length=args.context, memory_guard=check,
-            )
+            with TextStream(source, tokenizer, args.partition, source_id=source_id) as stream:
+                trained_source = metadata["training"].get("source_id")
+                if trained_source is not None and stream.source_id != trained_source:
+                    raise ValueError("index source differs from the training source")
+                manifest = build_index(
+                    args.dictionary, stream_documents(stream, check=check), model=model, tokenizer=tokenizer,
+                    dictionary=dictionary, provenance=provenance, max_tokens=args.tokens,
+                    context_length=args.context, memory_guard=check,
+                )
             memory.check("complete")
             print(json.dumps({"stage": "index_ready", "tokens": manifest["tokens"],
                               "documents": manifest["documents"], "index_hash": manifest["index_hash"],

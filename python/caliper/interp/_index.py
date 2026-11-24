@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 from collections import Counter, OrderedDict
-from contextlib import contextmanager
 from copy import deepcopy
 import hashlib
 import json
@@ -12,6 +11,7 @@ import numpy as np
 import torch
 
 from ._dictionary import load_dictionary, model_identity, weights_hash
+from ._memory import autorelease_scope as _device_scope
 from ._points import capture
 
 INDEX_VERSION = 1
@@ -23,25 +23,6 @@ _TABLE = np.dtype([("activation", "<f8"), ("offset", "<i8")])
 _DOCUMENT = np.dtype([("id", "S128"), ("start", "<i8"), ("length", "<i8"),
                       ("truncated", "?")])
 _FILES = ("table.npy", "counts.npy", "tokens.bin", "documents.bin")
-
-
-@contextmanager
-def _device_scope(device):
-    """Release Objective-C temporaries after each MPS work unit."""
-    if torch.device(device).type != "mps":
-        yield
-        return
-    import ctypes
-    runtime = ctypes.CDLL("/usr/lib/libobjc.A.dylib")
-    runtime.objc_autoreleasePoolPush.restype = ctypes.c_void_p
-    runtime.objc_autoreleasePoolPush.argtypes = []
-    runtime.objc_autoreleasePoolPop.restype = None
-    runtime.objc_autoreleasePoolPop.argtypes = [ctypes.c_void_p]
-    pool = runtime.objc_autoreleasePoolPush()
-    try:
-        yield
-    finally:
-        runtime.objc_autoreleasePoolPop(pool)
 
 
 def _json(value):
