@@ -33,6 +33,8 @@ The manifest records model identity, probe points, dimensions, activation type, 
 `caliper.interp.load_dictionary(path, model=model)` verifies the dictionary against the model.
 An explicit `model_hash` can supply the expected identity instead.
 The loader refuses an absent identity or a mismatch.
+Its `memory_limit_gb` argument caps total process memory at 12 GB by default and refuses larger limits.
+Header checks precede allocation, and memory admission includes the model, dictionary, and conversion buffers.
 The returned object exposes `encode(layer, x)`, `decode(layer, a)`, and `error(layer, x, y)`.
 Its `metadata` contains the manifest, and its `layers` contain the weights.
 
