@@ -92,7 +92,7 @@ ShownItems DrawRuntime::shown_items() const {
     p->map = *m.piece.draw->pick;
     p->layout = s->layout;
     p->shown = s->shown;
-    return ShownItems{std::move(p)};
+    return ShownItems{std::move(p), s->shown};
 }
 
 std::optional<PickedItem> DrawRuntime::pick(std::uint32_t item) const { return pick_shown(item, shown_items()); }

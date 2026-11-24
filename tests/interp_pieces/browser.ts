@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import type { Expect } from '../../web/node_modules/@playwright/test/index';
 import { REPO, WEB, serve } from '../../web/test/util.js';
+import { mockApp, openSpec, ready, VIEWS_FILES, type MockApp } from '../../web/test/spec-mock.js';
 
 // These limits match web/test/draw_parity.spec.ts: two channel levels in interiors,
 // at most one percent differing edge pixels, and identical interior IDs. There is no bloom.
@@ -133,5 +134,97 @@ export function registerInterpPieceTests(test: typeof import('../../web/node_mod
         fs.writeFileSync(info.outputPath(pp.id + '.id'), ids);
       }
     } finally { site.close(); }
+  });
+
+  test('the browser spec page shows pointer hover labels and preserves local picks', async ({ page }, info) => {
+    test.skip(info.project.name === 'canvas2d', 'Piece draws require WebGPU.');
+    const fixture = process.env.CALIPER_INTERP_PIECES_OUT ?? path.join(REPO, 'cmake-build-release/tests/interp_pieces/out');
+    const wasm = process.env.CALIPER_WASM_DIR ?? path.join(REPO, 'python/caliper/_web');
+    const available = fs.existsSync(path.join(fixture, 'hover.json')) && VIEWS_FILES.every((f) => fs.existsSync(path.join(wasm, f)));
+    if (process.env.CALIPER_REQUIRE_INTERP_PIECES === '1') expect(available, 'The current native hover fixture and WASM views must exist.').toBe(true);
+    test.skip(!available, 'The native hover fixture or WASM views are absent.');
+    test.setTimeout(120_000);
+    const program = JSON.parse(fs.readFileSync(path.join(fixture, 'hover.json'), 'utf8'));
+    expect(program.instance.manifest.draw.text.hover).toEqual({ anchor: 33, string_offset: 32 });
+    program.params.hovered_node = -1;
+    program.instance.params.hovered_node = -1;
+    for (const r of program.resources) { r.base64 = Buffer.from(r.bytes).toString('base64'); delete r.bytes; }
+    const panel = program.id as string;
+    const spec = {
+      caliper_spec: 1, applet: { id: 'hover-test', title: 'Hover Test' },
+      panel: [{ id: panel, primitive: 'scene', bind: {}, options: { labels: true, select: { state: 'selected_node', field: 'index' } } }],
+      program: [{ id: panel, params: { selected_node: { state: 'selected_node', default: 4 } } }], layout: panel,
+    };
+    const app: MockApp = { specs: { 'hover-test': spec }, data: { 'hover-test': {
+      [panel]: ready(panel, 'scene', { scene: null, programs: [program] }),
+    } }, requests: [] };
+    await mockApp(page, app, wasm);
+    await page.setViewportSize({ width: 800, height: 640 });
+    await page.mouse.move(1, 1);
+    await openSpec(page, 'hover-test');
+    await page.waitForFunction((id) => {
+      const p = (window as any).caliperSpec?.debugState().programs[id]?.programs[0];
+      return p?.module === 'running' && p.frames > 0;
+    }, panel, { timeout: 60_000, polling: 'raf' });
+    const labels = () => page.evaluate((id) => {
+      const raw = (window as any).caliperSpec.programs.mounts.get(id)?.handle?.stats.pageLabels ?? '[]';
+      return (JSON.parse(raw) as [string, ...number[]][]).map((label) => label[0]);
+    }, panel);
+    await expect.poll(labels).toContain('label 36');
+    // Feature discs have green pixels. Connected components give actual visible node centers.
+    // The later click proves the hovered node's ID without a synthetic hover parameter.
+    const centers = await page.evaluate((id) => {
+      const canvas = (window as any).caliperSpec.programs.canvasOf(id) as HTMLCanvasElement;
+      const probe = document.createElement('canvas'); probe.width = canvas.width; probe.height = canvas.height;
+      const context = probe.getContext('2d', { willReadFrequently: true })!;
+      context.drawImage(canvas, 0, 0);
+      const pixels = context.getImageData(0, 0, probe.width, probe.height).data;
+      const mask = new Uint8Array(probe.width * probe.height);
+      for (let i = 0; i < mask.length; ++i) {
+        const r = pixels[4 * i], g = pixels[4 * i + 1], b = pixels[4 * i + 2];
+        if (g > r + 45 && g > b + 20 && g > 100) mask[i] = 1;
+      }
+      const bounds = canvas.getBoundingClientRect(), found: { x: number; y: number; count: number }[] = [];
+      for (let i = 0; i < mask.length; ++i) {
+        if (!mask[i]) continue;
+        const todo = [i]; mask[i] = 0;
+        let x = 0, y = 0, count = 0;
+        while (todo.length) {
+          const p = todo.pop()!, px = p % probe.width, py = Math.floor(p / probe.width);
+          x += px; y += py; ++count;
+          for (const [nx, ny] of [[px - 1, py], [px + 1, py], [px, py - 1], [px, py + 1]]) {
+            if (nx < 0 || ny < 0 || nx >= probe.width || ny >= probe.height) continue;
+            const next = ny * probe.width + nx;
+            if (mask[next]) { mask[next] = 0; todo.push(next); }
+          }
+        }
+        if (count >= 4) found.push({ x: bounds.left + (x / count + 0.5) * bounds.width / probe.width,
+          y: bounds.top + (y / count + 0.5) * bounds.height / probe.height, count });
+      }
+      return found.sort((a, b) => b.count - a.count);
+    }, panel);
+    expect(centers.length).toBeGreaterThanOrEqual(2);
+    const hoverLabels = async () => (await labels()).filter((s) => /^label (3[2-9]|4[0-7])$/.test(s) && s !== 'label 36');
+    await page.mouse.move(centers[0].x, centers[0].y);
+    await expect.poll(hoverLabels).toHaveLength(1);
+    const first = (await hoverLabels())[0];
+    await page.mouse.move(centers[1].x, centers[1].y);
+    await expect.poll(hoverLabels).toHaveLength(1);
+    await expect.poll(async () => (await hoverLabels())[0]).not.toBe(first);
+    const second = (await hoverLabels())[0];
+    expect(await page.evaluate(() => (window as any).caliperSpec.debugState().picks.length)).toBe(0);
+    expect(await page.evaluate(() => (window as any).caliperSpec.programs.localState)).toEqual({});
+    await page.screenshot({ path: info.outputPath('hover-node.png') });
+    await page.mouse.move(1, 1);
+    await expect.poll(hoverLabels).toHaveLength(0);
+    expect(await labels()).toContain('label 36');
+    await page.screenshot({ path: info.outputPath('hover-exit.png') });
+    await page.mouse.click(centers[1].x, centers[1].y);
+    await expect.poll(() => page.evaluate(() => (window as any).caliperSpec.debugState().picks.length)).toBe(1);
+    const picked = await page.evaluate(() => (window as any).caliperSpec.debugState().picks[0].detail);
+    expect(second).toBe(`label ${32 + picked.item}`);
+    expect(picked.fields.index).toBe(picked.item);
+    expect(await page.evaluate(() => (window as any).caliperSpec.programs.localState.selected_node)).toBe(picked.item);
+    expect(app.requests.filter((r) => ['state.set', 'selection.set', 'trace.run'].includes(r.name))).toEqual([]);
   });
 }

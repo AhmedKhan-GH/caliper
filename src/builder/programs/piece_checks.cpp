@@ -732,6 +732,25 @@ private:
                 if (t.strings[k].size() > pl::kStringBytes)
                     return fail(kProgramBadText, "A string of the text table has at most 64 bytes.",
                                 at("draw.text.strings", k));
+            if (t.hover) {
+                if (t.hover->anchor >= r->count || t.hover->anchor >= pl::kLabels)
+                    return fail(kProgramBadText, "The hover anchor must fit the anchor buffer and the 512-label limit.",
+                                "draw.text.hover.anchor");
+                const spec::Resource* items = d.pick ? find_resource(p_, d.pick->resource) : nullptr;
+                if (!items || items->kind != spec::ResourceKind::buffer)
+                    return fail(kProgramBadText, "A hover label requires a buffer item map.", "draw.text.hover");
+                std::uint64_t strings = t.strings.size();
+                if (t.strings_from) {
+                    const spec::Resource* source = find_resource(p_, *t.strings_from);
+                    if (!source)
+                        return fail(kProgramBadText, "Hover strings require a resource with a declared count.",
+                                    "draw.text.strings_from");
+                    strings = source->count;
+                }
+                if (std::uint64_t(t.hover->string_offset) + items->count > strings)
+                    return fail(kProgramBadText, "The hover string offset and item count must fit the string table.",
+                                "draw.text.hover.string_offset");
+            }
         }
         return {};
     }

@@ -36,6 +36,7 @@ struct PickedItem;
 namespace caliper_live_views {
 
 class SceneView;
+struct SceneProgramHover;
 
 // What a live view of kind scene holds: the backend of the graphics layer it draws through, when
 // it owns one, and its scene view. Without a backend (a renderer the layer cannot run on) the view
@@ -168,6 +169,8 @@ struct SceneRectState {
     float rect[4] = {0, 0, 0, 0};   // where the rectangle was drawn last: x, y, width, height in points
     // The labels drawn at the last draw, for a test that compares them as text apart from the picture.
     std::vector<DrawnLabel> labels;
+    // Local program hover state. It owns no GPU object and never enters the selection sink.
+    std::shared_ptr<SceneProgramHover> program_hover;
 };
 
 // Asks for a pick at (u, v), each from 0 to 1 across the rectangle, at the next draw, as if the

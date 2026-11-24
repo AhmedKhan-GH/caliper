@@ -61,7 +61,10 @@ fn order_influence(@builtin(global_invocation_id) id: vec3<u32>) {
         let x = -0.9 + (f32(i)+0.5)*1.8/f32(token_count());
         labels[i] = Label(vec4<f32>(x, -0.88, 0.0, 1.0), select(0xffffffffu, i, i<token_count() && n>0u), 1.0);
     }
-    if (i < 2u) { labels[32u+i] = Label(vec4<f32>(0.0), 0xffffffffu, 2.0); }
+    if (i == 0u) {
+        labels[32] = Label(vec4<f32>(-0.4,0.9,0.0,1.0), 0xffffffffu, 3.0);
+        labels[33] = Label(vec4<f32>(0.4,0.9,0.0,1.0), 0xffffffffu, 4.0);
+    }
     if (i >= n) { return; }
     let c = cells[i];
     var rank = 0u;
@@ -121,7 +124,6 @@ fn relax_four(@builtin(global_invocation_id) id: vec3<u32>) {
     offset_a[i] = result;
     nodes[i].position = vec4<f32>(result.x, cells[i].center.y, 0.0, result.w);
     if (i32(i) == params.selected_node) { labels[32] = Label(vec4<f32>(-0.4,0.9,0.0,1.0), 32u+i, 3.0); }
-    if (i32(i) == params.hovered_node) { labels[33] = Label(vec4<f32>(0.4,0.9,0.0,1.0), 32u+i, 4.0); }
 }
 
 @compute @workgroup_size(64)

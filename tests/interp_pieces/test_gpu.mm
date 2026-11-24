@@ -4,6 +4,11 @@
 #include "../boxes_match/match_rig.h"
 #include "../draw_parity/parity_fixture.h"
 #include "pieces.h"
+#include "draw/draw_host.h"
+#include "live/live_scene.h"
+#include "live/live_views_scene.h"
+#include "gfx/shaders/generated/programs_metal.h"
+#include "spec_runtime/spec_offscreen.h"
 #include <filesystem>
 #include <fstream>
 #include <set>
@@ -150,6 +155,27 @@ struct Export {
             m.stride = layout.stride;
             add_frame(m);
         }
+        if (id == "graph_selected") {
+            // The actual browser spec page consumes these same files and resource bytes.
+            nlohmann::json viewer = {{"id", id}, {"title", "Attribution Graph"}, {"state", "ready"}, {"error", nullptr},
+                {"piece", {{"name", piece.name}, {"version", piece.version}, {"from", "library"}}},
+                {"params", nlohmann::json::parse(values.dump())}, {"resources", nlohmann::json::array()}};
+            viewer["instance"] = {{"op", "set"}, {"id", id}, {"panel", id},
+                {"piece", nlohmann::json::parse(message.piece.dump())},
+                {"manifest", nlohmann::json::parse(message.manifest.dump())},
+                {"bind", nlohmann::json::parse(message.bind.dump())}, {"params", viewer["params"]},
+                {"segments", nlohmann::json::parse(message.segments.dump())},
+                {"common", message.common.value_or("")}, {"derive", message.derive.value_or("")}, {"draw", message.draw.value_or("")}};
+            for (const auto& r : data) {
+                cp::ElementLayout layout;
+                for (const auto& desc : piece.resources)
+                    if (desc.id == r.id) REQUIRE(cp::element_layout(desc.layout, &layout).ok());
+                viewer["resources"].push_back({{"resource", r.id}, {"step", 1}, {"version", "1"},
+                    {"count", r.count}, {"stride", layout.stride}, {"width", 0}, {"height", 0}, {"bytes", r.bytes}});
+            }
+            const auto json = viewer.dump();
+            write(out / "hover.json", json.data(), json.size());
+        }
         dp::ProgramPlan pp;
         pp.id = id; pp.pick_id = mr::kPiecePick; pp.inputs = frame(piece,values);
         plan.programs.push_back(pp);
@@ -203,8 +229,8 @@ TEST_CASE("graph layout has disjoint cells, stable bytes, labels, and sixteen ce
             check_pick(draw,x,y,i); picks.push(pick_at(x,y,i));
         }
         const auto labels=draw.rt.labels();
-        REQUIRE(labels.size()==6);
-        CHECK(labels[0].text=="label 0"); CHECK(labels[4].text=="label 36"); CHECK(labels[5].text=="label 37");
+        REQUIRE(labels.size()==5); // A synthetic parameter alone supplies no local pointer hit.
+        CHECK(labels[0].text=="label 0"); CHECK(labels[4].text=="label 36");
         auto& output=exporter();
         output.add("graph_selected",piece,data,draw,params,picks);
         const auto selected=draw.color;
@@ -386,6 +412,104 @@ TEST_CASE("dynamic labels retain complete UTF-8 characters at the byte limit") {
                 for (unsigned i=0;i<4;++i) CHECK(labels[i].text==expected[i]);
             }
         }
+    }
+}
+TEST_CASE("native scene pointer hover shows labels without a click or derive update") {
+    @autoreleasepool {
+        std::string why;
+        auto canvas = caliper_host::SpecOffscreen::create(size, size, 1, &why);
+        if (!canvas) CALIPER_SKIP_NO_GPU(why);
+        auto backend = caliper_gfx::make_metal_backend(canvas->native_device(), canvas->native_queue());
+        REQUIRE(backend);
+        struct Feed : cd::DrawFeed {
+            cs::Piece piece = ip::load("attribution_graph");
+            std::vector<Published> data;
+            std::uint64_t resource_revision = 1, sent = 0;
+            std::uint64_t revision() const override { return 1; }
+            std::vector<cd::PanelProgram> programs() const override {
+                return {{piece, {"graph", {}, "graph"}, mr::kPiecePick, 1, {}}};
+            }
+            void frame(cd::DrawRuntime& rt, cd::FrameInputs* in) override {
+                if (sent != resource_revision) {
+                    for (const auto& r : data) {
+                        cd::ResourceVersion v;
+                        v.resource = r.id; v.step = 1; v.count = r.count;
+                        v.bytes = r.bytes.data(); v.size = r.bytes.size();
+                        REQUIRE(rt.set_resource(v).ok());
+                    }
+                    sent = resource_revision;
+                }
+                Json params = Json::object(); params.set("selected_node", 4);
+                in->params = caliper_web::pack_params(piece, params);
+            }
+            void status(const cd::DrawRuntime& rt) override { CHECK_MESSAGE(rt.status().error.ok(), rt.status().error.message); }
+        } feed;
+        feed.data = mr::run_derive((__bridge id<MTLDevice>)canvas->native_device(), feed.piece, graph_tensors(), {{"selected_node",4}});
+        caliper_live_views::SceneView view(*backend, caliper_gfx::shaders::kMetalPrograms);
+        REQUIRE_MESSAGE(view.init(&why), why);
+        wire::SceneView description; description.space = CALIPER_NET_SPACE_3D; description.up = "+z";
+        view.describe(description);
+        caliper_live_views::SceneRectOptions options;
+        options.draw_feed = &feed;
+        caliper_live_views::SceneRectState state;
+        std::vector<std::pair<std::string, std::string>> events;
+        const auto sink = [&](const char* type, const std::string& detail) { events.emplace_back(type, detail); };
+        const auto scene = [&](const ImRect& area) {
+            caliper_live_views::draw_scene_view_in_rect(view, 1, "##hover", area.Min, area.GetSize(), options, state, sink);
+        };
+        const auto draw = [&] {
+            @autoreleasepool {
+                REQUIRE_MESSAGE(canvas->render(1, scene, nullptr, &why), why);
+            }
+        };
+        const auto capture = [&](const char* name) {
+            std::vector<std::uint8_t> rgba;
+            REQUIRE_MESSAGE(canvas->render(1, scene, &rgba, &why), why);
+            REQUIRE(stbi_write_png((exporter().out / "app" / name).string().c_str(), size, size, 4, rgba.data(), size * 4));
+        };
+        const auto has = [&](const std::string& text) {
+            return std::any_of(state.labels.begin(), state.labels.end(), [&](const auto& l) { return l.text == text; });
+        };
+        const auto until = [&](const std::function<bool()>& ready) {
+            for (unsigned frame = 0; frame < 120 && !ready(); ++frame) draw();
+            REQUIRE(ready());
+        };
+        const auto move = [&](float x, float y) { canvas->with_context([&] { ImGui::GetIO().AddMousePosEvent(x, y); }); };
+        const auto at_node = [&](unsigned item) {
+            const auto& nodes = resource(feed.data, "nodes");
+            double p[4];
+            caliper_scene::transform_h(view.program_clip(),
+                {scalar<float>(nodes,item,0,48), scalar<float>(nodes,item,4,48), 0}, p);
+            return ImVec2(float((1 + p[0]/p[3]) * size/2), float((1 - p[1]/p[3]) * size/2));
+        };
+        move(-100, -100);
+        until([&] { return has("label 36"); });
+        auto point = at_node(5); move(point.x, point.y);
+        until([&] { return has("label 37"); });
+        CHECK(has("label 36")); CHECK(events.empty()); CHECK(feed.sent == 1);
+        capture("hover-node.png");
+        point = at_node(6); move(point.x, point.y);
+        until([&] { return has("label 38") && !has("label 37"); });
+        CHECK(events.empty());
+        move(-100, -100); draw(); CHECK_FALSE(has("label 38"));
+        capture("hover-exit.png");
+        move(point.x, point.y);
+        until([&] { return has("label 38"); });
+        // A same-step replacement moves the node away from a still pointer.
+        for (auto& r : feed.data) if (r.id == "nodes") {
+            const float outside = 20;
+            std::memcpy(r.bytes.data() + 6 * 48, &outside, 4);
+        }
+        ++feed.resource_revision; draw(); CHECK_FALSE(has("label 38"));
+        point = at_node(5); move(point.x, point.y);
+        until([&] { return has("label 37"); });
+        canvas->with_context([] { ImGui::GetIO().AddMouseButtonEvent(0, true); });
+        draw(); CHECK_FALSE(has("label 37"));
+        canvas->with_context([] { ImGui::GetIO().AddMouseButtonEvent(0, false); });
+        until([&] { return !events.empty(); });
+        REQUIRE(events.size() == 1); CHECK(events[0].first == "pick");
+        const auto picked = nlohmann::json::parse(events[0].second);
+        CHECK(picked.at("item") == 5); CHECK(picked.at("fields").at("index") == 5);
     }
 }
 CALIPER_GPU_TEST_MAIN()

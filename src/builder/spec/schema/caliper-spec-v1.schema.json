@@ -1283,7 +1283,16 @@
             "priority": {"type": "string", "pattern": "^[a-z_][a-z0-9_]{0,31}$"},
             "strings": {"type": "array", "maxItems": 4096, "items": {"type": "string", "maxLength": 64}},
             "strings_from": {"type": "string", "pattern": "^[a-z][a-z0-9_]{0,31}$"},
-            "align": {"type": "string", "enum": ["placed", "left", "right", "center"]}
+            "align": {"type": "string", "enum": ["placed", "left", "right", "center"]},
+            "hover": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["anchor"],
+              "properties": {
+                "anchor": {"type": "integer", "minimum": 0, "maximum": 511},
+                "string_offset": {"type": "integer", "minimum": 0, "maximum": 4095, "description": "Zero when absent."}
+              }
+            }
           }
         },
         "frame_ms": {"type": "number", "minimum": 0.1, "maximum": 16},

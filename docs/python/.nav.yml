@@ -8,6 +8,7 @@ nav:
       - stream-links.md
       - script-control.md
       - hub-setup.md
+      - interpretability.md
   - Concepts:
       - live-streaming.md
       - network-streaming.md
