@@ -100,17 +100,26 @@ def test_no_vocabulary_projection_in_hidden_forward():
 
 def test_memory_stop_thresholds():
     values = iter([21, 19, 21, 19, 19])
-    guard = MemoryGuard(1, "cpu", resident=lambda: 0, pressure=lambda: next(values))
-    for _ in range(4):
+    ticks = iter(range(5))
+    readers = {"resident": lambda: 0, "footprint": lambda: 0,
+               "peak": lambda: 0, "driver": lambda: 0, "clock": lambda: 0}
+    guard = MemoryGuard(1, "cpu", **{**readers, "clock": lambda: next(ticks)},
+                        pressure=lambda: next(values))
+    for expected_low in (0, 1, 0, 1):
         guard.check("fixture")
+        assert guard.low == expected_low
     with pytest.raises(CleanStop, match="pressure"):
         guard.check("fixture")
-    guard = MemoryGuard(1, "cpu", resident=lambda: 0, pressure=lambda: 14)
+    assert guard.low == 2 and guard.peak == 0 and guard.last == 4
+    guard = MemoryGuard(1, "cpu", **readers, pressure=lambda: 14)
     with pytest.raises(CleanStop, match="pressure"):
         guard.check("fixture")
-    guard = MemoryGuard(1, "cpu", resident=lambda: 1_000_000_001, pressure=lambda: 50)
+    assert guard.low == 1 and guard.peak == 0
+    guard = MemoryGuard(1, "cpu", **{**readers, "resident": lambda: 1_000_000_001},
+                        pressure=lambda: 50)
     with pytest.raises(CleanStop, match="memory limit"):
         guard.check("fixture")
+    assert guard.peak == 1_000_000_001 and guard.low == 0
 
 
 def test_peak_and_fallback_memory_limits():
@@ -120,15 +129,18 @@ def test_peak_and_fallback_memory_limits():
         {"footprint": lambda: 0, "peak": lambda: 0, "driver": lambda: 1_000_000_001},
         {"footprint": lambda: None, "peak": lambda: 0, "driver": lambda: 600_000_001},
     ):
-        guard = MemoryGuard(1, "cpu", resident=lambda: 400_000_000, pressure=lambda: 50, **options)
+        guard = MemoryGuard(1, "cpu", resident=lambda: 400_000_000, pressure=lambda: 50,
+                            clock=lambda: 0, **options)
         with pytest.raises(CleanStop, match="memory limit"):
             guard.check("fixture")
+        assert guard.peak == 1_000_000_001
         guard.resident = lambda: 0
         guard.driver_reader = lambda: 0
         guard.footprint = lambda: 0
         guard.peak_reader = lambda: 0
         with pytest.raises(CleanStop, match="memory limit"):
             guard.check("past_peak")
+        assert guard.peak == 1_000_000_001 and guard.low == 0
 
 
 def test_physical_footprint_api():
