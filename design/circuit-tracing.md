@@ -278,11 +278,48 @@ The hidden acceptance driver uses only `caliper-mcp` to build and operate the in
 It waits for events or published steps, captures the graph before and after a feature clamp, and writes `result.json`.
 The graph must have 20 to 512 nodes and a token-to-logit path.
 Feature influence share must reach 0.30, and completeness residual must not exceed 0.02.
-Steering must reduce the top probability by 0.05 or change the top token.
-Validation needs at least eight correct signs and a Spearman correlation of at least 0.6.
+
+The absolute probability change for the original top token must reach 0.05, or the top token must change.
+Both alternatives require the original token's probability to change in the direction predicted for the selected intervention.
+The driver finds that token's exact probability by its ID, even when the bar order or top token changes.
+Validation needs at least eight correct signs among ten features and a Spearman correlation of at least 0.6.
 
 The trace budget is 20 seconds, the steering budget is one second, and the demo memory limit is 12 GB.
-The driver checks node IDs, bar heights within two pixels, and app/browser parity with existing draw tolerances.
+The driver checks node IDs and window bar heights within two pixels of probability times scale.
+The original top token's bar must also change in the predicted direction after the Qwen clamp.
+App/browser parity applies to the fixture graph, with the existing draw tolerances.
+
+The 24 November founder decision permits this demo dictionary despite its recorded dead-feature and cross-entropy failures.
+A quality override must identify the exact dictionary fingerprint, complete evaluation count, measured values, and failed gates.
+The driver displays that decision and retains the failed measurements in its result.
+This quality exception does not change causal, pixel, parity, or budget thresholds.
+The later decision on 24 November changes the steering direction rule and holds M8 open.
+M8 cannot merge until a better dictionary passes the unchanged graph check.
+This check requires at least eight of ten signs and Spearman correlation of at least 0.6.
+Dictionary work requires a separate founder decision.
+
+The driver ties graph, example, and bar targets to the window through the actual image quads, clips, and framebuffer scale.
+An independent CPU reference uses the actual font atlas and expected glyph quads to check prompt and selected labels.
+The reference permits two channel levels of interior difference and at most one percent differing edge pixels.
+Each required label also needs visible ink and glyph pixels within two channel levels.
+Synthetic failure injections check these oracles. They do not establish application acceptance.
+
+Hosted `trace.status` supplies optional inference evidence with current prompt and intervention hashes.
+Its comparison evidence supplies both actual argmax token IDs. The driver does not infer them from the ten bars.
+Before Generate, the driver records the prior completion identity.
+A fresh completion must bind two rows of 24 token IDs and both text hashes to the current prompt and interventions.
+Both the semantic steering gate and the bar direction gate remain required for Qwen.
+
+The demo selects the feature with the largest absolute effect on the top logit before the last layer.
+The result also records the original influence-based selection and its measured zero-ablation effect from the validation table.
+The validation still uses the ten most influential active features and the same sign and rank thresholds.
+
+The zero clamp predicts a centered-logit change equal to the negative of the selected feature's direct effect.
+An inhibitory feature predicts an increase, and an excitatory feature predicts a decrease.
+A zero or nonfinite prediction establishes no direction and cannot pass either direction check.
+The result records the predicted effect and direction, both original-token probabilities, their signed change, and both pixel heights with their signed change.
+The check names are `steering_change_matches_prediction` and `bar_change_matches_prediction`.
+
 Only the founder uses `--show`. Every automated run remains hidden.
 The demo states the per-layer dictionary, frozen routing, feature-label heuristic, prompt cap, and lack of global weight analysis.
 Fallbacks follow the outline, and every fallback records its effect on coverage and acceptance.
