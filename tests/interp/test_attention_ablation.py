@@ -130,10 +130,8 @@ def test_qwen_attention_module_ablation_removes_value_derivatives(layer, attenti
     dictionary = random_dictionary(model)
     ids = torch.tensor([[1, 2, 3]])
     name = f"model.layers.{layer}.{attention}"
-    # These primary Qwen modules do not expose heads through the existing interface.
-    assert not any(p["point"].startswith(name + "#") for p in ablation_points(model))
-    with pytest.raises(KeyError):
-        ablate(model, name + "#0")
+    assert [p["point"] for p in ablation_points(model) if p["point"].startswith(name + "#")] == [
+        name + "#0", name + "#1"]
     with active_ablation(model, [name]):
         path = FrozenPath(model, ids, dictionary, interventions=[{"op": "ablate", "point": name}])
         assert path.forward_residual < 2e-5
