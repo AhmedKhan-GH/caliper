@@ -120,7 +120,7 @@ def _completed_training(training, budget):
              "Qwen requires a complete training budget of 20000000 or 40000000 tokens.")
 
 
-def _gemma_source(metadata):
+def _gemma_source(metadata, response):
     """Bind the published Scope selection and keep publisher training unknown."""
     _require(_integer(metadata.get("width"), 2304) and _integer(metadata.get("latents"), 16384)
              and metadata.get("activation") == "jumprelu" and "k" in metadata and metadata["k"] is None,
@@ -148,6 +148,12 @@ def _gemma_source(metadata):
                  and isinstance(row.get("input_gain_hash"), str)
                  and row["input_gain_hash"].startswith("sha256:") and _digest(row["input_gain_hash"][7:]),
                  "Gemma Scope layer provenance is incomplete or differs from the selected set.")
+    binding = response["import_binding"]
+    _require(isinstance(binding, dict) and _integer(binding.get("version"), 1)
+             and binding.get("model_hash") == GEMMA_HASH
+             and binding.get("layers") == [{key: row[key] for key in
+                                            ("layer", "file", "sha256", "input_gain_hash")} for row in layers],
+             "Gemma Scope import does not match the current files and verified model gains.")
     training = metadata["training"]
     _require(training.get("origin") == "imported" and training.get("local_training") is False
              and _integer(training.get("tokens"), 0) and training.get("partitions") == {}
@@ -235,7 +241,7 @@ def dictionary_qualification(response, *, quality_override=None, family="qwen"):
         _require(index.get("complete") is True and _integer(index.get("tokens"), INDEX_TOKENS)
                  and _integer(index.get("token_budget"), INDEX_TOKENS),
                  "Acceptance requires a complete 2000000-token index.")
-        training = _gemma_source(metadata) if gemma else metadata["training"]
+        training = _gemma_source(metadata, response) if gemma else metadata["training"]
         provenance = index["provenance"]
         _partitions(training)
         if gemma:

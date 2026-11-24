@@ -13,6 +13,7 @@ from caliper.interp._dictionary import (
     dictionary_fingerprint, model_identity, weight_names,
 )
 from caliper.interp._trace import _forward_settings
+from caliper.interp._gemma_import_identity import verified_import_binding
 from .memory_limits import CleanStop, autorelease_scope
 
 
@@ -61,6 +62,8 @@ class EvaluationBinding:
         self.model = model
         self.model_hash = dictionary.metadata["model_hash"]
         self._check_model_identity()
+        self.import_evidence = verified_import_binding(
+            self.folder, dictionary.metadata, model=model, memory=memory)
         # Keep original modules and tensors alive through temporary MLP replacements.
         self.model_modules = tuple(model.modules())
         self.model_tensors = tuple(self._model_tensors().values())
@@ -183,6 +186,9 @@ class EvaluationBinding:
         """Recheck bytes before publication, including aliases without version updates."""
         self.check()
         self._check_model_identity()
+        if verified_import_binding(self.folder, self.dictionary.metadata, model=self.model,
+                                   memory=self.memory) != self.import_evidence:
+            raise ValueError(_CHANGED)
         if _hf_digest(self.model, memory=self.memory) != self.model_evidence["tensor_hash"]:
             raise ValueError(_MODEL_CHANGED)
         self._check_files()

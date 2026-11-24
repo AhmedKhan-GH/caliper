@@ -38,6 +38,11 @@ def gemma_reply():
                     "sha256": "f" * 64, "input_gain_hash": "sha256:" + "1" * 64}
                    for i, l0 in enumerate(GEMMA_L0)]}
     metadata["import_source"] = imported
+    response["import_binding"] = {
+        "version": 1, "model_hash": GEMMA_HASH,
+        "layers": [{key: row[key] for key in ("layer", "file", "sha256", "input_gain_hash")}
+                   for row in imported["layers"]],
+    }
     metadata["quality"].update(fvu=.3, per_layer_fvu=[.3] * 26,
                                per_layer_dead_fraction=[.15] * 26, all_mlps_replaced=26,
                                evaluation_source=deepcopy(source), publisher_training_overlap="unknown")
@@ -112,6 +117,19 @@ def test_qwen_override_cannot_qualify_gemma():
     from test_circuit_trace import failed_quality_override
     _, override = failed_quality_override()
     assert not dictionary_qualification(gemma_reply(), family="gemma", quality_override=override)["qualified"]
+
+
+@pytest.mark.parametrize("fault", ["missing", "file_hash", "gain_hash", "reforged_record"])
+def test_gemma_requires_current_import_evidence(fault):
+    response = gemma_reply()
+    if fault == "missing":
+        del response["import_binding"]
+    elif fault == "reforged_record":
+        response["metadata"]["import_source"]["layers"][0]["sha256"] = "a" * 64
+    else:
+        field = "sha256" if fault == "file_hash" else "input_gain_hash"
+        response["import_binding"]["layers"][0][field] = ("sha256:" if fault == "gain_hash" else "") + "b" * 64
+    assert not dictionary_qualification(response, family="gemma")["qualified"]
 
 
 def test_gemma_finish_keeps_causal_failure_and_separate_model_result():

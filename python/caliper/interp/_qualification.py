@@ -4,6 +4,7 @@ import hashlib
 import json
 
 from ._dictionary import dictionary_fingerprint, model_identity
+from ._gemma_import_identity import verified_import_binding
 from ._index import FeatureIndex, _FILES, _dictionary_hash, _hash_file, _json, _source_hash, _tokenizer_hash
 
 
@@ -21,6 +22,7 @@ def dictionary_response(dictionary, index=None, *, model=None, tokenizer=None):
     identity = model_identity(model, memory_limit_gb=min(ceiling, memory.limit / 1e9))
     if identity != metadata["model_hash"]:
         raise ValueError("dictionary qualification model identity mismatch")
+    import_binding = verified_import_binding(index.root, metadata, model=model, memory=memory)
     manifest_file = index.root / "index" / "index.json"
     if manifest_file.stat().st_size > 1024 * 1024:
         raise ValueError("index qualification manifest exceeds its bound")
@@ -48,6 +50,8 @@ def dictionary_response(dictionary, index=None, *, model=None, tokenizer=None):
         "model_hash": identity, "dictionary_hash": content, "dictionary_fingerprint": fingerprint,
         "index_hash": manifest["index_hash"], "tokenizer_hash": tokenizer_hash,
     })
+    if import_binding is not None:
+        result["import_binding"] = import_binding
     if "fallback_source" in metadata:
         result["fallback_source"] = deepcopy(metadata["fallback_source"])
     memory.check("dictionary qualification complete")
