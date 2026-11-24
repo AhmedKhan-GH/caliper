@@ -312,11 +312,13 @@ class HostedService(InterpretationService):
         if method == "trace.run":
             prompt_inputs(self.model, self.tokenizer, params["prompt"])
             self.owner.prompt.set(params["prompt"])
+            traced_specifications = self.owner.interventions.specifications()
         result = super()._execute(method, params, step)
         if method == "trace.run":
             self.owner.traced_prompt = params["prompt"]
-            self.owner.traced_specifications = self.owner.interventions.specifications()
-            self.owner.traced_state = self.owner.interventions.state_dict()
+            self.owner.traced_specifications = traced_specifications
+            # Queued replacements may differ from the hooks that produced this graph.
+            self.owner.traced_state = deepcopy(traced_specifications)
         return result
 
     def step(self, step=None):
@@ -484,12 +486,8 @@ class HostedInference:
 
     def reset(self):
         if self.selection is not None:
-            state = self.interventions.state_dict()
             point = self.dictionary.metadata["write_points"][self.selection["layer"]]
-            state["interventions"] = [record for record in state["interventions"] if not (
-                record["specification"]["point"] == point and record["specification"]["op"] == "clamp"
-                and record["specification"].get("feature") == self.selection["feature"])]
-            self.interventions.load_state_dict(state)
+            self.interventions.clear_feature(point, self.selection["feature"], kind="clamp")
             with internal_forward():
                 self._apply()
         self.clamp.set(0.)

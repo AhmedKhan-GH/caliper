@@ -112,6 +112,38 @@ def test_safe_checkpoint_restores_bindings_and_counter(resource_folder, tmp_path
         run.close()
 
 
+def test_trace_snapshot_uses_applied_effects_during_a_queued_replacement(resource_folder, monkeypatch):
+    from caliper.interp._hosted import HostedService
+    from caliper.interp._service import InterpretationService
+    run = HostedInference("tiny-lm", resource_folder, "AB")
+    controls = _controls.Controls()
+    interventions = controls.interventions_on(run.model)
+    interventions.configure(dictionary=run.dictionary, tokenizer=run.tokenizer)
+    original = {"kind": "clamp", "point": "layers.0.mlp_out", "feature": 1, "value": 0.}
+    interventions.set(original)
+    controls.step(7)
+    run.interventions = interventions
+    run.prompt = SimpleNamespace(set=lambda value: None)
+    service = HostedService(run)
+
+    def finish_trace(*args):
+        # A request arrives after the trace forward, before the service records its snapshot.
+        interventions.set(dict(original, value=2.))
+        return {"state": "done"}
+
+    monkeypatch.setattr(InterpretationService, "_execute", finish_trace)
+    try:
+        service._execute("trace.run", {"prompt": "AB"}, 7)
+        assert interventions.state_dict()["interventions"][0]["specification"]["value"] == 2.
+        assert run.traced_state[0]["value"] == 0.
+        assert run.traced_state == interventions.specifications()
+        assert controls.n == 7
+    finally:
+        service.close()
+        interventions.remove()
+        run.close()
+
+
 class HostedChild:
     def __init__(self, root, dictionary, name, *, resume=None):
         self.folder = root / name

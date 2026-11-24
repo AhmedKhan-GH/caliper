@@ -127,3 +127,25 @@ def test_validation_measures_ten_distinct_feature_positions():
         assert result["spearman"] == pytest.approx(1)
     finally:
         service.remove()
+
+
+def test_trace_snapshot_restores_current_lifecycle_on_every_exit():
+    model, tokenizer, dictionary, controls, service = validation_case()
+    traced = service.state_dict()
+    service.set({"kind": "clamp", "point": "layers.3.mlp_out", "feature": 7, "value": 0.})
+    service.set({"kind": "scale", "point": "layers.1.mlp_out", "feature": 0, "multiplier": 1., "from_step": 20})
+    service.set({"kind": "ablate", "point": "layers.2.mlp", "until_step": 2})
+    controls.step()
+    saved = service.state_dict()
+    try:
+        with pytest.raises(RuntimeError, match="snapshot exit"):
+            with service.temporary_state(traced) as replay:
+                assert replay.specifications() == []
+                assert service.specifications()[0]["kind"] == "clamp"
+                assert controls.n == 1
+                raise RuntimeError("snapshot exit")
+        assert service.state_dict() == saved
+        assert service.specifications()[0]["kind"] == "clamp"
+        assert controls.n == 1
+    finally:
+        service.remove()
