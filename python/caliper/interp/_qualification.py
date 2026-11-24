@@ -17,7 +17,8 @@ def dictionary_response(dictionary, index=None, *, model=None, tokenizer=None):
     memory = index.memory
     memory.check("dictionary qualification")
     metadata = dictionary.metadata
-    identity = model_identity(model, memory_limit_gb=min(12, memory.limit / 1e9))
+    ceiling = 28 if getattr(model.config, "model_type", None) == "gemma2" else 12
+    identity = model_identity(model, memory_limit_gb=min(ceiling, memory.limit / 1e9))
     if identity != metadata["model_hash"]:
         raise ValueError("dictionary qualification model identity mismatch")
     manifest_file = index.root / "index" / "index.json"

@@ -103,8 +103,8 @@ class MemoryGuard:
     def __init__(self, limit_gb, device, *, interval=15, pressure=free_percent,
                  resident=resident_bytes, footprint=physical_footprint, peak=peak_resident_bytes,
                  driver=None, clock=time.monotonic):
-        if not 0 < limit_gb <= 24:
-            raise ValueError("memory limit must be positive and at most 24 GB")
+        if not 0 < limit_gb <= 28:
+            raise ValueError("memory limit must be positive and at most 28 GB")
         self.limit = int(limit_gb * 1_000_000_000)
         self.device = torch.device(device)
         self.interval, self.pressure, self.resident, self.clock = interval, pressure, resident, clock
@@ -114,6 +114,7 @@ class MemoryGuard:
         self._pressure_value = None
         self.low = 0
         self.peak = 0
+        self.current = 0
         if self.device.type == "mps":
             if not torch.backends.mps.is_available():
                 raise ValueError("MPS is unavailable")
@@ -132,6 +133,7 @@ class MemoryGuard:
         footprint = self.footprint()
         # A missing physical-footprint API uses a conservative sum, not a maximum.
         process = footprint if footprint is not None else rss + driver
+        self.current = max(process, rss, driver)
         self.peak = max(self.peak, process, rss, driver, self.peak_reader())
         # Forced stage checks refresh allocations without a pressure subprocess.
         # A low sample bypasses the cache to confirm pressure or recovery.

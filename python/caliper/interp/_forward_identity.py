@@ -19,6 +19,7 @@ _MODULE_FIELDS = (
     "original_max_seq_len", "long_inv_freq", "max_norm", "norm_type",
     "padding_idx", "scale_grad_by_freq", "sparse", "inplace", "approximate",
     "kernel_size", "stride", "padding", "dilation", "groups", "padding_mode",
+    "sliding_window", "attn_logit_softcapping", "scalar_embed_scale",
 )
 _CONFIG_FIELDS = (
     "model_type", "num_hidden_layers", "hidden_size", "intermediate_size", "vocab_size",
@@ -26,6 +27,8 @@ _CONFIG_FIELDS = (
     "num_attention_heads", "num_key_value_heads", "hidden_act", "rms_norm_eps",
     "attention_dropout", "attention_bias", "linear_num_value_heads", "linear_num_key_heads",
     "linear_key_head_dim", "linear_value_head_dim", "linear_conv_kernel_dim",
+    "sliding_window", "query_pre_attn_scalar", "attn_logit_softcapping", "final_logit_softcapping",
+    "tie_word_embeddings",
 )
 
 
@@ -96,6 +99,7 @@ def _checkpoint_buffers(reference, model, *, admit):
     admit(4 * _MAX_CHECKPOINT_BUFFER_BYTES)
 
     from transformers.models.qwen3_5.modeling_qwen3_5 import Qwen3_5TextRotaryEmbedding
+    from transformers.models.gemma2.modeling_gemma2 import Gemma2RotaryEmbedding, Gemma2TextScaledWordEmbedding
 
     buffers = {}
     for name, module in reference.named_modules(remove_duplicate=False):
@@ -104,11 +108,17 @@ def _checkpoint_buffers(reference, model, *, admit):
             continue
         # This constructor uses only two frequency vectors. Unknown constructors
         # must not allocate model parameters or establish an unchecked baseline.
-        if (type(module) is not Qwen3_5TextRotaryEmbedding or module.rope_type != "default"
+        if type(module) is Gemma2TextScaledWordEmbedding and keys == {"embed_scale"}:
+            full_name = f"{name}.embed_scale" if name else "embed_scale"
+            # Construct only the scalar, never the vocabulary embedding matrix.
+            buffers[full_name] = torch.tensor(module.scalar_embed_scale, dtype=torch.float32,
+                                               device="cpu").to(dtype=actual[full_name].dtype)
+            continue
+        if (type(module) not in (Qwen3_5TextRotaryEmbedding, Gemma2RotaryEmbedding) or module.rope_type != "default"
                 or keys != {"inv_freq", "original_inv_freq"}):
             raise ValueError("unsupported checkpoint nonpersistent buffers")
         with torch.device("cpu"):
-            rotary = Qwen3_5TextRotaryEmbedding(module.config)
+            rotary = type(module)(module.config)
         for key, value in rotary.named_buffers():
             full_name = f"{name}.{key}" if name else key
             buffers[full_name] = value.to(dtype=actual[full_name].dtype)

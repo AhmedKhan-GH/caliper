@@ -54,7 +54,7 @@ def forward_logits(model, inputs, *, last_token=True, guard=None):
         if guard is not None:
             guard.check("inference forward start")
         kwargs = {"use_cache": False}
-        keep_last = last_token and model.config.model_type == "qwen3_5_text"
+        keep_last = last_token and model.config.model_type in ("qwen3_5_text", "gemma2")
         if keep_last:
             kwargs["logits_to_keep"] = 1
         output = model(**inputs, **kwargs)

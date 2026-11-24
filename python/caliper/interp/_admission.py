@@ -6,18 +6,22 @@ from pathlib import Path
 
 import torch
 
+GEMMA_ID = "google/gemma-2-2b"
+GEMMA_REVISION = "c5ebcd40d208330abc697524c919956e692655cf"
 
-def _admit_load(memory, required, stage):
+
+def _admit_load(memory, required, stage, *, staged=False):
     from ._memory import CleanStop
     memory.check(stage)
-    if memory.peak + required > memory.limit:
+    used = getattr(memory, "current", memory.peak) if staged else memory.peak
+    if used + required > memory.limit:
         raise CleanStop("model allocation exceeds the process memory limit")
 
 
-def _admit_model_load(snapshot, memory, device):
+def _admit_model_load(snapshot, memory, device, *, staged=False):
     """Reserve float32 weights, source pages, conversion work, and a device copy."""
     header_limit = 4 * 1024 * 1024
-    _admit_load(memory, 128 * 1024 * 1024, "model header admission")
+    _admit_load(memory, 128 * 1024 * 1024, "model header admission", staged=staged)
     files = list(islice(Path(snapshot).glob("*.safetensors"), 65))
     if not files or len(files) > 64:
         raise ValueError("model admission requires one to 64 local safetensors shards")
@@ -58,11 +62,47 @@ def _admit_model_load(snapshot, memory, device):
         raise ValueError("model admission requires nonempty weights")
     copies = 1 if torch.device(device).type == "cpu" else 2
     # The reserve covers loader metadata, tokenizer data, and allocator overhead.
-    _admit_load(memory, copies * loaded + stored + largest + 512_000_000, "model load admission")
+    # Gemma releases checkpoint mappings before transfer. Admit both phases,
+    # then measure current memory again before the separate device allocation.
+    required = (max(loaded + stored, copies * loaded) if staged else copies * loaded + stored)
+    _admit_load(memory, required + largest + 512_000_000, "model load admission", staged=staged)
     return loaded, largest
 
 
-def _admit_model_transfer(memory, estimate, device):
+def _admit_model_transfer(memory, estimate, device, *, staged=False):
     loaded, largest = estimate
     required = 0 if torch.device(device).type == "cpu" else loaded + largest
-    _admit_load(memory, required + 512_000_000, "model device admission")
+    _admit_load(memory, required + 512_000_000, "model device admission", staged=staged)
+
+
+def _load_gemma_model(snapshot, *, device, memory):
+    """Load and verify the exact local Gemma snapshot before device transfer."""
+    from transformers import Gemma2Config, Gemma2ForCausalLM
+    from ._dictionary import verify_hf_model
+
+    snapshot = Path(snapshot).resolve(strict=True)
+    if (snapshot.name != GEMMA_REVISION or snapshot.parent.name != "snapshots"
+            or snapshot.parent.parent.name != "models--google--gemma-2-2b"):
+        raise ValueError("model must name the pinned local Gemma snapshot")
+    if not 0 < memory.limit <= 28_000_000_000:
+        raise ValueError("Gemma memory limit is at most 28 GB")
+    config = Gemma2Config(**json.loads((snapshot / "config.json").read_text()))
+    if (config.model_type, config.num_hidden_layers, config.hidden_size, config.vocab_size) != (
+            "gemma2", 26, 2304, 256000):
+        raise ValueError("the pinned Gemma model has unexpected dimensions")
+    estimate = _admit_model_load(snapshot, memory, device, staged=True)
+    model, info = Gemma2ForCausalLM.from_pretrained(
+        snapshot, config=config, dtype=torch.float32, attn_implementation="eager",
+        local_files_only=True, trust_remote_code=False, use_safetensors=True, output_loading_info=True)
+    if any(info.get(key) for key in ("missing_keys", "unexpected_keys", "mismatched_keys", "error_msgs")):
+        raise ValueError("local model weights do not match the pinned Gemma architecture")
+    model.config._name_or_path, model.config._commit_hash = GEMMA_ID, GEMMA_REVISION
+    model.requires_grad_(False).eval()
+    memory.check("inference model CPU load")
+    # Verify bytes, tied parameters, settings, and reconstructed buffers before
+    # the trusted identity enters the cache. Loading information alone is insufficient.
+    verify_hf_model(model, snapshot, memory_limit_gb=memory.limit / 1e9)
+    _admit_model_transfer(memory, estimate, device, staged=True)
+    model.to(device=device, dtype=torch.float32)
+    memory.check("inference model load")
+    return model

@@ -9,21 +9,35 @@ import torch
 
 from caliper.interp._dictionary import _record_verified_hf_load
 from caliper.interp._memory import MemoryGuard
-from caliper.interp._admission import _admit_model_load, _admit_model_transfer
+from caliper.interp._admission import (GEMMA_ID, GEMMA_REVISION, _admit_model_load,
+                                       _admit_model_transfer, _load_gemma_model)
 
 
 MODEL_ID = "Qwen/Qwen3.5-0.8B"
 MODEL_REVISION = "2fc06364715b967f1860aea9cf38778875588b17"
 
 
-def load_text_model(*, device="mps", memory=None):
+def load_text_model(*, device="mps", memory=None, model_id=MODEL_ID):
     """Load only the text class from the complete cached snapshot.
 
     Transformers resolves the shard index. It applies the same prefix mapping
     as the lead preflight. Missing, unexpected, and mismatched keys are errors.
     """
+    if model_id not in (MODEL_ID, GEMMA_ID):
+        raise ValueError("unsupported text model selection")
     from huggingface_hub import snapshot_download
-    from transformers import AutoTokenizer, Qwen3_5ForCausalLM, Qwen3_5TextConfig
+    from transformers import AutoTokenizer
+
+    if model_id == GEMMA_ID:
+        memory = memory if memory is not None else MemoryGuard(28, device)
+        snapshot = Path(snapshot_download(GEMMA_ID, revision=GEMMA_REVISION, local_files_only=True))
+        model = _load_gemma_model(snapshot, device=device, memory=memory)
+        tokenizer = AutoTokenizer.from_pretrained(snapshot, local_files_only=True, trust_remote_code=False)
+        print(json.dumps({"stage": "text_model_ready", "model_id": GEMMA_ID, "revision": GEMMA_REVISION,
+                          "fallback_enabled": os.environ.get("PYTORCH_ENABLE_MPS_FALLBACK", "0")}), flush=True)
+        return model, tokenizer
+
+    from transformers import Qwen3_5ForCausalLM, Qwen3_5TextConfig
 
     if memory is None:
         memory = MemoryGuard(12, device)
@@ -57,11 +71,12 @@ def load_text_model(*, device="mps", memory=None):
     return model, tokenizer
 
 
-def hidden_forward(model, input_ids):
+def hidden_forward(model, input_ids, attention_mask=None):
     """Return final normalized hidden states without a vocabulary projection."""
     if getattr(model.config, "model_type", None) == "caliper_tiny":
         x = model.embed_tokens(input_ids)
         for layer in model.layers:
             x = layer(x)
         return model.norm(x)
-    return model.model(input_ids=input_ids, use_cache=False, return_dict=True).last_hidden_state
+    return model.model(input_ids=input_ids, attention_mask=attention_mask,
+                       use_cache=False, return_dict=True).last_hidden_state

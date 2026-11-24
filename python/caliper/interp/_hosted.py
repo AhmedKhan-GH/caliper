@@ -17,7 +17,7 @@ import torch
 from torch import nn
 from torch.nn import functional as F
 
-from ._admission import _admit_model_load, _admit_model_transfer
+from ._admission import (GEMMA_REVISION, _admit_model_load, _admit_model_transfer, _load_gemma_model)
 from ._output import Output, bounded_text, internal_forward, prompt_inputs
 from ._service import InterpretationService, Refused, register_service, unregister_service
 
@@ -371,7 +371,7 @@ def fixture_resources(folder):
 
 
 def load_resources(model_name, dictionary_path):
-    """Load only local safe weights and the exact pinned Qwen text model."""
+    """Load local safe weights for a fixture or an exact pinned text model."""
     from ._dictionary import load_dictionary, _record_verified_hf_load
     from ._index import FeatureIndex
     from ._memory import MemoryGuard
@@ -381,6 +381,13 @@ def load_resources(model_name, dictionary_path):
     guard = None
     if model_name == "tiny-lm":
         model, tokenizer = TinyLM(), TinyTokenizer()
+    elif Path(model_name).name == GEMMA_REVISION:
+        from transformers import AutoTokenizer
+        snapshot = Path(model_name).resolve(strict=True)
+        device = "mps" if torch.backends.mps.is_available() else "cpu"
+        guard = MemoryGuard(28, device)
+        model = _load_gemma_model(snapshot, device=device, memory=guard)
+        tokenizer = AutoTokenizer.from_pretrained(snapshot, local_files_only=True, trust_remote_code=False)
     else:
         snapshot = Path(model_name).resolve(strict=True)
         if not snapshot.is_dir() or snapshot.name != QWEN_REVISION or snapshot.parent.name != "snapshots":
@@ -408,11 +415,13 @@ def load_resources(model_name, dictionary_path):
         model.to(device)
         guard.check("inference model load")
         tokenizer = AutoTokenizer.from_pretrained(snapshot, local_files_only=True, trust_remote_code=False)
+    options = {"memory_limit_gb": 28} if getattr(model.config, "model_type", None) == "gemma2" else {}
     dictionary = load_dictionary(folder, model=model, device=next(model.parameters()).device,
-                                 dtype=next(model.parameters()).dtype)
+                                 dtype=next(model.parameters()).dtype, **options)
     if guard is not None:
         guard.check("inference dictionary load")
-    index = FeatureIndex(folder, model=model, tokenizer=tokenizer, dictionary=dictionary)
+    index = FeatureIndex(folder, model=model, tokenizer=tokenizer, dictionary=dictionary,
+                         **({"memory": guard} if options else {}))
     return model, tokenizer, dictionary, index, guard
 
 
