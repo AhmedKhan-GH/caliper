@@ -289,7 +289,8 @@ def main(argv=None):
     memory.check("start")
     with StopControl() as stop:
         model, tokenizer = load_text_model(device=args.device, memory=memory)
-        dictionary = load_dictionary(args.dictionary, model=model, device=args.device, dtype=torch.float32)
+        dictionary = load_dictionary(args.dictionary, model=model, device=args.device, dtype=torch.float32,
+                                     memory_limit_gb=args.memory_gb)
         memory.check("after_dictionary_load")
         source = fineweb_documents(cache_dir=args.dataset_cache, local_manifest=args.local_dataset_manifest)
         with TextStream(source, tokenizer, "quality") as stream:

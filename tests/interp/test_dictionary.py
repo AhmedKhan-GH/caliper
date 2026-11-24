@@ -172,6 +172,19 @@ def test_hf_identity_requires_resolved_checkpoint():
         model_identity(model)
 
 
+@pytest.mark.parametrize("separator", ["/", "\\"])
+@pytest.mark.parametrize("prefix", ["cache", "C:/cache", "//server/cache"])
+def test_hf_snapshot_separators_and_revision_conflict(separator, prefix):
+    revision = "a" * 40
+    name = f"{prefix}/models--Qwen--Qwen3.5-0.8B/snapshots/{revision}".replace("/", separator)
+    model = SimpleNamespace(config=SimpleNamespace(model_type="qwen3_5_text",
+                            _name_or_path=name, _commit_hash=None))
+    assert model_identity(model) == f"hf:Qwen/Qwen3.5-0.8B@{revision}"
+    model.config._commit_hash = "b" * 40
+    with pytest.raises(ValueError, match="conflicts"):
+        model_identity(model)
+
+
 def test_partial_export_refuses_load_and_retry_resets_quality(tmp_path, monkeypatch):
     from copy import deepcopy
     from safetensors.torch import load_file

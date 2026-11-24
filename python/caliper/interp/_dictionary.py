@@ -50,7 +50,7 @@ def model_identity(model):
     family = getattr(config, "model_type", None)
     if family == "caliper_tiny" or config is None:
         return weights_hash(model)
-    name = str(getattr(config, "_name_or_path", ""))
+    name = str(getattr(config, "_name_or_path", "")).replace("\\", "/")
     revision = getattr(config, "_commit_hash", None)
     snapshot = re.search(r"(?:^|/)models--([^/]+)/snapshots/([0-9a-f]{40})(?:/|$)", name)
     if snapshot:
