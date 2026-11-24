@@ -300,6 +300,8 @@ class ManagedRun:
         self.interventions = list(interventions or [])
         self.kept = KeptCheckpoints(os.path.join(run_dir, KEEP_DIR))
         self._first = None               # the hook that applies the interventions
+        self._restored_interventions = NONE
+        self._intervening = False
         self.values = dict(self.params)
         self.step = None
         self.stopping = False
@@ -377,6 +379,7 @@ class ManagedRun:
             extra = TORCH.restore(data, model, optimizer)
             if extra.get("format") != FORMAT:
                 raise ValueError(f"{self.resume} is not a checkpoint of a managed run")
+            self._restored_interventions = extra.get("interventions", NONE)
         step = int(extra.get("step") or 0)
         self.step = step
         ctl = pkg._CTL
@@ -413,7 +416,7 @@ class ManagedRun:
             # after the pre-hook of caliper._watch_run, which calls caliper.step() first
             handle._handles.append(optimizer.register_step_pre_hook(
                 lambda opt, args, kwargs: self._keep(model, optimizer)))
-        if self.interventions:
+        if self.interventions or self._restored_interventions is not NONE:
             self._first = model.register_forward_pre_hook(lambda mod, args: self._intervene())
             handle._handles.append(self._first)
         self.write_link(pkg.serve().url)
@@ -440,6 +443,9 @@ class ManagedRun:
             if not checkpoint_metadata(extra):
                 raise ValueError("inference checkpoint exceeds the metadata limits")
             return json.dumps(extra, ensure_ascii=False, allow_nan=False).encode("utf-8")
+        interventions = getattr(ctl, "intervention_service", None)
+        if interventions is not None and interventions.model is model:
+            extra["interventions"] = interventions.state_dict()
         return TORCH.state(model, optimizer, extra)
 
     def checkpoint(self, model, optimizer) -> str:
@@ -466,17 +472,35 @@ class ManagedRun:
                           f"{type(e).__name__}: {e}", RuntimeWarning, stacklevel=2)
 
     def _intervene(self) -> None:
+        """Restore saved effects after resource binding and before the first script forward."""
+        from .interp._output import internal_forward
+        if self._first is None or self._intervening:
+            return
+        self._intervening = True
+        try:
+            with internal_forward():
+                if self._restored_interventions is not NONE:
+                    service = self._pkg._CTL.intervention_service
+                    if service is None:
+                        raise RuntimeError("the fork has no intervention service for its saved state")
+                    service.load_state_dict(self._restored_interventions, restore_active=True)
+                if self.interventions:
+                    self._apply_fork_overrides()
+            self._restored_interventions = NONE
+            first, self._first = self._first, None
+            first.remove()
+        finally:
+            # A refused restore must also refuse a later forward after a caught error.
+            self._intervening = False
+
+    def _apply_fork_overrides(self) -> None:
         """At the first forward pass: apply ``interventions`` before the first step, as
-        ``intervene.set`` would at a checkpoint, and take this hook off.
+        ``intervene.set`` would at a checkpoint.
 
         Raises:
             RuntimeError: When the script takes no interventions, or one is refused; the fork
                 must not train without them.
         """
-        first, self._first = self._first, None
-        if first is None:
-            return
-        first.remove()
         ctl = self._pkg._CTL
         error = None
         with ctl.lock:

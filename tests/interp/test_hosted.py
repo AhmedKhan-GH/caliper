@@ -424,6 +424,92 @@ def test_script_checkpoint_keeps_the_existing_tensor_format(tmp_path):
     assert fork.step == 5
 
 
+@pytest.mark.parametrize("bind_late", [False, True])
+def test_script_fork_restores_outputs_and_defers_queued_lifecycle(tmp_path, monkeypatch, bind_late):
+    import caliper
+    from caliper import _net
+    from caliper.interp._output import is_internal_forward
+    from .test_intervene import dictionary_for
+
+    parent_model, tokenizer = TinyLM(), TinyTokenizer()
+    parent_controls = _controls.Controls()
+    parent_service = parent_controls.interventions_on(parent_model)
+    parent_service.configure(dictionary=dictionary_for(parent_model), tokenizer=tokenizer)
+    parent = _managed.ManagedRun("script-parent", str(tmp_path))
+    parent._pkg = SimpleNamespace(_CTL=parent_controls)
+    inputs = tokenizer("AB")
+    add = {"kind": "add", "point": "layers.3.mlp_out", "vector": [1.] * 64, "coefficient": .25}
+    try:
+        parent_service.set({"kind": "ablate", "point": "layers.3.mlp_out"})
+        parent_service.set(add)
+        parent_service.set({"kind": "clamp", "point": "layers.0.mlp_out", "feature": 0, "value": 2.})
+        parent_service.set({"kind": "scale", "point": "layers.1.mlp_out", "feature": 1,
+                            "multiplier": 2., "from_step": 7})
+        parent_service.set({"kind": "ablate", "point": "layers.2.mlp_out", "until_step": 6})
+        parent_service.set({"kind": "patch", "point": "layers.1.resid_pre", "source_prompt": "AC", "positions": [1]})
+        parent_controls.step(5)
+        parent_service.set(dict(add, coefficient=.75, from_step=8))
+        parent_service.clear_feature("layers.0.mlp_out", 0)
+        checkpoint = parent.checkpoint(parent_model, None)
+        record = torch.load(checkpoint, weights_only=True)
+        assert Path(checkpoint).suffix == ".pt" and record["format"] == _managed.FORMAT
+        assert record["interventions"] == parent_service.state_dict()
+        assert {r["state"] for r in record["interventions"]["interventions"]} == {"active", "pending", "ended"}
+        expected, states = [], []
+        for step in (None, 5, 6, 7):
+            if step is not None:
+                parent_controls.step(step)
+            states.append(parent_service.state_dict())
+            with internal_forward(), torch.no_grad():
+                expected.append(parent_model(**inputs).logits.clone())
+        assert not torch.equal(expected[0], expected[1])
+        assert not torch.equal(expected[2], expected[3])
+    finally:
+        parent_service.remove()
+
+    controls = _controls.Controls()
+    model = TinyLM()
+    folder = tmp_path / "script-fork"
+    folder.mkdir()
+    fork = _managed.ManagedRun("script-fork", str(folder), str(folder / "link"), resume=checkpoint)
+    monkeypatch.setattr(caliper, "_CTL", controls)
+    monkeypatch.setattr(_controls, "CONTROLS", controls)
+    monkeypatch.setattr(_managed, "current", lambda: fork)
+    monkeypatch.setattr(_managed, "watch_parent", lambda: None)
+    monkeypatch.setenv("CALIPER_NETIO", "0")
+    handle = None
+    try:
+        handle = caliper.watch(model, activations=False)
+        service = controls.intervention_service
+        assert service.state_dict()["interventions"] == []
+        if bind_late:
+            with pytest.raises(ValueError, match="dictionary"):
+                model(**inputs)
+            with pytest.raises(ValueError, match="dictionary"):
+                model(**inputs)
+            assert fork._first is not None and controls.n == 4
+        # Scripts bind resources after watch and before their first forward.
+        service.configure(dictionary=dictionary_for(model), tokenizer=tokenizer)
+        seen = []
+        def before_forward(*args):
+            if not is_internal_forward() and not service.executor.preparing_source:
+                seen.append((controls.n, service.state_dict()))
+        handle._handles.append(model.register_forward_pre_hook(before_forward))
+        with torch.no_grad():
+            actual = [model(**inputs).logits.clone() for _ in expected]
+        for wanted, received in zip(expected, actual):
+            torch.testing.assert_close(received, wanted, rtol=0, atol=0)
+        assert [step for step, _ in seen] == [4, 5, 6, 7]
+        assert [state for _, state in seen] == states
+        assert controls.n == 8 and fork._first is None
+    finally:
+        if handle is not None:
+            handle.remove()
+        server = _net.current_server()
+        if server is not None:
+            server.close()
+
+
 def test_local_checkpoint_supports_vectors_without_executable_objects():
     from caliper.interp._hosted import checkpoint_metadata
     assert checkpoint_metadata({"vector": [0.] * 1024})
