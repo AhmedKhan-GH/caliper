@@ -4,15 +4,18 @@ from inspect import Parameter, signature
 
 
 def display_text(value):
-    """Return valid UTF-8 text with NUL as a visible escape."""
-    return str(value).encode("utf-8", errors="replace").decode("utf-8").replace("\x00", r"\x00")
+    """Return valid UTF-8 text with control characters as visible escapes."""
+    text = str(value).encode("utf-8", errors="replace").decode("utf-8")
+    for character, escape in (("\x00", r"\x00"), ("\n", r"\n"), ("\r", r"\r"), ("\t", r"\t")):
+        text = text.replace(character, escape)
+    return text
 
 
 def token_label(tokenizer, token_id):
     """Decode one token, or identify a row with no token spelling.
 
     Vocabulary lookup detects sparse IDs and padded output rows. The decoder
-    supplies display text with special tokens and boundary whitespace intact.
+    supplies display text with special tokens and boundary spaces intact.
     Raw vocabulary text remains separate from display text for identity checks.
     """
     token_id = int(token_id)
