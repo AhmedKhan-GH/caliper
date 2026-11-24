@@ -33,6 +33,30 @@ class InterventionError(ValueError):
         self.code = code
 
 
+class _IdentityMemory:
+    """Retain the supplied guard and its lower limits for bounded readbacks."""
+
+    def __init__(self, guard):
+        self.guard = guard
+        self.inner = getattr(guard, "_guard", guard)
+        self.device = getattr(guard, "device", getattr(self.inner, "device", torch.device("cpu")))
+        self.current = 0
+
+    @property
+    def limit(self):
+        return min(getattr(self.guard, "limit", math.inf), getattr(self.inner, "limit", math.inf))
+
+    @property
+    def peak(self):
+        return max(self.current, getattr(self.guard, "peak", 0), getattr(self.inner, "peak", 0))
+
+    def check(self, stage, **kwargs):
+        # Some supplied guards accept only the stage. Do not bypass their latch.
+        current = self.guard.check(stage)
+        if isinstance(current, (int, float)):
+            self.current = max(self.current, current)
+
+
 def _indices(value, name, *, limit=None):
     if not isinstance(value, (list, tuple)) or any(
         type(i) is not int or i < 0 or (limit is not None and i >= limit) for i in value
@@ -351,16 +375,20 @@ class InterventionService:
         return inputs
 
     def _identity(self):
-        # Version counters detect optimizer steps and normal in-place weight updates.
-        tensors = []
-        for value in (*self.model.parameters(), *self.model.buffers()):
-            try:
-                version = value._version
-            except RuntimeError:  # tensors created inside inference_mode have no counter
-                version = None
-            tensors.append((id(value), version, value.device, value.dtype, tuple(value.shape)))
+        """Check exact state at each lookup, including writes between point hooks."""
+        from ._dictionary import _state_hash
+        # Include nonpersistent buffers and alias writes. Inference tensors have
+        # no version counter, but their materialized bytes obey the same contract.
+        state = {"parameter:" + name: value for name, value in self.model.named_parameters()}
+        state.update({"buffer:" + name: value for name, value in self.model.named_buffers()})
+        memory = _IdentityMemory(self.resource_guard) if self.resource_guard is not None else None
+        if any(value.device.type != "cpu" for value in state.values()):
+            if memory is None or not math.isfinite(memory.limit):
+                raise ValueError("device patch identity requires a bounded process memory guard")
+        content = _state_hash(state, memory=memory)
         return (id(self.model), id(self.tokenizer),
-                tuple((id(m), m.training) for m in self.model.modules()), tuple(tensors))
+                tuple((id(m), m.training) for m in self.model.modules()),
+                tuple((name, id(value), value.device) for name, value in state.items()), content)
 
     def _source_keys(self):
         return {(hook.spec["source_prompt"], hook.spec["point"]) for hook in self._hooks

@@ -392,10 +392,12 @@ def test_source_guard_stages_scope_and_replay_inheritance(controlled, monkeypatc
     service.set(patch_spec())
     ctl.step()
     stages = ["patch source forward start", "patch source forward complete"]
-    assert guard.stages == stages and scopes == ["enter", "exit"]
+    first = list(guard.stages)
+    assert first[-2:] == stages and first[:-2] and set(first[:-2]) == {"model_identity"}
+    assert scopes == ["enter", "exit"]
     with service.temporary_state(service.specifications()) as replay:
         assert replay.executor.resource_guard is guard
-    assert guard.stages == stages * 2 and scopes == ["enter", "exit"] * 2
+    assert guard.stages == first * 2 and scopes == ["enter", "exit"] * 2
     guard.stop = "all"
     with pytest.raises(RuntimeError, match="source guard stop"):
         with service.temporary_state(service.specifications()):
@@ -410,7 +412,8 @@ def test_source_guard_failure_after_forward_releases_capture(controlled):
     hooks = [(len(m._forward_hooks), len(m._forward_pre_hooks)) for m in model.modules()]
     with pytest.raises(RuntimeError, match="source guard stop"):
         service.executor.install(patch_spec())
-    assert guard.stages == ["patch source forward start", "patch source forward complete"]
+    assert guard.stages[-2:] == ["patch source forward start", "patch source forward complete"]
+    assert guard.stages[:-2] and set(guard.stages[:-2]) == {"model_identity"}
     assert hooks == [(len(m._forward_hooks), len(m._forward_pre_hooks)) for m in model.modules()]
     assert not service.executor._cache and not service.executor.preparing_source
 
