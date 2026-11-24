@@ -49,6 +49,7 @@ title = "Packed UTF-8 Tokens (400, 16)"
 optional = false
 
 [[params]]
+# A page change requires a derive publication for rows, cells, and labels.
 name = "page"
 type = "u32"
 default = 0

@@ -136,7 +136,7 @@ export function registerInterpPieceTests(test: typeof import('../../web/node_mod
     } finally { site.close(); }
   });
 
-  for (const [id, count, rows] of [['graph', 4, 1], ['examples_0', 200, 8], ['logits', 10, 1]] as const) {
+  for (const [id, count, rows] of [['graph', 4, 1], ['examples_0', 200, 8], ['examples_1', 200, 8], ['logits', 10, 1]] as const) {
     test(`the browser ${id} panel fits its orthographic layout and label bounds`, async ({ page }, info) => {
       test.skip(info.project.name === 'canvas2d', 'Piece draws require WebGPU.');
       const fixture = process.env.CALIPER_INTERP_PIECES_OUT ?? path.join(REPO, 'cmake-build-release/tests/interp_pieces/out');
