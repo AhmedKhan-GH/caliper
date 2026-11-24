@@ -4,6 +4,7 @@ from __future__ import annotations
 from collections import deque
 from contextlib import ExitStack
 import json
+import math
 import sys
 import time
 
@@ -18,6 +19,33 @@ from ._memory import MemoryGuard as ProcessMemoryGuard, CleanStop, free_percent,
 # Mixed storage precision needs at most this many converted encoder elements,
 # or one row when the residual width exceeds the block limit.
 _ENCODER_BLOCK_ELEMENTS = 1_048_576
+_FINITE_BLOCK_ELEMENTS = 65_536
+
+
+def _require_finite(value, name):
+    """Check bounded views without a full tensor copy, including strided inputs."""
+    pending = [value.detach()]
+    while pending:
+        block = pending.pop()
+        if block.numel() > _FINITE_BLOCK_ELEMENTS:
+            axis = max(range(block.ndim), key=lambda i: block.shape[i])
+            middle = block.shape[axis] // 2
+            pending.append(block.narrow(axis, middle, block.shape[axis] - middle))
+            pending.append(block.narrow(axis, 0, middle))
+            continue
+        with autorelease_scope(value.device):
+            if not torch.isfinite(block).all().item():
+                raise ValueError(f"{name} must be finite")
+
+
+def _finite_max(values, name):
+    """Reject each nonfinite residual before a maximum can hide a later NaN."""
+    largest = 0.
+    for value in values:
+        if not math.isfinite(value):
+            raise ValueError(f"{name} must be finite")
+        largest = max(largest, value)
+    return largest
 
 
 def _trace_features(layer, x, guard):
@@ -69,7 +97,7 @@ def _validate_dictionary(model, dictionary):
     shapes = {"W_enc": (latents, config.hidden_size), "W_dec": (latents, config.hidden_size),
               "b_enc": (latents,), "b_dec": (config.hidden_size,)}
     device = next(model.parameters()).device
-    for layer in dictionary.layers:
+    for i, layer in enumerate(dictionary.layers):
         if layer.k != k:
             raise ValueError("dictionary TopK differs from its metadata")
         for name, shape in shapes.items():
@@ -78,6 +106,7 @@ def _validate_dictionary(model, dictionary):
                 raise ValueError(f"dictionary {name} shape differs from its metadata")
             if value.device != device:
                 raise ValueError("dictionary and model must share one device")
+            _require_finite(value, f"dictionary layer {i} {name}")
     return probes
 
 
@@ -421,6 +450,8 @@ class FrozenPath:
                     self.outputs.append(y)
                     self.features.append(a.to(self.dtype))
                     self.errors.append((y - reconstruction).detach())
+                    _require_finite(self.features[-1], f"layer {i} features")
+                    _require_finite(self.errors[-1], f"layer {i} reconstruction residual")
                     self.decoder_biases.append(layer.b_dec.detach().to(self.dtype).masked_fill(output_mask, 0))
                     self.residual_masks.append(torch.tensor(f"{base}.resid_pre" in ablated, device=self.device))
                     self.mlp_input_masks.append(torch.tensor(f"{base}.mlp_in" in ablated, device=self.device))
@@ -447,15 +478,17 @@ class FrozenPath:
                 self.writes = [(y - b).detach() for y, b in zip(self.outputs, self.decoder_biases)]
                 reads, final = self.run(self.embedding, self.writes)
                 # Compare every read and all next-token logits, before any edge calculation.
-                self.forward_residual = max([float((a - b).abs().max()) for a, b in zip(reads, self.inputs)] +
+                self.forward_residual = _finite_max([float((a - b).abs().max()) for a, b in zip(reads, self.inputs)] +
                                             [float((F.linear(final[:, -1], self.unembedding,
-                                                             self.unembedding_bias) - self.logits).abs().max())])
+                                                             self.unembedding_bias) - self.logits).abs().max())],
+                                                   "direct forward residual")
                 self.direct_forward_residual = self.forward_residual
                 replacement_reads, replacement_final = self.replacement(self.embedding, dictionary)
-                self.replacement_forward_residual = max(
-                    max(float((a - b).abs().max()) for a, b in zip(replacement_reads, self.inputs)),
-                    float((F.linear(replacement_final[:, -1], self.unembedding,
-                                    self.unembedding_bias) - self.logits).abs().max()))
+                self.replacement_forward_residual = _finite_max(
+                    [float((a - b).abs().max()) for a, b in zip(replacement_reads, self.inputs)] +
+                    [float((F.linear(replacement_final[:, -1], self.unembedding,
+                                     self.unembedding_bias) - self.logits).abs().max())],
+                    "replacement forward residual")
                 self.forward_residual = max(self.direct_forward_residual, self.replacement_forward_residual)
                 tolerance = 1e-9 if self.dtype == torch.float64 else 2e-2
                 if not self.forward_residual <= tolerance:

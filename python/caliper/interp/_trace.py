@@ -10,7 +10,8 @@ import time
 import torch
 
 from ._dictionary import _state_hash, weights_hash
-from ._frozen import FrozenPath, MemoryGuard, _validate_dictionary, _validate_ablation_points
+from ._frozen import (FrozenPath, MemoryGuard, _validate_dictionary, _validate_ablation_points,
+                      _finite_max, _require_finite)
 from ._memory import CleanStop, autorelease_scope
 from ._graph import Graph, bounded_integer
 from ._influence import influence
@@ -134,6 +135,7 @@ class _DirectEffects:
         unembedding = torch.stack([target.unembedding_bias for target in targets])
         incoming = weights.sum(0)
         residual = (incoming + affine.sum(-1) + encoder + unembedding - expected).abs()
+        _require_finite(residual, "direct-effect completeness residual")
         # One bounded readback per target batch avoids thousands of MPS scalar synchronizations.
         accounting = torch.cat((expected[:, None], incoming[:, None], affine, encoder[:, None],
                                 unembedding[:, None], residual[:, None]), dim=1).tolist()
@@ -471,7 +473,6 @@ class Tracer:
                 self._validate_forward_settings()
                 if self._intervention_state() != identity["interventions"]:
                     raise RuntimeError("intervention state changed during the trace forward")
-                self._forward_cache = (state_key, path)
             effects = _DirectEffects(path, self.dictionary, ids[0].tolist(), self.tokenizer)
             target_indices = list(effects.logit_nodes)
             budget = len(target_indices) + min(max_targets, len(effects.feature_nodes))
@@ -499,6 +500,8 @@ class Tracer:
                         batch = ranked[:count].tolist()
                         target_indices.extend(batch)
                     incoming, accounting = effects.backward(batch)
+                    for field in ("absolute_residual", "relative_residual"):
+                        _finite_max((row[field] for row in accounting), f"direct-effect {field}")
                     batch_sizes.append(len(batch))
                     weights[:, completed:completed + len(batch)] = incoming
                     diagnostics.extend(accounting)
@@ -516,8 +519,10 @@ class Tracer:
             error_share = float(top_scores[error_mask].sum()) / source_total if source_total else 0.
             display_nodes, display_edges, omitted, edge_omitted, connectivity = _prune(
                 effects, weights, target_indices, scores, normalized, max_nodes=max_nodes, max_edges=max_edges)
-            completeness = {"max_absolute_residual": max(d["absolute_residual"] for d in diagnostics),
-                            "max_relative_residual": max(d["relative_residual"] for d in diagnostics),
+            completeness = {"max_absolute_residual": _finite_max(
+                                (d["absolute_residual"] for d in diagnostics), "direct-effect absolute residual"),
+                            "max_relative_residual": _finite_max(
+                                (d["relative_residual"] for d in diagnostics), "direct-effect relative residual"),
                             "forward_residual": path.forward_residual,
                             "direct_forward_residual": path.direct_forward_residual,
                             "replacement_forward_residual": path.replacement_forward_residual,
@@ -548,6 +553,7 @@ class Tracer:
                 raise RuntimeError("intervention state changed during the trace")
             self._validate_forward_settings()
             graph.publish()
+            self._forward_cache = (state_key, path)
             self._cache[cache_key] = graph
             while len(self._cache) > 8:
                 self._cache.popitem(last=False)
