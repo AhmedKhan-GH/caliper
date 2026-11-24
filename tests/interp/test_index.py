@@ -1,5 +1,6 @@
 """Exact CPU evidence for feature tables and document windows."""
 from collections import Counter
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -257,6 +258,37 @@ def test_promoted_chunk_ties_and_zero_direction(indexed):
     tokens = index._promoted(0, 0, chunk_size=37)
     assert [row["token_id"] for row in tokens] == [0, 1, 2]
     assert [row["score"] for row in tokens] == [0, 0, 0]
+
+
+@pytest.mark.parametrize("chunk_size", [1, 3, 4, 9, 4096])
+def test_sparse_promoted_chunks_keep_exact_scores_and_ties(monkeypatch, chunk_size):
+    from caliper.interp import _index
+    from caliper.interp._labels import token_label
+
+    scores = torch.tensor([0., 2., 0., 2., 0., 0., 2., 0., 2.], dtype=torch.float64,
+                          device="cpu")
+    scores[8] = torch.nextafter(scores[8], torch.tensor(3., dtype=torch.float64))
+    output = SimpleNamespace(weight=scores[:, None])
+    dictionary = SimpleNamespace(layers=[SimpleNamespace(W_dec=torch.ones(1, 1, dtype=torch.float64))])
+    tokenizer = SimpleNamespace(convert_ids_to_tokens=lambda i: {3: "three", 6: "six"}.get(i))
+    index = SimpleNamespace(model=SimpleNamespace(get_output_embeddings=lambda: output),
+                            dictionary=dictionary, _token=lambda i: token_label(tokenizer, i))
+    original = _index._stable_topk
+    shapes = []
+
+    def bounded_topk(values, offsets, k):
+        shapes.append(values.shape[1])
+        assert values.shape[1] <= (chunk_size if len(shapes) % 2 else 6)
+        return original(values, offsets, k)
+
+    monkeypatch.setattr(_index, "_stable_topk", bounded_topk)
+    rows = FeatureIndex._promoted(index, 0, 0, chunk_size=chunk_size)
+    assert rows == [
+        {"token_id": 8, "token": "[unmapped token 8]", "score": scores[8].item()},
+        {"token_id": 1, "token": "[unmapped token 1]", "score": 2.0},
+        {"token_id": 3, "token": "three", "score": 2.0},
+    ]
+    assert shapes[::2] == [min(chunk_size, 9 - start) for start in range(0, 9, chunk_size)]
 
 
 def test_token_store_preserves_32_bits(tmp_path):
