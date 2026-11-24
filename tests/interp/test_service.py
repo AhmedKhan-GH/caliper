@@ -345,3 +345,67 @@ def test_default_tracer_uses_registered_owner(actual, monkeypatch, legacy_owner)
     finally:
         unregister_service(actual, controls=owner)
         watched.remove()
+
+
+@pytest.mark.parametrize("replace", [False, True])
+def test_recursive_registration_refuses_before_concurrent_close_lock(monkeypatch, replace):
+    controls = _controls.Controls()
+    service = register_service(controls=controls)
+    assert register_service(service, controls=controls) is service
+    entered, waiting = threading.Event(), threading.Event()
+    replies, failures = [], []
+    replacement = InterpretationService()
+
+    class BoundedLifecycleLock:
+        def __init__(self):
+            self.lock = threading.Lock()
+
+        def __enter__(self):
+            # A failing regression must end both threads without a deadlock.
+            assert self.lock.acquire(timeout=2), "Recursive registration waited for the lifecycle lock."
+
+        def __exit__(self, *args):
+            self.lock.release()
+
+    monkeypatch.setattr(controls, "interpretation_registration_lock", BoundedLifecycleLock())
+    wait = service.idle.wait
+
+    def close_wait(timeout=None):
+        waiting.set()
+        return wait(timeout)
+
+    def factory():
+        entered.set()
+        assert waiting.wait(5)
+        register_service(service, controls=controls)
+
+    def close():
+        try:
+            if replace:
+                register_service(replacement, controls=controls)
+            else:
+                unregister_service(service, controls=controls)
+        except BaseException as exc:
+            failures.append(exc)
+
+    monkeypatch.setattr(service.idle, "wait", close_wait)
+    service.factories["dictionary"] = factory
+    service.submit({"version": 1, "method": "feature.dictionary", "params": {}}, lambda *args: replies.append(args))
+    worker = threading.Thread(target=service.step)
+    closer = threading.Thread(target=close)
+    worker.start()
+    try:
+        assert entered.wait(5)
+        closer.start()
+    finally:
+        worker.join(7)
+        if closer.ident is not None:
+            closer.join(7)
+    assert not worker.is_alive() and not closer.is_alive()
+    assert not failures
+    assert replies[0][2]["code"] == "interpret.busy"
+    assert service.closed
+    assert controls.interpretation_service is (replacement if replace else None)
+    if replace:
+        assert register_service(replacement, controls=controls) is replacement
+        unregister_service(replacement, controls=controls)

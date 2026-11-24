@@ -79,7 +79,8 @@ Clear those ablations at a step boundary before the query.
 Unregistration refuses queued requests and waits for active work and its final reply.
 Service replacement also waits before it changes the registered owner.
 Call these lifecycle operations from the script, outside an active service request or an app event loop.
-An active request cannot close its own service and receives `interpret.busy` if it tries.
+An active request cannot re-register, replace, or close its current service and receives `interpret.busy` if it tries.
+An idle service can register again with the same owner.
 Resource ownership remains with the script. Close the index after unregistration returns.
 
 Missing resources produce structured errors, including `interpret.missing_dictionary`, `interpret.missing_index`, and `interpret.missing_model`.
