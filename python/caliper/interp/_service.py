@@ -43,6 +43,7 @@ class InterpretationService:
 
     def _bind_resources(self):
         """Use one model, tokenizer, and dictionary for all supplied resources."""
+        self._check_tracer_controls(self.tracer, getattr(self, "controls", None))
         for resource in (self.index, self.tracer):
             if resource is None:
                 continue
@@ -53,6 +54,21 @@ class InterpretationService:
                     if current is not None and current is not value:
                         raise Refused("interpret.resource_mismatch", "Interpretation resources must share one " + name + ".")
                     setattr(self, name, value)
+
+    @staticmethod
+    def _check_tracer_controls(tracer, controls):
+        if controls is not None and getattr(tracer, "controls", controls) is not controls:
+            raise Refused("interpret.controls_mismatch", "The tracer must use the service control owner.")
+
+    def _bind_controls(self, controls):
+        with self.lock:
+            if self.closed:
+                raise Refused("interpret.closed", "The interpretation service is closed.")
+            if getattr(self, "controls", controls) is not controls:
+                raise Refused("interpret.controls_mismatch", "An interpretation service cannot change its control owner.")
+            self._check_tracer_controls(self.tracer, controls)
+            # Claim the owner before replacement can close the prior service.
+            self.controls = controls
 
     @property
     def pending(self):
@@ -106,8 +122,11 @@ class InterpretationService:
                                controls=getattr(self, "controls", None))
             if value is None:
                 raise Refused("interpret.missing_" + name, "The run has no " + name + ".")
-            setattr(self, name, value)
-            self._bind_resources()
+            with self.lock:
+                if name == "tracer":
+                    self._check_tracer_controls(value, getattr(self, "controls", None))
+                setattr(self, name, value)
+                self._bind_resources()
         return value
 
     def _feature(self, params):
@@ -306,16 +325,13 @@ def register_service(service=None, *, controls=None, **resources):
     if old is not None:
         old._check_close_thread()
     with controls.interpretation_registration_lock:
-        with service.lock:
-            if service.closed:
-                raise Refused("interpret.closed", "The interpretation service is closed.")
+        service._bind_controls(controls)
         with controls.lock:
             old = controls.interpretation_service
         if old is not None and old is not service:
             old.close()
         with controls.lock:
             controls.interpretation_service = service
-            service.controls = controls
             controls._update_busy()
             if service.pending:
                 controls.cond.notify_all()
