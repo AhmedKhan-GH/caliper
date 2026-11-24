@@ -199,7 +199,7 @@ def test_jumprelu_all_active_features_padding_edits_and_mixed_precision(monkeypa
     assert (sparse.indices[:, 1:] != sparse.indices[:, :-1]).all()
 
 
-@pytest.mark.parametrize("defect", ["shape", "negative", "nonfinite", "activation", "k"])
+@pytest.mark.parametrize("defect", ["shape", "negative", "zero", "nonfinite", "activation", "k"])
 def test_jump_dictionary_admission_rejects_invalid_threshold_and_metadata(defect):
     model, dictionary, _ = setup(jump=True, dtype=torch.float16)
     layer = dictionary.layers[0]
@@ -207,6 +207,8 @@ def test_jump_dictionary_admission_rejects_invalid_threshold_and_metadata(defect
         layer.threshold = layer.threshold[:1]
     elif defect == "negative":
         layer.threshold[0] = -.1
+    elif defect == "zero":
+        layer.threshold[0] = 0
     elif defect == "nonfinite":
         layer.threshold[0] = float("nan")
     elif defect == "activation":

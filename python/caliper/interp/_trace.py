@@ -184,11 +184,12 @@ class _DirectEffects:
                 selected = indices[position, active[position]]
                 values = activations[position, active[position]]
                 for start in range(0, len(selected), step):
-                    self.check("direct decoder block")
-                    decoder = rows[selected[start:start + step]].to(path.dtype)
-                    products = (gradient[:, position] @ decoder.T) * values[start:start + step]
-                    weights[node:node + decoder.shape[0]] = products.T
-                    node += decoder.shape[0]
+                    with autorelease_scope(path.device):
+                        self.check("direct decoder block")
+                        decoder = rows[selected[start:start + step]].to(path.dtype)
+                        products = (gradient[:, position] @ decoder.T) * values[start:start + step]
+                        weights[node:node + decoder.shape[0]] = products.T
+                        node += decoder.shape[0]
             weights[error_slice] = (gradient * path.errors[layer]).sum(-1).T
         expected = torch.stack([target.expected for target in targets])
         affine = torch.stack([(path.bias_final if target.layer == path.layers else path.bias_reads[target.layer])

@@ -90,7 +90,8 @@ def _trace_reconstruction(layer, features):
     result = features.new_zeros(*features.shape[:-1], layer.W_dec.shape[1])
     rows = max(1, _ENCODER_BLOCK_ELEMENTS // layer.W_dec.shape[1])
     for start in range(0, layer.W_dec.shape[0], rows):
-        result += features[..., start:start + rows] @ layer.W_dec.detach()[start:start + rows].to(features.dtype)
+        with autorelease_scope(features.device):
+            result += features[..., start:start + rows] @ layer.W_dec.detach()[start:start + rows].to(features.dtype)
     return result + layer.b_dec.detach().to(features.dtype)
 
 
@@ -101,9 +102,10 @@ def _decode_selected(layer, indices, activations, *, check=_no_check):
     result = activations.new_zeros(*activations.shape[:-1], width)
     step = max(1, _ENCODER_BLOCK_ELEMENTS // max(1, tokens * width))
     for start in range(0, columns, step):
-        check("selected decoder block")
-        rows = layer.W_dec.detach()[indices[:, start:start + step]].to(activations.dtype)
-        result += torch.einsum("...tk,tkw->...tw", activations[..., start:start + step], rows)
+        with autorelease_scope(activations.device):
+            check("selected decoder block")
+            rows = layer.W_dec.detach()[indices[:, start:start + step]].to(activations.dtype)
+            result += torch.einsum("...tk,tkw->...tw", activations[..., start:start + step], rows)
     return result
 
 
@@ -153,8 +155,8 @@ def _validate_dictionary(model, dictionary, check=_no_check):
                 raise ValueError("dictionary tensors must use floating point storage")
             if value.device != device:
                 raise ValueError("dictionary and model must share one device")
-            if name == "threshold" and (value < 0).any().item():
-                raise ValueError("dictionary JumpReLU threshold must be nonnegative")
+            if name == "threshold" and (value <= 0).any().item():
+                raise ValueError("dictionary JumpReLU threshold must be positive")
             _require_finite(value, f"dictionary layer {i} {name}", check)
     return probes
 
@@ -475,10 +477,11 @@ class FrozenFeatures:
         values = read.new_empty(*read.shape[:-1], self.indices.shape[-1])
         step = max(1, _ENCODER_BLOCK_ELEMENTS // max(1, self.indices.shape[0] * read.shape[-1]))
         for start in range(0, self.indices.shape[-1], step):
-            indices = self.indices[:, start:start + step]
-            encoder = layer.W_enc.detach()[indices].to(read.dtype)
-            values[..., start:start + step] = (torch.einsum("btw,tkw->btk", read, encoder) +
-                                                layer.b_enc.detach()[indices].to(read.dtype))
+            with autorelease_scope(read.device):
+                indices = self.indices[:, start:start + step]
+                encoder = layer.W_enc.detach()[indices].to(read.dtype)
+                values[..., start:start + step] = (torch.einsum("btw,tkw->btk", read, encoder) +
+                                                    layer.b_enc.detach()[indices].to(read.dtype))
         return values * self.coefficients + self.constants
 
 
@@ -738,8 +741,9 @@ class FrozenPath:
         self.unembedding_mean = self.unembedding.new_zeros(self.width)
         rows = max(1, _ENCODER_BLOCK_ELEMENTS // self.width)
         for start in range(0, len(raw), rows):
-            check("softcap centered direction")
-            self.unembedding_mean += self.logit_scale[start:start + rows] @ self.unembedding[start:start + rows]
+            with autorelease_scope(self.device):
+                check("softcap centered direction")
+                self.unembedding_mean += self.logit_scale[start:start + rows] @ self.unembedding[start:start + rows]
         self.unembedding_mean /= len(raw)
 
     def logits_from_final(self, final):
