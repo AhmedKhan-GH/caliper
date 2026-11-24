@@ -16,7 +16,8 @@ from ._memory import (BudgetMemory, CleanStop, MemoryGuard, allocation_bytes, fa
 from ._points import capture
 from ._frozen import _trace_features
 
-INDEX_VERSION = 1
+INDEX_VERSION = 2
+ENCODER_POLICY = "live_input_v1"
 TOP_EXAMPLES = 16
 WINDOW_TOKENS = 33
 CACHE_FEATURES = 256
@@ -31,6 +32,23 @@ _FILES = ("table.npy", "counts.npy", "tokens.bin", "documents.bin")
 
 def _json(value):
     return json.dumps(value, sort_keys=True, separators=(",", ":"), allow_nan=False)
+
+
+def _encoding_policy(manifest, model, dictionary):
+    version = manifest["format_version"]
+    if type(version) is not int or version not in (1, INDEX_VERSION):
+        raise ValueError("incomplete or unsupported index")
+    if version == INDEX_VERSION:
+        if manifest.get("encoder_policy") != ENCODER_POLICY:
+            raise ValueError("unsupported index encoder policy; rebuild the index")
+        return
+    # Version 1 cast captured inputs to encoder storage precision. The two
+    # policies agree only when the admitted model and encoder use one dtype.
+    dtypes = {value.dtype for value in model.state_dict().values() if value.is_floating_point()}
+    if ("encoder_policy" in manifest or len(dtypes) != 1 or
+            any(value.dtype not in dtypes for layer in dictionary.layers
+                for value in (layer.W_enc, layer.b_enc))):
+        raise ValueError("legacy index encoder precision differs; rebuild the index")
 
 
 def _hash_file(path):
@@ -273,7 +291,8 @@ def build_index(dictionary_path, documents, *, model, tokenizer, provenance,
         table.flush()
     check("table")
     manifest = {
-        "format_version": INDEX_VERSION, "complete": True, "top_examples": TOP_EXAMPLES,
+        "format_version": INDEX_VERSION, "encoder_policy": ENCODER_POLICY,
+        "complete": True, "top_examples": TOP_EXAMPLES,
         "window_tokens": WINDOW_TOKENS, "model_hash": data["model_hash"],
         "dictionary_hash": identity, "dictionary_source_hash": source_hash,
         "tokenizer_hash": tokenizer_hash, "layers": data["layers"], "features": data["latents"],
@@ -327,7 +346,8 @@ class FeatureIndex:
             if claimed != hashlib.sha256(_json(manifest).encode()).hexdigest():
                 raise ValueError("index hash mismatch")
             manifest["index_hash"] = claimed
-            if (type(manifest["format_version"]) is not int or manifest["format_version"] != INDEX_VERSION or manifest["complete"] is not True or
+            _encoding_policy(manifest, model, self.dictionary)
+            if (manifest["complete"] is not True or
                     manifest["top_examples"] != TOP_EXAMPLES or manifest["window_tokens"] != WINDOW_TOKENS):
                 raise ValueError("incomplete or unsupported index")
             if (manifest["dictionary_source_hash"] != _source_hash(self.root, data["layers"]) or
