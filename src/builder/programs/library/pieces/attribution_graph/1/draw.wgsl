@@ -60,8 +60,9 @@ fn node_vs(@builtin(instance_index) i: u32, @builtin(vertex_index) v: u32) -> No
     let right = camera::clip(p.xyz+vec3<f32>(p.w,0.0,0.0));
     let up = camera::clip(p.xyz+vec3<f32>(0.0,p.w,0.0));
     let pixels = caliper_view.viewport.zw*0.5;
-    let radius = min(length((right.xy/right.w-center.xy/center.w)*pixels),
-                     length((up.xy/up.w-center.xy/center.w)*pixels));
+    // Keep every silhouette rasterizable even when the graph panel shrinks.
+    let radius = max(2.0,min(length((right.xy/right.w-center.xy/center.w)*pixels),
+                            length((up.xy/up.w-center.xy/center.w)*pixels)));
     var out: NodeOut;
     out.position = camera::offset_pixels(center,corners[v]*radius);
     out.uv = corners[v];
