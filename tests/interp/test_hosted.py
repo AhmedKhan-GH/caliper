@@ -294,6 +294,11 @@ class HostedChild:
         path = Path(reply.message)
         return path, json.loads(path.read_bytes())
 
+    def generation(self):
+        reply = self.control("interpret", interpretation={"version": 1, "method": "trace.status", "params": {}})
+        assert reply.status == "ok", reply.error
+        return reply.result["inference"]["generation"]
+
     def close(self):
         try:
             self.connections.close()
@@ -409,6 +414,7 @@ def test_real_hosted_fork_carries_active_feature_and_text(resource_folder, tmp_p
         assert parent.control("intervene", intervene={"set": dict(ablation, until_step=100)}).status == "ok"
         assert parent.control("run", name="generate").status == "ok"
         checkpoint, saved = parent.checkpoint()
+        parent_generation = parent.generation()
         assert saved["interventions"]["interventions"][0]["state"] == "active"
         child = HostedChild(tmp_path, resource_folder, "fork", resume=checkpoint)
         cleanup.callback(child.close)
@@ -420,10 +426,17 @@ def test_real_hosted_fork_carries_active_feature_and_text(resource_folder, tmp_p
         assert forked["params"]["prompt"] == "AB"
         assert child.control("run", name="generate").status == "ok"
         _, generated = child.checkpoint()
+        fork_generation = child.generation()
         assert set(generated["params"]) >= {"output.baseline", "output.steered"}
-        for name in ("output.baseline", "output.steered"):
+        for row, name in enumerate(("output.baseline", "output.steered")):
+            evidence = {"output": name, "parent_step": saved["step"], "fork_step": generated["step"],
+                        "parent_generation": parent_generation, "fork_generation": fork_generation}
             assert 0 < len(generated["params"][name].encode("utf-8")) <= 1024
-            assert generated["params"][name] == saved["params"][name]
+            assert generated["params"][name] == saved["params"][name], evidence
+            assert fork_generation["token_ids"][row] == parent_generation["token_ids"][row], evidence
+        assert fork_generation["id"] == parent_generation["id"] + 1
+        for key in ("prompt_hash", "interventions_hash", "text_hashes", "counts"):
+            assert fork_generation[key] == parent_generation[key], key
         assert generated["params"]["output.baseline"] != generated["params"]["output.steered"]
         assert generated["step"] == forked["step"] + 2
         assert child.control("run", name="caliper.stop").status == "ok"
@@ -753,6 +766,9 @@ def test_hosted_fork_matches_generation_after_late_intervention_requests(hosted_
         monkeypatch.setattr(run.output, "compare", compared)
     run.boundary()
     assert injected == [arrival]
+    assert run.controls.actions["generate"].queued
+    assert run.inference_status()["generation"]["id"] == 0
+    assert not any(reply.request_id == 3 for reply in route.transport.replies)
     run.boundary()
     reply, = [reply for reply in route.transport.replies if reply.request_id == 3]
     assert reply.status == "ok", reply.error

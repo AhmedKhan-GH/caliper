@@ -636,6 +636,33 @@ def test_actions_run_in_order_at_the_checkpoint(ctl):
     assert evaluate.entry() == {"name": "evaluate", "running": False, "queued": False}
 
 
+@pytest.mark.parametrize("same_action", [False, True])
+def test_late_actions_observe_prior_parameter_edits_at_the_next_pass(ctl, same_action):
+    route = ctl.attach(Fake())
+    value = caliper.param("value", 0)
+    observed = []
+
+    def enqueue():
+        assert control(route, "set", name="value", value=7)["status"] == "ok"
+        assert control(route, "run", name="evaluate")["status"] == "queued"
+
+    def evaluate():
+        observed.append(value.value)
+        if same_action and len(observed) == 1:
+            enqueue()
+
+    caliper.action("evaluate", evaluate)
+    caliper.action("enqueue", enqueue)
+    caliper.step()
+    control(route, "run", name="evaluate" if same_action else "enqueue")
+    caliper.step()
+    assert observed == ([0] if same_action else [])
+    assert ctl.actions["evaluate"].queued and value.value == 0
+    caliper.step()
+    assert observed == ([0, 7] if same_action else [7])
+    assert not ctl.actions["evaluate"].queued
+
+
 def test_an_action_that_raises(ctl):
     t = Fake()
     r = ctl.attach(t)
