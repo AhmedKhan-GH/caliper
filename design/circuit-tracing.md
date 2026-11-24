@@ -40,9 +40,12 @@ This verifies the artifact format, not a complete fallback model run.
 
 Gemma Scope folds pre-MLP normalization gains and predicts the output after the post-MLP normalization.
 A compatible converter needs those points and the encoder in the Caliper orientation.
-This release contains no Gemma converter or fallback model run.
-The founder accepted the existing Qwen dictionary and prohibited further dictionary training.
-Qwen remains the acceptance target.
+The current implementation contains no Gemma converter or completed Gemma model run.
+The founder accepted the existing Qwen dictionary for its recorded visual results and prohibited further dictionary training.
+The M8 acceptance target is Gemma 2 2B with the public Gemma Scope transcoders.
+M8 remains held until that model passes every quality and acceptance check.
+The graph requires at least eight of ten correct signs and Spearman correlation of at least 0.6.
+The Qwen quality override does not apply to Gemma.
 
 ### Existing Interfaces
 
