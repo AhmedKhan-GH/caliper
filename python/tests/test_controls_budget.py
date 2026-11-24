@@ -102,6 +102,56 @@ def fill_budget(ctl):
     pytest.fail("the wire budget did not refuse a bounded text value")
 
 
+@pytest.mark.parametrize("admission", ["request", "restore"])
+def test_smaller_replacement_reserves_the_retained_specification(case, monkeypatch, admission):
+    ctl, service = case
+    service.set(spec(0, from_step=1, until_step=1000))
+    ctl.step()
+    service.set(spec(0, from_step=None, until_step=None, vector=[0.] * 1024))
+    if admission == "restore":
+        service.load_state_dict(service.state_dict(), restore_active=True)
+    observed = []
+    action = ctl.action("inspect", lambda: observed.append(service.specifications()))
+    pad = fill_budget(ctl)
+    with pytest.raises(ValueError, match="wire limit"):
+        pad.set(pad.value + "\x01")
+    record = next(iter(ctl._ivs.values()))
+    hook, applied, request = record.hook, record.applied_spec, record.spec
+    since = record.since_step
+    saved = service.state_dict()
+    assert control(ctl, "run", name="inspect")["status"] == "queued"
+
+    def fail(*args, **kwargs):
+        raise RuntimeError("\x01" * controls.TEXT_MAX)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(service.executor, "install", fail)
+        with pytest.warns(RuntimeWarning, match="failed"):
+            ctl.step()
+    assert record.hook is hook and not hook.removed and record.applied_spec is applied
+    assert record.spec is request and record.spec == applied and not record.replace
+    assert (record.from_step, record.until_step, record.since_step) == (1, 1000, since)
+    assert record.error_code == "intervene.hook_failed"
+    assert record.error == ctl._stop_message("RuntimeError: " + "\x01" * controls.TEXT_MAX)
+    assert service.state_dict() != saved
+    assert not observed and action.queued
+    size = encoded(ctl)
+    assert wire.MAX_META_BYTES - 3000 < size <= wire.MAX_META_BYTES
+    resolved = service.state_dict()
+    ctl.checkpoint()
+    assert observed == [[applied]] and not action.queued
+    for restore_active in (False, True):
+        service.load_state_dict(resolved, restore_active=restore_active)
+        ctl.checkpoint()
+        assert service.state_dict() == resolved
+        assert service.specifications() == [applied]
+        encoded(ctl)
+    ctl.step(999)
+    assert not service.specifications()
+    assert next(iter(ctl._ivs.values())).state == "ended"
+    encoded(ctl)
+
+
 class Transport:
     def __init__(self):
         self.frames = []

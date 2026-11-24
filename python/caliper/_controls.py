@@ -207,7 +207,7 @@ def _check_help(help) -> str | None:
     return help
 
 
-def _check_controls_budget(meta):
+def _check_controls_budget(meta, *, ivs=None):
     """Check a detached prospective message with space for automatic state changes."""
     from ._intervention_protocol import MAX_BYTES
 
@@ -221,16 +221,29 @@ def _check_controls_budget(meta):
                    "steps_left": max(_INT_EXACT - 1, run.get("steps_left", 0))}
     for action in meta["actions"]:
         action.update(running=False, queued=False)
-    for entry in meta.get("interventions", {}).get("active", []):
-        if entry["state"] != IV_ENDED:
-            # One UTF-8 byte can require six JSON bytes. Reserve the full error
-            # bounds, even when every live hook fails at the same boundary.
-            entry.update(state=IV_PENDING,
-                         since_step=max(_INT_EXACT - 1, run.get("step", 0) + 1,
-                                        entry.get("since_step") or 0),
-                         error="\x01" * TEXT_MAX, error_code="\x01" * NAME_MAX)
-        if size(entry) > MAX_BYTES:
-            raise ValueError("intervention metadata exceeds the wire limit with lifecycle headroom")
+    entries = meta.get("interventions", {}).get("active", [])
+    for index, entry in enumerate(entries):
+        alternatives = [entry]
+        iv = (ivs or {}).get((entry["point"], entry["op"]))
+        if iv is not None and iv.applied_spec is not None:
+            # A refused replacement restores the applied specification and schedule.
+            # Reserve each record's largest outcome before any control uses the space.
+            retained = dict(iv.applied_spec, state=entry["state"], since_step=iv.since_step,
+                            from_step=iv.applied_spec.get("from_step"),
+                            until_step=iv.applied_spec.get("until_step"))
+            if iv.op == "ablate":
+                retained.pop("kind", None)
+            alternatives.append(retained)
+        for candidate in alternatives:
+            if candidate["state"] != IV_ENDED:
+                # One UTF-8 byte can require six JSON bytes. Every live hook can fail.
+                candidate.update(state=IV_PENDING,
+                                 since_step=max(_INT_EXACT - 1, run.get("step", 0) + 1,
+                                                candidate.get("since_step") or 0),
+                                 error="\x01" * TEXT_MAX, error_code="\x01" * NAME_MAX)
+            if size(candidate) > MAX_BYTES:
+                raise ValueError("intervention metadata exceeds the wire limit with lifecycle headroom")
+        entries[index] = max(alternatives, key=size)
     if size(meta) > MAX_META_BYTES:
         raise ValueError("CONTROLS metadata exceeds the wire limit with lifecycle headroom")
 
@@ -1239,7 +1252,7 @@ class Controls:
             with self.lock:
                 meta = self._controls_meta()
                 meta["run"]["step"] = int(prospective)
-                _check_controls_budget(meta)
+                _check_controls_budget(meta, ivs=self._ivs)
                 self.n = prospective
         else:
             self.n = prospective
@@ -2035,6 +2048,7 @@ class Controls:
             candidate = _Intervention(point, op, frm, until, spec)
             if iv is not None and iv.state != IV_ENDED:
                 candidate.state, candidate.since_step = iv.state, iv.since_step
+                candidate.applied_spec = iv.applied_spec
             try:
                 prospective = self._admit_interventions({**self._ivs, key: candidate}, evict_ended=True)
             except ValueError as error:
@@ -2500,12 +2514,12 @@ class Controls:
             meta.setdefault("interventions", {"active": []})["points"] = points
         if ivs is not None:
             meta["interventions"]["active"] = [iv.entry() for iv in ivs.values()]
-        _check_controls_budget(meta)
+        _check_controls_budget(meta, ivs=self._ivs if ivs is None else ivs)
 
     def _check_param_budget(self, param, entry):
         meta = self._controls_meta()
         meta["params"] = [entry if p is param else p.entry() for p in self.params.values()]
-        _check_controls_budget(meta)
+        _check_controls_budget(meta, ivs=self._ivs)
 
     def _admit_interventions(self, ivs, *, evict_ended=False):
         """Return a bounded collection. Evict history only after complete admission."""
