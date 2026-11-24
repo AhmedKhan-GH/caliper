@@ -22,7 +22,11 @@ _ENCODER_BLOCK_ELEMENTS = 1_048_576
 _FINITE_BLOCK_ELEMENTS = 65_536
 
 
-def _require_finite(value, name):
+def _no_check(stage):
+    pass
+
+
+def _require_finite(value, name, check=_no_check):
     """Check bounded views without a full tensor copy, including strided inputs."""
     pending = [value.detach()]
     while pending:
@@ -34,8 +38,10 @@ def _require_finite(value, name):
             pending.append(block.narrow(axis, 0, middle))
             continue
         with autorelease_scope(value.device):
+            check("finite block")
             if not torch.isfinite(block).all().item():
                 raise ValueError(f"{name} must be finite")
+            check("finite block complete")
 
 
 def _finite_max(values, name):
@@ -48,7 +54,7 @@ def _finite_max(values, name):
     return largest
 
 
-def _trace_features(layer, x, guard):
+def _trace_features(layer, x, guard, check=_no_check):
     """Evaluate TopK in model precision without a converted dictionary copy."""
     if layer.W_enc.dtype == x.dtype and layer.b_enc.dtype == x.dtype:
         return layer.encode(x).detach()
@@ -58,10 +64,12 @@ def _trace_features(layer, x, guard):
     for start in range(0, latents, rows):
         with autorelease_scope(x.device):
             guard.check("dictionary encoder block")
+            check("dictionary encoder block")
             stop = min(start + rows, latents)
             preactivation[..., start:stop] = F.linear(
                 x, layer.W_enc.detach()[start:stop].to(x.dtype),
                 layer.b_enc.detach()[start:stop].to(x.dtype))
+            check("dictionary encoder block complete")
     values, indices = preactivation.relu_().topk(layer.k, dim=-1)
     return torch.zeros_like(preactivation).scatter_(-1, indices, values)
 
@@ -75,11 +83,13 @@ def _trace_reconstruction(layer, features):
     return torch.einsum("tk,tkw->tw", values, decoders)[None] + layer.b_dec.detach().to(features.dtype)
 
 
-def _validate_dictionary(model, dictionary):
+def _validate_dictionary(model, dictionary, check=_no_check):
     """Check identity, dimensions, and probes before any model forward."""
+    check("dictionary admission")
     data = dictionary.metadata
     if not isinstance(data, dict) or data.get("model_hash") != model_identity(model):
         raise ValueError("dictionary model identity mismatch")
+    check("dictionary identity")
     config = model.config
     if (data.get("layers"), data.get("width")) != (config.num_hidden_layers, config.hidden_size):
         raise ValueError("dictionary dimensions differ from the model")
@@ -106,7 +116,7 @@ def _validate_dictionary(model, dictionary):
                 raise ValueError(f"dictionary {name} shape differs from its metadata")
             if value.device != device:
                 raise ValueError("dictionary and model must share one device")
-            _require_finite(value, f"dictionary layer {i} {name}")
+            _require_finite(value, f"dictionary layer {i} {name}", check)
     return probes
 
 
@@ -461,10 +471,10 @@ class FrozenPath:
     recorded MLP inputs. Its write arguments are independent source leaves.
     """
 
-    def __init__(self, model, input_ids, dictionary, *, guard=None, interventions=()):
+    def __init__(self, model, input_ids, dictionary, *, guard=None, interventions=(), check=_no_check):
         _validate_ablation_points(model, interventions)
         _validate_intervention_positions(input_ids.shape[1], interventions)
-        probes = _validate_dictionary(model, dictionary)
+        probes = _validate_dictionary(model, dictionary, check)
         parameter = next(model.parameters())
         self.device, self.dtype = parameter.device, parameter.dtype
         self.guard = guard or MemoryGuard(self.device)
@@ -542,11 +552,14 @@ class FrozenPath:
                     install(block.self_attn.q_proj.register_forward_hook(out(f"{i}.q_gate")))
                 def stage_hook(*_, i=i):
                     self.guard.check(f"record layer {i}")
+                    check(f"record layer {i}")
                 install(block.register_forward_hook(stage_hook))
             with torch.no_grad():
+                check("record admission")
                 kwargs = {"use_cache": False, "logits_to_keep": 1} if self.qwen else {}
                 self.logits = model(input_ids=input_ids, **kwargs).logits[:, -1].detach()
         self.guard.check("record complete")
+        check("record complete")
         self.embedding = recorded["embedding"]
         self.inputs, self.outputs, self.features, self.errors, self.decoder_biases = [], [], [], [], []
         self.feature_outputs, self.output_offsets = [], []
@@ -558,7 +571,8 @@ class FrozenPath:
                     x = values[f"{base}.mlp_in"]
                     y = values[f"{base}.mlp_out"]
                     layer = dictionary.layers[i]
-                    a = _trace_features(layer, x, self.guard)
+                    check(f"freeze layer {i} admission")
+                    a = _trace_features(layer, x, self.guard, check)
                     raw = recorded[f"{i}.mlp_raw"]
                     output_specs = [s for s in interventions
                                     if s["point"] in (f"{base}.mlp", f"{base}.mlp_out")
@@ -583,8 +597,8 @@ class FrozenPath:
                     self.outputs.append(y)
                     self.features.append(transformed)
                     self.errors.append(error.detach())
-                    _require_finite(self.features[-1], f"layer {i} features")
-                    _require_finite(self.errors[-1], f"layer {i} reconstruction residual")
+                    _require_finite(self.features[-1], f"layer {i} features", check)
+                    _require_finite(self.errors[-1], f"layer {i} reconstruction residual", check)
                     self.decoder_biases.append(decoder_bias)
                     self.output_offsets.append(offset.detach())
                     self.norms.append(FrozenNorm(block.input_layernorm, recorded[f"{i}.input_norm"], qwen=self.qwen))
@@ -605,6 +619,7 @@ class FrozenPath:
                                                     model, f"{base}.self_attn", "o_proj", interventions, recorded))
                     self.mixers.append(mixer)
                     self.guard.check(f"freeze layer {i}")
+                    check(f"freeze layer {i}")
             with autorelease_scope(self.device):
                 self.final_norm = FrozenNorm(root.norm, recorded["final_norm"], qwen=self.qwen)
                 head = model.get_output_embeddings()
@@ -613,14 +628,15 @@ class FrozenPath:
                 self.unembedding_bias = _bias(head)
                 self.writes = [(y - b - c).detach() for y, b, c in
                                zip(self.outputs, self.decoder_biases, self.output_offsets)]
-                reads, final = self.run(self.embedding, self.writes)
+                reads, final = self.run(self.embedding, self.writes, check=check)
                 # Compare every read and all next-token logits, before any edge calculation.
                 self.forward_residual = _finite_max([float((a - b).abs().max()) for a, b in zip(reads, self.inputs)] +
                                             [float((F.linear(final[:, -1], self.unembedding,
                                                              self.unembedding_bias) - self.logits).abs().max())],
                                                    "direct forward residual")
                 self.direct_forward_residual = self.forward_residual
-                replacement_reads, replacement_final = self.replacement(self.embedding, dictionary)
+                check("direct forward agreement")
+                replacement_reads, replacement_final = self.replacement(self.embedding, dictionary, check=check)
                 self.replacement_forward_residual = _finite_max(
                     [float((a - b).abs().max()) for a, b in zip(replacement_reads, self.inputs)] +
                     [float((F.linear(replacement_final[:, -1], self.unembedding,
@@ -631,12 +647,14 @@ class FrozenPath:
                 if not self.forward_residual <= tolerance:
                     raise ValueError(f"frozen replacement forward mismatch: {self.forward_residual:.6g}")
                 self.guard.check("forward agreement")
+                check("forward agreement")
                 # Encoder and unembedding biases are target-local. Input edits have their own constant term.
                 zero = torch.zeros_like(self.embedding).expand(4, -1, -1)
                 masks = torch.eye(4, device=self.device, dtype=self.dtype).reshape(4, 4, 1, 1)
-                self.bias_reads, self.bias_final = self.run(zero, [zero] * self.layers, bias_masks=masks)
+                self.bias_reads, self.bias_final = self.run(zero, [zero] * self.layers, bias_masks=masks, check=check)
+                check("bias preparation")
 
-    def run(self, embedding, writes, *, bias_masks=None):
+    def run(self, embedding, writes, *, bias_masks=None, check=_no_check):
         """Return MLP reads and final normalized residual for independent writes.
 
         Bias mask rows are decoder, normalization, attention, and intervention contributions.
@@ -654,10 +672,11 @@ class FrozenPath:
                 reads.append(self.mlp_inputs[i](post_norm(x, norm), intervention))
                 x = x + write + decoder * self.decoder_biases[i] + intervention * self.output_offsets[i]
                 self.guard.check(f"frozen layer {i}")
+                check(f"frozen layer {i}")
         return reads, self.final_norm(x, norm)
 
 
-    def replacement(self, embedding, dictionary):
+    def replacement(self, embedding, dictionary, *, check=_no_check):
         """Evaluate transcoders with the recorded active masks and constant errors.
 
         This affine forward verifies the complete local replacement. Direct
@@ -678,4 +697,5 @@ class FrozenPath:
                 x = (x + torch.einsum("btk,tkw->btw", activation, decoder) +
                      self.decoder_biases[i] + self.errors[i] + self.output_offsets[i])
                 self.guard.check(f"replacement layer {i}")
+                check(f"replacement layer {i}")
         return reads, self.final_norm(x)

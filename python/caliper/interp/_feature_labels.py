@@ -10,6 +10,8 @@ def label_graph_nodes(nodes, index=None, *, check=None):
     A standalone graph without an index retains explicit layer and feature IDs.
     """
     bounded_integer(len(nodes), "label nodes", 0, NODE_CAP)
+    if check is not None:
+        check("graph labels admission")
     features = [(node["layer"], node["feature"]) for node in nodes if node["kind"] == "feature"]
     labels = index.labels(features, check=check) if index is not None else {}
     result = []
@@ -19,4 +21,6 @@ def label_graph_nodes(nodes, index=None, *, check=None):
             key = record["layer"], record["feature"]
             record["label"] = labels[key] if index is not None else f"L{key[0]} F{key[1]}"
         result.append(record)
+    if check is not None:
+        check("graph labels complete")
     return result

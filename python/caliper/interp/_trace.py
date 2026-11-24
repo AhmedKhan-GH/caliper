@@ -12,12 +12,42 @@ import torch
 
 from ._dictionary import _state_hash, weights_hash
 from ._frozen import (FrozenPath, MemoryGuard, _validate_dictionary, _validate_ablation_points,
-                      _validate_intervention_positions, _finite_max, _require_finite)
-from ._memory import CleanStop, autorelease_scope
+                      _validate_intervention_positions, _finite_max, _require_finite, _no_check)
+from ._memory import autorelease_scope
 from ._graph import Graph, bounded_integer
 from ._influence import influence
 from ._labels import token_label
 from ._feature_labels import label_graph_nodes
+
+
+class TraceTimeout(TimeoutError):
+    """One trace exceeds its request budget without a process resource stop."""
+
+    code = "interpret.trace_timeout"
+
+
+class _Deadline:
+    def __init__(self):
+        self.expires = time.monotonic() + 20
+
+    def __call__(self, stage):
+        if time.monotonic() >= self.expires:
+            raise TraceTimeout("Trace exceeded the 20 second request budget.")
+
+
+class _DeadlineMemory:
+    """Check the deadline at each bounded identity hash chunk."""
+
+    def __init__(self, memory, check):
+        self.memory, self.deadline = memory, check
+
+    def __getattr__(self, name):
+        return getattr(self.memory, name)
+
+    def check(self, stage, **kwargs):
+        self.deadline(stage)
+        self.memory.check(stage, **kwargs)
+        self.deadline(stage)
 
 
 @dataclass
@@ -35,8 +65,9 @@ class _Target:
 class _DirectEffects:
     """Independent source writes and bounded vector-Jacobian products."""
 
-    def __init__(self, path, dictionary, token_ids, tokenizer):
+    def __init__(self, path, dictionary, token_ids, tokenizer, *, check=_no_check):
         self.path, self.dictionary = path, dictionary
+        self.check = check
         self.nodes, self.source_layers = [], []
         self.feature_columns = {}
         self.tokens = [{"position": p, "token_id": token, "text": token_label(tokenizer, token)}
@@ -46,6 +77,7 @@ class _DirectEffects:
                                "layer": -1, **token, "activation": 1., "label": token["text"]})
         for layer, output in enumerate(path.feature_outputs):
             with autorelease_scope(path.device):
+                check(f"source layer {layer}")
                 weights = dictionary.layers[layer]
                 # Original TopK columns and explicit edits retain signed and constant writes.
                 indices = output.indices
@@ -80,6 +112,7 @@ class _DirectEffects:
                                "probability": probability, "label": token_label(tokenizer, token)})
         self.feature_nodes = [i for i, n in enumerate(self.nodes) if n["kind"] == "feature"]
         path.guard.check("source preparation")
+        check("source preparation")
 
     def target(self, index):
         node = self.nodes[index]
@@ -113,24 +146,28 @@ class _DirectEffects:
         enter this path because ``FrozenPath.run`` never evaluates an encoder.
         """
         bounded_integer(len(indices), "target batch", 1, 64)
+        self.check("target batch admission")
         path = self.path
         targets = [self.target(index) for index in indices]
         batch = len(targets)
         with torch.enable_grad():
             zero = path.embedding.new_zeros(batch, path.tokens, path.width)
             leaves = [zero.detach().requires_grad_(True) for _ in range(path.layers + 1)]
-            reads, final = path.run(leaves[0], leaves[1:], bias_masks=(0., 0., 0., 0.))
+            reads, final = path.run(leaves[0], leaves[1:], bias_masks=(0., 0., 0., 0.), check=self.check)
             objective = torch.stack([((final if target.layer == path.layers else reads[target.layer])
                                       [row, target.position] * target.direction).sum()
                                      for row, target in enumerate(targets)]).sum()
             path.guard.check("target forward")
+            self.check("target forward")
             gradients = torch.autograd.grad(objective, leaves, allow_unused=True)
         path.guard.check("target backward")
+        self.check("target backward")
         weights = path.embedding.new_zeros(len(self.nodes), batch)
         token_gradient = gradients[0]
         if token_gradient is not None:
             weights[:path.tokens] = (token_gradient * path.embedding).sum(-1).T
         for layer, (feature_slice, error_slice, decoders, activations, active) in enumerate(self.source_layers):
+            self.check(f"edge layer {layer}")
             gradient = gradients[layer + 1]
             if gradient is None:
                 continue
@@ -146,7 +183,7 @@ class _DirectEffects:
         unembedding = torch.stack([target.unembedding_bias for target in targets])
         incoming = weights.sum(0)
         residual = (incoming + affine.sum(-1) + encoder + unembedding - expected).abs()
-        _require_finite(residual, "direct-effect completeness residual")
+        _require_finite(residual, "direct-effect completeness residual", self.check)
         # One bounded readback per target batch avoids thousands of MPS scalar synchronizations.
         accounting = torch.cat((expected[:, None], incoming[:, None], affine, encoder[:, None],
                                 unembedding[:, None], residual[:, None]), dim=1).tolist()
@@ -157,6 +194,7 @@ class _DirectEffects:
                                 "incoming": row[1], "biases": biases, "absolute_residual": row[8],
                                 "relative_residual": row[8] / max(1., abs(row[0]))})
         path.guard.check("direct edge products")
+        self.check("direct edge products")
         return weights, diagnostics
 
 
@@ -371,9 +409,11 @@ class Tracer:
             index.label_identity  # Refuse closed or invalid indexes before trace work.
         self.index = index
 
-    def _validate_forward_settings(self):
+    def _validate_forward_settings(self, check=_no_check):
         try:
-            current = _forward_settings(self.model, self.guard._guard)
+            check("forward settings")
+            current = _forward_settings(self.model, _DeadlineMemory(self.guard._guard, check))
+            check("forward settings complete")
             if current != self._settings:
                 changed = next(name for name in sorted(current.keys() | self._settings.keys())
                                if current.get(name) != self._settings.get(name))
@@ -441,13 +481,10 @@ class Tracer:
             return self._trace(prompt, max_targets, max_nodes, max_edges)
 
     def _trace(self, prompt, max_targets, max_nodes, max_edges):
-        started = time.monotonic()
+        check = _Deadline()
         label_index = self.index
         label_key = None if label_index is None else label_index.label_identity
-
-        def label_check(stage):
-            if time.monotonic() - started > 20:
-                raise CleanStop("trace feature labels exceeded the 20 second budget")
+        check("trace admission")
 
         state = self._intervention_state()
         specifications = state["specifications"] if isinstance(state, dict) else state
@@ -461,7 +498,7 @@ class Tracer:
             if self.model.training:
                 raise ValueError("trace requires an evaluation model")
             try:
-                _validate_dictionary(self.model, self.dictionary)
+                _validate_dictionary(self.model, self.dictionary, check)
             except (TypeError, ValueError):
                 self._cache.clear()
                 self._forward_cache = None
@@ -477,6 +514,7 @@ class Tracer:
             bounded_integer(max_edges, "max_edges", 0, 8192)
             bounded_integer(self.target_batch_size, "target_batch_size", 1, 64)
             encoded = self.tokenizer(prompt, return_tensors="pt", truncation=False)
+            check("tokenization")
             ids = encoded["input_ids"]
             if ids.ndim != 2 or ids.shape[0] != 1 or ids.dtype not in (torch.int32, torch.int64):
                 raise ValueError("tokenizer must return one integer token sequence")
@@ -487,28 +525,32 @@ class Tracer:
             self._new_prompt(prompt)
             identity = {"model": id(self.model), "model_weights": _versions(self.model),
                         "dictionary": id(self.dictionary), "dictionary_weights": _versions(self.dictionary),
-                        "dictionary_content": weights_hash(self.dictionary, memory=self.guard._guard),
+                        "dictionary_content": weights_hash(
+                            self.dictionary, memory=_DeadlineMemory(self.guard._guard, check)),
                         "dictionary_metadata": self.dictionary.metadata,
                         "tokenizer": id(self.tokenizer), "prompt": prompt, "tokens": ids.tolist(),
                         "interventions": state}
             state_key = hashlib.sha256(json.dumps(identity, sort_keys=True, allow_nan=False).encode()).hexdigest()
             cache_key = (state_key, max_targets, max_nodes, max_edges, self.target_batch_size, label_key)
-            self._validate_forward_settings()
+            self._validate_forward_settings(check)
             if cache_key in self._cache:
-                graph = self._cache.pop(cache_key)
-                self._cache[cache_key] = graph
+                graph = self._cache[cache_key]
                 self.guard.check("cached publication")
-                return graph.publish()
+                check("cached publication")
+                graph.publish()
+                self._cache.move_to_end(cache_key)
+                return graph
             if self._forward_cache is not None and self._forward_cache[0] == state_key:
                 path = self._forward_cache[1]
             else:
                 self._forward_cache = None
                 path = FrozenPath(self.model, ids.to(self.guard.device), self.dictionary,
-                                  guard=self.guard, interventions=specifications)
-                self._validate_forward_settings()
+                                  guard=self.guard, interventions=specifications, check=check)
+                self._validate_forward_settings(check)
                 if self._intervention_state() != identity["interventions"]:
                     raise RuntimeError("intervention state changed during the trace forward")
-            effects = _DirectEffects(path, self.dictionary, ids[0].tolist(), self.tokenizer)
+            check("forward complete")
+            effects = _DirectEffects(path, self.dictionary, ids[0].tolist(), self.tokenizer, check=check)
             target_indices = list(effects.logit_nodes)
             budget = len(target_indices) + min(max_targets, len(effects.feature_nodes))
             weights = path.embedding.new_zeros(len(effects.nodes), budget)
@@ -522,6 +564,7 @@ class Tracer:
             completed = 0
             while completed < budget:
                 with autorelease_scope(path.device):
+                    check("target selection")
                     size = self.guard.batch_size(self.target_batch_size, layers=path.layers, tokens=path.tokens,
                                                  width=path.width, mixer_width=path.mixer_width)
                     if completed < len(effects.logit_nodes):
@@ -529,6 +572,7 @@ class Tracer:
                     else:
                         targets = torch.tensor(target_indices, dtype=torch.long, device=path.device)
                         estimated, _ = influence(weights[:, :completed], targets, seeds)
+                        check("target influence")
                         available = feature_mask & ~visited
                         ranked = torch.argsort(estimated.masked_fill(~available, -1), descending=True, stable=True)
                         count = min(size, budget - completed)
@@ -543,17 +587,21 @@ class Tracer:
                     visited[batch] = True
                     completed += len(batch)
                     self.guard.check("target batch complete")
+                    check("target batch complete")
             targets = torch.tensor(target_indices, dtype=torch.long, device=path.device)
             scores, normalized = influence(weights, targets, seeds)
+            check("graph influence")
             top_seed = torch.zeros_like(seeds)
             top_seed[effects.logit_nodes[0]] = 1
             top_scores, _ = influence(weights, targets, top_seed)
+            check("top logit influence")
             source_total = float(top_scores[:effects.logit_nodes[0]].sum())
             feature_share = float(top_scores[feature_mask].sum()) / source_total if source_total else 0.
             error_mask = torch.tensor([n["kind"] == "error" for n in effects.nodes], device=path.device)
             error_share = float(top_scores[error_mask].sum()) / source_total if source_total else 0.
             display_nodes, display_edges, omitted, edge_omitted, connectivity = _prune(
                 effects, weights, target_indices, scores, normalized, max_nodes=max_nodes, max_edges=max_edges)
+            check("graph pruning")
             completeness = {"max_absolute_residual": _finite_max(
                                 (d["absolute_residual"] for d in diagnostics), "direct-effect absolute residual"),
                             "max_relative_residual": _finite_max(
@@ -570,7 +618,7 @@ class Tracer:
             tolerance = 1e-9 if path.dtype == torch.float64 else 2e-2
             if completeness["max_absolute_residual"] > tolerance:
                 raise ValueError(f"direct-effect completeness residual exceeds {tolerance}")
-            display_nodes = label_graph_nodes(display_nodes, label_index, check=label_check)
+            display_nodes = label_graph_nodes(display_nodes, label_index, check=check)
             graph_data = dict(nodes=display_nodes, edges=display_edges, tokens=effects.tokens,
                               layers=path.layers, completeness=completeness, omitted_influence=omitted,
                               error_share=error_share, feature_share=feature_share,
@@ -582,11 +630,14 @@ class Tracer:
                               "batches": batch_sizes, "graph": graph_data}
             trace_id = hashlib.sha256(json.dumps(trace_identity, sort_keys=True, allow_nan=False).encode()).hexdigest()
             graph = Graph.build(**graph_data, trace_id=trace_id, device=path.device)
+            check("graph construction")
             self.guard.check("graph publication")
             if self._intervention_state() != identity["interventions"]:
                 self._forward_cache = None
                 raise RuntimeError("intervention state changed during the trace")
-            self._validate_forward_settings()
+            self._validate_forward_settings(check)
+            # Admit publication and both caches together. No timeout follows this boundary.
+            check("graph publication")
             graph.publish()
             self._forward_cache = (state_key, path)
             self._cache[cache_key] = graph
