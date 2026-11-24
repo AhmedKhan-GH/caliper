@@ -947,3 +947,38 @@ foreach(_caliper_pg_dir programmable_graphics points_match draw_parity surface_m
         add_subdirectory(${_caliper_pg_dir})
     endif()
 endforeach()
+
+# The circuit fixture uses the actual hosted run and MCP bridge. Its browser
+# comparison runs after the workflow prepares Chromium and WebAssembly.
+function(caliper_circuit_trace_targets)
+    if(NOT APPLE OR NOT CALIPER_WITH_BUILDER OR NOT TARGET caliper_draw OR NOT TARGET caliper_producer)
+        return()
+    endif()
+    add_executable(caliper_circuit_parity "${CMAKE_SOURCE_DIR}/demos/circuit_trace/parity.mm"
+        "${CMAKE_SOURCE_DIR}/src/host/tensor_bridge.cpp")
+    target_include_directories(caliper_circuit_parity PRIVATE "${CMAKE_SOURCE_DIR}/src/host" "${CMAKE_SOURCE_DIR}/third_party/stb")
+    target_link_libraries(caliper_circuit_parity PRIVATE caliper_draw caliper_scene caliper_net caliper_producer
+        caliper::sdk caliper_builder_spec doctest::doctest
+        "-framework Metal" "-framework MetalPerformanceShaders" "-framework Foundation")
+    set_source_files_properties("${CMAKE_SOURCE_DIR}/demos/circuit_trace/parity.mm" PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
+    set_target_properties(caliper_circuit_parity PROPERTIES CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON
+        OBJCXX_STANDARD 17 OBJCXX_STANDARD_REQUIRED ON)
+    target_compile_definitions(caliper_circuit_parity PRIVATE CALIPER_MATCH_SUITE="interp_pieces")
+    set(_circuit_python "${CALIPER_ACCEPTANCE_PYTHON}")
+    if(NOT _circuit_python)
+        set(_circuit_python "${CALIPER_BUILDER_TEST_PYTHON}")
+    endif()
+    if(_circuit_python)
+        add_test(NAME caliper_circuit_trace_acceptance COMMAND "${CMAKE_COMMAND}" -E env
+            "PYTHONPATH=${CMAKE_SOURCE_DIR}/python:${CMAKE_SOURCE_DIR}"
+            "CALIPER_AGENT_OFFLINE=1" "HF_HUB_OFFLINE=1" "TRANSFORMERS_OFFLINE=1"
+            "CALIPER_APP_EXE=$<TARGET_FILE:caliper>" "CALIPER_MCP_EXE=$<TARGET_FILE:caliper-mcp>"
+            "CALIPER_CIRCUIT_PARITY_EXE=$<TARGET_FILE:caliper_circuit_parity>"
+            "${_circuit_python}" -m pytest --noconftest -p no:cacheprovider -rs
+            "${CMAKE_SOURCE_DIR}/tests/demos/test_circuit_trace.py::test_hidden_fixture")
+        set_tests_properties(caliper_circuit_trace_acceptance PROPERTIES LABELS "interp;acceptance;circuit_trace"
+            WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}" TIMEOUT 600
+            SKIP_REGULAR_EXPRESSION "SKIPPED \\[1\\].*Circuit fixture: verified absence of a Metal device")
+    endif()
+endfunction()
+cmake_language(DEFER DIRECTORY "${CMAKE_SOURCE_DIR}" CALL caliper_circuit_trace_targets)

@@ -69,7 +69,7 @@ jobs:
       - name: Make the instrument test Python
         run: |
           python3 -m venv "$RUNNER_TEMP/acceptance-py"
-          "$RUNNER_TEMP/acceptance-py/bin/pip" install "torch==$ACCEPTANCE_TORCH_VERSION" numpy Pillow websockets nanobind pytest
+          "$RUNNER_TEMP/acceptance-py/bin/pip" install "torch==$ACCEPTANCE_TORCH_VERSION" numpy Pillow websockets nanobind pytest safetensors "transformers==5.24.0" psutil datasets watchdog jsonschema
           "$RUNNER_TEMP/acceptance-py/bin/python" scripts/build_netio.py
           PYTHONPATH=python "$RUNNER_TEMP/acceptance-py/bin/python" -c "import torch, caliper, caliper._netio; print('Instrument test Python ready, torch', torch.__version__)"
       # The runtime WGSL compiler (tools/shaders/caliper-wgsl) is built from source in this job
@@ -143,7 +143,7 @@ jobs:
       # availability is not guaranteed, so skips are accepted here; a lane
       # that must have a GPU sets CALIPER_REQUIRE_GPU=1 to turn them into
       # failures.
-      - run: ctest --test-dir cmake-build-release --output-on-failure --timeout 600
+      - run: ctest --test-dir cmake-build-release --output-on-failure --timeout 600 -E '^caliper_circuit_trace_acceptance$'
       # The instrument acceptance test on its own, so that its result is visible. A skip because the runner has
       # no Metal device is accepted. A skip because torch or the native network sender is missing is a
       # setup error, and so is any other outcome that is neither a pass nor a Metal skip.
@@ -398,6 +398,45 @@ jobs:
             grep -q "dashboard: comparison skipped: no Metal device" "$dlog"
             echo "Dashboard parity: the browser side RAN and passed; the comparison SKIPPED because the runner has no Metal device"
           fi
+      - name: Circuit trace fixture acceptance
+        env:
+          CALIPER_WASM_DIR: ${{ runner.temp }}/draw-parity-views
+          CALIPER_CIRCUIT_OUT: ${{ runner.temp }}/circuit-trace-fixture
+          CALIPER_AGENT_OFFLINE: '1'
+          HF_HUB_OFFLINE: '1'
+          TRANSFORMERS_OFFLINE: '1'
+          TMPDIR: ${{ runner.temp }}
+        run: |
+          set -o pipefail
+          log="$RUNNER_TEMP/circuit-trace.log"
+          ctest --test-dir cmake-build-release -R '^caliper_circuit_trace_acceptance$' --no-tests=error --output-on-failure -V | tee "$log"
+          if grep -q '1 passed' "$log"; then
+            echo "Circuit fixture acceptance passed"
+          elif grep -q 'SKIPPED \[1\].*Circuit fixture: verified absence of a Metal device' "$log"; then
+            echo "Circuit fixture acceptance skipped because Metal is absent"
+          else
+            echo "::error::Circuit fixture acceptance has no valid outcome"
+            exit 1
+          fi
+
+      - if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: macos-circuit-trace
+          path: |
+            ${{ runner.temp }}/circuit-trace-fixture/*.json
+            ${{ runner.temp }}/circuit-trace-fixture/acceptance/*.json
+            ${{ runner.temp }}/circuit-trace-fixture/acceptance/commands.jsonl
+            ${{ runner.temp }}/circuit-trace-fixture/acceptance/events.jsonl
+            ${{ runner.temp }}/circuit-trace-fixture/acceptance/instrument.toml
+            ${{ runner.temp }}/circuit-trace-fixture/acceptance/*.png
+            ${{ runner.temp }}/circuit-trace-fixture/acceptance/captures
+            ${{ runner.temp }}/circuit-trace-fixture/parity
+            ${{ runner.temp }}/circuit-trace-fixture/**/*memory*.txt
+            ${{ runner.temp }}/circuit-trace-fixture/**/*.log
+            ${{ runner.temp }}/circuit-trace.log
+          if-no-files-found: ignore
+
       - if: failure()
         uses: actions/upload-artifact@v6
         with:
