@@ -1089,6 +1089,8 @@ def test_instrument_uses_three_panels_and_confirmed_bindings(override):
             spec["panel"].append(deepcopy(args))
         elif method == "spec.get":
             return {"json": deepcopy(spec)}
+        elif method == "piece.show":
+            return {"piece": {"hash": "0" * 64}, "from": "library"}
         elif method == "spec.set_text":
             spec.clear()
             spec.update(tomllib.loads(args["text"]))
@@ -1144,9 +1146,24 @@ def test_instrument_uses_three_panels_and_confirmed_bindings(override):
     bars = next(program for program in spec["program"] if program["id"] == "probabilities")
     assert set(bars["bind"].values()) == {"live:output.probs", "live:output.tokens", "live:output.label_text"}
     assert all(panel["primitive"] == "scene" for panel in spec["panel"])
+    assert all(program["piece"]["hash"] == "0" * 64 for program in spec["program"])
     driver.scene_programs(session, [], remove_examples=True)
     assert next(panel for panel in spec["panel"] if panel["id"] == "examples")["primitive"] == "text"
     assert {program["id"] for program in spec["program"]} == {"attribution", "probabilities"}
+
+
+@pytest.mark.parametrize("method,arguments", [("piece.show", {"name": "attribution_graph", "version": 1}),
+                                            ("run.set_param", {"run": "circuit-trace", "name": "clamp", "value": 0})])
+def test_mcp_command_name_does_not_consume_named_argument(method, arguments):
+    from io import StringIO
+    from unittest.mock import Mock
+    from _mcp import MCP
+    client = MCP.__new__(MCP)
+    client.journal = StringIO()
+    client.request = Mock(return_value={"structuredContent": {"ok": True}})
+    assert client.body(method, **arguments) == {"ok": True}
+    client.request.assert_called_once_with("tools/call", {"name": method.replace(".", "_"), "arguments": arguments})
+    assert json.loads(client.journal.getvalue())["args"] == arguments
 
 
 def headless_executable():

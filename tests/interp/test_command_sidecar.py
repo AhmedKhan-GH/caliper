@@ -159,8 +159,8 @@ def test_offline_command_sidecar(actual, tmp_path, monkeypatch):
         from types import SimpleNamespace
         monkeypatch.syspath_prepend(str(Path(__file__).resolve().parents[2] / "demos/circuit_trace"))
         import run as demo
-        def body(name, **params):
-            reply = tool(name, params)
+        def body(method, **params):
+            reply = tool(method, params)
             assert not reply.get("isError"), json.dumps(reply.get("content"))
             return reply["structuredContent"]
         session = SimpleNamespace(mcp=SimpleNamespace(body=body), quality_override=None)
@@ -169,6 +169,11 @@ def test_offline_command_sidecar(actual, tmp_path, monkeypatch):
         demo.programs(session, examples=True)
         spec = body("spec.get")["json"]
         assert all(panel["primitive"] == "scene" for panel in spec["panel"])
+        for program in spec["program"]:
+            pin = program["piece"]
+            assert pin["hash"] == body("piece.show", name=pin["name"], version=pin["version"],
+                                       **{"from": "library"})["piece"]["hash"]
+            assert pin["hash"] and pin["from"] == "library"
         demo.scene_programs(session, [], remove_examples=True)
         spec = body("spec.get")["json"]
         assert next(panel for panel in spec["panel"] if panel["id"] == "examples")["primitive"] == "text"

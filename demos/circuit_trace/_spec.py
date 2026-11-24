@@ -17,6 +17,10 @@ def toml_value(value):
 
 
 def scene_programs(session, programs, *, remove_examples=False):
+    for program in programs:
+        pin = program["piece"]
+        found = session.mcp.body("piece.show", name=pin["name"], version=pin["version"], **{"from": "library"})
+        pin.update(hash=found["piece"]["hash"], **{"from": found["from"]})
     spec = session.mcp.body("spec.get")["json"]
     identifiers = {program["id"] for program in programs}
     if remove_examples:

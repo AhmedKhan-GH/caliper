@@ -145,7 +145,7 @@ class MCP:
                 raise Failure(f"MCP {method}: {message['error']}")
             return message["result"]
 
-    def call(self, name, **args):
+    def call(self, name, /, **args):
         result = self.request("tools/call", {"name": name.replace(".", "_"), "arguments": args})
         # Images remain separate artifacts. The command log contains no API token.
         logged = {k: v for k, v in result.items() if k != "content"}
@@ -158,7 +158,7 @@ class MCP:
             raise Failure(f"{name}: {result.get('content')}")
         return result
 
-    def body(self, name, **args):
+    def body(self, name, /, **args):
         return self.call(name, **args).get("structuredContent", {})
 
     def close(self):
@@ -210,7 +210,7 @@ class Events:
                 raise Failure(f"Timed out: {description}.")
             self.wait(min(1, left))
 
-    def complete(self, name, **args):
+    def complete(self, name, /, **args):
         reply = self.mcp.body(name, **args)
         if not reply.get("pending"):
             return reply["result"]
