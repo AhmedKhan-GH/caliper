@@ -5,7 +5,7 @@ import pytest
 import safetensors
 
 from caliper.interp import _dictionary
-from caliper.interp._memory import CleanStop, MemoryGuard
+from caliper.interp._memory import MemoryGuard
 from tools.interp import build_index, eval_dictionary
 from .fixture import TinyLM, TinyTokenizer
 from .test_index import _t2_source_manifest
@@ -42,9 +42,5 @@ def test_requested_limit_refuses_before_tensor_materialization(tmp_path, monkeyp
     monkeypatch.setattr(command, "fineweb_documents", lambda **_: pytest.fail("dataset access ran"))
     monkeypatch.setattr(safetensors, "safe_open", HeadersOnly)
     arguments = ["--dictionary", str(tmp_path), "--device", "cpu", "--memory-gb", "6"]
-    if command is build_index:
-        assert command.main(arguments) == 2
-    else:
-        with pytest.raises(CleanStop, match="memory limit"):
-            command.main(arguments)
+    assert command.main(arguments) == 2
     assert limits == [6, 6]

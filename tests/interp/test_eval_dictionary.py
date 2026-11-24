@@ -96,3 +96,67 @@ def test_evaluator_refuses_unbounded_work_before_model_load(tmp_path, monkeypatc
     monkeypatch.setattr(evaluation, "load_text_model", lambda **_: pytest.fail("model load ran"))
     with pytest.raises(ValueError):
         evaluation.main(["--dictionary", str(tmp_path), *arguments])
+
+
+@pytest.mark.parametrize("stop_at", ["before_batch", "pending_batch", "one_token", "restore"])
+def test_early_all_layer_stop_replaces_prior_passed_quality(tmp_path, monkeypatch, capsys, stop_at):
+    from caliper._interpret_protocol import bounded
+    from tools.interp.checkpoint_state import dictionary_fingerprint, write_json
+    from tools.interp.text_stream import TokenBatch
+
+    model = TinyLM(layers=2, width=4, heads=2, latents=8, k=2)
+    _, metadata = write_fixture(tmp_path, model)
+    dictionary = load_dictionary(tmp_path, model=model)
+    dictionary.metadata["quality"].update(status="passed", fvu=0, dead_fraction=0,
+                                           cross_entropy_delta=0, evaluated_tokens=200_000)
+    write_json(tmp_path / "dictionary.json", dictionary.metadata)
+    identity = dictionary_fingerprint(tmp_path, metadata)
+    stream = TextStream([], TinyTokenizer(), "quality")
+
+    class Stop:
+        def check(self):
+            if stop_at == "before_batch":
+                raise CleanStop("synthetic pre-batch stop")
+
+    def next_tokens(*args, **kwargs):
+        size = 1 if stop_at == "one_token" else 2
+        return TokenBatch(torch.ones(size, dtype=torch.int64), torch.zeros(size), torch.zeros(size))
+
+    def batch(*args, **kwargs):
+        if stop_at == "pending_batch":
+            raise CleanStop("synthetic pending stop")
+        result = evaluation.quality_stats(metadata)
+        result.count = 1
+        monkeypatch.setattr(stream, "next_tokens", lambda *a, **k: (_ for _ in ()).throw(CleanStop("one token")))
+        return result
+
+    monkeypatch.setattr(stream, "next_tokens", next_tokens)
+    monkeypatch.setattr(evaluation, "evaluate_batch", batch)
+    if stop_at == "restore":
+        state = tmp_path / "evaluation" / "state.json"
+        state.parent.mkdir()
+        state.write_text('{"complete_previous_cursor": true}\n')
+        before = state.read_bytes()
+
+        def restore(folder, stats, *args):
+            stats.count = 200_000
+            raise CleanStop("synthetic partial restore")
+
+        monkeypatch.setattr(evaluation, "restore_evaluation", restore)
+    result = evaluation.evaluate(model, dictionary, stream, tmp_path, tokens=4, context=2,
+                                 batch_tokens=2, stop=Stop(), resume=stop_at == "restore")
+    assert result["status"] == "partial"
+    assert result["evaluated_tokens"] == (1 if stop_at == "one_token" else 0)
+    assert result["fvu"] is result["dead_fraction"] is result["cross_entropy_delta"] is None
+    assert result["scope"] == "all_layers" and result["all_mlps_replaced"] == 2
+    assert result["dictionary_hash"] == identity
+    assert json.loads((tmp_path / "dictionary.json").read_text())["quality"] == result
+    end = json.loads(capsys.readouterr().out.splitlines()[-1])
+    assert end == {"stage": "quality_end", **result}
+    assert bounded({"result": end})
+    if stop_at == "restore":
+        assert state.read_bytes() == before
+        assert list(state.parent.iterdir()) == [state]
+    elif stop_at == "pending_batch":
+        state = json.loads((tmp_path / "evaluation" / "state.json").read_text())
+        assert state["pending_ids"] == [1, 1] and state["count"] == 0

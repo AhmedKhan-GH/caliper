@@ -1,4 +1,5 @@
 """Synthetic fallback admission, resume identity, and aggregate time checks."""
+import copy
 import json
 import shutil
 
@@ -11,9 +12,9 @@ from .test_training_stream import documents
 from .test_upper_half import tiny_model
 
 
-def synthetic_source(folder):
+def synthetic_source(folder, layers=4):
     """Create artificial completed-run records without a learning or quality run."""
-    model = tiny_model()
+    model = tiny_model(layers)
     metadata = training.make_manifest(model, 8, 2)
     stream = TextStream(documents(), TinyTokenizer(), "train")
     metadata["training"].update(source_id=stream.source_id, token_budget=16, tokens=16,
@@ -27,7 +28,7 @@ def synthetic_source(folder):
     checkpoint_state.write_json(folder / "runtime.json", {"generation": generation.name, "elapsed_seconds": 130})
     metadata["quality"] = {"fvu": 0.31, "dead_fraction": 0.1, "cross_entropy_delta": 0.2,
                            "evaluated_tokens": 200_000, "status": "failed", "partition": "quality",
-                           "stop_reason": "complete", "all_mlps_replaced": 4}
+                           "stop_reason": "complete", "all_mlps_replaced": layers}
     checkpoint_state.write_json(folder / "dictionary.json", metadata)
     # Artificial completed quality state for source-admission checks only.
     evaluation = folder / "evaluation"
@@ -74,6 +75,143 @@ def test_admission_binds_source_bytes_and_excludes_quality(tmp_path):
     assert before == {p.relative_to(source): p.read_bytes() for p in source.rglob("*") if p.is_file()}
 
 
+def test_admission_embeds_exact_source_evidence_with_response_bounds(tmp_path, monkeypatch):
+    from caliper._interpret_protocol import bounded
+
+    source, output = tmp_path / "source", tmp_path / "fallback"
+    _, metadata, source_id = synthetic_source(source, layers=24)
+    # Include normal full-size report arrays and per-layer diagnostic metadata.
+    metadata["quality"].update(per_layer_fvu=[0.31] * 24, per_layer_dead_fraction=[0.1] * 24)
+    metadata["training"]["last_batch_metrics"] = {str(i): {"fvu": 0.31, "gradient_norm": 1.0} for i in range(24)}
+    checkpoint_state.write_json(source / "dictionary.json", metadata)
+    source_hash = checkpoint_state.dictionary_fingerprint(source, metadata)
+    state_path = source / "evaluation" / "state.json"
+    state = json.loads(state_path.read_text())
+    state["identity"] = source_hash
+    checkpoint_state.write_json(state_path, state)
+    before = {p.relative_to(source): p.read_bytes() for p in source.rglob("*") if p.is_file()}
+    args = training.parser().parse_args(arguments(source, output))
+    manifest = training._manifest
+    admitted_sources = []
+
+    def remember(data):
+        if "fallback_source" not in data:
+            admitted_sources.append(data)
+        return manifest(data)
+
+    monkeypatch.setattr(training, "_manifest", remember)
+    prepared = training.prepare_upper_half(args, source_id=source_id)
+    evidence = prepared["fallback_source"]
+    assert evidence == {
+        "metadata": metadata,
+        "identity": {"model_hash": metadata["model_hash"], "dictionary_fingerprint": source_hash},
+        "evaluation": {
+            "version": 1, "count": 200_000, "pending_ids": None, "identity": source_hash,
+            "settings": {"tokens": 200_000, "scope": "all_layers", "active_layers": list(range(24))},
+            "stream": {"partition": "quality", "source_id": source_id,
+                       "partitions": metadata["training"]["partitions"]},
+        },
+    }
+    trainer = training.Trainer(prepared, **training._trainer_arguments(args))
+    assert bounded({"metadata": trainer.metadata, "fallback_source": evidence})
+    assert bounded({"result": {"metadata": trainer.metadata, "fallback_source": evidence,
+                               "identity": evidence["identity"], "index": {"tokens": 2_000_000}}})
+    assert before == {p.relative_to(source): p.read_bytes() for p in source.rglob("*") if p.is_file()}
+    # Neither the admitted metadata nor its partition list can change the record.
+    admitted_sources[0]["training"]["partitions"]["train"][0] = 1
+    admitted_sources[0]["quality"]["fvu"] = 0.8
+    assert evidence["metadata"] == metadata
+    assert evidence["evaluation"]["stream"]["partitions"] == metadata["training"]["partitions"]
+    evidence["metadata"]["training"]["partitions"]["train"][0] = 2
+    assert evidence["evaluation"]["stream"]["partitions"] == metadata["training"]["partitions"]
+
+
+@pytest.mark.parametrize("change", ["missing", "quality", "source_quality", "identity", "cursor", "partitions"])
+def test_changed_admitted_record_refuses_resume_before_model(tmp_path, monkeypatch, change):
+    source, _, folder, argv = fallback_checkpoint(tmp_path)
+    record = json.loads((folder / "state.json").read_text())
+    evidence = record["metadata"]["fallback_source"]
+    if change == "missing":
+        del record["metadata"]["fallback_source"]
+    elif change == "quality":
+        evidence["metadata"]["quality"]["fvu"] = 0.4
+    elif change == "source_quality":
+        metadata = json.loads((source / "dictionary.json").read_text())
+        metadata["quality"]["fvu"] = 0.4
+        checkpoint_state.write_json(source / "dictionary.json", metadata)
+    elif change == "identity":
+        evidence["identity"]["dictionary_fingerprint"] = "0" * 64
+    elif change == "cursor":
+        evidence["evaluation"]["count"] -= 1
+    else:
+        evidence["evaluation"]["stream"]["partitions"]["train"][0] = 1
+    checkpoint_state.write_json(folder / "state.json", record)
+    monkeypatch.setattr(training, "fineweb_documents", lambda **_: documents())
+    monkeypatch.setattr(training, "load_text_model", lambda **_: pytest.fail("model allocation ran"))
+    with pytest.raises(ValueError, match="admitted fallback source"):
+        training.main([*argv, "--resume"])
+
+
+@pytest.mark.parametrize("value", [None, {}, {"fallback_source": {}}])
+def test_all_layer_source_refuses_nested_fallback_source(tmp_path, value):
+    source, _, _, metadata, source_id, _, args, _ = setup_fallback(tmp_path)
+    metadata["fallback_source"] = value
+    checkpoint_state.write_json(source / "dictionary.json", metadata)
+    with pytest.raises(ValueError, match="all-layer source"):
+        training.prepare_upper_half(args, source_id=source_id)
+
+
+def test_admission_refuses_unbounded_full_source_metadata(tmp_path):
+    source, _, _, metadata, source_id, _, args, _ = setup_fallback(tmp_path)
+    metadata["quality"]["diagnostic"] = "x" * 4097
+    checkpoint_state.write_json(source / "dictionary.json", metadata)
+    with pytest.raises(ValueError, match="response limits"):
+        training.prepare_upper_half(args, source_id=source_id)
+
+
+def test_source_evidence_changes_current_fingerprint(tmp_path):
+    source, output, _, _, _, _, args, prepared = setup_fallback(tmp_path)
+    trainer = training.Trainer(prepared, **training._trainer_arguments(args))
+    trainer.initialize_upper(source)
+    checkpoint_state.export_dictionary(output, trainer, training.initial_progress())
+    identity = checkpoint_state.dictionary_fingerprint(output, trainer.metadata)
+    changed = copy.deepcopy(trainer.metadata)
+    changed["fallback_source"]["metadata"]["quality"]["fvu"] = 0.4
+    assert checkpoint_state.dictionary_fingerprint(output, changed) != identity
+
+
+def test_restore_cannot_drop_admitted_source_before_training(tmp_path, monkeypatch):
+    source, output, _, argv = fallback_checkpoint(tmp_path)
+    from .test_dictionary_startup import snapshot, startup
+    from caliper.interp import load_dictionary
+    dictionary = load_dictionary(source, model_hash=json.loads((source / "dictionary.json").read_text())["model_hash"])
+    model = tiny_model()
+    startup(monkeypatch, training, model, "no_stop")
+    # Use the admitted source model identity without a model forward.
+    monkeypatch.setattr(training, "make_manifest", lambda *a: copy.deepcopy(dictionary.metadata))
+
+    def restore(root, trainer, stream):
+        trainer.metadata.pop("fallback_source")
+        return training.initial_progress()
+
+    monkeypatch.setattr(training, "restore_checkpoint", restore)
+    monkeypatch.setattr(training, "train_online", lambda *a, **k: pytest.fail("training ran"))
+    before = snapshot(output)
+    with pytest.raises(ValueError, match="admitted fallback source"):
+        training.main([*argv, "--resume"])
+    assert snapshot(output) == before
+
+
+def test_direct_training_refuses_changed_admitted_source(tmp_path):
+    source, output, model, _, _, _, args, prepared = setup_fallback(tmp_path)
+    trainer = training.Trainer(prepared, **training._trainer_arguments(args))
+    trainer.initialize_upper(source)
+    trainer.metadata["fallback_source"]["metadata"]["quality"]["fvu"] = 0.4
+    with pytest.raises(ValueError, match="admitted fallback source"):
+        training.train_online(model, trainer, TextStream(documents(), TinyTokenizer(), "train"), output, token_budget=16)
+    assert not output.exists()
+
+
 @pytest.mark.parametrize("section,key,value", [
     ("quality", "status", "partial"), ("quality", "evaluated_tokens", 199999),
     ("quality", "partition", "train"), ("quality", "all_mlps_replaced", 2),
@@ -112,12 +250,20 @@ def test_fallback_options_are_required_together(tmp_path, monkeypatch, extra):
         training.main(["--output", str(tmp_path), *extra])
 
 
-def test_source_alias_and_existing_output_refuse(tmp_path):
+def test_source_alias_refuses(tmp_path):
     source, output, _, _, source_id, _, args, _ = setup_fallback(tmp_path)
-    output.symlink_to(source, target_is_directory=True)
+    try:
+        output.symlink_to(source, target_is_directory=True)
+    except OSError as error:
+        if getattr(error, "winerror", None) == 1314:
+            pytest.skip("directory symlinks require Windows privilege")
+        raise
     with pytest.raises(ValueError, match="separate"):
         training.prepare_upper_half(args, source_id=source_id)
-    output.unlink()
+
+
+def test_existing_output_refuses(tmp_path):
+    _, output, _, _, source_id, _, args, _ = setup_fallback(tmp_path)
     output.mkdir()
     (output / "dictionary.json").write_text("{}")
     with pytest.raises(ValueError, match="not empty"):
@@ -180,7 +326,7 @@ def test_resume_time_includes_prior_and_runtime_export(tmp_path, monkeypatch):
 
 
 def test_main_uses_checkpoint_on_resume_and_keeps_warm_source_unchanged(tmp_path, monkeypatch):
-    source, output, model, _, _, argv, _, _ = setup_fallback(tmp_path)
+    source, output, model, _, _, argv, _, prepared = setup_fallback(tmp_path)
     before = {p.relative_to(source): p.read_bytes() for p in source.rglob("*") if p.is_file()}
     monkeypatch.setattr(training, "fineweb_documents", lambda **_: documents())
     monkeypatch.setattr(training, "load_text_model", lambda **_: (model, TinyTokenizer()))
@@ -190,8 +336,11 @@ def test_main_uses_checkpoint_on_resume_and_keeps_warm_source_unchanged(tmp_path
     assert exported["training"]["status"] == "fallback_complete"
     assert exported["training"]["tokens"] == 16
     assert "upper_half_from" not in exported["training"]["optimizer"]
+    assert exported["fallback_source"] == prepared["fallback_source"]
+    assert checkpoint_state.checkpoint_record(output / "checkpoints")[1]["metadata"]["fallback_source"] == prepared["fallback_source"]
     monkeypatch.setattr(training.Trainer, "initialize_upper", lambda *_: pytest.fail("source weights reinitialized"))
     training.main([*argv, "--resume"])
+    assert json.loads((output / "dictionary.json").read_text())["fallback_source"] == prepared["fallback_source"]
     assert before == {p.relative_to(source): p.read_bytes() for p in source.rglob("*") if p.is_file()}
 
 
@@ -297,7 +446,9 @@ def test_matching_optional_report_hash_preserves_legacy_admission(tmp_path):
     source, _, _, metadata, source_id, _, args, before = setup_fallback(tmp_path)
     metadata["quality"]["dictionary_hash"] = before["training"]["fallback"]["source_dictionary_hash"]
     checkpoint_state.write_json(source / "dictionary.json", metadata)
-    assert training.prepare_upper_half(args, source_id=source_id) == before
+    after = training.prepare_upper_half(args, source_id=source_id)
+    before["fallback_source"]["metadata"]["quality"]["dictionary_hash"] = metadata["quality"]["dictionary_hash"]
+    assert after == before
 
 
 @pytest.mark.parametrize("value", [-1, float("nan"), float("inf")])

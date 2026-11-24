@@ -206,3 +206,63 @@ def test_exhausted_resume_refuses_model_load(tmp_path, monkeypatch):
     monkeypatch.setattr(train_transcoders, "load_text_model", lambda **_: pytest.fail("model load ran"))
     with pytest.raises(ValueError, match="reserve"):
         train_transcoders.main(["--output", str(tmp_path), "--resume"])
+
+
+@pytest.mark.parametrize("delay,stop_reason", [(1, None), (270, None), (1, "synthetic resource stop")])
+def test_checkpoint_deadline_starts_after_complete_save(tmp_path, monkeypatch, capsys, delay, stop_reason):
+    from caliper._interpret_protocol import bounded
+    from tools.interp import train_transcoders as training
+    from .test_dictionary_startup import startup
+    import json
+
+    model, _, _ = small_trainer()
+    startup(monkeypatch, training, model, "no_stop")
+
+    class Clock:
+        value = 0.0
+        def __call__(self):
+            return self.value
+
+    clock = Clock()
+    save, online = training.save_checkpoint, training.train_online
+
+    def delayed_save(*args, **kwargs):
+        result = save(*args, **kwargs)
+        clock.value += 300  # Artificial duration, with no sleep or timing measurement.
+        return result
+
+    def step(self, index, x, y, tokens_before, *, health):
+        clock.value += delay
+        health()
+        if stop_reason:
+            raise CleanStop(stop_reason)
+        return {"fvu": 0.0, "gradient_norm": 0.0}
+
+    def train(*args, **kwargs):
+        kwargs.update(started=0, clock=clock)
+        return online(*args, **kwargs)
+
+    monkeypatch.setattr(training, "save_checkpoint", delayed_save)
+    monkeypatch.setattr(training.Trainer, "step_layer", step)
+    monkeypatch.setattr(training, "train_online", train)
+    # Supply deterministic CPU tokens without a dataset iterator or optimizer step.
+    from tools.interp.text_stream import TokenBatch
+    monkeypatch.setattr(TextStream, "next_tokens", lambda self, count, **k: TokenBatch(
+        torch.ones(count, dtype=torch.int64), torch.zeros(count, dtype=torch.int64),
+        torch.arange(count)))
+    code = training.main(["--output", str(tmp_path), "--device", "cpu", "--latents", "16", "--k", "2",
+                          "--tokens", "8", "--context", "4", "--batch-tokens", "8"])
+    events = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+    result = events[-1]
+    assert result["stage"] == "train_end" and bounded({"result": result})
+    _, saved = checkpoint_record(tmp_path / "checkpoints")
+    assert all(event["save_seconds"] == 300 for event in events if event["stage"] == "checkpoint")
+    if delay == 270 or stop_reason:
+        assert code == 2 and result["status"] == "interrupted"
+        assert result["reason"] == (stop_reason or "checkpoint deadline") and result["tokens"] == 0
+        assert saved["progress"]["pending_ids"] == [1] * 8
+        assert saved["progress"]["next_layer"] == 0
+    else:
+        assert code == 0 and result["status"] == "complete"
+        assert result["tokens"] == saved["progress"]["tokens"] == 8
+        assert saved["progress"]["pending_ids"] is None

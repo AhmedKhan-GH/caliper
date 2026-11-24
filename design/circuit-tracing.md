@@ -120,13 +120,42 @@ It processes layer losses in sequence to bound temporary memory. Training does n
 A ten-minute pilot measures throughput and peak memory with `/usr/bin/time -l` on a quiet machine.
 
 If the pilot predicts more than ten hours, reduce latents to 8,192, then tokens to 20 million.
-The hard limits remain ten hours and 24 GB. Checkpoints occur at most five minutes apart and on a clean stop.
+The hard limits remain ten hours and 24 GB.
+The trainer uses a 240-second checkpoint interval after each completed save and stops if the work interval reaches 270 seconds.
+Checkpoint writes consume additional time within the aggregate cap.
 The founder checkpoint rule overrides the earlier 30-minute interval.
-Training runs at reduced priority, with one heavy slot and exclusive GPU access.
+
+The external resource wrapper runs training at `nice -n 10`, with one heavy slot and exclusive GPU access.
+These requirements are run policy. Portable tools do not contain machine-specific lock paths.
 The process checks memory pressure and stops cleanly at the specified thresholds.
+Startup stops return a bounded structured result and a nonzero exit without a traceback.
+A stop before complete initialization or restore preserves existing checkpoints and creates no new checkpoint.
+
+Model and tokenizer files must exist locally before a tool starts.
+The dataset can use a pinned local Parquet manifest or the specifically approved public FineWeb-Edu stream.
+The stream uses the fixed revision and document partitions in the training metadata.
 
 Quality uses 200,000 held-out tokens. Mean unexplained variance must not exceed 0.30.
 Dead latents must not exceed 15 percent. Full MLP replacement must increase cross-entropy by at most 0.5 nats.
+An incomplete evaluation records `partial` and the current dictionary fingerprint, even before two tokens complete.
+It emits `quality_end` and replaces any earlier passed quality report.
+
+Section 7 of the approved M7 and M8 outline authorizes an upper-half fallback after complete training and failed full quality evaluation.
+The fallback trains the upper half with its full token budget and represents the lower half through error nodes.
+For Qwen, layers 12 through 23 train, and layers 0 through 11 retain zero transcoders.
+The original lower MLPs remain in the quality evaluation.
+The fallback records the admitted source metadata, exact fingerprint, and completed evaluation cursor in `fallback_source`.
+
+Fallback quality has scope `upper_half` and status `fallback_passed`, `fallback_failed`, or `fallback_partial`.
+Upper-half acceptance does not establish all-layer acceptance or receive the all-layer `passed` status.
+Lower layers have no feature examples or feature intervention targets because their MLP contributions enter error nodes.
+This reduced coverage can increase error share and reduce feature share. Acceptance still requires a feature share of at least 0.30.
+The acceptance report must record both measured shares and the fallback scope.
+
+The original and fallback training jobs share the aggregate ten-hour cap, which includes model load, checkpoints, and export.
+The fallback adds no time beyond that cap. Its token budget and quality scope are separate from the aggregate time allowance.
+The detailed contract is in `docs/reference/upper-half-dictionaries.md`.
+
 The example index uses two million other held-out tokens and keeps the largest 16 activations per feature.
 Its memory-mapped table records document, token position, activation count, and maximum.
 Window queries run at most 16 windows together and use an LRU cache of 256 features.
@@ -205,7 +234,10 @@ A missing dictionary gives a structured refusal.
 
 The outline reference `tests/scene/draw_reference.h` is absent on the base.
 The implemented cross-backend limits are in `web/test/draw_parity.spec.ts`.
-Interior pixels differ by at most two channel levels. Differing edge pixels occupy at most one percent of the image.
+
+Interior pixels differ by at most two channel levels.
+The existing edge-side exemption accepts an edge pixel that matches an adjacent reference color.
+After this exemption, differing edge pixels occupy at most one percent of the image.
 Interior IDs must match exactly. The new piece checks retain these limits.
 
 ## Intervention Contract
