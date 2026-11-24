@@ -399,7 +399,12 @@ class Tracer:
         with autorelease_scope(next(self.model.parameters()).device):
             if self.model.training:
                 raise ValueError("trace requires an evaluation model")
-            _validate_dictionary(self.model, self.dictionary)
+            try:
+                _validate_dictionary(self.model, self.dictionary)
+            except (TypeError, ValueError):
+                self._cache.clear()
+                self._forward_cache = None
+                raise
             device = next(self.model.parameters()).device
             if device != self.guard.device:
                 self.guard = MemoryGuard(device)

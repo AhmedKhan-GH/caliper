@@ -167,8 +167,8 @@ def test_small_qwen_forward_settings_are_refused(monkeypatch, module, field, val
     assert tracer.trace("fixture", 0) is first
     identity = model_identity(model)
     setattr(model.get_submodule(module), field, value)
-    assert model_identity(model) == identity
-    with pytest.raises(ValueError, match="forward setting changed"):
+    assert model_identity(model) != identity
+    with pytest.raises(ValueError, match="dictionary model identity mismatch"):
         tracer.trace("fixture", 0)
     assert not tracer._cache and tracer._forward_cache is None
 
@@ -184,6 +184,6 @@ def test_qwen_mutable_config_cannot_change_under_cached_graph(monkeypatch):
     assert tracer.trace("\x01\x02", 0) is baseline
     # A list mutation must not also mutate the admission snapshot.
     model.config.layer_types[0] = "full_attention"
-    with pytest.raises(ValueError, match=r"forward setting changed.*config.layer_types"):
+    with pytest.raises(ValueError, match="dictionary model identity mismatch"):
         tracer.trace("\x01\x02", 0)
     assert not tracer._cache and tracer._forward_cache is None
