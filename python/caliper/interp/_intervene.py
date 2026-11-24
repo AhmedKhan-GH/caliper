@@ -361,6 +361,7 @@ class InterventionService:
         self.tokenizer = None
         self.resource_guard = None
         self._cache = OrderedDict()
+        self._cache_inputs = {}
         self._cache_identity = None
         self.preparing_source = False
         self._hooks = weakref.WeakSet()
@@ -423,6 +424,7 @@ class InterventionService:
     def invalidate_cache(self):
         """Release patch sources after a prompt or model change."""
         self._cache.clear()
+        self._cache_inputs.clear()
         self._cache_identity = None
 
     def _prepare_dictionary_identity(self):
@@ -598,14 +600,19 @@ class InterventionService:
 
     def _identity(self):
         """Check exact state at each lookup, including writes between point hooks."""
+        from ._forward_identity import forward_settings
         # Include nonpersistent buffers and alias writes. Inference tensors have
         # no version counter, but their materialized bytes obey the same contract.
         state = {"parameter:" + name: value for name, value in self.model.named_parameters()}
         state.update({"buffer:" + name: value for name, value in self.model.named_buffers()})
         content = _content_identity(state, self.resource_guard)
+        settings = forward_settings(self.model, tensor_hash=lambda values: _content_identity(values, self.resource_guard))
         return (id(self.model), id(self.tokenizer),
                 tuple((id(m), m.training) for m in self.model.modules()),
-                tuple((name, id(value), value.device) for name, value in state.items()), content)
+                tuple((name, id(value), value.device) for name, value in state.items()), content,
+                tuple(sorted(settings.items())),
+                tuple((name, id(module.act_fn)) for name, module in self.model.named_modules()
+                      if hasattr(module, "act_fn")))
 
     def _source_keys(self):
         return {(hook.spec["source_prompt"], hook.spec["point"]) for hook in self._hooks
@@ -627,6 +634,8 @@ class InterventionService:
         for key in list(self._cache):
             if key not in required:
                 del self._cache[key]
+        prompts = {key[0] for key in self._cache}
+        self._cache_inputs = {key: value for key, value in self._cache_inputs.items() if key in prompts}
 
     def _source_space(self, sources):
         """Admit captures within fixed bounds without eviction of an active source."""
@@ -644,6 +653,8 @@ class InterventionService:
             raise InterventionError("active patch sources exceed the bounded source cache")
         for key in evict:
             del self._cache[key]
+        prompts = {key[0] for key in self._cache}
+        self._cache_inputs = {key: value for key, value in self._cache_inputs.items() if key in prompts}
 
     def _source(self, spec):
         identity = self._identity()
@@ -652,10 +663,16 @@ class InterventionService:
             self._cache_identity = identity
         prompt, point = spec["source_prompt"], spec["point"]
         key = prompt, point
+        inputs = self._source_inputs(spec)
+        input_identity = _content_identity(inputs, self.resource_guard)
+        if self._cache_inputs.get(prompt) != input_identity:
+            for old_key in list(self._cache):
+                if old_key[0] == prompt:
+                    del self._cache[old_key]
+            self._cache_inputs.pop(prompt, None)
         if key not in self._cache:
             from ._memory import autorelease_scope
             from ._output import internal_forward
-            inputs = self._source_inputs(spec)
             missing = {key} | {item for item in self._source_keys()
                                if item[0] == prompt and item not in self._cache}
             device = next(self.model.parameters()).device
@@ -687,6 +704,7 @@ class InterventionService:
             finally:
                 self.preparing_source = False
             self._cache.update(sources)
+            self._cache_inputs[prompt] = input_identity
         self._cache.move_to_end(key)
         return self._cache[key]
 
