@@ -655,7 +655,7 @@ bool interpretation_request(const Json& v) {
 }
 
 bool intervention_number(const Json& value) {
-    return is_finite(value) && (!value.is_int() || std::abs(value.as_double()) <= double(kSafeInt));
+    return is_finite(value) && (!value.is_integer_token() || std::abs(value.as_double()) <= double(kSafeInt));
 }
 
 bool intervention_spec(const Json& value, bool lifecycle = false) {

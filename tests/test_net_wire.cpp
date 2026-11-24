@@ -1133,3 +1133,17 @@ TEST_CASE("net/wire: free-text parameters preserve exact byte limits") {
     CHECK(CALIPER_NET_TEXT_MAX == 1024);
     CHECK(CALIPER_NET_NAME_MAX == 63);
 }
+
+TEST_CASE("net/wire: M8 intervention numbers preserve raw integer limits") {
+    for (const auto& item : std::vector<std::pair<std::string, bool>>{
+             {"9007199254740991", true}, {"9007199254740992", false},
+             {"100000000000000000000", false}, {"-100000000000000000000", false},
+             {"1e20", true}, {"100000000000000000000.0", true}}) {
+        CAPTURE(item.first);
+        const std::string spec = R"({"point":"layers.0.mlp_out","kind":"clamp","feature":1,"value":)" + item.first + "}";
+        const auto bytes = raw_frame_of(CALIPER_NET_MSG_CONTROL,
+            R"({"request_id":1,"op":"intervene","intervene":{"set":)" + spec + "}}");
+        Message decoded;
+        CHECK(decode_bytes(bytes, &decoded).ok() == item.second);
+    }
+}
