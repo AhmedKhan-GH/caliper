@@ -287,12 +287,12 @@ def main(argv=None):
                           microbatch_tokens=args.microbatch_tokens, auxiliary_weight=args.auxiliary_weight,
                           dead_tokens=args.dead_tokens, context=args.context, batch_tokens=args.batch_tokens)
         memory.check("after_dictionary_init")
-        stream = TextStream(fineweb_documents(cache_dir=args.dataset_cache), tokenizer, "train")
-        progress = restore_checkpoint(args.output / "checkpoints", trainer, stream) if args.resume else None
-        memory.check("after_resume")
-        train_online(model, trainer, stream, args.output, token_budget=args.tokens, progress=progress,
-                     memory=memory, stop=stop, save_seconds=args.save_seconds,
-                     max_wall_seconds=args.max_wall_seconds, run_seconds=args.run_seconds, started=started)
+        with TextStream(fineweb_documents(cache_dir=args.dataset_cache), tokenizer, "train") as stream:
+            progress = restore_checkpoint(args.output / "checkpoints", trainer, stream) if args.resume else None
+            memory.check("after_resume")
+            train_online(model, trainer, stream, args.output, token_budget=args.tokens, progress=progress,
+                         memory=memory, stop=stop, save_seconds=args.save_seconds,
+                         max_wall_seconds=args.max_wall_seconds, run_seconds=args.run_seconds, started=started)
 
 
 if __name__ == "__main__":

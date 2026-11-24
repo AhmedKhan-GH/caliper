@@ -169,3 +169,28 @@ def test_interrupted_document_scan_keeps_buffered_tokens():
     assert torch.equal(actual.input_ids, expected.input_ids)
     assert torch.equal(actual.document_ids, expected.document_ids)
     assert torch.equal(actual.positions, expected.positions)
+
+
+def test_stream_close_releases_generator_and_keeps_cursor():
+    closed = []
+    class Source:
+        def __iter__(self):
+            try:
+                yield from documents()
+            finally:
+                closed.append(True)
+    with TextStream(Source(), TinyTokenizer(), "train") as stream:
+        stream.next_tokens(23)
+        state = stream.state_dict()
+    assert closed == [True]
+    assert stream.iterator is None and stream.documents is None
+    assert stream.state_dict() == state
+    stream.close()
+    assert closed == [True]
+    with pytest.raises(RuntimeError, match="closed"):
+        stream.next_tokens(1)
+    with pytest.raises(ValueError):
+        with TextStream(Source(), TinyTokenizer(), "train") as failed:
+            failed.next_tokens(23)
+            raise ValueError("fixture")
+    assert closed == [True, True]
