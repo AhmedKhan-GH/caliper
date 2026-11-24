@@ -2,7 +2,8 @@
 import pytest
 import torch
 
-from caliper.interp._intervene import InterventionService, _source_input_identity
+from caliper._controls import Controls
+from caliper.interp._intervene import InterventionError, InterventionService, _source_input_identity
 from caliper.interp._memory import CleanStop
 from caliper.interp._points import capture
 from .fixture import TinyLM
@@ -141,24 +142,69 @@ def test_input_canonicalization_preserves_weight_layout_refusal():
         _state_hash(inputs)
 
 
-def test_source_evidence_restores_with_the_control_transaction():
+@pytest.mark.parametrize("operation", ["boundary", "restore", "override"])
+def test_source_evidence_restores_with_the_control_transaction(operation):
+    from .test_intervention_replay import snapshot
+
+    class ArmedTokenizer(MutableTokenizer):
+        change_on_call = False
+
+        def __call__(self, text, **kwargs):
+            if self.change_on_call:
+                self.add_bos_token = False
+                self.change_on_call = False
+            return super().__call__(text, **kwargs)
+
     model = TinyLM(layers=1, width=8, heads=2, latents=4, k=1).eval()
-    tokenizer = MutableTokenizer()
-    service = InterventionService(model)
+    tokenizer = ArmedTokenizer()
+    controls = Controls()
+    service = controls.interventions_on(model)
     service.configure(tokenizer=tokenizer)
-    spec = {"kind": "patch", "point": "layers.0.resid_pre", "source_prompt": "source"}
+    executor = service.executor
+    spec = {"kind": "patch", "point": "layers.0.resid_pre", "source_prompt": "source", "source_position": 0}
     try:
-        original = service._source(spec)
-        cache, identity = service._cache.copy(), service._cache_identity
-        tokenizer.add_bos_token = False
-        changed = service._source(spec)
-        assert changed.shape[1] == 2
-        # Restore the same pair retained by control preparation and rollback.
-        service._cache.clear()
-        service._cache.update(cache)
-        service._cache_identity = identity
-        refreshed = service._source(spec)
+        service.set(spec)
+        controls.step()
+        original = executor._cache["source", spec["point"]]
+        cache, identity = executor._cache.copy(), executor._cache_identity
+        old_hook = controls._ivs[spec["point"], "patch"].hook
+        replacement = dict(spec, source_position=1)
+        if operation == "boundary":
+            service.set(replacement)
+            transaction = controls.step
+        elif operation == "restore":
+            transaction = lambda: service.load_state_dict(snapshot(replacement), restore_active=True)
+        else:
+            transaction = lambda: service.apply_overrides([replacement])
+        tokenizer.change_on_call = True
+        observed = []
+
+        def cancel_preparation(module, args, kwargs):
+            assert executor.preparing_source
+            observed.append(kwargs["input_ids"].shape[1])
+            # A real request changes the transaction revision during its forward.
+            service.set({"kind": "add", "point": "layers.0.mlp_out", "vector": [.1] * 8, "coefficient": 1.})
+
+        observer = model.register_forward_pre_hook(cancel_preparation, with_kwargs=True)
+        try:
+            if operation == "boundary":
+                transaction()
+            else:
+                with pytest.raises(InterventionError, match="state changed"):
+                    transaction()
+        finally:
+            observer.remove()
+        assert observed == [2] and not tokenizer.add_bos_token
+        assert controls._ivs[spec["point"], "patch"].hook is old_hook and not old_hook.removed
+        assert executor._cache_identity is identity
+        assert executor._cache.keys() == cache.keys()
+        assert all(executor._cache[key] is value for key, value in cache.items())
+        assert ("layers.0.mlp_out", "add") in controls._ivs
+        refreshed = executor._source(spec)
         assert refreshed is not original
-        torch.testing.assert_close(refreshed, changed, rtol=0, atol=0)
+        assert refreshed.shape[1] == 2
+        expected = model.embed_tokens(tokenizer("source")["input_ids"])
+        torch.testing.assert_close(refreshed, expected, rtol=0, atol=0)
+        assert executor._cache_identity[1] != identity[1]
     finally:
-        service.close()
+        service.remove()

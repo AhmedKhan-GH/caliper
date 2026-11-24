@@ -648,6 +648,11 @@ class InterventionService:
                 tuple((id(m), m.training) for m in self.model.modules()),
                 tuple((name, id(value), value.device) for name, value in state.items()), content,
                 tuple(sorted(settings.items())),
+                # Checkpoint identity permits both Qwen backends. A clean source
+                # must still belong to the backend that produced its values.
+                tuple((name, module.config._attn_implementation)
+                      for name, module in self.model.named_modules()
+                      if hasattr(getattr(module, "config", None), "_attn_implementation")),
                 tuple((name, id(module.act_fn)) for name, module in self.model.named_modules()
                       if hasattr(module, "act_fn")))
 
