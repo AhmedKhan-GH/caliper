@@ -398,3 +398,38 @@ def test_model_verification_runs_after_mlp_restoration(tmp_path, monkeypatch):
     monkeypatch.setattr(binding_module, "model_identity", restored)
     evaluate(tmp_path, model, dictionary)
     assert len(checks) >= 3
+
+
+def test_stop_after_restore_retains_committed_statistics(tmp_path, monkeypatch):
+    model, dictionary = fixture(tmp_path)
+    batch = evaluation.evaluate_batch
+    calls = 0
+
+    def interrupted(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise CleanStop("synthetic batch stop")
+        return batch(*args, **kwargs)
+
+    monkeypatch.setattr(evaluation, "evaluate_batch", interrupted)
+    prior = evaluate(tmp_path, model, dictionary)
+    assert prior["evaluated_tokens"] == 4
+    state_path = tmp_path / "evaluation" / "state.json"
+    before = json.loads(state_path.read_text())
+
+    class Stop:
+        calls = 0
+
+        def check(self):
+            self.calls += 1
+            if self.calls == 2:
+                raise CleanStop("synthetic stop after restore")
+
+    monkeypatch.setattr(evaluation, "evaluate_batch", lambda *a, **k: pytest.fail("batch ran"))
+    resumed = evaluate(tmp_path, model, dictionary, resume=True, stop=Stop())
+    for key in ("evaluated_tokens", "cross_entropy_tokens", "fvu", "dead_fraction", "cross_entropy_delta"):
+        assert resumed[key] == prior[key]
+    after = json.loads(state_path.read_text())
+    for key in ("count", "pending_ids", "stream", "original_ce", "replaced_ce", "ce_tokens"):
+        assert after[key] == before[key]

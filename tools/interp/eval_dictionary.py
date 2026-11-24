@@ -264,11 +264,13 @@ def evaluate(model, dictionary, stream, folder, *, tokens=200_000, context=256,
     if resume:
         health()
         pending, elapsed_before = restore_evaluation(state_folder, stats, stream, identity, settings, binding)
+        ready = True
     # Admission ends after artifact binding. Earlier startup stops preserve quality.
     # A stop in this block records partial quality for the admitted artifact.
     try:
-        health()
-        ready = True
+        if not ready:
+            health()
+            ready = True
         while stats.count < tokens:
             health()
             binding.check()
@@ -292,9 +294,6 @@ def evaluate(model, dictionary, stream, folder, *, tokens=200_000, context=256,
             print(json.dumps({"stage": "quality_batch", "tokens": stats.count, "target": tokens}), flush=True)
     except CleanStop as error:
         reason = stop_reason(error)
-        if not ready:
-            # A partial restore must not replace the last complete evaluation cursor.
-            stats = quality_stats(metadata)
     if stats.count >= 2 and stats.ce_tokens:
         quality = stats.metrics()
     else:
