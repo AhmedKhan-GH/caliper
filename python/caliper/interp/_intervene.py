@@ -93,13 +93,15 @@ def _dictionary_digest(dictionary, content):
 class _DictionarySnapshot:
     """Prove unchanged content with private bytes, without version-counter assumptions.
 
-    Every lookup compares all bytes on the original device. Data aliases, NumPy
-    writes, and inference tensors need no mutation notification. The snapshot
-    never supplies model weights, and a mismatch requires reconfiguration.
+    Every lookup compares all live bytes. Gemma MPS snapshots retain CPU bytes
+    and read back bounded blocks for comparison. Data aliases, NumPy writes, and
+    inference tensors need no mutation notification. The snapshot never supplies
+    model weights, and a mismatch requires reconfiguration.
     """
 
-    def __init__(self, state, content):
+    def __init__(self, state, content, source_devices):
         self.state, self.content = state, content
+        self.source_devices = source_devices
 
     @staticmethod
     def _memory(state, guard):
@@ -123,9 +125,13 @@ class _DictionarySnapshot:
 
     @classmethod
     def create(cls, dictionary, identifier, guard):
+        from ._admission import GEMMA_ID
         from ._dictionary import _dense_state, _HASH_CHUNK_BYTES, _UNVERIFIED_CPU_BYTES
         from ._memory import autorelease_scope
         state = _dense_state(dictionary.state_dict())
+        source_devices = {name: tensor.device for name, tensor in state.items()}
+        retain_cpu = (dictionary.metadata.get("model_id") == GEMMA_ID
+                      and any(device.type == "mps" for device in source_devices.values()))
         sizes = [tensor.numel() * tensor.element_size() for tensor in state.values()]
         total, largest = sum(sizes), max(sizes, default=0)
         memory = cls._memory(state, guard)
@@ -143,11 +149,26 @@ class _DictionarySnapshot:
         snapshot, copied = {}, 0
         for name, tensor in state.items():
             cls._admit(memory, total - copied + scratch, floor=initial + copied)
+            if retain_cpu:
+                # Complete admission precedes every private allocation. Count the
+                # whole destination before its first block, even with lazy pages.
+                snapshot[name] = torch.empty(tensor.shape, dtype=tensor.dtype, device="cpu")
+                copied += tensor.numel() * tensor.element_size()
+                current = tensor.detach().reshape(-1).view(torch.uint8)
+                original = snapshot[name].reshape(-1).view(torch.uint8)
+                for start in range(0, current.numel(), _SNAPSHOT_COMPARE_BYTES):
+                    stop = min(start + _SNAPSHOT_COMPARE_BYTES, current.numel())
+                    cls._admit(memory, total - copied + scratch, floor=initial + copied)
+                    with autorelease_scope(tensor.device):
+                        block = current[start:stop].to(device="cpu")
+                        original[start:stop].copy_(block)
+                        del block
+                continue
             with autorelease_scope(tensor.device):
                 snapshot[name] = tensor.detach().clone()
             copied += tensor.numel() * tensor.element_size()
         content = _content_identity(snapshot, guard)
-        result = cls(snapshot, content)
+        result = cls(snapshot, content, source_devices)
         cls._admit(memory, scratch, force=True, floor=initial + copied)
         # The copied bytes must reproduce the configured full-content identity.
         if _dictionary_digest(dictionary, content) != identifier or not result.matches(dictionary, identifier, guard):
@@ -165,7 +186,8 @@ class _DictionarySnapshot:
         self._admit(memory, 0, force=True)
         for name, tensor in state.items():
             saved = self.state[name]
-            if (tensor.shape != saved.shape or tensor.dtype != saved.dtype or tensor.device != saved.device):
+            if (tensor.shape != saved.shape or tensor.dtype != saved.dtype
+                    or tensor.device != self.source_devices[name]):
                 return False
             # Byte views also distinguish signed zero and preserve NaN bits.
             current = tensor.detach().reshape(-1).view(torch.uint8)
@@ -174,7 +196,12 @@ class _DictionarySnapshot:
                 stop = min(start + _SNAPSHOT_COMPARE_BYTES, current.numel())
                 self._admit(memory, 4 * (stop - start))
                 with autorelease_scope(tensor.device):
-                    if not torch.equal(current[start:stop], original[start:stop]):
+                    block = current[start:stop]
+                    if tensor.device != saved.device:
+                        block = block.to(device="cpu")
+                    equal = torch.equal(block, original[start:stop])
+                    del block
+                    if not equal:
                         return False
         return True
 

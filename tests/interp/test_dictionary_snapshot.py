@@ -1,10 +1,13 @@
 """Exact dictionary bytes with bounded snapshots and unchanged restore identities."""
+from contextlib import contextmanager
+from types import SimpleNamespace
 import weakref
 
 import pytest
 import torch
 
-from caliper.interp import _intervene
+from caliper.interp import _dictionary, _intervene, _memory
+from caliper.interp._admission import GEMMA_ID
 from caliper.interp._intervene import InterventionError
 from caliper.interp._memory import CleanStop
 from .test_intervene import controlled, dictionary_for
@@ -229,3 +232,128 @@ def test_snapshot_requires_the_device_guard_before_any_device_operation(controll
             executor._prepare_dictionary_identity()
         else:
             executor.validate(feature_spec())
+
+
+@pytest.fixture
+def device_snapshot(controlled, monkeypatch):
+    """Label CPU views as MPS tensors and replace transfers with private CPU copies."""
+    def make(*, model_id=GEMMA_ID, device="mps", guard=None):
+        model, tokenizer, _, service = controlled
+        dictionary = dictionary_for(model)
+        dictionary.metadata["model_id"] = model_id
+        dictionary.layers = torch.nn.ModuleList([
+            _dictionary.JumpReLUTranscoder(layer.W_enc, layer.b_enc, layer.W_dec, layer.b_dec,
+                                          torch.full_like(layer.b_enc, .05))
+            for layer in dictionary.layers])
+        guard = IdentityGuard() if guard is None else guard
+        guard.device = torch.device(device)
+        service.configure(dictionary=dictionary, tokenizer=tokenizer, resource_guard=guard)
+        case = SimpleNamespace(dictionary=dictionary, service=service, executor=service.executor,
+                               guard=guard, transfers=[], scopes=[])
+
+        @contextmanager
+        def scope(device):
+            case.scopes.append(torch.device(device))
+            try:
+                yield
+            finally:
+                case.scopes.pop()
+
+        class DeviceLabel(torch.Tensor):
+            @property
+            def device(self):
+                return torch.device(device)
+
+            def to(self, *, device):
+                assert device == "cpu"
+                assert case.scopes[-1] == self.device
+                case.transfers.append((self.numel() * self.element_size(), len(guard.stages)))
+                return self.as_subclass(torch.Tensor).clone()
+
+        state_dict = dictionary.state_dict
+        if device != "cpu":
+            monkeypatch.setattr(dictionary, "state_dict", lambda: {
+                name: tensor.as_subclass(DeviceLabel) for name, tensor in state_dict().items()})
+        monkeypatch.setattr(_memory, "autorelease_scope", scope)
+        monkeypatch.setattr(_dictionary, "autorelease_scope", scope)
+        monkeypatch.setattr(_intervene, "_SNAPSHOT_COMPARE_BYTES", 4096)
+        return case
+    return make
+
+
+@pytest.mark.parametrize("model_id,device,retained", [
+    (GEMMA_ID, "mps", "cpu"), (GEMMA_ID, "mps:0", "cpu"),
+    (GEMMA_ID, "cpu", "cpu"), ("Qwen/Qwen3.5-0.8B", "mps", "mps"),
+    ("fixture", "cpu", "cpu"),
+])
+def test_snapshot_selects_cpu_retention_only_for_gemma_mps(device_snapshot, model_id, device, retained):
+    case = device_snapshot(model_id=model_id, device=device)
+    identifier = case.executor.dictionary_id
+    case.executor._prepare_dictionary_identity()
+    snapshot = case.executor._dictionary_snapshot
+    assert snapshot is not None
+    assert {str(t.device) for t in snapshot.state.values()} == {retained}
+    assert set(snapshot.source_devices.values()) == {torch.device(device)}
+    assert case.executor.dictionary_id == identifier
+    assert case.executor._dictionary_status()["mode"] == "snapshot"
+    assert snapshot.matches(case.dictionary, identifier, case.guard)
+    assert not case.scopes
+
+
+def test_cpu_snapshot_bounds_copy_and_reads_every_live_block(device_snapshot, monkeypatch):
+    case = device_snapshot()
+    empty, clone, equal = torch.empty, torch.Tensor.clone, torch.equal
+    allocations, comparisons = [], []
+
+    def allocate(*args, **kwargs):
+        assert kwargs["device"] == "cpu"
+        assert case.guard.stages[-1] == "dictionary identity"
+        tensor = empty(*args, **kwargs)
+        allocations.append(tensor.numel() * tensor.element_size())
+        return tensor
+
+    def copy(tensor, *args, **kwargs):
+        assert tensor.device.type == "cpu"
+        return clone(tensor, *args, **kwargs)
+
+    def compare(left, right):
+        assert left.device.type == right.device.type == "cpu"
+        assert left.dtype == right.dtype == torch.uint8
+        assert left.data_ptr() != right.data_ptr()
+        comparisons.append(left.numel())
+        return equal(left, right)
+
+    monkeypatch.setattr(torch, "empty", allocate)
+    monkeypatch.setattr(torch.Tensor, "clone", copy)
+    monkeypatch.setattr(torch, "equal", compare)
+    case.executor._prepare_dictionary_identity()
+    total = sum(t.numel() * t.element_size() for t in case.dictionary.state_dict().values())
+    assert sum(allocations) == total
+    assert max(size for size, _ in case.transfers) <= 4096
+    assert sum(size for size, _ in case.transfers) == 2 * total
+    assert sum(comparisons) == total
+    case.transfers.clear()
+    comparisons.clear()
+    def forbidden(*args, **kwargs):
+        pytest.fail("CPU snapshot validation must compare the complete live bytes")
+    monkeypatch.setattr(_intervene, "_content_identity", forbidden)
+    case.executor.validate(feature_spec())
+    assert sum(size for size, _ in case.transfers) == sum(comparisons) == total
+    assert max(comparisons) <= 4096
+    checks = [count for _, count in case.transfers]
+    assert all(right > left for left, right in zip(checks, checks[1:]))
+    case.dictionary.layers[-1].threshold.data[-1].add_(.125)
+    with pytest.raises(InterventionError, match="dictionary content changed"):
+        case.executor.validate(feature_spec())
+
+
+def test_cpu_snapshot_preserves_source_device_identity(device_snapshot, monkeypatch):
+    case = device_snapshot()
+    case.executor._prepare_dictionary_identity()
+    snapshot = case.executor._dictionary_snapshot
+    # The retained CPU bytes cannot make a later source move appear unchanged.
+    state = torch.nn.Module.state_dict(case.dictionary)
+    monkeypatch.setattr(case.dictionary, "state_dict", lambda: state)
+    case.transfers.clear()
+    assert not snapshot.matches(case.dictionary, case.executor.dictionary_id, case.guard)
+    assert not case.transfers
