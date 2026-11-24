@@ -249,7 +249,7 @@ def device_snapshot(controlled, monkeypatch):
         guard.device = torch.device(device)
         service.configure(dictionary=dictionary, tokenizer=tokenizer, resource_guard=guard)
         case = SimpleNamespace(dictionary=dictionary, service=service, executor=service.executor,
-                               guard=guard, transfers=[], scopes=[])
+                               guard=guard, transfers=[], scopes=[], readback=None)
 
         @contextmanager
         def scope(device):
@@ -267,8 +267,11 @@ def device_snapshot(controlled, monkeypatch):
             def to(self, *, device):
                 assert device == "cpu"
                 assert case.scopes[-1] == self.device
+                assert case.readback is None or case.readback() is None
                 case.transfers.append((self.numel() * self.element_size(), len(guard.stages)))
-                return self.as_subclass(torch.Tensor).clone()
+                result = self.as_subclass(torch.Tensor).clone()
+                case.readback = weakref.ref(result)
+                return result
 
         state_dict = dictionary.state_dict
         if device != "cpu":
@@ -357,3 +360,178 @@ def test_cpu_snapshot_preserves_source_device_identity(device_snapshot, monkeypa
     case.transfers.clear()
     assert not snapshot.matches(case.dictionary, case.executor.dictionary_id, case.guard)
     assert not case.transfers
+
+
+@pytest.mark.parametrize("write", [
+    "normal", "data", "numpy", "storage", "replacement", "late_block",
+    "signed_zero", "shape", "dtype", "metadata", "activation", "threshold",
+])
+def test_cpu_snapshot_refuses_alias_and_identity_changes(device_snapshot, write):
+    case = device_snapshot()
+    case.executor._prepare_dictionary_identity()
+    layer = case.dictionary.layers[-1]
+    parameter = layer.b_dec
+    version = parameter._version
+    if write == "normal":
+        with torch.no_grad():
+            parameter[-1].add_(.125)
+    elif write == "data":
+        parameter.data[-1].add_(.125)
+        assert parameter._version == version
+    elif write == "numpy":
+        parameter.detach().numpy()[-1] += .125
+        assert parameter._version == version
+    elif write == "storage":
+        alias = torch.empty(0, dtype=parameter.dtype).set_(parameter.untyped_storage())
+        alias[-1].add_(.125)
+        assert parameter._version == version
+    elif write == "replacement":
+        layer.b_dec = torch.nn.Parameter(parameter.detach().clone() + .125)
+    elif write == "late_block":
+        layer.W_dec.data[-1, -1].add_(.125)
+    elif write == "signed_zero":
+        assert parameter[-1] == 0
+        parameter.data[-1] = -0.
+    elif write == "shape":
+        layer.W_dec.data = layer.W_dec.data.reshape(-1)
+    elif write == "dtype":
+        parameter.data = parameter.data.view(torch.int64)
+    elif write == "metadata":
+        case.dictionary.metadata["revision"] = "changed"
+    elif write == "activation":
+        layer.activation = "topk"
+    else:
+        layer.threshold.data[-1].add_(.125)
+    with pytest.raises(InterventionError, match="dictionary content changed"):
+        case.executor.install(feature_spec())
+    assert not case.executor._hooks
+
+
+def test_cpu_snapshot_preserves_nan_payloads_without_version_counters(device_snapshot):
+    with torch.inference_mode():
+        case = device_snapshot()
+        parameter = case.dictionary.layers[-1].b_dec
+        with pytest.raises(RuntimeError, match="version counter"):
+            _ = parameter._version
+        bits = parameter.view(torch.int64)
+        bits[-1] = 0x7FF8000000000001
+        case.executor.dictionary_id = _intervene._dictionary_identifier(case.dictionary, case.guard)
+        case.executor._prepare_dictionary_identity()
+        case.dictionary.metadata["quality"] = {"fvu": .25}
+        case.executor.validate(feature_spec())
+        bits[-1] = 0x7FF8000000000002
+        assert torch.isnan(parameter[-1])
+        with pytest.raises(InterventionError, match="dictionary content changed"):
+            case.executor.validate(feature_spec())
+
+
+@pytest.mark.parametrize("lower", ["outer", "inner"])
+@pytest.mark.parametrize("margin", [-1, 0])
+def test_cpu_snapshot_admits_the_complete_reserve_before_allocation(device_snapshot, monkeypatch, lower, margin):
+    guard = IdentityGuard()
+    guard._guard = IdentityGuard()
+    case = device_snapshot(guard=guard)
+    state = case.dictionary.state_dict()
+    sizes = [t.numel() * t.element_size() for t in state.values()]
+    scratch = max(4 * min(max(sizes), _intervene._SNAPSHOT_COMPARE_BYTES),
+                  4 * _dictionary._HASH_CHUNK_BYTES)
+    selected = guard if lower == "outer" else guard._guard
+    selected.peak = 321
+    selected.limit = selected.peak + sum(sizes) + scratch + margin
+    def forbidden(*args, **kwargs):
+        pytest.fail("the complete snapshot must fit before its first allocation")
+    with monkeypatch.context() as patch:
+        if margin < 0:
+            patch.setattr(torch, "empty", forbidden)
+        case.executor._prepare_dictionary_identity()
+    if margin == 0:
+        assert case.executor._dictionary_snapshot is not None
+        return
+    assert case.executor._dictionary_snapshot is None and not case.transfers
+    assert case.executor._dictionary_status()["mode"] == "hash"
+    case.executor.validate(feature_spec())
+    assert sum(size for size, _ in case.transfers) == sum(sizes)
+    assert max(size for size, _ in case.transfers) <= _dictionary._HASH_CHUNK_BYTES
+    case.dictionary.layers[-1].threshold.data[-1].add_(.125)
+    with pytest.raises(InterventionError, match="dictionary content changed"):
+        case.executor.validate(feature_spec())
+
+
+@pytest.mark.parametrize("phase", ["create", "compare"])
+@pytest.mark.parametrize("failure", ["outer_limit", "inner_limit", "stop"])
+def test_cpu_snapshot_stops_between_blocks(device_snapshot, monkeypatch, phase, failure):
+    guard = IdentityGuard()
+    guard._guard = IdentityGuard()
+    case = device_snapshot(guard=guard)
+    if phase == "compare":
+        case.executor._prepare_dictionary_identity()
+        case.transfers.clear()
+    check = guard.check
+
+    def stopped(stage):
+        check(stage)
+        if case.transfers:
+            if failure == "stop":
+                raise CleanStop("snapshot stop")
+            selected = guard if failure == "outer_limit" else guard._guard
+            selected.limit = 1
+
+    monkeypatch.setattr(guard, "check", stopped)
+    with pytest.raises(CleanStop, match="snapshot stop|allocation exceeds"):
+        if phase == "create":
+            case.executor._prepare_dictionary_identity()
+        else:
+            case.executor.validate(feature_spec())
+    assert len(case.transfers) == 1 and not case.scopes and case.readback() is None
+    if phase == "create":
+        assert case.executor._dictionary_snapshot is None
+
+
+@pytest.mark.parametrize("target", ["copied", "pending"])
+def test_cpu_snapshot_refuses_changes_during_copy(device_snapshot, monkeypatch, target):
+    case = device_snapshot()
+    copy, copies = torch.Tensor.copy_, []
+
+    def changed(tensor, source, *args, **kwargs):
+        result = copy(tensor, source, *args, **kwargs)
+        if not copies:
+            parameter = (case.dictionary.layers[0].W_enc if target == "copied" else
+                         case.dictionary.layers[-1].threshold)
+            parameter.data.view(-1)[0].add_(.125)
+        copies.append(tensor.numel())
+        return result
+
+    monkeypatch.setattr(torch.Tensor, "copy_", changed)
+    with pytest.raises(InterventionError, match="dictionary content changed"):
+        case.executor._prepare_dictionary_identity()
+    assert case.executor._dictionary_snapshot is None and not case.scopes
+
+
+def test_cpu_snapshot_replay_release_and_live_weights(device_snapshot, controlled):
+    case = device_snapshot()
+    model, tokenizer, controls, _ = controlled
+    case.executor._prepare_dictionary_identity()
+    case.service.set(feature_spec())
+    controls.step()
+    state = case.service.state_dict()
+    expected = model(**tokenizer("abc")).logits
+    with case.service.temporary_state(state):
+        torch.testing.assert_close(model(**tokenizer("abc")).logits, expected, rtol=0, atol=0)
+    saved = weakref.ref(next(iter(case.executor._dictionary_snapshot.state.values())))
+    assert saved() is not None
+    case.dictionary.layers[-1].threshold.data[-1].add_(.125)
+    with pytest.raises(InterventionError, match="dictionary content changed"):
+        with case.service.temporary_state(state):
+            pytest.fail("a replay must refuse changed live bytes")
+    case.service.configure(dictionary=case.dictionary, tokenizer=tokenizer, resource_guard=case.guard)
+    assert saved() is None and case.executor._dictionary_snapshot is None
+    case.executor._prepare_dictionary_identity()
+    case.service.set(feature_spec())
+    controls.step()
+    expected = model(**tokenizer("abc")).logits
+    # Private snapshot damage must not supply a different decoder to an installed hook.
+    case.executor._dictionary_snapshot.state["layers.1.W_dec"].fill_(100)
+    torch.testing.assert_close(model(**tokenizer("abc")).logits, expected, rtol=0, atol=0)
+    saved = weakref.ref(next(iter(case.executor._dictionary_snapshot.state.values())))
+    case.executor.close()
+    assert saved() is None
