@@ -30,8 +30,10 @@ class InterpretationService:
         self.graph = None
         self.status = {"state": "idle", "seconds": 0., "step": None}
         self.lock = threading.RLock()
+        self.idle = threading.Condition(self.lock)
         self.queue = deque()
         self.running = False
+        self.running_thread = None
         self.closed = False
 
     @property
@@ -148,6 +150,7 @@ class InterpretationService:
             if self.running or self.closed:
                 return 0
             self.running = True
+            self.running_thread = threading.get_ident()
             count = len(self.queue)
         try:
             for _ in range(count):
@@ -172,11 +175,22 @@ class InterpretationService:
         finally:
             with self.lock:
                 self.running = False
+                self.running_thread = None
+                self.idle.notify_all()
+
+    def _check_close_thread(self):
+        with self.lock:
+            if self.running_thread == threading.get_ident():
+                raise Refused("interpret.busy", "An active service request cannot close its own service.")
 
     def close(self):
-        with self.lock:
+        """Wait for active work before the caller disposes of external resources."""
+        with self.idle:
+            self._check_close_thread()
             self.closed = True
             requests, self.queue = self.queue, deque()
+            while self.running:
+                self.idle.wait()
         for _, _, reply in requests:
             reply("error", None, {"code": "interpret.closed", "message": "The interpretation service closed."})
 
@@ -249,11 +263,20 @@ def register_service(service=None, *, controls=None, **resources):
     service = service or InterpretationService(**resources)
     with controls.lock:
         old = controls.interpretation_service
-        controls.interpretation_service = service
-        service.controls = controls
-        controls.busy = True
     if old is not None and old is not service:
-        old.close()
+        old._check_close_thread()
+    with controls.interpretation_registration_lock:
+        with service.lock:
+            if service.closed:
+                raise Refused("interpret.closed", "The interpretation service is closed.")
+        with controls.lock:
+            old = controls.interpretation_service
+        if old is not None and old is not service:
+            old.close()
+        with controls.lock:
+            controls.interpretation_service = service
+            service.controls = controls
+            controls.busy = True
     return service
 
 
@@ -261,7 +284,9 @@ def unregister_service(service, *, controls=None):
     if controls is None:
         from .._controls import CONTROLS
         controls = CONTROLS
-    with controls.lock:
-        if controls.interpretation_service is service:
-            controls.interpretation_service = None
-    service.close()
+    service._check_close_thread()
+    with controls.interpretation_registration_lock:
+        service.close()
+        with controls.lock:
+            if controls.interpretation_service is service:
+                controls.interpretation_service = None

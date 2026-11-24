@@ -803,6 +803,7 @@ class Controls:
         self.params: dict[str, Param] = {}
         self.actions: dict[str, Action] = {}
         self.interpretation_service = None
+        self.interpretation_registration_lock = threading.Lock()
         self.queue: collections.deque = collections.deque()
         self.spaces: dict[str, ItemSpace] = {}
         self.view_items: dict[str, dict] = {}    # view -> {dim, _FIRST, _LAST or None: space}
