@@ -95,7 +95,7 @@ def jsonl_documents(path):
             yield {"text": row["text"]}
 
 
-def _index_stream(args, metadata, provenance, resources, *, health=None):
+def _index_stream(args, metadata, provenance, resources, *, health=None, memory=None):
     """Admit the exact source before model load, without token consumption."""
     provenance["partition"] = args.partition
     provenance["duplicate_documents"] = "first occurrence only"
@@ -107,11 +107,11 @@ def _index_stream(args, metadata, provenance, resources, *, health=None):
         source_id = "jsonl:sha256:" + source_hash
         provenance.update(source_kind="staged_jsonl", source_hash=source_hash)
     elif args.local_dataset_manifest is not None:
-        source = fineweb_documents(local_manifest=args.local_dataset_manifest, health=health)
+        source = fineweb_documents(local_manifest=args.local_dataset_manifest, health=health, memory=memory)
         source_id = None
         provenance["source_kind"] = "pinned_local_parquet"
     else:
-        source = fineweb_documents(cache_dir=args.dataset_cache, health=health)
+        source = fineweb_documents(cache_dir=args.dataset_cache, health=health, memory=memory)
         source_id = None
         provenance["source_kind"] = "pinned_dataset"
     if hasattr(source, "close"):
@@ -183,7 +183,7 @@ def main(argv=None):
             stream = None
             if args.query is None:
                 stream = _index_stream(args, metadata, provenance, resources,
-                                       health=lambda: check("source admission"))
+                                       health=lambda: check("source admission"), memory=memory)
                 check("source")
                 stop.check()
             model, tokenizer = load_text_model(device=args.device, memory=memory)

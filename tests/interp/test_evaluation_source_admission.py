@@ -34,8 +34,9 @@ def test_source_admission_checks_stop_and_memory_before_evaluation(tmp_path, mon
         def close(self):
             events.append("close")
 
-    def admit_source(*, cache_dir, local_manifest, health):
+    def admit_source(*, cache_dir, local_manifest, health, memory):
         assert cache_dir == cache and local_manifest == manifest
+        assert memory is guard
         health()
         if stop_kind == "signal":
             control._signal(signal.SIGTERM, None)

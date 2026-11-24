@@ -15,11 +15,14 @@ import re
 
 import torch
 
+from .memory_limits import CleanStop
+
 
 DATASET_ID = "HuggingFaceFW/fineweb-edu"
 DATASET_CONFIG = "sample-10BT"
 DATASET_REVISION = "87f09149ef4734204d70ed1d046ddc9ca3f2b8f9"
 _CHECKSUM_CHUNK_BYTES = 8 * 1024 * 1024
+_PARQUET_RESERVE_BYTES = 32 * 1024 * 1024
 PARTITIONS = {
     "algorithm": "sha256-utf8-text-mod10000-v1",
     "train": [0, 9400], "quality": [9400, 9500], "index": [9500, 10000],
@@ -43,10 +46,83 @@ def document_identity(text):
     return partition, int.from_bytes(digest[:8], "big") & ((1 << 63) - 1)
 
 
+def _parquet_units(source, file_bytes):
+    """Bound one-row decode units from trusted, well-formed Parquet metadata.
+
+    Only flat UTF-8 BYTE_ARRAY columns with PLAIN/dictionary data and bounded
+    codecs are supported. A dictionary value can occupy almost all U bytes,
+    where U is the column chunk's uncompressed size. Row count cannot bound it.
+    One-row batches keep both Arrow output and scalar conversion proportional
+    to U, even when every dictionary index refers to that same value.
+
+    The allowance is 2C + 20U + 64(R + 1) + 512 + 32 MiB. Two C cover compressed
+    input and its copy. Eight U cover pages, dictionaries, and value descriptors.
+    Four U cover Arrow output and buffer growth. Eight U cover Python Unicode,
+    UTF-8 copies, and conversion overlap. R covers row offsets and level buffers.
+    The fixed reserve covers decoder workspace, object headers, and alignment.
+    This is an admission bound, not a sandbox for corrupt files or native codecs.
+    """
+    import pyarrow as arrow
+
+    schema = source.schema
+    if (source.schema_arrow.names.count("text") != 1
+            or not arrow.types.is_string(source.schema_arrow.field("text").type)
+            or schema.names.count("text") != 1):
+        raise ValueError("local Parquet source requires one flat string text column")
+    column = schema.names.index("text")
+    field = schema.column(column)
+    if (field.path != "text" or field.physical_type != "BYTE_ARRAY"
+            or field.max_repetition_level != 0 or field.max_definition_level > 1):
+        raise ValueError("unsupported Parquet text column layout")
+    units = []
+    for index in range(source.num_row_groups):
+        group = source.metadata.row_group(index)
+        chunk = group.column(column)
+        rows, compressed, uncompressed = (group.num_rows, chunk.total_compressed_size,
+                                           chunk.total_uncompressed_size)
+        if (type(rows) is not int or rows < 0 or chunk.num_values != rows
+                or any(type(size) is not int or size <= 0 for size in (compressed, uncompressed))
+                or compressed > file_bytes or uncompressed >= 2**31):
+            raise ValueError("invalid or impossible Parquet decode size bound")
+        encodings = set(chunk.encodings)
+        if (chunk.path_in_schema != "text" or chunk.physical_type != "BYTE_ARRAY"
+                or chunk.file_path not in (None, "")
+                or chunk.compression not in {"UNCOMPRESSED", "SNAPPY"}
+                or "PLAIN" not in encodings
+                or not encodings <= {"PLAIN", "RLE", "PLAIN_DICTIONARY", "RLE_DICTIONARY"}):
+            raise ValueError("unsupported Parquet text encoding or codec")
+        required = 2 * compressed + 20 * uncompressed + 64 * (rows + 1) + 512 + _PARQUET_RESERVE_BYTES
+        units.append((rows, required))
+    if sum(rows for rows, _ in units) != source.metadata.num_rows:
+        raise ValueError("inconsistent Parquet row counts")
+    return units
+
+
+def _admit_parquet_decode(memory, required):
+    """Require fresh process headroom and host memory above a 20 percent reserve."""
+    if memory is None:
+        raise CleanStop("Parquet decode requires a process memory guard")
+    import psutil
+
+    memory.check("parquet_decode", force=False)
+    driver = (memory.driver_reader() if memory.driver_reader else
+              torch.mps.driver_allocated_memory() if memory.device.type == "mps" else 0)
+    rss, footprint = memory.resident(), memory.footprint()
+    process = max(rss, driver, footprint if footprint is not None else rss + driver)
+    memory.peak = max(memory.peak, process, memory.peak_reader())
+    if memory.peak > memory.limit:
+        raise CleanStop("process or MPS allocation exceeds the memory limit")
+    host = psutil.virtual_memory()
+    headroom = min(memory.limit - process, host.available - host.total // 5)
+    if required > headroom:
+        raise CleanStop("Parquet decode exceeds available memory headroom")
+
+
 class LocalParquetDocuments:
     """Pinned local shards with no Arrow worker pool and an exact row cursor."""
 
-    def __init__(self, manifest, *, health=None):
+    def __init__(self, manifest, *, health=None, memory=None):
+        self.health, self.memory = health, memory
         if health is not None:
             health()
         import pyarrow.parquet as parquet
@@ -59,6 +135,7 @@ class LocalParquetDocuments:
         if not isinstance(data.get("files"), list) or not data["files"]:
             raise ValueError("local dataset manifest requires ordered Parquet files")
         self.files = []
+        self.units = []
         identities = []
         root = manifest.parent.resolve()
         for entry in data["files"]:
@@ -84,16 +161,18 @@ class LocalParquetDocuments:
                     digest.update(chunk)
             if digest.hexdigest() != expected:
                 raise ValueError("local Parquet checksum mismatch")
-            source = parquet.ParquetFile(path)
+            source = parquet.ParquetFile(path, pre_buffer=False)
             try:
-                if "text" not in source.schema_arrow.names:
-                    raise ValueError("local Parquet source has no text column")
+                units = _parquet_units(source, entry["size_bytes"])
+                if memory is not None and any(required > memory.limit for _, required in units):
+                    raise CleanStop("Parquet decode bound exceeds the process memory limit")
                 rows = source.metadata.num_rows
             finally:
                 source.close()
             if health is not None:
                 health()
             self.files.append((path, rows))
+            self.units.append(units)
             identities.append(expected)
         fingerprint = hashlib.sha256(json.dumps(identities, separators=(",", ":")).encode()).hexdigest()
         self.source_id = f"local-parquet:{DATASET_ID}/{DATASET_CONFIG}@{DATASET_REVISION}:train:{fingerprint}"
@@ -115,34 +194,49 @@ class LocalParquetDocuments:
         for shard in range(self.shard, len(self.files)):
             path, _ = self.files[shard]
             skip = self.row if shard == self.shard else 0
-            source = parquet.ParquetFile(path)
+            source = parquet.ParquetFile(path, pre_buffer=False)
             try:
+                units = _parquet_units(source, path.stat().st_size)
+                if units != self.units[shard]:
+                    raise ValueError("Parquet decode metadata changed after admission")
                 # Skip whole row groups without decoding their text on resume.
-                groups = []
-                for group in range(source.num_row_groups):
-                    rows = source.metadata.row_group(group).num_rows
-                    if not groups and skip >= rows:
+                for group, (rows, required) in enumerate(units):
+                    if skip >= rows:
                         skip -= rows
-                    else:
-                        groups.append(group)
-                for batch in source.iter_batches(batch_size=16, row_groups=groups,
-                                                 columns=["text"], use_threads=False):
-                    for text in batch.column(0).to_pylist():
-                        if skip:
-                            skip -= 1
-                            continue
-                        self.shard = shard
-                        self.row += 1
-                        yield {"text": text}
+                        continue
+                    batches = None
+                    try:
+                        for _ in range(rows):
+                            if self.health is not None:
+                                self.health()
+                            _admit_parquet_decode(self.memory, required)
+                            if batches is None:
+                                batches = source.iter_batches(batch_size=1, row_groups=[group],
+                                                              columns=["text"], use_threads=False)
+                            batch = next(batches)
+                            if skip:
+                                skip -= 1
+                            else:
+                                # Convert one scalar, never a full batch. The admission
+                                # includes both the live Arrow buffers and Python copies.
+                                text = batch.column(0)[0].as_py()
+                                self.shard = shard
+                                self.row += 1
+                                yield {"text": text}
+                                del text
+                            del batch
+                    finally:
+                        if batches is not None:
+                            batches.close()
             finally:
                 source.close()
             self.shard, self.row = shard + 1, 0
 
 
-def fineweb_documents(*, cache_dir=None, local_manifest=None, health=None):
-    """Open the pinned stream. Local checksum admission calls health without arguments."""
+def fineweb_documents(*, cache_dir=None, local_manifest=None, health=None, memory=None):
+    """Open the pinned stream. Local decode requires memory and calls health()."""
     if local_manifest is not None:
-        return LocalParquetDocuments(local_manifest, health=health)
+        return LocalParquetDocuments(local_manifest, health=health, memory=memory)
     from datasets import load_dataset
     return load_dataset(DATASET_ID, DATASET_CONFIG, revision=DATASET_REVISION,
                         split="train", streaming=True, cache_dir=cache_dir)

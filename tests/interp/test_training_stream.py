@@ -225,15 +225,21 @@ def local_manifest(folder):
     return path
 
 
-def test_local_parquet_exact_resume_across_shards(tmp_path):
+@pytest.fixture
+def parquet_memory():
+    return MemoryGuard(1, "cpu", resident=lambda: 0, footprint=lambda: 0,
+                       peak=lambda: 0, pressure=lambda: 80)
+
+
+def test_local_parquet_exact_resume_across_shards(tmp_path, parquet_memory):
     from tools.interp.text_stream import fineweb_documents
     manifest = local_manifest(tmp_path)
-    with TextStream(fineweb_documents(local_manifest=manifest), TinyTokenizer(), "train") as first:
+    with TextStream(fineweb_documents(local_manifest=manifest, memory=parquet_memory), TinyTokenizer(), "train") as first:
         first.next_tokens(4017)
         state = json.loads(json.dumps(first.state_dict()))
         assert state["source_id"].startswith("local-parquet:")
         expected = first.next_tokens(7001)
-        with TextStream(fineweb_documents(local_manifest=manifest), TinyTokenizer(), "train", state=state) as second:
+        with TextStream(fineweb_documents(local_manifest=manifest, memory=parquet_memory), TinyTokenizer(), "train", state=state) as second:
             actual = second.next_tokens(7001)
             for name in ("input_ids", "document_ids", "positions"):
                 assert torch.equal(getattr(actual, name), getattr(expected, name))
@@ -241,15 +247,15 @@ def test_local_parquet_exact_resume_across_shards(tmp_path):
 
 
 @pytest.mark.parametrize("rows", [0, 13, 17, 70, 71, 300])
-def test_local_parquet_row_group_and_batch_positions(tmp_path, rows):
+def test_local_parquet_row_group_and_batch_positions(tmp_path, rows, parquet_memory):
     from itertools import islice
     from tools.interp.text_stream import fineweb_documents
     manifest = local_manifest(tmp_path)
-    first = fineweb_documents(local_manifest=manifest)
+    first = fineweb_documents(local_manifest=manifest, memory=parquet_memory)
     iterator = iter(first)
     list(islice(iterator, rows))
     state = first.state_dict()
-    second = fineweb_documents(local_manifest=manifest)
+    second = fineweb_documents(local_manifest=manifest, memory=parquet_memory)
     second.load_state_dict(state)
     resumed = iter(second)
     try:
@@ -262,7 +268,7 @@ def test_local_parquet_row_group_and_batch_positions(tmp_path, rows):
     assert empty.closed and empty.state_dict()["emitted"] == 0
 
 
-def test_local_parquet_is_bounded_and_unthreaded(tmp_path, monkeypatch):
+def test_local_parquet_is_scalar_and_unthreaded(tmp_path, monkeypatch, parquet_memory):
     import pyarrow.parquet as parquet
     from tools.interp.text_stream import fineweb_documents
     manifest = local_manifest(tmp_path)
@@ -270,20 +276,22 @@ def test_local_parquet_is_bounded_and_unthreaded(tmp_path, monkeypatch):
     calls = []
     class Observed:
         def __init__(self, *args, **kwargs):
+            assert kwargs["pre_buffer"] is False
             self.inner = original(*args, **kwargs)
         def __getattr__(self, name):
             return getattr(self.inner, name)
         def iter_batches(self, **kwargs):
             assert kwargs["use_threads"] is False
             assert kwargs["columns"] == ["text"]
-            assert kwargs["batch_size"] == 16
+            assert kwargs["batch_size"] == 1
+            assert len(kwargs["row_groups"]) == 1
             calls.append("batches")
             return self.inner.iter_batches(**kwargs)
         def close(self):
             calls.append("close")
             self.inner.close()
     monkeypatch.setattr(parquet, "ParquetFile", Observed)
-    source = fineweb_documents(local_manifest=manifest)
+    source = fineweb_documents(local_manifest=manifest, memory=parquet_memory)
     calls.clear()
     with TextStream(source, TinyTokenizer(), "train") as stream:
         stream.next_tokens(19)
