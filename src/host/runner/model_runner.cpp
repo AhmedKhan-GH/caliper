@@ -179,6 +179,8 @@ private:
 struct Run {
     cb::RunEntry entry;
     std::string script_path;   // absolute
+    std::string kind = "script";
+    std::string model, dictionary, prompt;
     std::string dir, link_file, output;
     std::unique_ptr<ChildProcess> proc;
     Clock::time_point started = Clock::now();
@@ -582,8 +584,13 @@ ChildSpec run_spec(const ModelRunner::Options& o, const std::string& python, con
                    const std::vector<std::pair<std::string, std::string>>& extra) {
     ChildSpec spec;
     spec.program = python;
-    spec.args.push_back(r.script_path);
-    spec.args.insert(spec.args.end(), r.entry.args.begin(), r.entry.args.end());
+    if (r.kind == "inference") {
+        spec.args = {"-m", "caliper.interp._hosted", "--model=" + r.model,
+                     "--dictionary=" + r.dictionary, "--prompt=" + r.prompt};
+    } else {
+        spec.args.push_back(r.script_path);
+        spec.args.insert(spec.args.end(), r.entry.args.begin(), r.entry.args.end());
+    }
     for (auto& kv : current_environment())
         if (kv.first.rfind("CALIPER_RUN_", 0) != 0 && kv.first != "PYTHONUNBUFFERED") spec.env.push_back(kv);
     spec.env.emplace_back("CALIPER_RUN_ID", r.entry.id);
@@ -721,7 +728,7 @@ cb::Error ModelRunner::start(const cb::RunStartRequest& request, cb::RunEntry* o
         std::string id = request.id;
         std::error_code ec;
         if (id.empty()) {
-            const std::string base = id_base(request.script);
+            const std::string base = request.kind == "inference" ? "inference" : id_base(request.script);
             for (int n = 1; n < 100000 && id.empty(); ++n) {
                 const std::string c = base + "-" + std::to_string(n);
                 if (!s.find(c) && !fs::exists(runs / c, ec)) id = c;
@@ -742,6 +749,10 @@ cb::Error ModelRunner::start(const cb::RunStartRequest& request, cb::RunEntry* o
         run->entry.args = request.args;
         run->entry.params = request.params.is_object() ? request.params : json::object();
         run->script_path = request.script_path;
+        run->kind = request.kind;
+        run->model = request.model;
+        run->dictionary = request.dictionary;
+        run->prompt = request.prompt;
         run->dir = dir.u8string();
         run->link_file = (dir / "link.txt").u8string();
         run->output = (dir / "output.log").u8string();
@@ -793,7 +804,7 @@ cb::Error ModelRunner::fork(const cb::RunForkRequest& request, cb::RunEntry* out
         std::error_code ec;
         std::string id = request.id;
         if (id.empty()) {
-            const std::string base = id_base(parent->entry.script);
+            const std::string base = parent->kind == "inference" ? "inference" : id_base(parent->entry.script);
             for (int n = 1; n < 100000 && id.empty(); ++n) {
                 const std::string c = base + "-" + std::to_string(n);
                 if (!s.find(c) && !fs::exists(runs / c, ec)) id = c;
@@ -873,6 +884,10 @@ cb::Error ModelRunner::fork(const cb::RunForkRequest& request, cb::RunEntry* out
         run->entry.params = request.params.is_object() ? request.params : json::object();
         run->entry.parent = request.parent;
         run->script_path = parent->script_path;
+        run->kind = parent->kind;
+        run->model = parent->model;
+        run->dictionary = parent->dictionary;
+        run->prompt = parent->prompt;
         run->dir = dir.u8string();
         run->link_file = (dir / "link.txt").u8string();
         run->output = (dir / "output.log").u8string();

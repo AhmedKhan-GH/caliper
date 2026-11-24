@@ -582,3 +582,44 @@ TEST_CASE("runner commands: a fork retains all structured intervention fields") 
     invocation.args = {{"run","train-1"},{"interventions",json::array({spec})}};
     CHECK(run_card_text(invocation,"train.py").find("clamp layers.0.mlp_out") != std::string::npos);
 }
+
+TEST_CASE("runner inference uses local resources and a fixed module") {
+    Fixture f("runner_inference");
+    std::filesystem::create_directories(f.ws + "/dictionary");
+    json args{{"kind", "inference"}, {"model", "tiny-lm"}, {"dictionary", "dictionary"},
+              {"prompt", "A quoted \"prompt\"\n--model=untrusted"}, {"id", "inference-test"}};
+    approved(*f.s, "run.start", args);
+    REQUIRE(f.runner.starts.size() == 1);
+    const auto& request = f.runner.starts.front();
+    CHECK(request.kind == "inference");
+    CHECK(request.script == "caliper.interp._hosted");
+    CHECK(request.script_path.empty());
+    CHECK(request.model == "tiny-lm");
+    CHECK(request.dictionary == std::filesystem::canonical(f.ws + "/dictionary").u8string());
+    CHECK(request.prompt == args["prompt"].get<std::string>());
+    CHECK(request.args.empty());
+    CommandInvocation inv;
+    inv.name = "run.start";
+    inv.args = args;
+    const auto card = run_card_text(inv, "");
+    CHECK(card.find("tiny-lm") != std::string::npos);
+    CHECK(card.find("\\n--model=untrusted") != std::string::npos);
+}
+
+TEST_CASE("runner inference refuses mixed or nonlocal start data") {
+    Fixture f("runner_inference_refusal");
+    std::filesystem::create_directories(f.ws + "/dictionary");
+    const json valid{{"kind", "inference"}, {"model", "tiny-lm"}, {"dictionary", "dictionary"}, {"prompt", "A"}};
+    for (const auto& change : std::vector<json>{
+             {{"script", "scripts/train.py"}}, {{"args", json::array({"-c", "code"})}},
+             {{"params", json::array()}}, {{"kind", "unknown"}}, {{"prompt", ""}},
+             {{"prompt", std::string(4097, 'a')}}, {{"model", "https://example.invalid/model"}},
+             {{"dictionary", "missing"}}, {{"prompt", std::string("A\0B", 3)}}}) {
+        CommandInvocation inv;
+        inv.name = "run.start";
+        inv.args = valid;
+        inv.args.update(change);
+        CHECK(bool(runner_precheck(inv, &f.runner, f.ws)));
+    }
+    CHECK(f.runner.starts.empty());
+}
