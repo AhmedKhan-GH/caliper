@@ -1,5 +1,6 @@
 """Exact CPU quality, full MLP replacement, and interrupted evaluation."""
 import json
+from pathlib import Path
 
 import pytest
 import torch
@@ -13,6 +14,76 @@ from tools.interp.text_stream import TextStream
 from .fixture import TinyLM, TinyTokenizer
 from .test_dictionary import write_fixture
 from .test_training_stream import documents
+
+
+@pytest.mark.parametrize("fail_sync", [False, True])
+def test_evaluation_sync_precedes_binding_recheck_and_cursor(tmp_path, monkeypatch, fail_sync):
+    from tools.interp import checkpoint_state
+    from tools.interp.evaluation_binding import EvaluationBinding
+
+    model = TinyLM(layers=2, width=4, heads=2, latents=8, k=2)
+    _, metadata = write_fixture(tmp_path, model)
+    dictionary = load_dictionary(tmp_path, model=model, device="cpu")
+    identity = checkpoint_state.dictionary_fingerprint(tmp_path, metadata)
+    binding = EvaluationBinding(tmp_path, dictionary, identity)
+    stream = TextStream([], TinyTokenizer(), "quality")
+    stats = evaluation.quality_stats(metadata)
+    folder = tmp_path / "evaluation"
+    evaluation.save_evaluation(folder, stats, stream, None, identity, {}, 0, binding)
+    previous = {p.name: p.read_bytes() for p in folder.iterdir()}
+    events, handles = [], {}
+    opened, sync = Path.open, checkpoint_state.os.fsync
+    save, verify, write = checkpoint_state.save_file, binding.verify, evaluation.write_json
+
+    def track(path, *args, **kwargs):
+        handle = opened(path, *args, **kwargs)
+        handles[handle.fileno()] = path
+        return handle
+
+    def save_tensors(*args):
+        events.append("write")
+        return save(*args)
+
+    def sync_tensors(descriptor):
+        if handles[descriptor].suffix == ".safetensors":
+            events.append("sync")
+            if fail_sync:
+                raise OSError("synthetic statistics sync failure")
+        sync(descriptor)
+
+    def recheck():
+        events.append("verify")
+        verify()
+
+    def cursor(*args):
+        events.append("cursor")
+        return write(*args)
+
+    monkeypatch.setattr(Path, "open", track)
+    monkeypatch.setattr(checkpoint_state, "save_file", save_tensors)
+    monkeypatch.setattr(checkpoint_state.os, "fsync", sync_tensors)
+    monkeypatch.setattr(binding, "verify", recheck)
+    monkeypatch.setattr(evaluation, "write_json", cursor)
+    stats.count = 2
+    stats.mean.fill_(3)
+    if fail_sync:
+        with pytest.raises(OSError, match="statistics sync failure"):
+            evaluation.save_evaluation(folder, stats, stream, [1, 2], identity, {}, 1, binding)
+        assert events == ["write", "sync"]
+        assert all((folder / name).read_bytes() == value for name, value in previous.items())
+        restored = evaluation.quality_stats(metadata)
+        assert evaluation.restore_evaluation(folder, restored, stream, identity, {}, binding) == (None, 0)
+        assert restored.count == 0 and torch.equal(restored.mean, torch.zeros_like(restored.mean))
+        fail_sync = False
+        events.clear()
+    evaluation.save_evaluation(folder, stats, stream, [1, 2], identity, {}, 1, binding)
+    assert events == ["write", "sync", "verify", "cursor"]
+    assert json.loads((folder / "state.json").read_text())["tensors"] == "stats-b.safetensors"
+    restored = evaluation.quality_stats(metadata)
+    assert evaluation.restore_evaluation(folder, restored, stream, identity, {}, binding) == ([1, 2], 1)
+    assert restored.count == 2 and torch.equal(restored.mean, stats.mean)
+    evaluation.save_evaluation(folder, stats, stream, None, identity, {}, 2, binding)
+    assert json.loads((folder / "state.json").read_text())["tensors"] == "stats-a.safetensors"
 
 
 def test_chunked_cross_entropy_matches_full_logits():

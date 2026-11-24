@@ -104,7 +104,8 @@ def checkpoint_record(root):
         saved = json.loads(runtime.read_text())
         if saved["generation"] == folder.name:
             record["progress"]["elapsed_seconds"] = max(record["progress"]["elapsed_seconds"], saved["elapsed_seconds"])
-            record["progress"]["checkpoint_seconds"] = saved.get("checkpoint_seconds", 0)
+            for key in ("checkpoint_seconds", "export_seconds"):
+                record["progress"][key] = max(record["progress"].get(key, 0), saved.get(key, 0))
     return folder, record
 
 

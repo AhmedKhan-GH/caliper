@@ -10,11 +10,11 @@ import time
 
 import torch
 from torch.nn import functional as F
-from safetensors.torch import load_file, save_file
+from safetensors.torch import load_file
 
 from caliper.interp import capture, load_dictionary
 from caliper.interp._dictionary import fallback_metadata
-from .checkpoint_state import dictionary_fingerprint, write_json
+from .checkpoint_state import _save_tensors, dictionary_fingerprint, write_json
 from .evaluation_binding import EvaluationBinding
 from .memory_limits import CleanStop, MemoryGuard, StopControl, autorelease_scope
 from .model_load import hidden_forward, load_text_model
@@ -193,8 +193,8 @@ def save_evaluation(folder, stats, stream, pending, identity, settings, elapsed,
     # Two alternating files prevent a partial update from corrupting the old state.
     prior = json.loads((folder / "state.json").read_text()) if (folder / "state.json").exists() else {}
     name = "stats-b.safetensors" if prior.get("tensors") == "stats-a.safetensors" else "stats-a.safetensors"
-    save_file({"mean": stats.mean, "variance_sum": stats.variance_sum,
-               "error_sum": stats.error_sum, "hits": stats.hits}, folder / name)
+    _save_tensors({"mean": stats.mean, "variance_sum": stats.variance_sum,
+                   "error_sum": stats.error_sum, "hits": stats.hits}, folder / name)
     binding.verify()
     write_json(folder / "state.json", {"version": 1, "identity": identity, "settings": settings,
                "tensor_binding": binding.evidence,

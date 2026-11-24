@@ -347,7 +347,7 @@ def test_main_uses_checkpoint_on_resume_and_keeps_warm_source_unchanged(tmp_path
 def test_aggregate_allowance_counts_setup_checkpoint_and_export(tmp_path, monkeypatch):
     source, output, model, _, _, _, args, metadata = setup_fallback(tmp_path)
     metadata["training"]["fallback"].update(source_elapsed_seconds=100, prior_wall_seconds=100,
-                                            aggregate_wall_limit_seconds=200)
+                                            aggregate_wall_limit_seconds=230)
     trainer = training.Trainer(metadata, **training._trainer_arguments(args))
     trainer.initialize_upper(source)
     stream = TextStream(documents(), TinyTokenizer(), "train")
@@ -371,22 +371,24 @@ def test_aggregate_allowance_counts_setup_checkpoint_and_export(tmp_path, monkey
         return export(*args, **kwargs)
 
     def forward_time(*_):
-        clock.value += 35
+        clock.value += 20
 
     monkeypatch.setattr(training, "save_checkpoint", counted_save)
     monkeypatch.setattr(training, "export_dictionary", counted_export)
     handle = model.layers[0].register_forward_pre_hook(forward_time)
     try:
         result = training.train_online(model, trainer, stream, output, token_budget=16,
-                                        progress=progress, max_wall_seconds=200, started=0, clock=clock)
+                                        progress=progress, max_wall_seconds=230, started=0, clock=clock)
     finally:
         handle.remove()
     assert result["tokens"] == 0 and result["pending_ids"] is not None
-    assert result["elapsed_seconds"] == 92
+    assert result["elapsed_seconds"] == 77
     assert trainer.metadata["training"]["status"] == "fallback_incomplete"
     assert trainer.metadata["training"]["stop_reason"] == "wall time reserve"
-    assert trainer.metadata["training"]["elapsed_seconds"] + 100 == 192
-    assert checkpoint_state.checkpoint_record(output / "checkpoints")[1]["progress"]["elapsed_seconds"] == 92
+    assert trainer.metadata["training"]["elapsed_seconds"] + 100 == 177
+    saved = checkpoint_state.checkpoint_record(output / "checkpoints")[1]["progress"]
+    assert saved["elapsed_seconds"] == 77
+    assert saved["checkpoint_seconds"] == 2 and saved["export_seconds"] == 3
 
 
 @pytest.mark.parametrize("damage", ["lower_index", "missing_batch", "uninitialized", "over_budget"])
