@@ -12582,6 +12582,28 @@
                         "pattern": "^[a-z][a-z0-9_]{0,31}$",
                         "type": "string"
                       },
+                      "hover": {
+                        "additionalProperties": false,
+                        "description": "A local item hit selects this label's text.",
+                        "properties": {
+                          "anchor": {
+                            "description": "The anchor index for the local hover label.",
+                            "maximum": 511,
+                            "minimum": 0,
+                            "type": "integer"
+                          },
+                          "string_offset": {
+                            "description": "The string index offset for a local item hit. Zero when absent.",
+                            "maximum": 4095,
+                            "minimum": 0,
+                            "type": "integer"
+                          }
+                        },
+                        "required": [
+                          "anchor"
+                        ],
+                        "type": "object"
+                      },
                       "position": {
                         "description": "The vec4<f32> field whose xyz is the label's world position; position when absent.",
                         "pattern": "^[a-z_][a-z0-9_]{0,31}$",
@@ -14945,6 +14967,28 @@
                         "pattern": "^[a-z][a-z0-9_]{0,31}$",
                         "type": "string"
                       },
+                      "hover": {
+                        "additionalProperties": false,
+                        "description": "A local item hit selects this label's text.",
+                        "properties": {
+                          "anchor": {
+                            "description": "The anchor index for the local hover label.",
+                            "maximum": 511,
+                            "minimum": 0,
+                            "type": "integer"
+                          },
+                          "string_offset": {
+                            "description": "The string index offset for a local item hit. Zero when absent.",
+                            "maximum": 4095,
+                            "minimum": 0,
+                            "type": "integer"
+                          }
+                        },
+                        "required": [
+                          "anchor"
+                        ],
+                        "type": "object"
+                      },
                       "position": {
                         "description": "The vec4<f32> field whose xyz is the label's world position; position when absent.",
                         "pattern": "^[a-z_][a-z0-9_]{0,31}$",
@@ -16065,6 +16109,28 @@
                         "pattern": "^[a-z][a-z0-9_]{0,31}$",
                         "type": "string"
                       },
+                      "hover": {
+                        "additionalProperties": false,
+                        "description": "A local item hit selects this label's text.",
+                        "properties": {
+                          "anchor": {
+                            "description": "The anchor index for the local hover label.",
+                            "maximum": 511,
+                            "minimum": 0,
+                            "type": "integer"
+                          },
+                          "string_offset": {
+                            "description": "The string index offset for a local item hit. Zero when absent.",
+                            "maximum": 4095,
+                            "minimum": 0,
+                            "type": "integer"
+                          }
+                        },
+                        "required": [
+                          "anchor"
+                        ],
+                        "type": "object"
+                      },
                       "position": {
                         "description": "The vec4<f32> field whose xyz is the label's world position; position when absent.",
                         "pattern": "^[a-z_][a-z0-9_]{0,31}$",
@@ -17058,6 +17124,28 @@
                         "description": "A buffer resource with a struct; one label at each valid element.",
                         "pattern": "^[a-z][a-z0-9_]{0,31}$",
                         "type": "string"
+                      },
+                      "hover": {
+                        "additionalProperties": false,
+                        "description": "A local item hit selects this label's text.",
+                        "properties": {
+                          "anchor": {
+                            "description": "The anchor index for the local hover label.",
+                            "maximum": 511,
+                            "minimum": 0,
+                            "type": "integer"
+                          },
+                          "string_offset": {
+                            "description": "The string index offset for a local item hit. Zero when absent.",
+                            "maximum": 4095,
+                            "minimum": 0,
+                            "type": "integer"
+                          }
+                        },
+                        "required": [
+                          "anchor"
+                        ],
+                        "type": "object"
                       },
                       "position": {
                         "description": "The vec4<f32> field whose xyz is the label's world position; position when absent.",
