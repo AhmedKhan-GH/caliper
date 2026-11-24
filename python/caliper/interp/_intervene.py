@@ -18,6 +18,7 @@ MAX_PROMPT_BYTES = 4096
 KINDS = ("ablate", "add", "scale", "clamp", "patch")
 _SUSPENDED = ContextVar("caliper_interventions_suspended", default=frozenset())
 _ROWS = ContextVar("caliper_intervention_rows", default={})
+_MUTED_HOOKS = ContextVar("caliper_muted_intervention_hooks", default=frozenset())
 
 
 class InterventionError(ValueError):
@@ -63,6 +64,20 @@ def selected_rows(model):
     if id(model) in _SUSPENDED.get():
         return ()
     return _ROWS.get().get(id(model))
+
+
+def _hook_muted(hook):
+    return hook in _MUTED_HOOKS.get()
+
+
+@contextmanager
+def _mute_hooks(hooks):
+    """Mute these hook objects in this context without a lifecycle change."""
+    token = _MUTED_HOOKS.set(_MUTED_HOOKS.get().union(hooks))
+    try:
+        yield
+    finally:
+        _MUTED_HOOKS.reset(token)
 
 
 @contextmanager
@@ -433,7 +448,7 @@ class Intervention:
         return result
 
     def pre(self, module, args, kwargs):
-        if self.removed or selected_rows(self.service.model) == ():
+        if self.removed or _hook_muted(self) or selected_rows(self.service.model) == ():
             return None
         self.calls += 1
         try:
@@ -447,7 +462,7 @@ class Intervention:
             return None
 
     def post(self, module, args, kwargs, output):
-        if self.removed or selected_rows(self.service.model) == ():
+        if self.removed or _hook_muted(self) or selected_rows(self.service.model) == ():
             return None
         self.calls += 1
         try:

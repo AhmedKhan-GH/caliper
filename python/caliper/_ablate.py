@@ -147,8 +147,8 @@ class Ablation:
                 pass
 
     def _suspended(self):
-        from .interp._intervene import selected_rows
-        return self.removed or selected_rows(self._model()) == ()
+        from .interp._intervene import _hook_muted, selected_rows
+        return self.removed or _hook_muted(self) or selected_rows(self._model()) == ()
 
     def _zero(self, t, mask_key):
         import torch
