@@ -84,3 +84,49 @@ def test_matching_settings_reach_resource_admission(tmp_path, monkeypatch, resum
     arguments = ["--output", str(tmp_path), "--device", "cpu"] + (["--resume"] if resume else [])
     assert training.main(arguments) == 2
     assert snapshot(tmp_path) == before
+
+
+@pytest.mark.parametrize("requested,current", [(None, 18), (24, 18), (8, 6)])
+def test_trainer_selects_training_load_budget_before_optimizer(tmp_path, monkeypatch, capsys, requested, current):
+    from caliper.interp import _dictionary
+    from tools.interp import model_load
+    from .test_model_load import hf_model, mocked_loader
+    from .test_model_load_modes import logical_guard
+
+    model = hf_model()
+    calls = mocked_loader(tmp_path, monkeypatch, model, {})
+    limit = 24 if requested is None else requested
+    guard = logical_guard(limit, {"current": int(current * 1e9), "peak": 0})
+
+    def memory(limit_gb, device):
+        assert limit_gb == limit and device == "cpu"
+        return guard
+
+    def load(*, device, memory, mode):
+        assert device == "cpu" and memory is guard and mode == "training"
+        return model_load.load_text_model(device=device, memory=memory, mode=mode)
+
+    def admitted(loaded, *args):
+        assert loaded is model
+        assert calls == ["snapshot", "weights", "tokenizer"]
+        retained = _dictionary._VERIFIED_MODELS[model].memory
+        assert retained.memory is guard and retained.limit == guard.limit == int(limit * 1e9)
+        assert _dictionary.model_identity(model) == f"hf:{model_load.MODEL_ID}@{model_load.MODEL_REVISION}"
+        raise training.CleanStop("fixture admission complete")
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("trainer allocation or training ran")
+
+    monkeypatch.setattr(training, "MemoryGuard", memory)
+    monkeypatch.setattr(training, "load_text_model", load)
+    monkeypatch.setattr(training, "make_manifest", admitted)
+    for name in ("Trainer", "fineweb_documents", "train_online"):
+        monkeypatch.setattr(training, name, forbidden)
+    output = tmp_path / "output"
+    argv = ["--output", str(output), "--device", "cpu"]
+    if requested is not None:
+        argv += ["--memory-gb", str(requested)]
+    assert training.main(argv) == 2
+    result = json.loads(capsys.readouterr().out.splitlines()[-1])
+    assert result["stage"] == "clean_stop" and result["reason"] == "fixture admission complete"
+    assert not output.exists()

@@ -69,9 +69,14 @@ def startup(monkeypatch, command, model, target, *, signal_only=False):
             super().__init__(*args, **kwargs)
             streams.append(self)
 
+    def load(*, device, memory, mode="inference"):
+        assert device == memory.device == "cpu"
+        assert mode == ("training" if command is training else "inference")
+        return model, TinyTokenizer()
+
     monkeypatch.setattr(command, "StopControl", lambda: control)
     monkeypatch.setattr(command, "MemoryGuard", guard)
-    monkeypatch.setattr(command, "load_text_model", wrap("model", lambda **_: (model, TinyTokenizer())))
+    monkeypatch.setattr(command, "load_text_model", wrap("model", load))
     monkeypatch.setattr(command, "fineweb_documents", source)
     monkeypatch.setattr(command, "TextStream", Stream)
     return stage, wrap, seen, streams, sources

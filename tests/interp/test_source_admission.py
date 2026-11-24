@@ -138,7 +138,10 @@ def test_trainer_checksum_stop_preserves_prior_artifacts(tmp_path, monkeypatch, 
         record["progress"]["elapsed_seconds"] = 100
         state_file.write_text(json.dumps(record))
         argv.append("--resume")
-        monkeypatch.setattr(training, "load_text_model", lambda **_: (object(), None))
+        def load(*, device, memory, mode):
+            assert device == "cpu" and mode == "training" and memory.limit == 24_000_000_000
+            return object(), None
+        monkeypatch.setattr(training, "load_text_model", load)
         monkeypatch.setattr(training, "make_manifest", lambda *a: copy.deepcopy(record["metadata"]))
         monkeypatch.setattr(training, "Trainer", lambda metadata, **k: SimpleNamespace(
             metadata=metadata, fallback_source=None))

@@ -616,7 +616,7 @@ def _run(args, started, stop, resources):
     np.random.seed(args.seed)
     torch.manual_seed(args.seed)
     health("before model")
-    model, tokenizer = load_text_model(device=args.device, memory=memory)
+    model, tokenizer = load_text_model(device=args.device, memory=memory, mode="training")
     health("after model", force=True)
     metadata = make_manifest(model, args.latents, args.k)
     if prepared is not None:

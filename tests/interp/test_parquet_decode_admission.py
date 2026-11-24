@@ -299,7 +299,10 @@ def test_main_source_admission_uses_guard_without_model_work(tmp_path, monkeypat
     monkeypatch.setattr(module, "MemoryGuard", lambda *a: guard)
     monkeypatch.setattr(module, "fineweb_documents", admit)
     if command == "trainer":
-        monkeypatch.setattr(module, "load_text_model", lambda **k: (object(), None))
+        def load(*, device, memory, mode):
+            assert device == "cpu" and memory is guard and mode == "training"
+            return object(), None
+        monkeypatch.setattr(module, "load_text_model", load)
         monkeypatch.setattr(module, "make_manifest", lambda *a: {"training": {}})
         monkeypatch.setattr(module, "Trainer", lambda *a, **k: object())
     else:

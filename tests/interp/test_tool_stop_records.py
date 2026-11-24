@@ -148,8 +148,13 @@ def test_other_commands_close_source_after_regular_errors(tmp_path, monkeypatch,
             raise ValueError("synthetic operation error")
         return {"status": "passed", "tokens": 16, "dictionary_export": "complete"}
 
+    def load(*, device, memory, mode="inference"):
+        assert device == "cpu" and memory is not None
+        assert mode == ("training" if command is training else "inference")
+        return None, None
+
     monkeypatch.setattr(command, "MemoryGuard", lambda *a: SimpleNamespace(check=lambda *a, **k: None))
-    monkeypatch.setattr(command, "load_text_model", lambda **k: (None, None))
+    monkeypatch.setattr(command, "load_text_model", load)
     monkeypatch.setattr(command, "fineweb_documents", lambda **k: Source())
     monkeypatch.setattr(command, "TextStream", Stream)
     if command is evaluation:

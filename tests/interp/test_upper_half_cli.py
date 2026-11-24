@@ -329,7 +329,10 @@ def test_main_uses_checkpoint_on_resume_and_keeps_warm_source_unchanged(tmp_path
     source, output, model, _, _, argv, _, prepared = setup_fallback(tmp_path)
     before = {p.relative_to(source): p.read_bytes() for p in source.rglob("*") if p.is_file()}
     monkeypatch.setattr(training, "fineweb_documents", lambda **_: documents())
-    monkeypatch.setattr(training, "load_text_model", lambda **_: (model, TinyTokenizer()))
+    def load(*, device, memory, mode):
+        assert device == "cpu" and mode == "training" and memory.limit == 24_000_000_000
+        return model, TinyTokenizer()
+    monkeypatch.setattr(training, "load_text_model", load)
     # This is two synthetic CPU batches, with no external model or learning benchmark.
     training.main(argv)
     exported = json.loads((output / "dictionary.json").read_text())
