@@ -250,7 +250,10 @@ def build_index(dictionary_path, documents, *, model, tokenizer, provenance,
         raise ValueError("index requires a memory guard for its model device")
 
     def check(stage):
-        memory.check(stage)
+        # Batch boundaries refresh live bytes. Small work units retain interval
+        # checks, dynamic lower limits, and the caller's cancellation callback.
+        memory.check(stage, force=stage not in (
+            "document", "dictionary batch", "dictionary encoder block", "dictionary encoder block complete"))
         if memory_guard is not None:
             memory_guard(stage)
 

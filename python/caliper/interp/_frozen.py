@@ -14,7 +14,8 @@ from torch.nn import functional as F
 from ._dictionary import model_identity
 from ._families import model_family
 from ._points import _architecture, capture
-from ._memory import MemoryGuard as ProcessMemoryGuard, CleanStop, free_percent, autorelease_scope
+from ._memory import (MemoryGuard as ProcessMemoryGuard, BudgetMemory, CleanStop,
+                      allocation_bytes, free_percent, autorelease_scope)
 
 
 # Mixed storage precision needs at most this many converted encoder elements,
@@ -63,18 +64,23 @@ def _trace_features(layer, x, guard=None, check=_no_check):
     """
     if layer.W_enc.dtype == x.dtype and layer.b_enc.dtype == x.dtype:
         return layer.encode(x)
+    memory = BudgetMemory(guard, guard.limit / 1e9) if guard is not None else None
+    if memory is not None:
+        memory.check("dictionary encoder admission")
     latents, width = layer.W_enc.shape
     rows = max(1, _ENCODER_BLOCK_ELEMENTS // width)
     preactivation = x.new_empty(*x.shape[:-1], latents)
     for start in range(0, latents, rows):
         with autorelease_scope(x.device):
-            if guard is not None:
-                guard.check("dictionary encoder block")
+            if memory is not None:
+                memory.check("dictionary encoder block", force=False)
             check("dictionary encoder block")
             stop = min(start + rows, latents)
             preactivation[..., start:stop] = F.linear(
                 x, layer.W_enc.detach()[start:stop].to(x.dtype),
                 layer.b_enc.detach()[start:stop].to(x.dtype))
+            if memory is not None:
+                memory.check("dictionary encoder block complete", force=False)
             check("dictionary encoder block complete")
     if callable(getattr(layer, "activate", None)):
         return layer.activate(preactivation)
@@ -216,6 +222,14 @@ class MemoryGuard:
         current = self.check(stage)
         if current + size > self.limit:
             raise CleanStop(f"{stage} allocation exceeds the trace memory limit")
+
+    def _check_interval(self, stage):
+        """Check bounded encoder work without another forced process read."""
+        self._guard.check(stage, force=False)
+        current = allocation_bytes(self._guard)
+        if max(current, self._guard.peak) > self.limit:
+            raise CleanStop("trace exceeded the process or MPS memory limit")
+        return current
 
     def batch_size(self, requested, *, layers, tokens, width, mixer_width, itemsize=4):
         current = self.check("target batch admission")

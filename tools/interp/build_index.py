@@ -222,7 +222,7 @@ def main(argv=None):
             manifest = build_index(
                 args.dictionary, documents, model=model, tokenizer=tokenizer,
                 dictionary=dictionary, provenance=provenance, max_tokens=args.tokens,
-                context_length=args.context, memory_guard=check, memory=memory,
+                context_length=args.context, memory_guard=lambda stage: stop.check(), memory=memory,
             )
             memory.check("complete")
             print(json.dumps({"stage": "index_ready", "tokens": manifest["tokens"],

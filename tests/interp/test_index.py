@@ -417,6 +417,8 @@ def test_cli_fixture_build_and_query(tmp_path, monkeypatch, capsys, source_kind)
     assert command.main([*args, *source_args, "--tokens", "73", "--context", "17"]) == 0
     index = FeatureIndex(tmp_path, model=model, tokenizer=TinyTokenizer())
     assert index.metadata["tokens"] == 73
+    batches = sum((int(length) + 16) // 17 for length in index.documents["length"])
+    assert stages.count("before batch") == stages.count("model batch") == batches
     assert index.metadata["provenance"]["partition"] == "index"
     assert index.metadata["provenance"]["source_kind"] == ("staged_jsonl" if source_kind == "jsonl" else "pinned_dataset")
     assert index.metadata["provenance"]["source_id"] == source_id
@@ -463,6 +465,8 @@ def test_cli_clean_memory_stop(tmp_path, monkeypatch):
     monkeypatch.setattr(command, "load_text_model", lambda **kwargs: (model, TinyTokenizer()))
     monkeypatch.setattr(command, "fineweb_documents", lambda **kwargs: [{"text": "fixture"}])
     class Memory:
+        device = torch.device("cpu")
+        limit = 12_000_000_000
         def __init__(self, *args):
             pass
         def check(self, stage, **kwargs):
