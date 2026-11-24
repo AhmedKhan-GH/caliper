@@ -122,11 +122,14 @@ def _decode_selected(layer, indices, activations, *, check=_no_check):
     return result
 
 
-def _validate_dictionary(model, dictionary, check=_no_check):
+def _validate_dictionary(model, dictionary, check=_no_check, *, memory=None):
     """Check identity, dimensions, and probes before any model forward."""
     check("dictionary admission")
+    def identity_check(stage):
+        # The caller reserves hash scratch and checks its deadline at each chunk.
+        check("dictionary admission")
     data = dictionary.metadata
-    if not isinstance(data, dict) or data.get("model_hash") != model_identity(model):
+    if not isinstance(data, dict) or data.get("model_hash") != model_identity(model, memory=memory, check=identity_check):
         raise ValueError("dictionary model identity mismatch")
     check("dictionary identity")
     config = model.config
@@ -550,7 +553,7 @@ class FrozenPath:
                  memory_limit_gb=12):
         _validate_ablation_points(model, interventions)
         _validate_intervention_positions(input_ids.shape[1], interventions)
-        probes = _validate_dictionary(model, dictionary, check)
+        probes = _validate_dictionary(model, dictionary, check, memory=guard)
         parameter = next(model.parameters())
         self.device, self.dtype = parameter.device, parameter.dtype
         self.family = model_family(model)
