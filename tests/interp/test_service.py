@@ -409,3 +409,62 @@ def test_recursive_registration_refuses_before_concurrent_close_lock(monkeypatch
     if replace:
         assert register_service(replacement, controls=controls) is replacement
         unregister_service(replacement, controls=controls)
+
+
+@pytest.mark.parametrize("method", ["trace.run", "feature.examples"])
+def test_resource_stop_terminates_queue_and_reaches_controls_owner(method):
+    from types import SimpleNamespace
+    from caliper.interp._memory import CleanStop
+    controls, transport = _controls.Controls(), Transport()
+    route = controls.attach(transport)
+    calls = []
+    failure = CleanStop("independent admission reserve")
+
+    def stop(**kwargs):
+        calls.append(method)
+        raise failure
+
+    service = InterpretationService(dictionary=SimpleNamespace(metadata={}),
+        tracer=SimpleNamespace(trace=stop), index=SimpleNamespace(examples=stop))
+    register_service(service, controls=controls)
+    params = {"prompt": "AB"} if method == "trace.run" else {"layer": 0, "feature": 1}
+    if method == "feature.examples":
+        service.index.examples = lambda *args, **kwargs: stop(**kwargs)
+    try:
+        assert call(route, method, params, 1)["status"] == "queued"
+        assert call(route, "feature.dictionary", request_id=2)["status"] == "queued"
+        with pytest.raises(CleanStop) as caught:
+            controls.checkpoint()
+        assert caught.value is failure
+        assert calls == [method]
+        terminal = {reply.request_id: reply for reply in transport.replies if reply.status == "error"}
+        assert set(terminal) == {1, 2}
+        assert all(reply.error["code"] == "interpret.stopped" for reply in terminal.values())
+        assert call(route, "trace.status")["result"]["state"] == "error"
+        assert call(route, "feature.dictionary")["error"]["code"] == "interpret.stopped"
+        with pytest.raises(CleanStop) as repeated:
+            controls.checkpoint()
+        assert repeated.value is failure and calls == [method]
+    finally:
+        unregister_service(service, controls=controls)
+        route.detach()
+    assert service.step() == 0
+
+
+def test_resource_stop_survives_failed_terminal_delivery():
+    from caliper.interp._memory import CleanStop
+    failure = CleanStop("resource stop")
+    service = InterpretationService(tracer_factory=lambda: (_ for _ in ()).throw(failure))
+    replies = []
+
+    def disconnected(*args):
+        raise OSError("disconnected")
+
+    service.submit({"version": 1, "method": "trace.run", "params": {"prompt": "A"}}, disconnected)
+    service.submit({"version": 1, "method": "feature.dictionary", "params": {}}, disconnected)
+    service.submit({"version": 1, "method": "trace.read", "params": {}}, lambda *args: replies.append(args))
+    with pytest.raises(CleanStop) as caught:
+        service.step(3)
+    assert caught.value is failure and replies[0][2]["code"] == "interpret.stopped"
+    assert not service.running and not service.queue
+    service.close()

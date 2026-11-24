@@ -36,11 +36,12 @@ class InterpretationService:
         self.running = False
         self.running_thread = None
         self.closed = False
+        self.failure = None
 
     @property
     def pending(self):
         with self.lock:
-            return bool(self.queue)
+            return bool(self.queue) or self.failure is not None
 
     def submit(self, metadata, reply, *, acknowledge=None):
         """Return a status and result; send deferred results through ``reply``."""
@@ -52,6 +53,8 @@ class InterpretationService:
                 raise Refused("interpret.closed", "The interpretation service is closed.")
             if method == "trace.status":
                 return "ok", deepcopy(self.status)
+            if self.failure is not None:
+                raise Refused("interpret.stopped", "The interpretation run stopped.")
             if len(self.queue) >= 32:
                 raise Refused("interpret.busy", "At most 32 requests can wait for a step.")
             if method == "trace.run":
@@ -145,11 +148,30 @@ class InterpretationService:
             raise Refused("interpret.unsupported", "This run does not support the requested operation.")
         return handler(**params)
 
+    def stop(self, failure, step=None):
+        """Latch a resource stop and terminate every queued request."""
+        with self.lock:
+            if self.failure is None:
+                self.failure = failure
+            error = {"code": "interpret.stopped", "message": str(self.failure).replace("\0", "").encode(
+                "utf-8", errors="replace")[:1024].decode("utf-8", errors="ignore")}
+            self.status = {"state": "error", "seconds": 0., "step": step, "error": error}
+            requests, self.queue = self.queue, deque()
+        for _, _, reply in requests:
+            try:
+                reply("error", None, error)
+            except Exception:
+                pass  # A disconnected waiter cannot hide the stop from the run owner.
+        return error
+
     def step(self, step=None):
         """Execute the requests present at entry, once, on the run thread."""
+        from ._memory import CleanStop
         with self.lock:
             if self.running or self.closed:
                 return 0
+            if self.failure is not None:
+                raise self.failure
             self.running = True
             self.running_thread = threading.get_ident()
             count = len(self.queue)
@@ -163,6 +185,13 @@ class InterpretationService:
                     result = self._execute(method, params, step)
                     if not protocol.bounded(result):
                         raise Refused("interpret.result_limit", "The result exceeds the structured metadata limits.")
+                except CleanStop as exc:
+                    error = self.stop(exc, step)
+                    try:
+                        reply("error", None, error)
+                    except Exception:
+                        pass
+                    raise self.failure
                 except Exception as exc:
                     error = {"code": getattr(exc, "code", "interpret.refused"),
                              "message": str(exc).encode("utf-8", errors="replace")[:1024].decode("utf-8", errors="ignore")}
