@@ -5,6 +5,8 @@ from collections import OrderedDict
 from contextlib import contextmanager
 from contextvars import ContextVar
 from copy import deepcopy
+import hashlib
+import json
 import math
 import weakref
 
@@ -31,6 +33,48 @@ class InterventionError(ValueError):
     def __init__(self, message, code="intervene.bad_request"):
         super().__init__(message)
         self.code = code
+
+
+class _IdentityMemory:
+    """Retain the supplied guard and its lower limits for bounded readbacks."""
+
+    def __init__(self, guard):
+        self.guard = guard
+        self.inner = getattr(guard, "_guard", guard)
+        self.device = getattr(guard, "device", getattr(self.inner, "device", torch.device("cpu")))
+        self.current = 0
+
+    @property
+    def limit(self):
+        return min(getattr(self.guard, "limit", math.inf), getattr(self.inner, "limit", math.inf))
+
+    @property
+    def peak(self):
+        return max(self.current, getattr(self.guard, "peak", 0), getattr(self.inner, "peak", 0))
+
+    def check(self, stage, **kwargs):
+        # Some supplied guards accept only the stage. Do not bypass their latch.
+        current = self.guard.check(stage)
+        if isinstance(current, (int, float)):
+            self.current = max(self.current, current)
+
+
+def _content_identity(state, guard):
+    from ._dictionary import _state_hash
+    memory = _IdentityMemory(guard) if guard is not None else None
+    if any(value.device.type != "cpu" for value in state.values()):
+        if memory is None or not math.isfinite(memory.limit):
+            raise ValueError("device content identity requires a bounded process memory guard")
+    return _state_hash(state, memory=memory)
+
+
+def _dictionary_identifier(dictionary, guard):
+    """Bind default restore compatibility to content, metadata, and actual TopK values."""
+    identity = {"version": 1, "content": _content_identity(dictionary.state_dict(), guard),
+                "metadata": {key: value for key, value in dictionary.metadata.items() if key != "quality"},
+                "topk": [layer.k for layer in dictionary.layers]}
+    encoded = json.dumps(identity, sort_keys=True, allow_nan=False, separators=(",", ":")).encode("utf-8")
+    return "sha256:" + hashlib.sha256(encoded).hexdigest()
 
 
 def _indices(value, name, *, limit=None):
@@ -150,6 +194,7 @@ class InterventionService:
         self._ablation_points = None
         self.dictionary = None
         self.dictionary_id = None
+        self._default_dictionary_id = False
         self.tokenizer = None
         self.resource_guard = None
         self._cache = OrderedDict()
@@ -172,7 +217,13 @@ class InterventionService:
 
         Reconfiguration removes existing hooks. Controls must also end their records.
         A failed validation leaves the prior configuration and hooks intact.
+        The default identifier covers dictionary content and metadata except quality.
+        A content change requires reconfiguration before another feature request.
+        The caller owns an explicit identifier and its restore compatibility.
         """
+        if resource_guard is not None and not callable(getattr(resource_guard, "check", None)):
+            raise InterventionError("resource_guard must provide check(stage, **kwargs)")
+        default_dictionary_id = dictionary is not None and dictionary_id is None
         if dictionary is not None:
             from ._dictionary import Dictionary, model_identity
             if not isinstance(dictionary, Dictionary):
@@ -193,16 +244,16 @@ class InterventionService:
                         or layer.b_enc.shape != (layer.W_enc.shape[0],)
                         or layer.b_dec.shape != (width,)):
                     raise InterventionError("dictionary weight dimensions differ from its probes")
-            dictionary_id = meta["model_hash"] if dictionary_id is None else dictionary_id
+            if default_dictionary_id:
+                dictionary_id = _dictionary_identifier(dictionary, resource_guard)
             _text(dictionary_id, "dictionary identifier", 255)
         elif dictionary_id is not None:
             raise InterventionError("dictionary identifier requires a dictionary", "intervene.unknown_dictionary")
         if tokenizer is not None and not callable(tokenizer):
             raise InterventionError("tokenizer must be callable")
-        if resource_guard is not None and not callable(getattr(resource_guard, "check", None)):
-            raise InterventionError("resource_guard must provide check(stage, **kwargs)")
         self.close()
         self.dictionary, self.dictionary_id, self.tokenizer = dictionary, dictionary_id, tokenizer
+        self._default_dictionary_id = default_dictionary_id
         self.resource_guard = resource_guard
 
     def invalidate_cache(self):
@@ -301,8 +352,17 @@ class InterventionService:
         elif kind in ("scale", "clamp"):
             if self.dictionary is None or spec.get("dictionary", self.dictionary_id) != self.dictionary_id:
                 raise InterventionError("unknown or absent dictionary", "intervene.unknown_dictionary")
+            if (self._default_dictionary_id
+                    and _dictionary_identifier(self.dictionary, self.resource_guard) != self.dictionary_id):
+                raise InterventionError("dictionary content changed. Reconfigure before use",
+                                        "intervene.unknown_dictionary")
             if probe is None or not point.endswith(".mlp_out"):
                 raise InterventionError("features require an mlp_out point")
+            from ._dictionary import fallback_metadata
+            meta = self.dictionary.metadata
+            fallback = fallback_metadata(meta) if "fallback" in meta.get("training", {}) else None
+            if fallback is not None and probe.layer not in fallback["active_layers"]:
+                raise InterventionError("dictionary excludes this feature layer", "intervene.unknown_feature")
             feature = spec.get("feature")
             if type(feature) is not int or not 0 <= feature < self.dictionary.layers[probe.layer].W_dec.shape[0]:
                 raise InterventionError("unknown dictionary feature", "intervene.unknown_feature")
@@ -346,16 +406,15 @@ class InterventionService:
         return inputs
 
     def _identity(self):
-        # Version counters detect optimizer steps and normal in-place weight updates.
-        tensors = []
-        for value in (*self.model.parameters(), *self.model.buffers()):
-            try:
-                version = value._version
-            except RuntimeError:  # tensors created inside inference_mode have no counter
-                version = None
-            tensors.append((id(value), version, value.device, value.dtype, tuple(value.shape)))
+        """Check exact state at each lookup, including writes between point hooks."""
+        # Include nonpersistent buffers and alias writes. Inference tensors have
+        # no version counter, but their materialized bytes obey the same contract.
+        state = {"parameter:" + name: value for name, value in self.model.named_parameters()}
+        state.update({"buffer:" + name: value for name, value in self.model.named_buffers()})
+        content = _content_identity(state, self.resource_guard)
         return (id(self.model), id(self.tokenizer),
-                tuple((id(m), m.training) for m in self.model.modules()), tuple(tensors))
+                tuple((id(m), m.training) for m in self.model.modules()),
+                tuple((name, id(value), value.device) for name, value in state.items()), content)
 
     def _source_keys(self):
         return {(hook.spec["source_prompt"], hook.spec["point"]) for hook in self._hooks
@@ -468,6 +527,7 @@ class _InterventionReplay:
         self.executor._ablation_points = executor._ablation_points
         self.executor.dictionary = executor.dictionary
         self.executor.dictionary_id = executor.dictionary_id
+        self.executor._default_dictionary_id = executor._default_dictionary_id
         self.executor.tokenizer = executor.tokenizer
         self.executor.resource_guard = executor.resource_guard
         self._effects = []
