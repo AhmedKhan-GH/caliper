@@ -32,6 +32,9 @@ _CONFIG_FIELDS = (
     "tie_word_embeddings", "use_bidirectional_attention",
 )
 _SOURCE_MODULE_FIELDS = ("batch_first", "norm_first", "activation_relu_or_gelu", "dropout", "p")
+_NATIVE_ACTIVATIONS = (torch.nn.GELU, torch.nn.Identity, torch.nn.Hardswish, torch.nn.LeakyReLU,
+                       torch.nn.ReLU, torch.nn.ReLU6, torch.nn.Sigmoid, torch.nn.SiLU,
+                       torch.nn.Tanh, torch.nn.PReLU)
 
 
 def _type_name(value):
@@ -77,9 +80,7 @@ def _activation_settings(function, prefix, record):
         return
     # Known activation modules use public scalar options or a supported `act`.
     # The stateful kernel module requires a separate implementation contract.
-    supported = {torch.nn.GELU, torch.nn.Identity, torch.nn.Hardswish, torch.nn.LeakyReLU,
-                 torch.nn.ReLU, torch.nn.ReLU6, torch.nn.Sigmoid, torch.nn.SiLU,
-                 torch.nn.Tanh, torch.nn.PReLU}
+    supported = set(_NATIVE_ACTIVATIONS)
     if type(function).__module__ == "transformers.activations":
         from transformers import activations
         supported.update(value[0] if isinstance(value, tuple) else value
@@ -137,6 +138,9 @@ def _settings(model, *, tensor_hash, source):
                 else:
                     record(prefix + field, value)
         if source:
+            if isinstance(module, _NATIVE_ACTIVATIONS):
+                # Standalone modules have no activation or act_fn owner field.
+                _activation_settings(module, prefix + "activation_module", record)
             for field in _SOURCE_MODULE_FIELDS:
                 value = getattr(module, field, None)
                 # Dropout modules appear separately in named_modules.
