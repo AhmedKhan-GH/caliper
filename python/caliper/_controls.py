@@ -876,18 +876,7 @@ class Interventions:
         # Validate every record before any hook installation or patch-source forward.
         specifications, keys = [], set()
         for record in records:
-            if not isinstance(record, dict) or set(record) != {
-                "specification", "state", "since_step", "clear", "error", "error_code"
-            }:
-                raise InterventionError("invalid intervention record")
-            spec = replay.executor.validate(record["specification"])
-            if (record["state"] not in (IV_PENDING, IV_ACTIVE, IV_ENDED)
-                    or not _step_ok(record["since_step"]) or type(record["clear"]) is not bool
-                    or (record["state"] == IV_ACTIVE and record["since_step"] is None)
-                    or (record["state"] == IV_PENDING and record["since_step"] is not None)
-                    or any(value is not None and (not isinstance(value, str) or len(value) > TEXT_MAX)
-                           for value in (record["error"], record["error_code"]))):
-                raise InterventionError("invalid intervention lifecycle state")
+            spec = _record_specification(record, replay.executor)
             key = spec["point"], spec["op"]
             if key in keys:
                 raise InterventionError("duplicate intervention record")
@@ -914,18 +903,7 @@ class Interventions:
                 raise InterventionError("the intervention service is no longer attached")
             restored = {}
             for record in records:
-                if not isinstance(record, dict) or set(record) != {
-                    "specification", "state", "since_step", "clear", "error", "error_code"
-                }:
-                    raise InterventionError("invalid intervention record")
-                spec = self.executor.validate(record["specification"])
-                if (record["state"] not in (IV_PENDING, IV_ACTIVE, IV_ENDED)
-                        or not _step_ok(record["since_step"]) or type(record["clear"]) is not bool
-                        or (record["state"] == IV_ACTIVE and record["since_step"] is None)
-                        or (record["state"] == IV_PENDING and record["since_step"] is not None)
-                        or any(value is not None and (not isinstance(value, str) or len(value) > TEXT_MAX)
-                               for value in (record["error"], record["error_code"]))):
-                    raise InterventionError("invalid intervention lifecycle state")
+                spec = _record_specification(record, self.executor)
                 key = spec["point"], spec["op"]
                 if key in restored:
                     raise InterventionError("duplicate intervention record")
@@ -942,6 +920,27 @@ class Interventions:
 
     def remove(self) -> None:
         self._ctl._interventions_off(self)
+
+
+def _record_specification(record, executor):
+    """Validate lifecycle structure before resources that an effect still needs."""
+    from . import _intervention_protocol as metadata
+    from .interp._intervene import InterventionError
+    if not isinstance(record, dict) or set(record) != {
+        "specification", "state", "since_step", "clear", "error", "error_code"
+    }:
+        raise InterventionError("invalid intervention record")
+    state, since = record["state"], record["since_step"]
+    if (state not in (IV_PENDING, IV_ACTIVE, IV_ENDED) or type(record["clear"]) is not bool
+            or (state == IV_ACTIVE and since is None)
+            or (state == IV_PENDING and since is not None)):
+        raise InterventionError("invalid intervention lifecycle state")
+    spec = executor.validate(record["specification"], resources=False)
+    entry = dict(spec, state=state, since_step=since)
+    entry.update({key: record[key] for key in ("error", "error_code") if record[key] is not None})
+    if not metadata.specification(entry, lifecycle=True):
+        raise InterventionError("invalid intervention lifecycle metadata")
+    return spec if state == IV_ENDED else executor.validate(spec)
 
 
 def _step_ok(v) -> bool:

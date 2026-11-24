@@ -10,6 +10,7 @@ import weakref
 
 import torch
 
+from .. import _intervention_protocol as metadata
 from ._points import _architecture, _input, capture
 
 MAX_POSITIONS = 32
@@ -39,17 +40,13 @@ def _indices(value, name, *, limit=None):
 
 
 def _text(value, name, maximum, *, code="intervene.bad_request"):
-    try:
-        valid = isinstance(value, str) and 0 < len(value.encode("utf-8")) <= maximum
-    except UnicodeEncodeError:
-        valid = False
-    if not valid:
+    if not metadata.text(value, maximum, False):
         raise InterventionError(f"{name} must contain 1 to {maximum} UTF-8 bytes", code)
     return value
 
 
 def _finite(value, name):
-    if type(value) not in (int, float):
+    if not metadata.finite(value):
         raise InterventionError(f"{name} must be a finite number")
     try:
         result = float(value)
@@ -215,7 +212,7 @@ class InterventionService:
             raise InterventionError("point width is unknown; capture its output first")
         return module, "output", width, None
 
-    def validate(self, request):
+    def validate(self, request, *, resources=True):
         """Return a detached, canonical specification without a hook or forward pass."""
         if not isinstance(request, dict):
             raise InterventionError("intervention set must be an object")
@@ -223,7 +220,7 @@ class InterventionService:
         if op is not None and kind is not None and op != kind:
             raise InterventionError("op and kind conflict")
         kind = kind if kind is not None else op
-        if kind not in KINDS:
+        if not isinstance(kind, str) or kind not in KINDS:
             raise InterventionError("unsupported intervention kind", "intervene.op_reserved")
         fields = {"point", "op", "kind", "from_step", "until_step"}
         fields |= {"add": {"vector", "coefficient", "positions"},
@@ -244,6 +241,11 @@ class InterventionService:
         if (spec.get("from_step") is not None and spec.get("until_step") is not None
                 and spec["until_step"] <= spec["from_step"]):
             raise InterventionError("until_step must exceed from_step", "intervene.bad_range")
+        # Check wire bounds before any integer-to-float conversion or resource access.
+        if not metadata.specification(spec):
+            raise InterventionError("intervention metadata exceeds the wire bounds")
+        if not resources:
+            return spec
         if kind == "ablate":
             from .._ablate import points
             if point not in {p["point"] for p in points(self.model)}:
@@ -290,6 +292,8 @@ class InterventionService:
                       [spec["value"]] if kind == "clamp" else [])
             if any(abs(v) > maximum for v in values):
                 raise InterventionError("intervention value exceeds the model dtype range")
+        if not metadata.specification(spec):
+            raise InterventionError("canonical intervention metadata exceeds the wire bounds")
         return spec
 
     def _source_inputs(self, spec):
