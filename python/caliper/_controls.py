@@ -225,7 +225,9 @@ def _check_controls_budget(meta):
         if entry["state"] != IV_ENDED:
             # One UTF-8 byte can require six JSON bytes. Reserve the full error
             # bounds, even when every live hook fails at the same boundary.
-            entry.update(state=IV_PENDING, since_step=_INT_EXACT - 1,
+            entry.update(state=IV_PENDING,
+                         since_step=max(_INT_EXACT - 1, run.get("step", 0) + 1,
+                                        entry.get("since_step") or 0),
                          error="\x01" * TEXT_MAX, error_code="\x01" * NAME_MAX)
         if size(entry) > MAX_BYTES:
             raise ValueError("intervention metadata exceeds the wire limit with lifecycle headroom")
