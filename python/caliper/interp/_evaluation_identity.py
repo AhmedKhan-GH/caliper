@@ -12,10 +12,13 @@ from ._trace import _forward_settings
 
 
 def _evaluation_settings(model, memory):
-    # Preserve trace checks for temporary object replacement and device changes.
-    # Include every checkpoint setting, such as activation approximation mode.
-    settings = forward_settings(model, tensor_hash=lambda state: _state_hash(state, memory=memory))
-    settings.update(_forward_settings(model, memory))
+    settings = _forward_settings(model, memory)
+    if getattr(getattr(model, "config", None), "model_type", None) == "gemma2":
+        # Include every Gemma checkpoint setting, such as activation approximation.
+        # Keep the existing Qwen cursor digest and trace object checks unchanged.
+        checkpoint = forward_settings(model, tensor_hash=lambda state: _state_hash(state, memory=memory))
+        checkpoint.update(settings)
+        settings = checkpoint
     for name, module in model.named_modules():
         config = getattr(module, "config", None)
         if hasattr(config, "_attn_implementation"):

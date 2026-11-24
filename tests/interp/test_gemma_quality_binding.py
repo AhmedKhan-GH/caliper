@@ -42,6 +42,12 @@ def test_quality_and_live_response_share_verified_evidence(artifact):
                                           context=4, batch_tokens=8, chunk_tokens=2)
     assert quality["status"] == "partial"
     assert quality["evaluated_tokens"] == 8
+    with TextStream(documents(), tokenizer, "quality") as stream:
+        resumed = eval_dictionary.evaluate(model, dictionary, stream, folder, tokens=8,
+                                          context=4, batch_tokens=8, chunk_tokens=2, resume=True)
+    for field in ("fvu", "dead_fraction", "cross_entropy_delta", "evaluated_tokens", "model_binding"):
+        assert resumed[field] == quality[field]
+    assert resumed["publisher_training_overlap"] == "unknown"
     result = reply(folder, model, dictionary)
     assert result["model_binding"] == quality["model_binding"] == evidence(model)
     _gemma_model_binding(result["metadata"], result)

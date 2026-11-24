@@ -138,6 +138,18 @@ def test_metadata_cannot_supply_the_verified_gain(artifact):
         imported.verified_import_binding(folder, metadata, model=model)
 
 
+@pytest.mark.parametrize("reforge", [False, True])
+def test_reduced_precision_gain_has_no_dtype_alias(artifact, reforge):
+    folder, model, dictionary, snapshot = artifact
+    model.half()
+    verify_hf_model(model, snapshot)
+    if reforge:
+        for row, block in zip(dictionary.metadata["import_source"]["layers"], model.model.layers):
+            row["input_gain_hash"] = _state_hash({"gain": 1 + block.pre_feedforward_layernorm.weight.detach()})
+    with pytest.raises(ValueError, match="import binding"):
+        imported.verified_import_binding(folder, dictionary.metadata, model=model)
+
+
 def test_import_file_reads_remain_bounded(artifact, monkeypatch):
     folder, model, dictionary, _ = artifact
     monkeypatch.setattr(imported, "_CHUNK_BYTES", 32)
