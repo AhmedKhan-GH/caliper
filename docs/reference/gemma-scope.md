@@ -321,7 +321,8 @@ Each identity check compares every byte on the device in blocks of at most 16 Mi
 A batch contains at most 64 blocks and fits the current process and host reserves.
 The device returns comparison flags to the CPU after each batch.
 The snapshot preserves source device identity and never supplies model weights.
-If the snapshot reserve does not fit, checks hash all live bytes instead.
+If the process budget cannot fit the snapshot, checks hash all live bytes instead.
+A host-reserve failure stops the operation.
 
 Example queries admit up to 16 windows in batches that fit current memory, including any live snapshot.
 Each batch retains the workspace reserve and releases temporary tensors within an autorelease scope before the next admission.
