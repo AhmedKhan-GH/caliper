@@ -5,6 +5,7 @@ from threading import Event
 import pytest
 
 from caliper import _wire
+from caliper._controls import intervention_key
 from caliper.interp._intervene import InterventionError
 from .concurrency_isolation import isolated_test
 from .test_controls_concurrency import Job, other_thread, source_gate
@@ -21,7 +22,7 @@ def test_unchanged_clamp_validation_releases_lock_and_retains_resources(hosted_r
     _queue_action(route, "apply_clamp", 1)
     run.boundary()
     service = run.interventions
-    owned = run.controls._ivs[(run._owned_clamp["point"], "clamp")]
+    owned = run.controls._ivs[intervention_key(run._owned_clamp)]
     hook = owned.hook
     before = service.state_dict()
     comparison = deepcopy(run.inference_status()["comparison"])
@@ -84,7 +85,7 @@ def test_owned_clamp_clear_invalidates_inflight_preparation(hosted_run):
     run.selected.set(_feature_rows(run)[0])
     run.boundary()
     run._set_clamp()
-    owned = run.controls._ivs[(run._owned_clamp["point"], "clamp")]
+    owned = run.controls._ivs[intervention_key(run._owned_clamp)]
     hook = owned.hook
     run.interventions.set({"kind": "patch", "point": "layers.1.resid_pre", "source_prompt": "AC"})
 

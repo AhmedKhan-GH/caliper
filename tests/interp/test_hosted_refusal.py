@@ -110,8 +110,20 @@ def test_explicit_clamp_requires_committed_effect(hosted_run, monkeypatch, outco
     run.boundary()
     published = _resolve("output.probs")
     comparison = deepcopy(run.inference_status()["comparison"])
+    owned = run._owned_record()
+    hook = None if owned is None else owned.hook
+    applied = None if owned is None else owned.applied_spec
     if outcome == "refused":
-        refuse_hook(run, monkeypatch, run.selection["layer"])
+        if prior == "same_point":
+            # A second feature can share the existing module hook.
+            # Refuse installation even when no new module hook is necessary.
+            def refused(spec, *, on_error=None):
+                assert spec["point"] == applied["point"] and spec["kind"] == "clamp"
+                assert callable(on_error)
+                raise RuntimeError("hosted hook refusal")
+            monkeypatch.setattr(run.interventions.executor, "install", refused)
+        else:
+            refuse_hook(run, monkeypatch, run.selection["layer"])
     else:
         install = run.controls._install_intervention
 
@@ -130,6 +142,11 @@ def test_explicit_clamp_requires_committed_effect(hosted_run, monkeypatch, outco
         run.boundary()
     reply, = [reply for reply in route.transport.replies if reply.request_id == 2]
     assert reply.status == "error" and reply.error["code"] == "action_failed"
+    if outcome == "refused":
+        assert "hosted hook refusal" in reply.error["message"]
+    if owned is not None:
+        assert run._owned_record() is owned
+        assert owned.hook is hook and owned.applied_spec is applied and not hook.removed
     assert run.inference_status()["comparison"] == comparison
     assert _resolve("output.probs") is published
     # Resolve the unrelated concurrent request without a delayed clamp effect.
@@ -174,10 +191,12 @@ def test_cross_layer_deferral_preserves_newer_requests(hosted_run, monkeypatch, 
         assert run._owned_record() is old
     if "set" in request:
         spec = request["set"]
-        record = run.controls._ivs[(spec["point"], spec["kind"])]
+        record = run.controls._ivs[_controls.intervention_key(spec)]
         assert all(record.spec[key] == value for key, value in spec.items())
     else:
-        assert run.controls._ivs[(request["clear"], "clamp")].clear
+        record, = (iv for iv in run.controls._ivs.values()
+                   if iv.point == request["clear"] and iv.op == "clamp")
+        assert record.clear
     run.boundary()
     if traffic in ("unrelated", "clear"):
         assert run._owned_record() is old
