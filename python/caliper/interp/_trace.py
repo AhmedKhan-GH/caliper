@@ -144,7 +144,7 @@ class _DirectEffects:
             activation = path.logits[0, token] - path.logits[0].mean()
             if self.reference:
                 direction, bias = path.logit_target(token, reference=True)
-                activation = (path.reference_final[0, -1] * direction).sum() + bias
+                activation = path.reference_final[0, -1] @ direction + bias
             self.logit_nodes.append(len(self.nodes))
             self.nodes.append({"id": f"logit:{path.tokens - 1}:{token}", "kind": "logit", "layer": path.layers,
                                "position": path.tokens - 1, "token_id": token,
@@ -161,7 +161,7 @@ class _DirectEffects:
         if node["kind"] == "logit":
             token = node["token_id"]
             direction, bias = path.logit_target(token, reference=True) if self.reference else path.logit_target(token)
-            expected = (path.reference_final[0, -1] * direction).sum() + bias if self.reference else (
+            expected = path.reference_final[0, -1] @ direction + bias if self.reference else (
                 path.logits[0, token] - path.logits[0].mean())
             return _Target(index, path.layers, path.tokens - 1, direction,
                            expected, zero, bias, zero)
@@ -207,7 +207,11 @@ class _DirectEffects:
         weights = path.embedding.new_zeros(len(self.nodes), batch)
         token_gradient = gradients[0]
         if token_gradient is not None:
-            weights[:path.tokens] = (token_gradient * path.embedding).sum(-1).T
+            if self.reference:
+                weights[:path.tokens] = torch.einsum(
+                    "bpd,pd->pb", token_gradient.to(path.embedding.dtype), path.embedding[0])
+            else:
+                weights[:path.tokens] = (token_gradient * path.embedding).sum(-1).T
         for layer, (feature_slice, error_slice, indices, activations, active) in enumerate(self.source_layers):
             self.check(f"edge layer {layer}")
             gradient = gradients[layer + 1]
@@ -233,14 +237,23 @@ class _DirectEffects:
                             products = (gradient[:, position] @ decoder.T) * values[start:start + step]
                         weights[node:node + decoder.shape[0]] = products.T
                         node += decoder.shape[0]
-            weights[error_slice] = (gradient * path.errors[layer]).sum(-1).T
-        expected = torch.stack([target.expected for target in targets])
+            if self.reference:
+                # The published hook contracts before BF16 output rounding.
+                # An elementwise product would round every coordinate first.
+                weights[error_slice] = torch.einsum(
+                    "bpd,pd->pb", gradient.to(path.errors[layer].dtype), path.errors[layer][0])
+            else:
+                weights[error_slice] = (gradient * path.errors[layer]).sum(-1).T
+        # Preserve the raw edge dtype, but audit its sum in at least float32.
+        # BF16 totals can erase discrepancies above the completeness limit.
+        account_dtype = torch.float64 if weights.dtype == torch.float64 else torch.float32
+        expected = torch.stack([target.expected for target in targets]).to(account_dtype)
         affine = torch.stack([(path.bias_final if target.layer == path.layers else path.bias_reads[target.layer])
-                              [:, target.position] @ target.direction for target in targets])
-        affine[:, 3] += torch.stack([target.intervention_bias for target in targets])
-        encoder = torch.stack([target.encoder_bias for target in targets])
-        unembedding = torch.stack([target.unembedding_bias for target in targets])
-        incoming = weights.sum(0)
+                              [:, target.position] @ target.direction for target in targets]).to(account_dtype)
+        affine[:, 3] += torch.stack([target.intervention_bias for target in targets]).to(account_dtype)
+        encoder = torch.stack([target.encoder_bias for target in targets]).to(account_dtype)
+        unembedding = torch.stack([target.unembedding_bias for target in targets]).to(account_dtype)
+        incoming = weights.sum(0, dtype=account_dtype)
         residual = (incoming + affine.sum(-1) + encoder + unembedding - expected).abs()
         _require_finite(residual, "direct-effect completeness residual", self.check)
         # One bounded readback per target batch avoids thousands of MPS scalar synchronizations.
