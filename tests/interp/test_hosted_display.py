@@ -119,7 +119,7 @@ def test_fixture_display_recognizes_the_concrete_mps_device(monkeypatch, device,
     from caliper.interp import _publish
     tensor = SimpleNamespace(dtype=torch.float32, ndim=2, shape=(2, 10),
                              device=torch.device(device), numel=lambda: 20, element_size=lambda: 4)
-    monkeypatch.setattr(_publish, "_resolve", lambda name: tensor if name == "output.probs" else None)
+    monkeypatch.setattr(_publish, "_TENSORS", {"output.probs": tensor})
     display = _hosted._FixtureDisplay(None)
     assert display.device == torch.device("mps:0")
     if accepted:

@@ -588,6 +588,9 @@ class HostedService(InterpretationService):
             traced_specifications = self.owner.interventions.specifications()
         result = super()._execute(method, params, step)
         if method == "trace.run":
+            if getattr(self.owner, "replication_profile", None) == "published_dallas_v1":
+                from ._replication_export import export_graph
+                export_graph(self.graph, self.owner.replication.directory)
             publish_prompt = False
             with self.owner.controls.lock:
                 # Commit only after success. A script edit or pending viewer edit

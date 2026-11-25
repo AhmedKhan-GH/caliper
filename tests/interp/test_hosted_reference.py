@@ -9,7 +9,7 @@ import torch
 
 from caliper.interp import _dictionary, _hosted, _index, _memory, _qualification as qualification
 from caliper.interp._gemma_import_identity import _REFERENCE_INPUT, _REFERENCE_PROFILE
-from .test_reference_snapshots import local_snapshots, qualified_model
+from .test_reference_snapshots import directory_link, local_snapshots, qualified_model
 
 
 def reference_manifest():
@@ -71,7 +71,7 @@ def test_hosted_selects_explicit_arithmetic_and_strict_import_before_index(loade
 
 def test_hosted_accepts_canonical_model_alias(loader, tmp_path):
     alias = tmp_path / "model-alias"
-    alias.symlink_to(loader.snapshots.model, target_is_directory=True)
+    directory_link(alias, loader.snapshots.model)
     _hosted.load_resources(str(alias), loader.folder, replication_profile="published_dallas_v1")
     assert next(row for row in loader.calls if row[0] == "model")[1] == loader.snapshots.model
 
@@ -190,6 +190,22 @@ def test_live_qualification_returns_exact_version_two_evidence_each_time(live_qu
         assert folder == case.index.root and metadata is case.dictionary.metadata
         assert arguments == {"model": case.model, "memory": case.memory, "profile": _REFERENCE_PROFILE,
             "source": case.snapshots.scope, "model_snapshot": case.snapshots.model}
+
+
+@pytest.mark.parametrize("changed", [False, True])
+def test_published_qualification_checks_live_tensor_bytes_against_files(live_qualification, monkeypatch, changed):
+    case = live_qualification
+    def binding(dictionary, *, memory, folder):
+        assert dictionary is case.dictionary and memory is case.memory and folder == case.index.root
+        if changed:
+            raise ValueError("evaluation dictionary or settings changed: artifact binding differs")
+        return {"version": 1, "tensor_hash": "current fixture tensors"}
+    monkeypatch.setattr(qualification, "evaluation_dictionary_evidence", binding)
+    if changed:
+        with pytest.raises(ValueError, match="artifact binding differs"):
+            case.response()
+    else:
+        assert case.response()["tensor_binding"]["tensor_hash"] == "current fixture tensors"
 
 
 @pytest.mark.parametrize("field,value", [("format_version", 1), ("encoder_policy", "live_input_v1"),

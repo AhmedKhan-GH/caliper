@@ -75,7 +75,8 @@ def dictionary_response(dictionary, index=None, *, model=None, tokenizer=None):
     fingerprint = dictionary_fingerprint(index.root, metadata, memory=memory)
     if reference and manifest.get("dictionary_fingerprint") != fingerprint:
         raise ValueError("reference qualification dictionary fingerprint changed")
-    tensor_binding = evaluation_dictionary_evidence(dictionary, memory=memory)
+    tensor_options = {"folder": index.root} if reference else {}
+    tensor_binding = evaluation_dictionary_evidence(dictionary, memory=memory, **tensor_options)
     result.update(index=deepcopy(manifest), model_binding=model_binding, tensor_binding=tensor_binding, identity={
         "model_hash": identity, "dictionary_hash": content, "dictionary_fingerprint": fingerprint,
         "index_hash": manifest["index_hash"], "tokenizer_hash": tokenizer_hash,

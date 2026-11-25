@@ -1,6 +1,7 @@
 """Offline snapshot resolution without checkpoint or Scope payload reads."""
 from copy import deepcopy
 import json
+import os
 from types import SimpleNamespace
 
 import pytest
@@ -10,6 +11,15 @@ from caliper.interp import _reference_snapshots as snapshots
 from caliper.interp._dictionary import _GEMMA_IDENTITY, _VERIFIED_MODELS
 from caliper.interp._gemma_reference import PROFILE, install_reference_profile, profile_metadata
 from .test_gemma_reference import reference_fixture
+
+
+def directory_link(link, target):
+    try:
+        link.symlink_to(target, target_is_directory=True)
+    except OSError as error:
+        if os.name == "nt" and getattr(error, "winerror", None) == 1314:
+            pytest.skip("Directory links require Windows link permission.")
+        raise
 
 
 def snapshot_folder(root, repo, revision):
@@ -80,14 +90,14 @@ def test_model_snapshot_location_refusal(tmp_path, local_snapshots, change):
         target = tmp_path / "unqualified"
         target.mkdir()
         folder.rmdir()
-        folder.symlink_to(target, target_is_directory=True)
+        directory_link(folder, target)
     with pytest.raises(ValueError, match="local snapshot"):
         snapshots.model_snapshot(folder)
 
 
 def test_valid_snapshot_alias_resolves_canonically(tmp_path, local_snapshots):
     alias = tmp_path / "model-alias"
-    alias.symlink_to(local_snapshots.model, target_is_directory=True)
+    directory_link(alias, local_snapshots.model)
     assert snapshots.model_snapshot(alias) == local_snapshots.model
 
 
