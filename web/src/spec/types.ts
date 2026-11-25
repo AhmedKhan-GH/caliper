@@ -2,6 +2,8 @@
 // as far as the spec page reads it, and the result of the panel.data command
 // (src/builder/include/caliper_builder/session/panel_data.h).
 
+import type { SpecColormapName } from '../render/colormaps.gen.js';
+
 export type Primitive = 'series' | 'heatmap' | 'points' | 'histogram' | 'table' | 'image' | 'text' | 'scene';
 
 /**
@@ -30,7 +32,7 @@ export interface SpecOptions {
   x_label?: string; y_label?: string; z_label?: string;
   x_range?: [number, number]; y_range?: [number, number]; range?: [number, number];
   x_log?: boolean; y_log?: boolean;
-  colormap?: 'viridis' | 'magma' | 'rdbu' | 'greys';
+  colormap?: SpecColormapName;
   bins?: number; columns?: string[]; text?: string;
 }
 

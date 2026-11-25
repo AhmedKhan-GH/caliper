@@ -32,6 +32,7 @@ import sys
 
 THEME_FILES = (
     "src/host/ui/sternbild_theme.h",
+    "src/host/ui/sternbild_theme_colors.inc",
     "src/host/ui/sternbild_theme.cpp",
     "src/host/ui/sternbild_fonts.h",
 )
@@ -164,6 +165,22 @@ def main():
               "sternbild_tokens.h, or list a colour without a token in the region "
               f"'{BEGIN}'.")
         return 1
+    if not args.files:
+        scripts_dir = str(pathlib.Path(__file__).resolve().parent)
+        if scripts_dir not in sys.path:
+            sys.path.insert(0, scripts_dir)
+        import shared_colors  # noqa: E402
+        try:
+            drift = shared_colors.check_files(root)
+        except Exception as exc:  # noqa: BLE001
+            print(f"error: shared colour check failed: {exc}", file=sys.stderr)
+            return 2
+        if drift:
+            for item in drift:
+                print(f"shared_colors: {item}", file=sys.stderr)
+            print("Run `python3 scripts/shared_colors.py --write` to regenerate the copies.",
+                  file=sys.stderr)
+            return 1
     print(f"The theme holds no raw colour literal outside the generated header ({checked} files checked).")
     return 0
 

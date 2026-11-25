@@ -6,8 +6,6 @@
 // axes with a heatmap's colorbar, points as squares with their colour key, the
 // house table and a text panel. All positions are CSS pixels.
 
-import { colormapLut } from '../render/colormap.js';
-import type { ColormapName } from '../protocol/messages.js';
 import { fmt4 } from './format.js';
 import type { LayoutTabs, Rect } from './layout.js';
 import { COL, ColorKey, ROW, SIZE, classColor, fill, fitText, outline, pointSize, text, textWidth, trackedText, trackedWidth } from './look.js';
@@ -354,7 +352,7 @@ function drawPoints3d(ctx: CanvasRenderingContext2D, p: PreparedPanel, c: Rect, 
 
 /** The colormap's scale of a points panel, named by its colour binding (ImPlot's ColormapScale). */
 function drawColorScale(ctx: CanvasRenderingContext2D, name: string, lo: number, hi: number, cmap: string, r: Rect): void {
-  const table = cmap === 'greys' ? lut('greys') : colormapLut(cmap as ColormapName);
+  const table = lut(cmap);
   const top = r.y + 6, bottom = r.y + r.h - 6;
   const bx = Math.round(r.x + (name ? AXES + 5 : 0)), bw = 12;
   const n = Math.max(2, Math.floor(bottom - top));

@@ -26,6 +26,7 @@
 #include "gfx/gfx.h"
 #include "scene/path.h"
 #include "scene/scene_math.h"
+#include "scene/scene_palette.h"
 
 #include <array>
 #include <cstdint>
@@ -67,7 +68,7 @@ inline constexpr uint32_t kStorageOffsetAlign = 256;
 inline constexpr double kDepthOffsetUnit = 1.0 / 8192.0;
 
 // The points view's flat light grey, packed r | g << 8 | b << 16 | a << 24.
-inline constexpr uint32_t kDefaultRgba = 0xff000000u | (230u << 16) | (220u << 8) | 220u;
+inline constexpr uint32_t kDefaultRgba = detail::kFlatPointRgba;
 // The fixed 16-colour categorical palette of the points view (live_views_draw.cpp, kPalette).
 extern const uint32_t kPalette[16];
 

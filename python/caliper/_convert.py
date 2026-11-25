@@ -23,10 +23,11 @@ from dataclasses import dataclass
 from types import SimpleNamespace
 from typing import Any, Callable
 
+from ._colors_gen import LIVE_COLORMAPS
 from ._ring import (FLAG_AUTO_VMAX, FLAG_AUTO_VMIN, FLAG_RAW, KIND_HEATMAP, KIND_HISTOGRAM,
                     KIND_IMAGE, KIND_POINTS, KIND_SERIES, STATS_FLOATS)
 
-CMAPS = {"viridis": 0, "magma": 1, "rdbu": 2}
+CMAPS = dict(LIVE_COLORMAPS)
 """The colormaps of the view calls, as a dict from name to index."""
 SERIES_CAPACITY = 4096
 """Number of values a series view keeps: the last 4096 appended."""

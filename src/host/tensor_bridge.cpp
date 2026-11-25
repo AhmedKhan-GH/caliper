@@ -1,4 +1,5 @@
 #include "tensor_bridge.h"
+#include "gfx/colormap_coeffs.h"
 #include "renderer/host_renderer.h"
 #include <caliper/services/log_v1.h>
 
@@ -43,14 +44,10 @@ void gen_poly(uint32_t* lut, const float c[7][3]) {
     }
 }
 
-// RdBu: ColorBrewer 11-class diverging anchors (the same control points
-// matplotlib's RdBu is built from), piecewise-linear over t in [0,1].
+// RdBu: ColorBrewer 11-class diverging anchors (from gfx/colormap_coeffs.h),
+// piecewise-linear over t in [0,1].
 void gen_rdbu(uint32_t* lut) {
-    static const float a[11][3] = {
-        {103,   0,  31}, {178,  24,  43}, {214,  96,  77}, {244, 165, 130},
-        {253, 219, 199}, {247, 247, 247}, {209, 229, 240}, {146, 197, 222},
-        { 67, 147, 195}, { 33, 102, 172}, {  5,  48,  97},
-    };
+    const auto& a = caliper_gfx::cmap::kRdbuAnchors;
     for (int i = 0; i < 256; ++i) {
         float p = (i / 255.0f) * 10.0f;    // 0..10 spans the 11 anchors
         int lo = (int)p; if (lo > 9) lo = 9;
@@ -67,26 +64,8 @@ struct Luts {
     uint32_t magma[256];
     uint32_t rdbu[256];
     Luts() {
-        static const float kViridis[7][3] = {
-            { 0.2777273272234177f,   0.005407344544966578f,  0.3340998053353061f  },
-            { 0.1050930431085774f,   1.404613529898575f,     1.384590162594685f   },
-            {-0.3308618287255563f,   0.214847559468213f,     0.09509516302823659f },
-            {-4.634230498983486f,   -5.799100973351585f,   -19.33244095627987f    },
-            { 6.228269936347081f,   14.17993336680509f,     56.69055260068105f    },
-            { 4.776384997670288f,  -13.74514537774601f,    -65.35303263337234f    },
-            {-5.435455855934631f,    4.645852612178535f,     26.3124352495832f    },
-        };
-        static const float kMagma[7][3] = {
-            {-0.002136485053939582f, -0.000749655052795221f, -0.005386127855323933f},
-            { 0.2516605407371642f,    0.6775232436837668f,    2.494026599312351f   },
-            { 8.353717279216625f,    -3.577719514958484f,     0.3144679030132573f  },
-            {-27.66873308576866f,    14.26473078096533f,    -13.64921318813922f    },
-            { 52.17613981234068f,   -27.94360607168351f,    12.94416944238394f    },
-            {-50.76852536473588f,    29.04658282127291f,     4.23415299384598f    },
-            { 18.65570506591883f,   -11.48977351997711f,    -5.601961508734096f   },
-        };
-        gen_poly(viridis, kViridis);
-        gen_poly(magma, kMagma);
+        gen_poly(viridis, caliper_gfx::cmap::kViridisPoly);
+        gen_poly(magma, caliper_gfx::cmap::kMagmaPoly);
         gen_rdbu(rdbu);
     }
 };
