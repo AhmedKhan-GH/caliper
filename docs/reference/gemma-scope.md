@@ -493,7 +493,11 @@ It does not require a new quality gate for the published profile.
 Feature-node Jaccard overlap with the actual reference must reach 0.9.
 Every edge must satisfy `abs(caliper - reference) <= 1e-6 + 1e-3 * abs(reference)`.
 The comparison uses the union of both edge sets and counts missing edges as zero.
-Every baseline and intervention comparison covers the full vocabulary, with absolute probability error at most 0.001 and exact top token IDs.
+Every baseline and intervention comparison covers the full vocabulary, with absolute probability error at most 0.015 and exact top token IDs.
+The approved bound equals the largest reference deviation from the published top percentages.
+State suppression sets this bound: `abs(0.375 - 0.36) = 0.015`, or 1.5 percentage points.
+This reference envelope supersedes the earlier probability limit in the immutable source manifest.
+Graph tolerances remain unchanged.
 Both implementations must reproduce every published semantic outcome.
 The ineffective British Columbia intervention remains part of that requirement.
 

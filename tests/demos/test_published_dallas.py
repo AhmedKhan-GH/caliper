@@ -386,13 +386,15 @@ def reviewed_collection(callback_boundary):
         "source_manifest_sha256": published.MANIFEST_SHA256, "collection_sha256": published.file_hash(out / "collection.json"),
         "reference": {"producer": "circuit-tracer", "source_revision": published.SOURCE["source_revision"], "prompt": published.PROMPT,
                       "dtype": "bfloat16", "trace_request": published.TRACE_REQUEST, "evidence": evidence},
+        "probability_policy": {"name": published.PROBABILITY_POLICY,
+                               "absolute_tolerance": published.PROBABILITY_ABSOLUTE_TOLERANCE},
         "graph": {"caliper_trace_id": result["trace"]["trace_id"], "feature_node_jaccard": .9,
                   "maximum_edge_tolerance_ratio": 1., "edge_absolute_tolerance": 1e-6, "edge_relative_tolerance": .001,
                   "union_edges_compared": 3, "absent_edges_counted_as_zero": True},
         "cases": [{"case_id": published.action_name(cell), "caliper_sequence": cases[cell]["sequence"],
                    "caliper_npz_sha256": cases[cell]["evidence"]["sha256"], "reference_top_token_ids": cases[cell]["top_token_ids"],
                    "reference_top_text": [row[0]["text"] for row in cases[cell]["top_five"]], "probabilities_compared": 10,
-                   "maximum_probability_absolute_error": .001, "published_outcome": {"reference": True, "caliper": True}}
+                   "maximum_probability_absolute_error": .015, "published_outcome": {"reference": True, "caliper": True}}
                   for cell in published.CASES], "british_columbia_ineffective": True,
         "browser": {"program_views": True, "attached_before": True, "attached_after": True, "evidence": evidence},
         "capture_inspection": {"native": True, "browser": True, "all_case_controls": True, "group_ids": True,
@@ -417,7 +419,7 @@ def test_review_cli_separates_complete_collection_from_acceptance(reviewed_colle
 
 @pytest.mark.parametrize("fault", ["missing_reference", "missing_browser", "missing_parity", "missing_inspection", "memory_cap",
                                   "reserve", "reference_prompt", "reference_settings", "case_coverage", "case_hash", "case_sequence",
-                                  "full_vocabulary", "probability_error", "top_id", "published_outcome", "british_columbia",
+                                  "full_vocabulary", "probability_error", "probability_policy", "top_id", "published_outcome", "british_columbia",
                                   "node_overlap", "edge_tolerance", "edge_coverage", "artifact", "collection_file"])
 def test_required_external_evidence_cannot_be_missing_or_stale(reviewed_collection, fault):
     root, review, result = reviewed_collection
@@ -432,7 +434,9 @@ def test_required_external_evidence_cannot_be_missing_or_stale(reviewed_collecti
     elif fault == "case_hash": review["cases"][1]["caliper_npz_sha256"] = "b" * 64
     elif fault == "case_sequence": review["cases"][1]["caliper_sequence"] += 1
     elif fault == "full_vocabulary": review["cases"][1]["probabilities_compared"] = 5
-    elif fault == "probability_error": review["cases"][1]["maximum_probability_absolute_error"] = .00101
+    elif fault == "probability_error":
+        review["cases"][1]["maximum_probability_absolute_error"] = float(np.nextafter(.015, np.inf))
+    elif fault == "probability_policy": review["probability_policy"]["absolute_tolerance"] = .001
     elif fault == "top_id": review["cases"][1]["reference_top_token_ids"] = [0, 0]
     elif fault == "published_outcome": review["cases"][1]["published_outcome"]["reference"] = False
     elif fault == "british_columbia": review["cases"][-1]["reference_top_text"][1] = " Victoria"

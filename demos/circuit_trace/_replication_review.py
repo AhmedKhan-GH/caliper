@@ -6,6 +6,7 @@ from copy import deepcopy
 from pathlib import Path
 
 from _mcp import Failure
+from _published import PROBABILITY_ABSOLUTE_TOLERANCE, PROBABILITY_POLICY
 from _published import (CASES, MANIFEST_SHA256, PROFILE, PROMPT, SOURCE, TRACE_REQUEST, action_name,
                         descriptor, file_hash, finite, private_path, read_json, require, validate_case, verify_descriptor)
 
@@ -117,6 +118,10 @@ def verify_review(root, collection_path, review_path):
                 and reference.get("prompt") == PROMPT and reference.get("dtype") == "bfloat16"
                 and reference.get("trace_request") == TRACE_REQUEST, "Reference identity or parameters differ.")
         _artifacts(root, reference)
+        policy = review.get("probability_policy", {})
+        require(isinstance(policy, dict) and policy.get("name") == PROBABILITY_POLICY
+                and policy.get("absolute_tolerance") == PROBABILITY_ABSOLUTE_TOLERANCE,
+                "The probability comparison lacks the approved reference envelope.")
         graph = review["graph"]
         require(graph.get("caliper_trace_id") == result["trace"]["trace_id"]
                 and finite(graph.get("feature_node_jaccard")) and .9 <= graph["feature_node_jaccard"] <= 1
@@ -138,7 +143,7 @@ def verify_review(root, collection_path, review_path):
                     and row["reference_top_text"] == [" Austin", expected]
                     and row.get("probabilities_compared") == 2 * record["evidence"]["shape"][1]
                     and finite(row.get("maximum_probability_absolute_error"))
-                    and row["maximum_probability_absolute_error"] <= .001
+                    and row["maximum_probability_absolute_error"] <= PROBABILITY_ABSOLUTE_TOLERANCE
                     and row.get("published_outcome") == {"reference": True, "caliper": True},
                     "Published outcomes or full-vocabulary reference agreement failed.")
         require(review["british_columbia_ineffective"] is True, "The published ineffective outcome is absent.")

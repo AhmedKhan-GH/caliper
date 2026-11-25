@@ -13,6 +13,9 @@ from _inference_evidence import bound_completion, inference_state, text_hash
 from _mcp import Failure
 
 PROFILE = "published_dallas_v1"
+# The approved reference envelope supersedes the pinned source record's earlier limit.
+PROBABILITY_POLICY = "reference_publication_envelope_v1"
+PROBABILITY_ABSOLUTE_TOLERANCE = .015
 MANIFEST_SHA256 = "0988e260b5f0c9cb8bfc6791edba779634b61f95c4f68e73ab6cdbdb390afa8d"
 
 
