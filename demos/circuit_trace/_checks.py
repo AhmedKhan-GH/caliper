@@ -300,7 +300,8 @@ def finish(result):
                                       required=result.get("pixel_evidence_collected") is not False))
     failed = [g["name"] for g in result.get("checks", []) if g["required"] and not g["passed"]]
     result["failed_checks"] = failed
-    result["passed"] = not failed and not result.get("error") and has_evidence
+    result["passed"] = (result.get("completed") is True and not failed
+                        and not result.get("error") and has_evidence)
     result["qwen_acceptance"] = (result["passed"] and result["mode"] == "qwen"
                                  and qualification["qualified"] and result.get("pixel_evidence_collected", False))
     result["qwen_acceptance_scope"] = qualification["scope"] if result["qwen_acceptance"] else None

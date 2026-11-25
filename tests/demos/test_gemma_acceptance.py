@@ -156,7 +156,7 @@ def test_gemma_clean_stop_requires_a_partial_sample(source_tokens, stop_reason):
 
 @pytest.mark.parametrize("source_tokens", [50000, 200000])
 def test_gemma_acceptance_result_preserves_comparison_disclosure(source_tokens):
-    result = {"mode": "gemma", "dictionary_evidence": gemma_reply(source_tokens=source_tokens),
+    result = {"mode": "gemma", "completed": True, "dictionary_evidence": gemma_reply(source_tokens=source_tokens),
               "pixel_evidence_collected": True, "checks": [check("validation", True, 8, ">=8")]}
     assert finish(result) == 0
     qualification = result["dictionary_qualification"]
@@ -413,7 +413,7 @@ def test_qwen_retains_legacy_quality_evidence_policy():
 
 @pytest.mark.parametrize("source_tokens", [51237, 200000])
 def test_gemma_finish_keeps_causal_failure_and_separate_model_result(source_tokens):
-    result = {"mode": "gemma", "dictionary_evidence": gemma_reply(source_tokens=source_tokens),
+    result = {"mode": "gemma", "completed": True, "dictionary_evidence": gemma_reply(source_tokens=source_tokens),
               "pixel_evidence_collected": True,
               "checks": [check("validation", False, {"correct_signs": 6, "spearman": .539},
                                "10 features, >=8 correct signs, Spearman >=0.6")]}

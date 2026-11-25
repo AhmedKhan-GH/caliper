@@ -199,7 +199,7 @@ def test_missing_top_bar_is_a_failure(measured):
 
 
 def test_finish_refuses_missing_evidence():
-    result = {"mode": "fixture", "checks": []}
+    result = {"mode": "fixture", "completed": True, "checks": []}
     assert finish(result) == 1
     assert result["qwen_acceptance"] is False
 
@@ -369,7 +369,7 @@ def test_qualification_requires_authorized_fallback_evidence(fault):
 
 @pytest.mark.parametrize("fallback", [False, True])
 def test_finish_keeps_qwen_qualification_scope(fallback):
-    result = {"mode": "qwen", "checks": [check("synthetic_evidence", True, True, True)],
+    result = {"mode": "qwen", "completed": True, "checks": [check("synthetic_evidence", True, True, True)],
               "pixel_evidence_collected": True, "dictionary_evidence": qualification_reply(fallback=fallback)}
     assert finish(result) == 0
     assert result["qwen_acceptance"] is True
@@ -383,7 +383,7 @@ def test_finish_keeps_qwen_qualification_scope(fallback):
 
 
 def test_finish_rejects_a_cached_qualification_without_evidence():
-    result = {"mode": "qwen", "pixel_evidence_collected": True,
+    result = {"mode": "qwen", "completed": True, "pixel_evidence_collected": True,
               "dictionary_qualification": {"qualified": True, "status": "passed"},
               "checks": [check("dictionary_qualification", True, "passed", "passed")]}
     assert finish(result) == 1
@@ -391,7 +391,7 @@ def test_finish_rejects_a_cached_qualification_without_evidence():
 
 
 def test_finish_preserves_fixture_without_qwen_qualification():
-    result = {"mode": "fixture", "checks": [check("synthetic_fixture", True, True, True)]}
+    result = {"mode": "fixture", "completed": True, "checks": [check("synthetic_fixture", True, True, True)]}
     assert finish(result) == 0
     assert result["qwen_acceptance"] is False
 
@@ -416,7 +416,7 @@ def test_quality_override_retains_failures_and_cannot_override_causal_checks():
     assert qualified["qualified"] is True and qualified["status"] == "founder_override"
     assert qualified["reported_status"] == "failed" and qualified["quality_override"] == record
     assert response == original
-    result = {"mode": "qwen", "checks": [check("steering", False, .01, .05)],
+    result = {"mode": "qwen", "completed": True, "checks": [check("steering", False, .01, .05)],
               "pixel_evidence_collected": True, "dictionary_evidence": response,
               "dictionary_quality_override": record}
     assert finish(result) == 1
@@ -837,7 +837,7 @@ def test_text_oracle_rejects_partial_glyphs_under_the_actual_clip(tmp_path):
 
 def test_visible_result_keeps_pixel_evidence_optional():
     # This pure contract case is not a measured application acceptance result.
-    result = {"mode": "qwen", "pixel_evidence_collected": False,
+    result = {"mode": "qwen", "completed": True, "pixel_evidence_collected": False,
               "checks": [check("hidden_capture_evidence", False, "not collected", "hidden only", required=False)]}
     assert finish(result) == 0
     assert result["qwen_acceptance"] is False
@@ -869,7 +869,7 @@ def test_program_budgets_reject_missing_or_excess_measurements(change, passed, e
         failed = [gate for gate in gates if not gate["passed"]]
         assert len(failed) == 1 and failed[0]["evidence"] == evidence
         assert failed[0]["measured"] == next(iter(change.values()))
-    result = {"mode": "fixture", "checks": gates}
+    result = {"mode": "fixture", "completed": True, "checks": gates}
     assert finish(result) == (0 if passed else 1)
 
 

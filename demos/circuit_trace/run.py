@@ -37,6 +37,10 @@ def save(path, value):
     path.write_text(json.dumps(value, indent=2, allow_nan=False) + "\n", encoding="utf-8")
 
 
+def error_detail(error):
+    return f"{type(error).__name__}: {error}" if str(error) else type(error).__name__
+
+
 def executable(variable, relative):
     value = Path(os.environ.get(variable, ROOT / relative)).resolve()
     if not value.is_file() or not os.access(value, os.X_OK):
@@ -671,6 +675,7 @@ def acceptance(session, args, result):
     s.mcp.body("applet.save")
     spec = s.mcp.body("spec.get")
     (s.out / "instrument.toml").write_text(spec["text"], encoding="utf-8")
+    result["acceptance_complete"] = True
     return bridge
 
 
@@ -720,20 +725,21 @@ def main(argv=None):
     result = {"mode": family, "prompt": args.prompt, "memory_limit_bytes": memory_limit,
               "method_disclosures": dict(METHOD_DISCLOSURES),
               "fixture_forward_hash": FIXTURE_HASH if args.model == "tiny-lm" else None,
-              "checks": [], "passed": False, "qwen_acceptance": False}
+              "checks": [], "acceptance_complete": False, "completed": False,
+              "passed": False, "qwen_acceptance": False, "gemma_acceptance": False}
     if args.quality_override is not None:
         result["dictionary_quality_override"] = args.quality_override
     session = None
+    completed = False
     try:
         # One bounded app case establishes measured memory before the full-cap case.
-        preflight = Session(args, out / "bounded")
-        try:
-            measured = preflight.events.complete("trace.run", prompt=args.prompt, max_targets=32, max_nodes=64, max_edges=256)
-            save(out / "bounded-trace.json", measured)
-        finally:
-            preflight.close()
-        if preflight.cleanup_error:
-            raise Failure(preflight.cleanup_error)
+        session = Session(args, out / "bounded")
+        measured = session.events.complete("trace.run", prompt=args.prompt, max_targets=32, max_nodes=64, max_edges=256)
+        save(out / "bounded-trace.json", measured)
+        session.close()
+        if session.cleanup_error:
+            raise Failure(session.cleanup_error)
+        session = None
         peak = memory_bytes(out / "bounded")
         result["checks"].append(check("bounded_memory", peak <= memory_limit, peak, memory_limit))
         if peak > memory_limit:
@@ -756,28 +762,42 @@ def main(argv=None):
             finish(result)
             save(out / "result.json", result)
             bridge.keep_alive()
-    except Exception as exc:
-        result["error"] = str(exc)
+        completed = result["acceptance_complete"] is True
+    except BaseException as exc:
+        result["error"] = error_detail(exc)
+        if not isinstance(exc, Exception):
+            raise
         if args.show and session is not None and hasattr(session, "bridge") and session.live():
             result["lifetime"] = "live bridge until the owned app closes"
             finish(result)
             save(out / "result.json", result)
             try:
                 session.bridge.keep_alive()
-            except Exception as bridge_error:
-                result["bridge_error"] = str(bridge_error)
+            except BaseException as bridge_error:
+                result["bridge_error"] = error_detail(bridge_error)
+                if not isinstance(bridge_error, Exception):
+                    raise
     finally:
-        if session is not None:
-            session.close()
-            if session.cleanup_error:
-                result["error"] = session.cleanup_error
         try:
-            peak = memory_bytes(out / "acceptance")
-            result["checks"].append(check("process_memory", peak <= memory_limit, peak, memory_limit))
-        except Failure as exc:
-            result["checks"].append(check("process_memory", False, str(exc), memory_limit))
-        code = finish(result)
-        save(out / "result.json", result)
+            if session is not None:
+                session.close()
+                if session.cleanup_error:
+                    raise Failure(session.cleanup_error)
+            try:
+                peak = memory_bytes(out / "acceptance")
+                result["checks"].append(check("process_memory", peak <= memory_limit, peak, memory_limit))
+            except Failure as exc:
+                result["checks"].append(check("process_memory", False, str(exc), memory_limit))
+        except BaseException as exc:
+            result["cleanup_error"] = error_detail(exc)
+            result.setdefault("error", result["cleanup_error"])
+            if not isinstance(exc, Exception):
+                raise
+        finally:
+            # Publication requires the full driver, including parity and cleanup.
+            result["completed"] = completed and not result.get("error")
+            code = finish(result)
+            save(out / "result.json", result)
     return code
 
 
