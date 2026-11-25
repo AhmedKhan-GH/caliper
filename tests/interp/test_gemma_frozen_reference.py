@@ -175,3 +175,33 @@ def test_published_softcap_forward_avoids_tangent_roundtrip():
         direction, bias = path.logit_target(token, reference=True)
         torch.testing.assert_close(direction, path.unembedding[token] - path.unembedding.mean(0), atol=0, rtol=0)
         assert bias == 0
+
+
+def test_reference_edges_keep_each_source_gradient_dtype(reference_case, monkeypatch):
+    from caliper.interp._trace import _DirectEffects
+    case, path = reference_case, reference_case.path
+    effects = _DirectEffects(path, case.dictionary, case.ids[0].tolist(),
+                             SimpleNamespace(decode=lambda *args, **kwargs: "x"), profile=PROFILE)
+    index = next(i for i in effects.feature_nodes if effects.nodes[i]["layer"] == 2)
+    node = effects.nodes[index]
+    direction = case.dictionary.layers[node["layer"]].W_enc_original[node["feature"]]
+    sources = [torch.zeros_like(value).requires_grad_() for value in [path.embedding, *path.outputs]]
+    reads, _ = independent_forward(case, sources[0], sources[1:])
+    objective = (reads[node["layer"]][0, node["position"]] * direction).sum()
+    expected = torch.autograd.grad(objective, sources, allow_unused=True)
+    original = torch.autograd.grad
+    observed = []
+    def record(*args, **kwargs):
+        result = original(*args, **kwargs)
+        observed.append(result)
+        return result
+    monkeypatch.setattr(torch.autograd, "grad", record)
+    effects.backward([index])
+    actual, = observed
+    assert actual[0].dtype == torch.bfloat16
+    assert actual[1].dtype == torch.float32
+    for first, second in zip(actual, expected):
+        if first is None or second is None:
+            assert first is second
+        else:
+            torch.testing.assert_close(first, second, atol=0, rtol=0)

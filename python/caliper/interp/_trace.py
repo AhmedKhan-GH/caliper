@@ -249,7 +249,15 @@ class _DirectEffects:
         batch = len(targets)
         with torch.enable_grad():
             zero = path.embedding.new_zeros(batch, path.tokens, path.width)
-            leaves = [zero.detach().requires_grad_(True) for _ in range(path.layers + 1)]
+            # The pinned replacement exposes float32 MLP writes beside BF16
+            # embeddings. Preserve each source coordinate through its VJP.
+            sources = ([path.embedding, *path.errors] if self.reference else
+                       [path.embedding] * (path.layers + 1))
+            zeros, leaves = {zero.dtype: zero}, []
+            for source in sources:
+                if source.dtype not in zeros:
+                    zeros[source.dtype] = source.new_zeros(batch, path.tokens, path.width)
+                leaves.append(zeros[source.dtype].detach().requires_grad_(True))
             reads, final = path.run(leaves[0], leaves[1:], bias_masks=(0., 0., 0., 0.), check=self.check)
             objective = torch.stack([((final if target.layer == path.layers else reads[target.layer])
                                       [row, target.position] * target.direction).sum()
