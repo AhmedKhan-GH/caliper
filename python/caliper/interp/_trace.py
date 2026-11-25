@@ -101,6 +101,7 @@ class _DirectEffects:
         self.check = check
         self.nodes, self.source_layers = [], []
         self.feature_columns = {}
+        self._decoder_blocks = None
         count = path.tokens * (path.layers + 1) + min(max_n_logits, path.logits.shape[-1])
         count += sum(int((output.activations != 0).sum()) for output in path.feature_outputs)
         # Python node dictionaries and their lookup tables also use process memory.
@@ -154,6 +155,60 @@ class _DirectEffects:
         path.guard.check("source preparation")
         check("source preparation")
 
+    def prepare_decoders(self):
+        """Retain reference scaled rows for this trace, after memory admission.
+
+        Storage is O(active sources * width), including BOS sources for the
+        full-source audit. Scratch contains one bounded decoder block and one
+        position's indices and values. The pinned decode_sparse scales once.
+        """
+        if not self.reference or self._decoder_blocks is not None:
+            return
+        path = self.path
+        step = max(1, _ENCODER_BLOCK_ELEMENTS // path.width)
+        itemsize = path.embedding.element_size()
+        count = len(self.feature_nodes)
+        columns = max((indices.shape[1] for _, _, indices, _, _ in self.source_layers), default=0)
+        source_itemsize = max((layer.W_dec.element_size() for layer in self.dictionary.layers), default=itemsize)
+        # Account for retained rows and block records, then gather/cast/scale
+        # scratch. The gather can use a wider dictionary dtype than the path.
+        retained = count * path.width * itemsize + (count + path.layers * path.tokens) * 256
+        scratch = min(step, columns) * path.width * (source_itemsize + 2 * itemsize)
+        scratch += columns * (8 + itemsize + 16)
+        self.check("direct decoder cache admission")
+        path.guard.reserve("direct decoder cache", retained + scratch)
+        blocks = [[] for _ in self.source_layers]
+        try:
+            for layer, (feature_slice, _, indices, activations, active) in enumerate(self.source_layers):
+                rows = self.dictionary.layers[layer].W_dec.detach()
+                node = feature_slice.start
+                for position in range(path.tokens):
+                    with autorelease_scope(path.device):
+                        self.check("direct decoder cache position")
+                        selected = indices[position, active[position]]
+                        values = activations[position, active[position]]
+                        for start in range(0, len(selected), step):
+                            with autorelease_scope(path.device):
+                                self.check("direct decoder cache block")
+                                decoder = rows[selected[start:start + step]].to(path.dtype)
+                                # Keep the BF16 scale boundary before the contraction.
+                                decoder = decoder * values[start:start + step, None]
+                                end = node + len(decoder)
+                                blocks[layer].append((slice(node, end), position, decoder))
+                                node = end
+                                del decoder
+                        del selected, values
+            path.guard.check("direct decoder cache complete")
+            self.check("direct decoder cache complete")
+        except BaseException:
+            blocks.clear()
+            raise
+        self._decoder_blocks = blocks
+
+    def release_decoders(self):
+        """Release prompt-local rows before graph export or after a failure."""
+        self._decoder_blocks = None
+
     def target(self, index):
         node = self.nodes[index]
         path = self.path
@@ -189,6 +244,7 @@ class _DirectEffects:
         bounded_integer(len(indices), "target batch", 1, 64)
         self.check("target batch admission")
         path = self.path
+        self.prepare_decoders()
         targets = [self.target(index) for index in indices]
         batch = len(targets)
         with torch.enable_grad():
@@ -217,26 +273,29 @@ class _DirectEffects:
             gradient = gradients[layer + 1]
             if gradient is None:
                 continue
-            # JumpReLU can activate every column. Copy only bounded decoder
-            # blocks instead of retaining token-by-feature-by-width tensors.
-            rows = self.dictionary.layers[layer].W_dec.detach()
-            step = max(1, _ENCODER_BLOCK_ELEMENTS // path.width)
-            node = feature_slice.start
-            for position in range(path.tokens):
-                selected = indices[position, active[position]]
-                values = activations[position, active[position]]
-                for start in range(0, len(selected), step):
+            if self.reference:
+                for node_slice, position, decoder in self._decoder_blocks[layer]:
                     with autorelease_scope(path.device):
                         self.check("direct decoder block")
-                        decoder = rows[selected[start:start + step]].to(path.dtype)
-                        if self.reference:
-                            # The reference rounds each scaled decoder before contraction.
-                            decoder = decoder * values[start:start + step, None]
-                            products = gradient[:, position].to(decoder.dtype) @ decoder.T
-                        else:
+                        products = gradient[:, position].to(decoder.dtype) @ decoder.T
+                        weights[node_slice] = products.T
+                        del products
+            else:
+                # JumpReLU can activate every column. Copy bounded decoder
+                # blocks for the ordinary path, which does not retain rows.
+                rows = self.dictionary.layers[layer].W_dec.detach()
+                step = max(1, _ENCODER_BLOCK_ELEMENTS // path.width)
+                node = feature_slice.start
+                for position in range(path.tokens):
+                    selected = indices[position, active[position]]
+                    values = activations[position, active[position]]
+                    for start in range(0, len(selected), step):
+                        with autorelease_scope(path.device):
+                            self.check("direct decoder block")
+                            decoder = rows[selected[start:start + step]].to(path.dtype)
                             products = (gradient[:, position] @ decoder.T) * values[start:start + step]
-                        weights[node:node + decoder.shape[0]] = products.T
-                        node += decoder.shape[0]
+                            weights[node:node + decoder.shape[0]] = products.T
+                            node += decoder.shape[0]
             if self.reference:
                 # The published hook contracts before BF16 output rounding.
                 # An elementwise product would round every coordinate first.
@@ -729,10 +788,12 @@ class Tracer:
                                      desired_logit_prob=desired_logit_prob)
             logical_queues = []
             if reference:
+                admission_scope.callback(effects.release_decoders)
                 result, diagnostics, target_indices, batch_sizes, logical_queues = _reference_graph.build(
                     effects, max_targets=max_targets, max_nodes=max_nodes, max_edges=max_edges,
                     batch_size=logical_batch, update_interval=update_interval,
                     node_threshold=node_threshold, edge_threshold=edge_threshold, check=check)
+                effects.release_decoders()
                 display_nodes, display_edges, omitted, edge_omitted, feature_share, error_share = result
                 connectivity = {"status": "reference_pruning"}
                 probability_mass = sum(effects.nodes[i]["probability"] for i in effects.logit_nodes)

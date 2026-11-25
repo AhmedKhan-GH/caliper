@@ -136,6 +136,8 @@ def build(effects, *, max_targets, max_nodes, max_edges, batch_size, update_inte
           node_threshold, edge_threshold, check):
     """Select reference targets with logical queues and bounded physical chunks."""
     path, guard = effects.path, effects.path.guard
+    # Retained decoder rows must count toward every physical batch admission.
+    effects.prepare_decoders()
     # The feature order matches sparse COO coordinates: layer, position, feature.
     features = [i for i in effects.feature_nodes if effects.nodes[i]["position"] != 0]
     errors = [i for i, n in enumerate(effects.nodes) if n["kind"] == "error"]
@@ -191,6 +193,7 @@ def build(effects, *, max_targets, max_nodes, max_edges, batch_size, update_inte
                 update_interval * batch_size, requested - len(selected))]
         evaluate([features[i] for i in pending])
         selected.update(pending)
+    effects.release_decoders()
     # Remove unselected feature columns before final influence and pruning.
     retained = sorted(selected) + list(range(len(features), len(order)))
     mapping = {old: new for new, old in enumerate(retained)}
