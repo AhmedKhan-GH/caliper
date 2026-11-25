@@ -54,8 +54,54 @@ jobs:
               for name in ("TMPDIR", "TEMP", "TMP"):
                   env.write(f"{name}={root / 'temp'}\n")
               env.write(f"CALIPER_DATA_DIR={root / 'data'}\n")
+      - name: Fixture Oracle Sources
+        shell: python
+        run: |
+          import hashlib
+          import os
+          from pathlib import Path
+          import subprocess
+          from urllib.request import urlopen
+
+          root = Path(os.environ["RUNNER_TEMP"]) / "caliper-interp" / "oracles"
+
+          def save(relative, raw, size, digest):
+              if len(raw) != size or hashlib.sha256(raw).hexdigest() != digest:
+                  raise ValueError(f"Oracle source size or SHA256 mismatch: {relative}")
+              path = root / relative
+              path.parent.mkdir(parents=True, exist_ok=True)
+              path.write_bytes(raw)
+              print(f"Verified {relative}: {size} bytes, SHA256 {digest}")
+              return path
+
+          # Fetch only the immutable objective commit, without the full history.
+          base = "a7cee6e0490545a6723df95687d577f2e92aebdd"
+          subprocess.run(["git", "fetch", "--no-tags", "--depth=1", "origin", base], check=True)
+          objective = save(
+              "base_objective.py",
+              subprocess.check_output(["git", "show", f"{base}:python/caliper/interp/_trace.py"]),
+              60329, "c49d8208c2f3f1221b42448e113d31c05b91c216f935d13894fcfedf2a093986",
+          )
+
+          revision = "82996f144b3371ae858ea5713590d004c218f0c2"
+          upstream = f"https://raw.githubusercontent.com/decoderesearch/circuit-tracer/{revision}"
+          sources = (
+              ("circuit_tracer/attribution/context_transformerlens.py", 8478,
+               "1a60242cc9b9acc94fa995b3ec8d90984675878c86712bb45f39a14f2717e9f6"),
+              ("circuit_tracer/transcoder/single_layer_transcoder.py", 25315,
+               "8fb5719906c96653efed86353bbf83fd7217d646edf9f7c05e6ab157cd1a55e7"),
+          )
+          for relative, size, digest in sources:
+              with urlopen(f"{upstream}/{relative}", timeout=30) as response:
+                  raw = response.read(size + 1)
+              save(relative, raw, size, digest)
+
+          # Export both required sources only after every identity check passes.
+          with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as env:
+              env.write(f"CALIPER_PINNED_ATTRIBUTION_SOURCE={root / sources[0][0]}\n")
+              env.write(f"CALIPER_BASE_OBJECTIVE_SOURCE={objective}\n")
       - name: Fixture Dependencies
-        run: python -m pip install torch==2.15.0 transformers==5.24.0 safetensors numpy pytest websockets Pillow psutil datasets watchdog jsonschema
+        run: python -m pip install torch==2.15.0 transformers==5.24.0 einops==0.8.2 safetensors numpy pytest websockets Pillow psutil datasets watchdog jsonschema
       - name: CPU Fixture Checks
         # The hidden fixture still runs in Build after native and browser setup.
         shell: python
