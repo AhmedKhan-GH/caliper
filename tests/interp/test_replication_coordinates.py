@@ -157,6 +157,36 @@ def test_each_candidate_uses_live_pre_gain_coordinates_and_replay(original_case)
     assert all(not values for values in captures) and not _intervene._REFERENCE_INPUTS.get()
 
 
+def test_published_generation_keeps_coordinates_after_attention_scope_ends(original_case, monkeypatch):
+    from caliper.interp import _output
+    model, tokenizer, service, runtime, _ = original_case
+    runtime.run(26)
+    _, members = runtime.case(26)
+    targets = {(m['layer'], m['feature'], m['position']): m['value'] for m in members}
+    forwards, depths = [], []
+    forward = _output.forward_logits
+
+    def observe(model, inputs, **kwargs):
+        logits = forward(model, inputs, **kwargs)
+        forwards.append((inputs['input_ids'].clone(), logits.clone()))
+        return logits
+
+    monkeypatch.setattr(_output, 'forward_logits', observe)
+    handle = model.layers[0].register_forward_pre_hook(
+        lambda *args: depths.append(service.executor._published_forward_depth))
+    try:
+        result = _output.Output(model, tokenizer, service).generate('AB')
+    finally:
+        handle.remove()
+    assert depths == [1] + [0] * 23
+    assert len(result['token_ids'][1]) == len(forwards) == 24
+    with service.suspend():
+        for step, (ids, actual) in enumerate(forwards):
+            expected, _, _, _ = oracle(model, ids[1:], service.dictionary, clamps=targets,
+                                       patterns=runtime.patterns if step == 0 else None)
+            torch.testing.assert_close(actual[1, -1], expected[0, -1], rtol=0, atol=0)
+
+
 def test_missing_live_coordinate_aborts_candidate_and_cleans_scope(original_case, monkeypatch):
     model, _, service, runtime, captures = original_case
     runtime.run(26)

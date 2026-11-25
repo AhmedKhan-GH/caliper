@@ -8,6 +8,7 @@ import torch
 from torch.nn import functional as F
 
 from caliper._controls import Controls
+from caliper.interp._dictionary import model_identity
 from caliper.interp._frozen import FrozenPath
 from caliper.interp._gemma_reference import PROFILE, install_reference_profile, profile_metadata
 from caliper.interp._intervene import InterventionService
@@ -21,7 +22,9 @@ from .test_intervention_replay import hook_objects
 
 class Tokenizer:
     def __call__(self, text, **kwargs):
-        ids = [1, 4, 6, 9, 2, 11, 3] if text == "prompt" else [1, 3, 11, 2, 9, 6, 4, 7]
+        ids = [1, 4, 6, 9, 2, 11, 3] if text in ("prompt", "generation") else [1, 3, 11, 2, 9, 6, 4, 7]
+        if text == "generation":
+            ids += [8, 5, 10, 12]
         return {"input_ids": torch.tensor([ids])}
 
     def decode(self, ids, **kwargs):
@@ -98,6 +101,8 @@ def independent(case, ids, spec=None, *, rows=None):
         block = model.model.layers[0]
         stack.callback(block.pre_feedforward_layernorm.register_forward_pre_hook(read).remove)
         stack.callback(block.post_feedforward_layernorm.register_forward_hook(write).remove)
+        stack.callback(block.post_feedforward_layernorm.register_forward_hook(
+            lambda module, args, output: recorded.update(write=output.detach().clone())).remove)
         stack.callback(model.model.norm.register_forward_hook(
             lambda module, args, output: recorded.update(final=output.detach().clone())).remove)
         logits = model(input_ids=ids, use_cache=False).logits
@@ -125,10 +130,12 @@ def test_standalone_original_coordinates(reference, positioned, kind):
     assert hook_objects(case.model) == hooks
 
 
-def test_original_coordinates_survive_restore_replay_and_prompt_fork(reference):
+@pytest.mark.parametrize("prompt", ["prompt", "fork"])
+@pytest.mark.parametrize("positioned", [False, True])
+def test_original_coordinates_survive_restore_replay_and_prompt_fork(reference, prompt, positioned):
     case = reference
-    spec = specification(case)
-    ids = case.tokenizer("fork")["input_ids"]
+    spec = specification(case, positioned=positioned)
+    ids = case.tokenizer(prompt)["input_ids"]
     expected, _ = independent(case, ids, spec)
     case.service.set(spec)
     case.controls.step()
@@ -140,6 +147,53 @@ def test_original_coordinates_survive_restore_replay_and_prompt_fork(reference):
     assert hook_objects(case.model) == hooks
     assert case.service.state_dict() == state
     torch.testing.assert_close(actual, expected, rtol=0, atol=0)
+
+
+@pytest.mark.parametrize("positioned", [False, True])
+def test_generation_retains_original_coordinates_at_every_length(reference, positioned):
+    case = reference
+    spec = specification(case, positioned=positioned)
+    case.service.set(spec)
+    case.controls.step()
+    observed, ids = [], []
+    block = case.model.model.layers[0]
+    with ExitStack() as stack:
+        stack.callback(case.model.register_forward_pre_hook(
+            lambda module, args, kwargs: ids.append(kwargs["input_ids"].clone()), with_kwargs=True).remove)
+        stack.callback(block.post_feedforward_layernorm.register_forward_hook(
+            lambda module, args, output: observed.append(output.detach().clone())).remove)
+        result = Output(case.model, case.tokenizer, case.service).generate("generation")
+    assert len(observed) == len(ids) == len(result["token_ids"][1]) == 24
+    assert ids[-1].shape[1] == ids[0].shape[1] + 23 == 34
+    with case.service.suspend():
+        for inputs, actual in zip(ids, observed):
+            _, expected = independent(case, inputs, spec, rows=[1])
+            torch.testing.assert_close(actual, expected["write"], rtol=0, atol=0)
+    for hook in case.service.executor._hooks:
+        reader = getattr(hook, "group", hook)
+        assert reader.live_input is None and not reader.read_stack
+
+
+def test_generic_slider_uses_index_coordinate_without_a_published_case(reference):
+    from caliper.interp._hosted import HostedInference
+    case = reference
+    ids = case.tokenizer("prompt")["input_ids"]
+    _, values = independent(case, ids)
+    maximum = float(values["activation"][0, case.position, case.feature])
+    run = object.__new__(HostedInference)
+    run.model, run.dictionary, run.tokenizer = case.model, case.dictionary, case.tokenizer
+    run.controls, run.interventions = case.controls, case.service
+    run.guard = run._failure = run._owned_clamp = run._owned_applied_spec = None
+    run.selection = {"layer": 0, "position": case.position, "feature": case.feature}
+    run.clamp = SimpleNamespace(value=.5)
+    run.index = SimpleNamespace(show=lambda layer, feature: {"maximum": maximum})
+    spec = dict(specification(case), value=.5 * maximum)
+    expected, _ = independent(case, ids, spec)
+    assert run._set_clamp(require_commit=True)
+    owned = run._owned_record()
+    assert owned is not None and owned.applied_spec["value"] == .5 * maximum
+    torch.testing.assert_close(case.model(ids).logits, expected, rtol=0, atol=0)
+    assert case.service.executor._published_forward_depth == 0
 
 
 def traced_graph(case, *, features=True):
@@ -171,10 +225,12 @@ def test_reference_validation_uses_traced_objective(reference):
     token = graph.nodes[0]["token_id"]
     expected = objective(case, recorded, token)
     assert abs(expected - float(logits[0, -1, token] - logits[0, -1].mean())) > .01
-    before = profile_metadata(case.model), deepcopy(case.model.config.to_dict()), hook_objects(case.model)
+    before = (profile_metadata(case.model), deepcopy(case.model.config.to_dict()), hook_objects(case.model),
+              model_identity(case.model))
     result = validate_trace(case.model, case.tokenizer, case.dictionary, case.service, graph, prompt="prompt")
     assert result["baseline_centered_logit"] == expected
-    assert before == (profile_metadata(case.model), case.model.config.to_dict(), hook_objects(case.model))
+    assert before == (profile_metadata(case.model), case.model.config.to_dict(), hook_objects(case.model),
+                      model_identity(case.model))
 
 
 def test_reference_validation_uses_traced_activation_and_clamp(reference):
@@ -190,3 +246,87 @@ def test_reference_validation_uses_traced_activation_and_clamp(reference):
     assert result["measurements"][0]["measured"] == expected
     assert result["measurements"][0]["predicted"] == -graph.nodes[1]["effect"]
     assert case.service.state_dict() == state and hook_objects(case.model) == hooks
+
+
+def test_reference_validation_replay_preserves_live_slider_and_pending_edit(reference):
+    case = reference
+    graph = traced_graph(case)
+    baseline = validate_trace(case.model, case.tokenizer, case.dictionary, case.service, graph, prompt="prompt")
+    case.service.set(dict(specification(case), value=-2.))
+    case.controls.step()
+    case.service.set(dict(specification(case), value=3.))
+    state, hooks = case.service.state_dict(), hook_objects(case.model)
+    with case.service.temporary_state([]) as replay:
+        result = validate_trace(case.model, case.tokenizer, case.dictionary, replay, graph, prompt="prompt")
+    assert result == baseline
+    assert case.service.state_dict() == state and hook_objects(case.model) == hooks
+
+
+@pytest.mark.parametrize("positioned", [False, True])
+def test_reference_read_cleanup_after_failure_and_nested_forward(reference, positioned):
+    from caliper.interp._memory import CleanStop
+    case = reference
+    spec = specification(case, positioned=positioned)
+    ids = case.tokenizer("prompt")["input_ids"]
+    expected, _ = independent(case, ids, spec)
+    hook = case.service.executor.install(spec)
+    reader = getattr(hook, "group", hook)
+    nested = False
+    def enter(module, args):
+        nonlocal nested
+        if not nested:
+            nested = True
+            case.model(case.tokenizer("fork")["input_ids"])
+    handle = case.model.model.layers[0].mlp.register_forward_pre_hook(enter)
+    try:
+        torch.testing.assert_close(case.model(ids).logits, expected, rtol=0, atol=0)
+        assert reader.live_input is None and not reader.read_stack
+    finally:
+        handle.remove()
+    def stop(module, args):
+        raise CleanStop("fixture cancellation")
+    handle = case.model.model.layers[0].mlp.register_forward_pre_hook(stop)
+    try:
+        with pytest.raises(CleanStop, match="fixture cancellation"):
+            case.model(ids)
+        assert reader.live_input is None and not reader.read_stack
+    finally:
+        handle.remove()
+    torch.testing.assert_close(case.model(ids).logits, expected, rtol=0, atol=0)
+    hook()
+
+
+@pytest.mark.parametrize("failure_call", [1, 2])
+def test_reference_validation_cancellation_retains_live_and_pending_edits(reference, failure_call):
+    from caliper.interp._memory import CleanStop
+    from caliper.interp import _intervene
+    case = reference
+    graph = traced_graph(case)
+    case.service.set({"kind": "add", "point": "model.layers.0.mlp_out", "vector": [0.] * 24, "coefficient": 1.})
+    case.service.set(dict(specification(case), from_step=20))
+    case.controls.step()
+    state = case.service.state_dict()
+    calls = 0
+    def stop(module, args):
+        nonlocal calls
+        calls += 1
+        if calls == failure_call:
+            raise CleanStop("fixture validation cancellation")
+    handle = case.model.model.norm.register_forward_pre_hook(stop)
+    hooks = hook_objects(case.model)
+    try:
+        with pytest.raises(CleanStop, match="fixture validation cancellation"):
+            validate_trace(case.model, case.tokenizer, case.dictionary, case.service, graph, prompt="prompt")
+        assert case.service.state_dict() == state and hook_objects(case.model) == hooks
+        assert not _intervene._REFERENCE_INPUTS.get() and case.controls.n == 1
+    finally:
+        handle.remove()
+
+
+def test_original_coordinate_admission_refuses_a_changed_adapter(reference):
+    case = reference
+    case.model.config.final_logit_softcapping += 1
+    hooks = hook_objects(case.model)
+    with pytest.raises(ValueError, match="configuration changed"):
+        case.service.executor.install(specification(case))
+    assert hook_objects(case.model) == hooks and not case.service.executor._feature_groups
