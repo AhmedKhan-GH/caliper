@@ -2603,6 +2603,9 @@ class Controls:
                 if len(ivs) > MAX_INTERVENTIONS:
                     raise ValueError(f"the script holds {MAX_INTERVENTIONS} interventions")
                 self._check_metadata_budget(ivs=ivs)
+                checkpoint_budget = getattr(self.interpretation_service, "_check_intervention_budget", None)
+                if checkpoint_budget is not None:
+                    checkpoint_budget(ivs)
                 return ivs
             except ValueError:
                 old = next((key for key, iv in ivs.items() if iv.state == IV_ENDED), None)

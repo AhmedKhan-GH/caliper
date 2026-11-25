@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 from contextlib import contextmanager
 from copy import copy, deepcopy
+from functools import lru_cache
 import hashlib
 import json
 import math
@@ -26,15 +27,21 @@ from ._service import InterpretationService, Refused, register_service, unregist
 CHECKPOINT_FORMAT = "caliper.inference"
 
 CHECKPOINT_BYTES = 4 * 1024 * 1024
+CHECKPOINT_VALUES = 262144
 
 
 def checkpoint_metadata(value):
     """Validate local JSON metadata, including full-width intervention vectors."""
+    return _checkpoint_metadata_size(value) is not None
+
+
+def _checkpoint_metadata_size(value):
+    """Return value and byte counts for metadata within the checkpoint limits."""
     count = 0
     def valid(item, depth=0):
         nonlocal count
         count += 1
-        if depth > 8 or count > 262144:
+        if depth > 8 or count > CHECKPOINT_VALUES:
             return False
         if item is None or type(item) is bool:
             return True
@@ -51,10 +58,60 @@ def checkpoint_metadata(value):
                                            and valid(v, depth + 1) for k, v in item.items())
         return False
     try:
-        return (type(value) is dict and valid(value)
-                and len(json.dumps(value, ensure_ascii=False, allow_nan=False).encode("utf-8")) <= CHECKPOINT_BYTES)
+        if type(value) is dict and valid(value):
+            size = len(json.dumps(value, ensure_ascii=False, allow_nan=False).encode("utf-8"))
+            if size <= CHECKPOINT_BYTES:
+                return count, size
     except (ValueError, UnicodeError):
-        return False
+        pass
+    return None
+
+
+@lru_cache(maxsize=1)
+def _checkpoint_reserve():
+    """Reserve the largest envelope and lifecycle fields without model access."""
+    from .._controls import MAX_PARAMS, NAME_MAX, PARAM_TEXT_MAX, POINT_MAX, TEXT_MAX
+    # Escaped control characters cost six JSON bytes per UTF-8 byte. Reserve
+    # every parameter slot because text and parameter registrations can change.
+    text = "\x01" * PARAM_TEXT_MAX
+    step = 2**53 - 1
+    clamp = {"point": "\x01" * POINT_MAX, "kind": "clamp", "op": "clamp",
+             "dictionary": "\x01" * POINT_MAX, "feature": 2**31 - 1,
+             "value": -1.7976931348623157e308, "positions": [31] * 32,
+             "from_step": step, "until_step": step}
+    envelope = {"format": CHECKPOINT_FORMAT, "version": 1, "run": text, "parent": text,
+                "step": step, "params": {str(i).zfill(NAME_MAX): text for i in range(MAX_PARAMS)},
+                "bindings": {key: text for key in ("model", "model_hash", "dictionary",
+                                                   "dictionary_hash", "tokenizer_hash")},
+                "interventions": {"version": 1, "interventions": []},
+                "selection": {key: step for key in ("layer", "feature", "position")},
+                "owned_clamp": clamp, "generation_id": step}
+    record = {"specification": None, "applied_specification": None, "state": "pending",
+              "since_step": step, "clear": False,
+              "error": "\x01" * TEXT_MAX, "error_code": "\x01" * NAME_MAX}
+    count, size = _checkpoint_metadata_size(envelope)
+    # Parameter names can also contain characters with six-byte JSON escapes.
+    size += 5 * MAX_PARAMS * NAME_MAX
+    return (count, size), _checkpoint_metadata_size(record)
+
+
+def _check_checkpoint_interventions(ivs):
+    """Refuse records whose future saved state can exceed either metadata limit."""
+    (count, size), (record_count, record_size) = _checkpoint_reserve()
+    for index, iv in enumerate(ivs.values()):
+        specifications = [iv.spec]
+        if iv.applied_spec is not None:
+            specifications.append(iv.applied_spec)
+        sizes = [_checkpoint_metadata_size(spec) for spec in specifications]
+        if any(item is None for item in sizes):
+            raise ValueError("intervention exceeds the checkpoint metadata limits")
+        # A pending request acquires an applied copy. A replacement can retain
+        # its old effect, or revert to it. Reserve two copies of each maximum.
+        # The largest byte count and value count can come from different specs.
+        count += record_count - 2 + 2 * max(item[0] for item in sizes)
+        size += record_size - 8 + 2 * max(item[1] for item in sizes) + (2 if index else 0)
+        if count > CHECKPOINT_VALUES or size > CHECKPOINT_BYTES:
+            raise ValueError("interventions exceed the checkpoint metadata limits with lifecycle headroom")
 
 
 class _RunGuard:
@@ -452,6 +509,9 @@ class HostedService(InterpretationService):
             self.factories["tracer"] = self._gemma_tracer
         self.boundary_running = False
         self.boundary_thread = None
+
+    def _check_intervention_budget(self, ivs):
+        _check_checkpoint_interventions(ivs)
 
     def _gemma_tracer(self):
         from . import Tracer
