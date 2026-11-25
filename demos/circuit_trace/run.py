@@ -23,6 +23,7 @@ from _inference_evidence import (bound_completion, comparison_evidence, generati
 from _qualification import (GEMMA_REVISION, MODEL_REVISION, dictionary_qualification,
                              validate_quality_override)
 from _spec import scene_programs
+from _visible import StartupFailure, check_assets, configure_assets, hold_after_error
 
 ROOT = Path(__file__).resolve().parents[2]
 METHOD_DISCLOSURES = {
@@ -114,6 +115,7 @@ class Session:
                             + '-$$.txt ' + shlex.quote(sys.executable) + ' "$@"\n')
         launcher.chmod(0o700)
         env["CALIPER_RUN_PYTHON"] = str(launcher)
+        configure_assets(env)
         if not show:
             env["CALIPER_TEST_CIRCUIT_CAPTURE_DIR"] = str(out / "captures")
         else:
@@ -149,7 +151,9 @@ class Session:
                 names = {p["name"] for p in state["params"]}
                 return state if state["attached"] and {"prompt", "selected_node", "clamp", "retrace"} <= names else False
             self.events.until("hosted inference readiness", ready)
-        except BaseException:
+        except BaseException as exc:
+            if (show or getattr(args, "demo", False)) and isinstance(exc, Exception) and self.live():
+                raise StartupFailure(self, exc) from exc
             self.close()
             raise
 
@@ -683,6 +687,42 @@ def acceptance(session, args, result):
     return bridge
 
 
+def live_demo(session, args, result):
+    """Publish a baseline instrument, then let its controls drive the model."""
+    result["browser_assets"] = check_assets(session)
+    instrument(session)
+    trace = session.events.complete("trace.run", prompt=args.prompt)
+    status = session.events.complete("trace.status")
+    if status["state"] != "done":
+        raise Failure("The actual trace did not complete.")
+    graph = read_graph(session)
+    save(session.out / "graph.json", graph)
+    result["trace"] = status
+    programs(session)
+    session.ready_programs(["attribution", "probabilities"])
+    session.read("attribution", "nodes", minimum_step=trace["step"])
+    bridge = Bridge(session)
+    session.bridge = bridge
+    # Initial selection only supplies examples. It does not apply an intervention.
+    selected = selected_feature(graph)
+    bridge.select(selected["index"])
+    rows, _ = session.example_page(0)
+    bars = session.read("probabilities", "cells")
+    labels = session.read("attribution", "labels", minimum_step=bars["step"])
+    session.capture("demo", {"attribution": labels["step"], "probabilities": bars["step"],
+                             "example_tokens": rows["step"]})
+    session.mcp.body("applet.save")
+    spec = session.mcp.body("spec.get")
+    (session.out / "instrument.toml").write_text(spec["text"], encoding="utf-8")
+    state = session.mcp.body("run.state", run=session.run_id)
+    if not state["attached"]:
+        raise Failure("The hosted model detached before the live demo was ready.")
+    result["demo_ready"] = True
+    save(session.out / "demo-ready.json", {"attached": True, "browser_assets": result["browser_assets"],
+                                          "capture": "demo.png", "acceptance": False})
+    return bridge
+
+
 def parser():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--model", required=True)
@@ -692,6 +732,7 @@ def parser():
     group = p.add_mutually_exclusive_group()
     group.add_argument("--hidden", action="store_true", default=True)
     group.add_argument("--show", action="store_true", help="Founder-only live window")
+    p.add_argument("--demo", action="store_true", help="Live instrument without the acceptance batch; hidden unless --show is set")
     p.add_argument("--out", type=Path, required=True)
     return p
 
@@ -754,8 +795,11 @@ def main(argv=None):
         if peak > memory_limit:
             raise Failure("The bounded app case exceeds the process memory limit.")
         session = Session(args, out / "acceptance", show=args.show)
-        bridge = acceptance(session, args, result)
-        if args.model == "tiny-lm" and not args.show:
+        if args.show or args.demo:
+            bridge = live_demo(session, args, result)
+        else:
+            bridge = acceptance(session, args, result)
+        if args.model == "tiny-lm" and not (args.show or args.demo):
             from parity import export_resources, run_parity
             export_resources(session, out / "parity")
             session.close()
@@ -769,22 +813,24 @@ def main(argv=None):
             result["parity_evidence_collected"] = True
         elif args.model == "tiny-lm":
             result["parity_evidence_collected"] = False
-        if args.show:
+        if args.show or args.demo:
             result["lifetime"] = "live bridge until the owned app closes"
             finish(result)
             save(out / "result.json", result)
             bridge.keep_alive()
         completed = result["acceptance_complete"] is True
     except BaseException as exc:
+        if isinstance(exc, StartupFailure):
+            session = exc.session
         result["error"] = error_detail(exc)
         if not isinstance(exc, Exception):
             raise
-        if args.show and session is not None and hasattr(session, "bridge") and session.live():
-            result["lifetime"] = "live bridge until the owned app closes"
+        if (args.show or args.demo) and session is not None and session.live():
+            result["lifetime"] = "owned app remains open after a driver error"
             finish(result)
             save(out / "result.json", result)
             try:
-                session.bridge.keep_alive()
+                hold_after_error(session, exc)
             except BaseException as bridge_error:
                 result["bridge_error"] = error_detail(bridge_error)
                 if not isinstance(bridge_error, Exception):
@@ -810,11 +856,13 @@ def main(argv=None):
             result["completed"] = completed and not result.get("error")
             code = finish(result)
             save(out / "result.json", result)
+    if args.show or args.demo:
+        return 0 if result.get("demo_ready") and not result.get("error") and not result.get("cleanup_error") else 1
     return code
 
 
 if __name__ == "__main__":
     def shutdown(signum, frame):
-        raise Failure("The driver received a shutdown signal.")
+        raise SystemExit(128 + signum)
     signal.signal(signal.SIGTERM, shutdown)
     raise SystemExit(main())

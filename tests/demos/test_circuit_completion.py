@@ -89,7 +89,7 @@ def completion_case(tmp_path, monkeypatch, steering_case):
                     self.steered = False
                 return {}
             if method == "run.state":
-                return {"params": [{"name": name, "value": value} for name, value in params.items()]}
+                return {"attached": True, "params": [{"name": name, "value": value} for name, value in params.items()]}
             if method == "applet.save":
                 checkpoint("applet.save")
                 return {}
@@ -183,6 +183,8 @@ def completion_case(tmp_path, monkeypatch, steering_case):
     monkeypatch.setattr(driver, "programs", lambda session: None)
     monkeypatch.setattr(driver, "read_graph", lambda session: graph)
     monkeypatch.setattr(driver, "memory_bytes", lambda folder: 1024)
+    monkeypatch.setattr(driver, "check_assets", lambda session: {"wasm": {"status": 200}})
+    monkeypatch.setattr(driver, "hold_after_error", lambda session, error: driver.Bridge(session).keep_alive())
     monkeypatch.setattr(driver, "program_budget_checks", lambda snapshot: [check("synthetic_budget", True, 0, 1)])
     monkeypatch.setattr(driver, "capture_checks", capture_checks)
     monkeypatch.setattr(driver, "time", SimpleNamespace(monotonic=lambda: 0))
@@ -363,11 +365,13 @@ def test_visible_lifetime_waits_for_owned_app(completion_case, failed):
     case = completion_case
     case.show = True
     if failed:
-        case.stage, case.fault = "generate", Failure("generation failed")
+        case.stage, case.fault = "acceptance.trace", Failure("trace failed before the bridge")
     assert case.run() == int(failed)
     assert case.calls.index("keep_alive") < case.calls.index("acceptance.close")
     result = case.read()
-    assert result["completed"] is (not failed) and result["passed"] is (not failed)
+    assert not result["completed"] and not result["passed"]
+    assert result.get("demo_ready", False) is (not failed)
+    assert "generate" not in case.calls and "validation" not in case.calls
     assert not result["gemma_acceptance"]
     assert all(s.app_log.closed for s in case.sessions)
 
@@ -375,14 +379,14 @@ def test_visible_lifetime_waits_for_owned_app(completion_case, failed):
 def test_visible_recovery_interruption_preserves_both_errors(completion_case, monkeypatch):
     case = completion_case
     case.show = True
-    case.stage, case.fault = "generate", Failure("generation failed")
+    case.stage, case.fault = "acceptance.trace", Failure("trace failed before the bridge")
     def interrupted(bridge):
         raise KeyboardInterrupt()
     monkeypatch.setattr(driver.Bridge, "keep_alive", interrupted)
     with pytest.raises(KeyboardInterrupt):
         case.run()
     result = case.read()
-    assert result["error"] == "Failure: generation failed" and result["bridge_error"] == "KeyboardInterrupt"
+    assert result["error"] == "Failure: trace failed before the bridge" and result["bridge_error"] == "KeyboardInterrupt"
     assert not result["completed"] and not result["passed"] and not result["gemma_acceptance"]
     assert all(s.app_log.closed and s.mcp_closed for s in case.sessions)
 
