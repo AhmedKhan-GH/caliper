@@ -278,3 +278,39 @@ def checkpoint_subset(model, identity, subset, key_mapping):
         "layers.0.self_attn.q_norm", "layers.0.self_attn.q_proj", "layers.0.self_attn.v_proj",
     )}
     return {"model.language_model.": "model."}, frozenset(visual | mtp)
+
+
+def load_hosted_model(model_name, *, memory_type, admit_load, admit_transfer, record_load):
+    """Load the pinned local Qwen model with hosted options and admission callbacks."""
+    import json
+    from pathlib import Path
+
+    import torch
+
+    snapshot = Path(model_name).resolve(strict=True)
+    if not snapshot.is_dir() or snapshot.name != MODEL_REVISION or snapshot.parent.name != "snapshots":
+        raise ValueError("model must name the pinned local Qwen snapshot or tiny-lm")
+    if snapshot.parent.parent.name != "models--Qwen--Qwen3.5-0.8B":
+        raise ValueError("model snapshot does not identify the pinned Qwen repository")
+    from transformers import AutoTokenizer, Qwen3_5ForCausalLM, Qwen3_5TextConfig
+    config = Qwen3_5TextConfig(**json.loads((snapshot / "config.json").read_text())["text_config"])
+    if (config.num_hidden_layers, config.hidden_size) != (24, 1024):
+        raise ValueError("the pinned text model has unexpected dimensions")
+    device = "mps" if torch.backends.mps.is_available() else "cpu"
+    guard = memory_type(INFERENCE_MEMORY_MAX_GB, device)
+    estimate = admit_load(snapshot, guard, device)
+    model, info = Qwen3_5ForCausalLM.from_pretrained(
+        snapshot, config=config, dtype=torch.float32, attn_implementation="eager",
+        local_files_only=True, use_safetensors=True, output_loading_info=True,
+        key_mapping={r"^model\.language_model\.": "model."})
+    if any(info.get(key) for key in ("missing_keys", "unexpected_keys", "mismatched_keys", "error_msgs")):
+        raise ValueError("local model weights do not match the pinned text architecture")
+    model.config._name_or_path, model.config._commit_hash = MODEL_ID, MODEL_REVISION
+    model.requires_grad_(False).eval()
+    guard.check("inference model CPU load")
+    record_load(model, memory=guard)
+    admit_transfer(guard, estimate, device)
+    model.to(device)
+    guard.check("inference model load")
+    tokenizer = AutoTokenizer.from_pretrained(snapshot, local_files_only=True, trust_remote_code=False)
+    return model, tokenizer, guard

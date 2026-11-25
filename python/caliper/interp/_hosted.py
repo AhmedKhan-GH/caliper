@@ -19,10 +19,9 @@ from torch.nn import functional as F
 
 from ._admission import (GEMMA_REVISION, _admit_model_load, _admit_model_transfer, _load_gemma_model)
 from ._output import Output, bounded_text, internal_forward, prompt_inputs
+from ._qwen_family import MODEL_ID as QWEN_ID, MODEL_REVISION as QWEN_REVISION
 from ._service import InterpretationService, Refused, register_service, unregister_service
 
-QWEN_REVISION = "2fc06364715b967f1860aea9cf38778875588b17"
-QWEN_ID = "Qwen/Qwen3.5-0.8B"
 CHECKPOINT_FORMAT = "caliper.inference"
 
 CHECKPOINT_BYTES = 4 * 1024 * 1024
@@ -428,32 +427,10 @@ def load_resources(model_name, dictionary_path):
         model = _load_gemma_model(snapshot, device=device, memory=guard)
         tokenizer = AutoTokenizer.from_pretrained(snapshot, local_files_only=True, trust_remote_code=False)
     else:
-        snapshot = Path(model_name).resolve(strict=True)
-        if not snapshot.is_dir() or snapshot.name != QWEN_REVISION or snapshot.parent.name != "snapshots":
-            raise ValueError("model must name the pinned local Qwen snapshot or tiny-lm")
-        if snapshot.parent.parent.name != "models--Qwen--Qwen3.5-0.8B":
-            raise ValueError("model snapshot does not identify the pinned Qwen repository")
-        from transformers import AutoTokenizer, Qwen3_5ForCausalLM, Qwen3_5TextConfig
-        config = Qwen3_5TextConfig(**json.loads((snapshot / "config.json").read_text())["text_config"])
-        if (config.num_hidden_layers, config.hidden_size) != (24, 1024):
-            raise ValueError("the pinned text model has unexpected dimensions")
-        device = "mps" if torch.backends.mps.is_available() else "cpu"
-        guard = MemoryGuard(12, device)
-        estimate = _admit_model_load(snapshot, guard, device)
-        model, info = Qwen3_5ForCausalLM.from_pretrained(
-            snapshot, config=config, dtype=torch.float32, attn_implementation="eager",
-            local_files_only=True, use_safetensors=True, output_loading_info=True,
-            key_mapping={r"^model\.language_model\.": "model."})
-        if any(info.get(key) for key in ("missing_keys", "unexpected_keys", "mismatched_keys", "error_msgs")):
-            raise ValueError("local model weights do not match the pinned text architecture")
-        model.config._name_or_path, model.config._commit_hash = QWEN_ID, QWEN_REVISION
-        model.requires_grad_(False).eval()
-        guard.check("inference model CPU load")
-        _record_verified_hf_load(model, memory=guard)
-        _admit_model_transfer(guard, estimate, device)
-        model.to(device)
-        guard.check("inference model load")
-        tokenizer = AutoTokenizer.from_pretrained(snapshot, local_files_only=True, trust_remote_code=False)
+        from ._qwen_family import load_hosted_model
+        model, tokenizer, guard = load_hosted_model(
+            model_name, memory_type=MemoryGuard, admit_load=_admit_model_load,
+            admit_transfer=_admit_model_transfer, record_load=_record_verified_hf_load)
     options = {"memory_limit_gb": 40} if getattr(model.config, "model_type", None) == "gemma2" else {}
     dictionary = load_dictionary(folder, model=model, device=next(model.parameters()).device,
                                  dtype=next(model.parameters()).dtype, memory=guard, **options)
