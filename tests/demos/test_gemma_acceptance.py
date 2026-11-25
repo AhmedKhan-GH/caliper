@@ -12,7 +12,7 @@ from _qualification import (GEMMA_HASH, GEMMA_ID, GEMMA_L0, GEMMA_REVISION,
 from run import acceptance_profile
 
 
-def gemma_reply():
+def gemma_reply(*, source_tokens=200000):
     response = qualification_reply()
     metadata, index, identity = response["metadata"], response["index"], response["identity"]
     source = {key: deepcopy(metadata["training"][key]) for key in
@@ -75,6 +75,7 @@ def gemma_reply():
         "first_token_loss": "bos_predicts_first_nonspecial_target"}
     research.update(protocol="research_v1", protocol_version=1, source_budget_complete=True,
         source_tokens=200000, metric_observations=199000, cross_entropy_tokens=199000,
+        scope="all_layers", replaced_mlps=26,
         thresholds={"fvu": .30, "dead_fraction": .15, "cross_entropy_delta": .5, "evaluated_tokens": 200000},
         checkpoint_sha256="7" * 64, context_policy=research_policy, active_layers=list(range(26)),
         per_layer_status=["active"] * 26, per_layer_l0=[20.] * 26,
@@ -88,8 +89,13 @@ def gemma_reply():
         "activity": "positive_features_per_nonspecial_source_position",
         "loss": "sum_nats_over_identical_targets_baseline_isolated_and_all_active",
         "statistics_dtype": "cpu_float64"}, "context_policy": deepcopy(research_policy),
-        "tokens": 200000, "context": 1024, "source": deepcopy(research["evaluation_source"]),
+        "tokens": 200000, "context": 1024, "batch_tokens": 1024, "chunk_tokens": 64,
+        "scope": "all_layers", "active_layers": list(range(26)), "source": deepcopy(research["evaluation_source"]),
         **{key: deepcopy(research[key]) for key in ("dictionary_hash", "tensor_binding", "model_binding")}}
+    if source_tokens != 200000:
+        research.update(source_tokens=source_tokens, evaluated_tokens=source_tokens,
+                        metric_observations=source_tokens - 1000, cross_entropy_tokens=source_tokens - 1000,
+                        source_budget_complete=False, status="partial", stop_reason="signal 2")
     response["research_quality"] = research
     return response
 
@@ -102,6 +108,162 @@ def test_gemma_requires_its_own_identity_and_preserves_unknown_training():
     assert response == original
     assert not dictionary_qualification(response)["qualified"]
     assert not dictionary_qualification(qualification_reply(), family="gemma")["qualified"]
+
+
+@pytest.mark.parametrize("source_tokens", [50000, 51237, 199999, 200000])
+@pytest.mark.parametrize("failed_metrics", [False, True])
+def test_gemma_comparison_reports_actual_sample_and_original_status(source_tokens, failed_metrics):
+    response = gemma_reply(source_tokens=source_tokens)
+    quality = response["research_quality"]
+    if failed_metrics:
+        quality.update(fvu=.5, per_layer_fvu=[.5] * 26)
+        if source_tokens == 200000:
+            quality["status"] = "failed"
+    original = deepcopy(response)
+    result = dictionary_qualification(response, family="gemma")
+    assert result["qualified"] and result["status"] == "research_reported"
+    assert result["reported_status"] == result["historical_quality_status"] == quality["status"]
+    assert result["acceptance_policy"] == "research_comparison_only"
+    assert not result["quality_gates_blocking"]
+    assert result["acceptance_reason"] == (
+        "Decision 10 accepts a committed comparison sample of at least 50000 source positions "
+        "to avoid delay to the Gemma index and acceptance captures. The founder sets final quality bars.")
+    assert result["source_tokens"] == result["evaluated_tokens"] == source_tokens
+    assert result["metric_observations"] == result["cross_entropy_tokens"] == source_tokens - 1000
+    assert result["source_budget"] == quality["settings"]["tokens"] == 200000
+    assert result["source_budget_complete"] is (source_tokens == 200000)
+    assert result["checkpoint_sha256"] == quality["checkpoint_sha256"]
+    assert result["stop_reason"] == quality["stop_reason"]
+    assert response == original
+
+
+@pytest.mark.parametrize("source_tokens", [50000, 200000])
+def test_gemma_acceptance_result_preserves_comparison_disclosure(source_tokens):
+    result = {"mode": "gemma", "dictionary_evidence": gemma_reply(source_tokens=source_tokens),
+              "pixel_evidence_collected": True, "checks": [check("validation", True, 8, ">=8")]}
+    assert finish(result) == 0
+    qualification = result["dictionary_qualification"]
+    assert qualification["source_tokens"] == source_tokens
+    assert qualification["reported_status"] == ("partial" if source_tokens < 200000 else "passed")
+    assert qualification["acceptance_policy"] == "research_comparison_only"
+    assert "Decision 10" in qualification["acceptance_reason"]
+
+
+@pytest.mark.parametrize("source_tokens", [50000, 51237, 200000])
+def test_gemma_segment_bounds_use_measured_sample(source_tokens):
+    response = gemma_reply(source_tokens=source_tokens)
+    spans = response["research_quality"]["content_segmentation"]
+    minimum = (source_tokens + 1022) // 1023
+    for count, valid in ((minimum, True), (minimum - 1, False), (source_tokens, True), (source_tokens + 1, False)):
+        spans["contexts"] = count
+        assert dictionary_qualification(response, family="gemma")["qualified"] is valid
+
+
+@pytest.mark.parametrize("source_tokens", [50000, 200000])
+@pytest.mark.parametrize("field,value", [
+    ("source_tokens", 49999), ("source_tokens", 200001), ("source_tokens", 50000.), ("source_tokens", True),
+    ("evaluated_tokens", 200000.), ("evaluated_tokens", True), ("evaluated_tokens", 49999),
+    ("metric_observations", 0), ("metric_observations", -1), ("metric_observations", 200001),
+    ("metric_observations", 49999.), ("metric_observations", True),
+    ("cross_entropy_tokens", 200001), ("cross_entropy_tokens", True), ("cross_entropy_tokens", 49999.),
+    ("source_budget_complete", 0), ("source_budget_complete", 1),
+    ("stop_reason", "signal 15"), ("stop_reason", "source_exhausted"), ("stop_reason", None),
+    ("status", "fallback_partial"), ("status", None), ("partition", "index"),
+    ("checkpoint_sha256", None), ("checkpoint_sha256", "A" * 64),
+    ("protocol_version", True), ("protocol_version", 1.),
+    ("all_mlps_replaced", 26.), ("replaced_mlps", True), ("scope", "upper_half"),
+    ("fvu", .29), ("dead_fraction", .14), ("original_cross_entropy", -1),
+    ("original_cross_entropy", True), ("replaced_cross_entropy", -1),
+    ("cross_entropy_delta", .6), ("fvu", float("inf")), ("dead_fraction", float("nan")),
+    ("cross_entropy_delta", float("nan")), ("replaced_cross_entropy", float("inf")),
+])
+def test_gemma_rejects_invalid_sample_scalars(source_tokens, field, value):
+    response = gemma_reply(source_tokens=source_tokens)
+    response["research_quality"][field] = value
+    assert not dictionary_qualification(response, family="gemma")["qualified"]
+
+
+@pytest.mark.parametrize("source_tokens", [50000, 200000])
+@pytest.mark.parametrize("fault", ["completion", "status", "stop_reason", "observation_bound", "target_mismatch",
+                                    "forged_budget", "missing_cursor", "dictionary_identity"])
+def test_gemma_rejects_inconsistent_sample_evidence(source_tokens, fault):
+    response = gemma_reply(source_tokens=source_tokens)
+    quality = response["research_quality"]
+    complete = source_tokens == 200000
+    if fault == "completion":
+        quality["source_budget_complete"] = not complete
+    elif fault == "status":
+        quality["status"] = "partial" if complete else "passed"
+    elif fault == "stop_reason":
+        quality["stop_reason"] = "signal 2" if complete else "complete"
+    elif fault == "observation_bound":
+        quality["metric_observations"] = quality["cross_entropy_tokens"] = source_tokens + 1
+    elif fault == "target_mismatch":
+        quality["cross_entropy_tokens"] -= 1
+    elif fault == "forged_budget":
+        quality.update(source_budget_complete=True, status="passed", stop_reason="complete")
+        quality["settings"]["tokens"] = quality["settings"]["protocol"]["source_budget"] = 50000
+        quality["thresholds"]["evaluated_tokens"] = 50000
+    elif fault == "missing_cursor":
+        del quality["checkpoint_sha256"]
+    else:
+        quality["dictionary_hash"] = quality["settings"]["dictionary_hash"] = "9" * 64
+    assert not dictionary_qualification(response, family="gemma")["qualified"]
+
+
+@pytest.mark.parametrize("key", ["per_layer_fvu", "per_layer_dead_fraction", "per_layer_l0",
+                                "per_layer_cross_entropy", "per_layer_cross_entropy_delta"])
+@pytest.mark.parametrize("fault", ["absent", "short", "boolean", "nan", "infinity", "inconsistent"])
+def test_gemma_partial_requires_all_layer_measurements(key, fault):
+    response = gemma_reply(source_tokens=51237)
+    quality = response["research_quality"]
+    if fault == "absent":
+        del quality[key]
+    elif fault == "short":
+        quality[key].pop()
+    else:
+        value = {"boolean": True, "nan": float("nan"), "infinity": float("inf"),
+                 "inconsistent": 16385 if key == "per_layer_l0" else -1}[fault]
+        quality[key][17] = value
+    assert not dictionary_qualification(response, family="gemma")["qualified"]
+
+
+@pytest.mark.parametrize("location", ["context_policy", "settings", "protocol"])
+@pytest.mark.parametrize("field,value", [
+    ("version", True), ("pad_id", False), ("prefix_ids", [2.]), ("eos_ids", [True]),
+    ("excluded_ids", [0, 2]), ("model_context", 1024.), ("content_context", 1023.),
+    ("observations", "source_tokens_only"), ("replacement", "all_positions"),
+    ("cross_entropy", "all_targets"), ("first_token_loss", "exclude_first"),
+])
+def test_gemma_partial_requires_exact_masks_and_context_types(location, field, value):
+    response = gemma_reply(source_tokens=51237)
+    quality = response["research_quality"]
+    policy = (quality["context_policy"] if location == "context_policy" else
+              quality["settings"]["context_policy"] if location == "settings" else
+              quality["settings"]["protocol"]["context_policy"])
+    policy[field] = value
+    assert not dictionary_qualification(response, family="gemma")["qualified"]
+
+
+@pytest.mark.parametrize("path,value", [
+    (("tokens",), 50000), (("tokens",), 200000.), (("context",), 1024.),
+    (("batch_tokens",), True), (("batch_tokens",), 1023), (("batch_tokens",), 4097),
+    (("chunk_tokens",), 0), (("chunk_tokens",), 129), (("chunk_tokens",), 64.),
+    (("active_layers",), [False, *range(1, 26)]), (("scope",), "upper_half"),
+    (("protocol", "source_budget"), 50000), (("protocol", "version"), True),
+    (("protocol", "fvu"), "mean_context_ratios"), (("protocol", "statistics_dtype"), "float32"),
+    (("protocol", "activity"), "all_positions"), (("protocol", "loss"), "mean_batch_loss"),
+    (("source", "source_id"), "stale"), (("source", "partition"), "index"),
+    (("source", "partitions", "quality"), [9400., 9500]),
+    (("tensor_binding", "version"), True), (("model_binding", "version"), 2.),
+])
+def test_gemma_partial_requires_exact_resume_settings(path, value):
+    response = gemma_reply(source_tokens=51237)
+    target = response["research_quality"]["settings"]
+    for key in path[:-1]:
+        target = target[key]
+    target[path[-1]] = value
+    assert not dictionary_qualification(response, family="gemma")["qualified"]
 
 
 @pytest.mark.parametrize("location", ["quality", "live"])
@@ -317,24 +479,81 @@ def test_legacy_quality_cannot_replace_missing_research_evidence():
     assert not dictionary_qualification(response, family="gemma")["qualified"]
 
 
-def test_gemma_instrument_discloses_failed_measurements_without_blocking():
+@pytest.mark.parametrize("source_tokens", [51237, 200000])
+def test_gemma_instrument_discloses_actual_comparison_without_blocking(source_tokens):
     from types import SimpleNamespace
     from unittest.mock import Mock
     from run import instrument, instrument_layout
 
-    response = gemma_reply()
+    response = gemma_reply(source_tokens=source_tokens)
     quality = response["research_quality"]
-    quality.update(status="failed", fvu=.5, per_layer_fvu=[.5] * 26)
+    quality.update(fvu=.5, per_layer_fvu=[.5] * 26)
+    if source_tokens == 200000:
+        quality["status"] = "failed"
     session = SimpleNamespace(family="gemma", quality_override=None, mcp=Mock(), events=Mock())
     session.events.complete.return_value = response
     instrument(session)
     calls = session.mcp.body.call_args_list
     readout = next(call.kwargs for call in calls if call.args[0] == "control.create"
                    and call.kwargs["id"] == "method_quality_measurements")
-    assert "0.500000" in readout["options"]["format"]
-    assert "await calibration" in readout["options"]["format"]
+    assert readout["options"]["format"] == (
+        f"Research comparison uses {source_tokens:,} source positions ({quality['status']}). "
+        "FVU 0.500000. Dead fraction 0.150000. All-layer loss rise 0.500000 nats. Quality bars await calibration.")
     for expanded in (False, True):
         instrument_layout(session, expanded=expanded)
         nodes = session.mcp.body.call_args.kwargs["layout"]["nodes"]
         methods = next(node for node in nodes if node["id"] == "methods")
         assert methods["children"].count("method_quality_measurements") == 1
+
+
+@pytest.mark.parametrize("source_tokens", [49999, 200001])
+def test_gemma_refuses_a_coherent_sample_outside_decision_bounds(source_tokens):
+    response = gemma_reply(source_tokens=source_tokens)
+    assert not dictionary_qualification(response, family="gemma")["qualified"]
+
+
+def test_gemma_partial_cannot_claim_failed_or_passed_quality():
+    response = gemma_reply(source_tokens=51237)
+    response["research_quality"].update(status="failed", fvu=.5, per_layer_fvu=[.5] * 26)
+    assert not dictionary_qualification(response, family="gemma")["qualified"]
+
+
+@pytest.mark.parametrize("location", ["quality", "live"])
+@pytest.mark.parametrize("binding", ["tensor_binding", "model_binding"])
+def test_gemma_partial_keeps_current_resource_checks(location, binding):
+    response = gemma_reply(source_tokens=51237)
+    target = response["research_quality"] if location == "quality" else response
+    target[binding]["tensor_hash"] = "9" * 64
+    if location == "quality":
+        response["research_quality"]["settings"][binding] = deepcopy(target[binding])
+    assert not dictionary_qualification(response, family="gemma")["qualified"]
+
+
+@pytest.mark.parametrize("field,value", [("fvu", -1e-14), ("dead_fraction", -1e-14),
+                                       ("dead_fraction", 1 + 1e-14)])
+def test_gemma_aggregate_bounds_apply_within_comparison_tolerance(field, value):
+    response = gemma_reply(source_tokens=51237)
+    quality = response["research_quality"]
+    quality[field] = value
+    quality["per_layer_" + field] = [0 if value < 0 else 1] * 26
+    assert not dictionary_qualification(response, family="gemma")["qualified"]
+
+
+@pytest.mark.parametrize("fault", ["import_boolean", "import_float", "index_layers", "index_features",
+                                   "index_partition", "threshold_count", "active_layers", "layer_status"])
+def test_gemma_partial_rejects_scalar_aliases_in_resource_evidence(fault):
+    response = gemma_reply(source_tokens=51237)
+    quality = response["research_quality"]
+    if fault.startswith("import_"):
+        response["import_binding"]["layers"][0]["layer"] = False if fault == "import_boolean" else 0.
+    elif fault in ("index_layers", "index_features"):
+        response["index"][fault.removeprefix("index_")] = 26. if fault == "index_layers" else 16384.
+    elif fault == "index_partition":
+        response["index"]["provenance"]["partitions"]["train"][0] = False
+    elif fault == "threshold_count":
+        quality["thresholds"]["evaluated_tokens"] = 200000.
+    elif fault == "active_layers":
+        quality["active_layers"][0] = False
+    else:
+        quality["per_layer_status"][0] = "error_only"
+    assert not dictionary_qualification(response, family="gemma")["qualified"]

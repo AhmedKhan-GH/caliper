@@ -2,7 +2,7 @@
 
 Caliper LIB supports Gemma 2 semantic probes, frozen attribution paths, and JumpReLU dictionaries.
 The converter imports the pinned Gemma Scope selection for `google/gemma-2-2b`.
-Qwen3.5 support remains available, and generic Llama support remains deferred.
+Qwen3.5 support remains experimental, and generic Llama support remains deferred.
 Gemma is the only M8 acceptance model.
 M8 remains held until Gemma passes every required acceptance check and platform CI passes.
 
@@ -203,7 +203,8 @@ The Qwen index format remains unchanged.
 
 ## Research Evaluation Protocol
 
-The explicit `research_v1` protocol applies the same aggregation and context limits to Gemma and Qwen.
+The explicit `research_v1` protocol retains CPU-tested aggregation and context code for Gemma and experimental Qwen.
+This M8 run evaluates Gemma only and does not regrade Qwen, under Founder Decision 9.
 Use `--protocol research_v1` with `tools.interp.eval_dictionary`, or pass `protocol="research_v1"` to `evaluate`.
 This mode defaults to 1,024 model positions and a batch limit of 1,024 positions.
 An explicit context can contain 2 through 1,024 model positions.
@@ -212,7 +213,7 @@ A smaller context remains an explicit, recorded protocol setting.
 
 The supplied [Gemma Scope report](https://storage.googleapis.com/gemma-scope/gemma-scope-report.pdf), Section 4.1, pages 5–6, specifies 2,048 sequences of length 1,024.
 It excludes BOS, EOS, and padding from evaluation.
-Caliper retains the held-out FineWeb-Edu source, its pinned revision, and the 200,000-source-token budget.
+Caliper retains the held-out FineWeb-Edu source, its pinned revision, and the configured resume budget of 200,000 source positions.
 Source EOS counts toward that budget, but it does not count as a metric observation or CE target.
 Contexts also end at document boundaries and the source budget, and thus can contain fewer than 1,024 positions.
 The dataset and sample differ from the paper, and these results do not reproduce its exact evaluation.
@@ -251,6 +252,13 @@ The separate cursor is `evaluation-research-v1/state.json`, with state schema ve
 `metric_observations` counts nonspecial source positions, and `cross_entropy_tokens` counts CE targets.
 `source_budget_complete` becomes true only at 200,000 committed source positions.
 The existing numeric thresholds remain historical measurements, and a failed result remains failed.
+
+Coordinator Decision 10 permits a comparison sample at the first published checkpoint with at least 50,000 source positions.
+The evaluator receives SIGINT, and its final report retains `status="partial"`, `source_budget_complete=false`, and `stop_reason="signal 2"`.
+The report records the exact committed sample, observation count, loss-target count, and final cursor SHA256.
+The configured budget remains 200,000, and the cursor permits a later resume toward that budget.
+The sample reduces the delay before the Gemma index and acceptance captures.
+It does not establish full-budget completion or a numerical release gate.
 
 Research mode leaves the legacy `dictionary.json:quality` report and `evaluation/` cursor intact.
 The default `legacy` selector retains the historical contexts, masks, and resume behavior.
@@ -316,10 +324,16 @@ Queries preserve example order and cache the complete result only after all batc
 If one window cannot fit, the query refuses before its tensor allocation.
 The budget is a limit, not a measured memory result or a speed guarantee.
 
-Gemma research quality requires exactly 200,000 source tokens and records separate observation and loss-target counts.
+Gemma qualification accepts complete research measurements from a sample of 50,000 through 199,999 source positions.
+That sample requires partial status and the Decision 10 stop reason.
+It also accepts a full 200,000-position result with consistent completion status and historical quality status.
+Both forms require all per-layer measurements, exact masks, valid aggregates, and the current source and resource identities.
+The service binds the report to the exact cursor bytes.
+The acceptance result and quality disclosure retain the actual sample count and original status.
+
 Historical comparisons retain 0.30 mean FVU, 0.15 dead fraction, and 0.5 nats all-layer loss rise.
 The founder sets final quality bars from the published comparison.
-Quality values do not block the index or hidden acceptance after the complete research result exists.
+Quality values do not block the index or hidden acceptance after the valid comparison sample exists.
 Quality evidence binds the evaluated model, dictionary tensor bytes, forward settings, and evaluation device.
 Use the acceptance device for evaluation. A device change requires a new evaluation because kernel arithmetic can differ.
 The index requires exactly 2,000,000 tokens.

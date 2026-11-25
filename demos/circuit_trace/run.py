@@ -347,8 +347,9 @@ def instrument(session):
         evidence = session.events.complete("feature.dictionary")
         research = evidence.get("research_quality", {})
         if not dictionary_qualification(evidence, family="gemma")["qualified"]:
-            raise Failure("The complete Gemma research protocol or artifact identity is unavailable.")
+            raise Failure("The Gemma research comparison sample or artifact identity is unavailable.")
         disclosures["quality_measurements"] = (
+            f"Research comparison uses {research['source_tokens']:,} source positions ({research['status']}). "
             f"FVU {research['fvu']:.6f}. Dead fraction {research['dead_fraction']:.6f}. "
             f"All-layer loss rise {research['cross_entropy_delta']:.6f} nats. Quality bars await calibration.")
     override = getattr(session, "quality_override", None)

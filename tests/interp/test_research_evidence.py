@@ -50,6 +50,34 @@ def test_research_report_binds_current_resources_and_cursor_without_mutation(evi
     assert research_evidence(root, identity, tensors, model, memory=guard) == before
 
 
+@pytest.mark.parametrize("source_tokens", [50000, 51237, 200000])
+def test_research_sample_retains_exact_counts_status_and_cursor_bytes(evidence, source_tokens):
+    root, identity, tensors, model, report, cursor, save, guard = evidence
+    rows = [[0, start, min(1023, source_tokens - start)] for start in range(0, source_tokens, 1023)]
+    cursor.update(source_tokens=source_tokens, count=source_tokens - 1, ce_tokens=source_tokens - 1,
+                  content_segments=rows)
+    report.update(source_tokens=source_tokens, evaluated_tokens=source_tokens,
+                  metric_observations=source_tokens - 1, cross_entropy_tokens=source_tokens - 1,
+                  source_budget_complete=source_tokens == 200000,
+                  status="passed" if source_tokens == 200000 else "partial",
+                  stop_reason="complete" if source_tokens == 200000 else "signal 2")
+    report["content_segmentation"].update(contexts=len(rows), sha256=hashlib.sha256(
+        "".join(json.dumps(row, separators=(",", ":")) + "\n" for row in rows).encode("ascii")).hexdigest())
+    cursor["settings"]["tokens"] = 200000
+    save()
+    folder = root / "evaluation-research-v1"
+    before = {name: (folder / name).read_bytes() for name in ("quality.json", "state.json")}
+    actual = research_evidence(root, identity, tensors, model, memory=guard)
+    assert actual == report
+    assert actual["source_tokens"] == source_tokens
+    assert actual["checkpoint_sha256"] == hashlib.sha256(before["state.json"]).hexdigest()
+    assert all((folder / name).read_bytes() == raw for name, raw in before.items())
+    # Equal JSON with different bytes must invalidate the published cursor digest.
+    (folder / "state.json").write_bytes(before["state.json"] + b"\n")
+    with pytest.raises(ValueError, match="identity differs"):
+        research_evidence(root, identity, tensors, model, memory=guard)
+
+
 @pytest.mark.parametrize("fault", ["cursor_bytes", "count", "spans", "settings", "dictionary", "model", "tensor"])
 def test_research_evidence_rejects_mismatched_records(evidence, fault):
     root, identity, tensors, model, report, cursor, save, guard = evidence

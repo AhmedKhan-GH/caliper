@@ -293,8 +293,10 @@ def finish(result):
     if result["mode"] in ("qwen", "gemma"):
         # Recompute this gate from evidence. A cached status cannot qualify a run.
         result["checks"] = [g for g in result.get("checks", []) if g["name"] != "dictionary_qualification"]
+        sample_requirement = ("at least 50000 research source positions" if result["mode"] == "gemma"
+                              else "200000 quality tokens")
         result["checks"].append(check("dictionary_qualification", qualification["qualified"], qualification,
-                                      "exact current dictionary, 200000 quality tokens, 2000000 index tokens",
+                                      f"exact current dictionary, {sample_requirement}, 2000000 index tokens",
                                       required=result.get("pixel_evidence_collected") is not False))
     failed = [g["name"] for g in result.get("checks", []) if g["required"] and not g["passed"]]
     result["failed_checks"] = failed

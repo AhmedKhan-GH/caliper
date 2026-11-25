@@ -183,11 +183,21 @@ It preserves decoder rows, both biases, and thresholds.
 The decoder writes after the post-feedforward norm without another normalization.
 A Qwen dictionary cannot serve Gemma.
 
-Gemma research evaluation uses 200,000 source tokens, 1,024 model positions, and explicit special-token masks.
+Gemma research evaluation retains a configured resume budget of 200,000 source positions, 1,024 model positions, and explicit special-token masks.
 It reports per-layer splice loss beside all-layer loss.
+Coordinator Decision 10 accepts the comparison sample at the first published checkpoint with at least 50,000 source positions.
+The final report retains the exact sample and observation counts, final cursor SHA256, `status="partial"`, `source_budget_complete=false`, and `stop_reason="signal 2"`.
+
+The cursor permits a later resume toward 200,000 positions.
+Qualification also accepts a valid full-budget result and preserves its original quality status.
+The acceptance result and quality disclosure state the measured sample count and its comparison role.
+
 Historical comparisons retain 0.30 mean FVU, 0.15 dead fraction, and 0.5 nats all-layer loss rise.
-These quality comparisons do not block the index or hidden acceptance after the complete research result exists.
+These comparisons do not block the index or hidden acceptance after the valid comparison sample exists.
+The sample reduces the delay before Gemma acceptance captures and does not establish a numerical release gate.
 The founder sets final quality bars from the published comparison.
+The shared protocol code retains CPU tests for Qwen, but this M8 run does not regrade Qwen under Founder Decision 9.
+
 The example index requires exactly 2,000,000 tokens from the unchanged index partition.
 The explicit Gemma process limit is 40 decimal GB.
 The Qwen quality override does not apply to Gemma.
