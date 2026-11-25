@@ -2099,13 +2099,7 @@ class Controls:
         """Install one effect with the same error callback on restore and at a boundary."""
         from copy import deepcopy
         callback = lambda message, iv=iv if owner is None else owner: self._intervention_failed(iv, message)
-        if iv.op == "ablate":
-            iv.hook = service.adapter.ablate(service.model, iv.point)
-            service.executor._remember_hook_order(iv.hook)
-            if hasattr(iv.hook, "on_error"):
-                iv.hook.on_error = callback
-        else:
-            iv.hook = service.executor.install(spec, on_error=callback)
+        iv.hook = service.executor.install(spec, on_error=callback)
         iv.applied_spec = deepcopy(spec)
 
     def _intervene(self, req):

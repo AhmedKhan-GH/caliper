@@ -83,7 +83,16 @@ def manual_logits(model, tokenizer, specifications):
     try:
         for spec in specifications:
             block = model.layers[int(spec["point"].split(".")[1])]
-            if spec["kind"] == "ablate":
+            if spec["kind"] == "ablate" and "#" in spec["point"]:
+                head = int(spec["point"].split("#")[1])
+                start = head * block.self_attn.head_dim
+                end = start + block.self_attn.head_dim
+                def zero_head(module, args, start=start, end=end):
+                    value = args[0].clone()
+                    value[..., start:end] = 0
+                    return (value,) + args[1:]
+                handles.append(block.self_attn.o_proj.register_forward_pre_hook(zero_head))
+            elif spec["kind"] == "ablate":
                 handles.append(block.mlp.register_forward_hook(lambda m, a, out: torch.zeros_like(out)))
             else:
                 handles.append(block.mlp.register_forward_hook(
@@ -96,7 +105,9 @@ def manual_logits(model, tokenizer, specifications):
 
 
 @pytest.mark.parametrize("saved", [False, True])
-@pytest.mark.parametrize("overrides", [[], [OVERRIDE], [{"kind": "ablate", "point": "layers.0.mlp"}]])
+@pytest.mark.parametrize("overrides", [[], [OVERRIDE],
+    [{"kind": "ablate", "point": "layers.0.mlp"}],
+    [{"kind": "ablate", "point": "layers.0.self_attn#0"}]])
 def test_published_fork_restores_before_first_boundary(hosted_factory, monkeypatch, saved, overrides):
     checkpoint = parent_checkpoint(hosted_factory) if saved else None
     run, managed, _ = hosted_factory("child", resume=checkpoint, overrides=overrides)
@@ -106,12 +117,7 @@ def test_published_fork_restores_before_first_boundary(hosted_factory, monkeypat
                           _controls.intervention_key(old) != _controls.intervention_key(spec)]
         expected_specs.append(spec)
     baseline = manual_logits(run.model, run.tokenizer, [])
-    if not saved and overrides and overrides[0]["kind"] == "ablate":
-        # PublishedCases retains baseline attention for a module-only ablation.
-        with run.model.frozen_attention():
-            expected = manual_logits(run.model, run.tokenizer, expected_specs)
-    else:
-        expected = manual_logits(run.model, run.tokenizer, expected_specs)
+    expected = manual_logits(run.model, run.tokenizer, expected_specs)
     source_values = {}
     with torch.no_grad():
         for source, prompt in published.PROMPTS.items():
