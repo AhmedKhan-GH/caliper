@@ -7,7 +7,7 @@ import pytest
 
 from test_circuit_trace import driver, inference_fixture, qualification_reply, steering_case
 from test_gemma_acceptance import gemma_reply
-from _checks import check, finish
+from _checks import MODEL_PROMPT, check, finish
 from _mcp import Failure
 
 
@@ -15,7 +15,7 @@ from _mcp import Failure
 def completion_case(tmp_path, monkeypatch, steering_case):
     import parity
 
-    prompt, prior, status, params = inference_fixture()
+    prompt, prior, status, params = inference_fixture(MODEL_PROMPT)
     graph = steering_case["graph"]
     graph["nodes"][1]["effect"] = 4.64
     graph["nodes"].extend({"kind": "token", "index": i} for i in range(4, 20))
@@ -23,7 +23,7 @@ def completion_case(tmp_path, monkeypatch, steering_case):
                                   token_ids=[1] * 29, activations=[row["activation"]] * 29)
                               for row in steering_case["examples"]["examples"]]}
     state = SimpleNamespace(out=tmp_path / "result", sessions=[], calls=[], publications=[],
-                            family="gemma", show=False, fault=None, stage=None,
+                            family="gemma", prompt=prompt, show=False, fault=None, stage=None,
                             cleanup_fault=None, cleanup_report=None, result=None,
                             parity_checks=[check(name, True, True, True)
                                            for name in ("fixture_parity", "parity_process_memory")])
@@ -155,6 +155,8 @@ def completion_case(tmp_path, monkeypatch, steering_case):
         checkpoint("keep_alive")
 
     def run():
+        nonlocal prompt, prior, status, params
+        prompt, prior, status, params = inference_fixture(state.prompt)
         model = {"gemma": tmp_path / "models--google--gemma-2-2b" / "snapshots" / driver.GEMMA_REVISION,
                  "qwen": tmp_path / "models--Qwen--Qwen3.5-0.8B" / "snapshots" / driver.MODEL_REVISION,
                  "fixture": "tiny-lm"}[state.family]
@@ -372,3 +374,15 @@ def test_visible_recovery_interruption_preserves_both_errors(completion_case, mo
     assert result["error"] == "Failure: generation failed" and result["bridge_error"] == "KeyboardInterrupt"
     assert not result["completed"] and not result["passed"] and not result["gemma_acceptance"]
     assert all(s.app_log.closed and s.mcp_closed for s in case.sessions)
+
+
+def test_complete_gemma_custom_prompt_retains_confidence_failure(completion_case):
+    case = completion_case
+    case.prompt = "A neutral custom prompt"
+    assert case.run() == 1
+    result = case.read()
+    assert result["completed"] and result["acceptance_complete"]
+    assert not result["passed"] and not result["gemma_acceptance"]
+    gate = next(gate for gate in result["checks"] if gate["name"] == "prompt_confidence")
+    assert gate["required"] and not gate["passed"]
+    assert gate["measured"]["baseline_probability"] == .5

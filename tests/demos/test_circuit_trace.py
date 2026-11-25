@@ -535,9 +535,8 @@ def test_parity_children_receive_private_temporary_environment(tmp_path, monkeyp
     assert dict(os.environ) == parent
 
 
-def inference_fixture():
+def inference_fixture(prompt="A neutral fixture prompt"):
     from _inference_evidence import text_hash
-    prompt = "A neutral fixture prompt"
     state = {"prompt_hash": text_hash(prompt), "interventions_hash": text_hash("[]")}
     completion = dict(state, id=2, token_ids=[list(range(24)), list(range(24, 48))], counts=[24, 24],
                       completed_step=9, text_hashes=[text_hash("baseline text"), text_hash("steered text")])

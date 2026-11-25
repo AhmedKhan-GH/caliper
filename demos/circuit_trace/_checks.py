@@ -131,6 +131,21 @@ def program_budget_checks(snapshot):
     return checks
 
 
+def prompt_confidence_check(prompt, before, baseline_top_token):
+    """Apply the default-prompt exception to the actual baseline argmax."""
+    rows = [row for row in before if row["token"] == baseline_top_token]
+    if len(rows) != 1:
+        raise Failure("Prompt confidence requires one actual baseline top-token row.")
+    probability = rows[0]["baseline"]
+    if type(probability) not in (int, float) or not math.isfinite(probability) or not 0 <= probability <= 1:
+        raise Failure("Prompt confidence requires a finite baseline probability.")
+    default = prompt == MODEL_PROMPT
+    return check("prompt_confidence", default or probability > 0.5,
+                 {"default_prompt": default, "baseline_top": baseline_top_token,
+                  "baseline_probability": probability},
+                 "default Dallas prompt or actual baseline top-token probability >0.5")
+
+
 def math_checks(graph, examples, before, after, validation, trace_seconds, steering_seconds, *, fixture,
                 argmax_token_ids, predicted_ablation_effect):
     rows = examples["examples"]

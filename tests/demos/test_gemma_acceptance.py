@@ -576,3 +576,28 @@ def test_gemma_partial_rejects_scalar_aliases_in_resource_evidence(fault):
     else:
         quality["per_layer_status"][0] = "error_only"
     assert not dictionary_qualification(response, family="gemma")["qualified"]
+
+
+@pytest.mark.parametrize("prompt,probability,passed", [
+    ("Fact: the capital of the state containing Dallas is", .409498900175, True),
+    ("A custom fact", .40, False), ("A custom fact", .5, False),
+    ("A custom fact", .500001, True),
+])
+def test_prompt_confidence_uses_actual_baseline_and_default_exception(prompt, probability, passed):
+    from _checks import prompt_confidence_check
+    rows = [{"token": 2, "baseline": .99, "probability": .99},
+            {"token": 7, "baseline": probability, "probability": .9}]
+    gate = prompt_confidence_check(prompt, rows, 7)
+    assert gate["required"] and gate["passed"] is passed
+    assert gate["measured"]["baseline_probability"] == probability
+    assert gate["measured"]["baseline_top"] == 7
+
+
+@pytest.mark.parametrize("rows", [[], [{"token": 8, "baseline": .9}],
+    [{"token": 7, "baseline": .9}] * 2,
+    *[[{"token": 7, "baseline": value}] for value in (float("nan"), float("inf"), -0.1, 1.1, True)],
+])
+def test_prompt_confidence_refuses_missing_ambiguous_or_invalid_evidence(rows):
+    from _checks import MODEL_PROMPT, prompt_confidence_check
+    with pytest.raises(Failure, match="Prompt confidence"):
+        prompt_confidence_check(MODEL_PROMPT, rows, 7)

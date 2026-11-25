@@ -567,6 +567,9 @@ def acceptance(session, args, result):
     before = bar_rows(before_reply)
     before_comparison = comparison_evidence(s.events.complete("trace.status"), args.prompt, before)
     baseline_top_token = before_comparison["argmax_token_ids"][0]
+    if result.get("mode") == "gemma":
+        from _checks import prompt_confidence_check
+        result["checks"].append(prompt_confidence_check(args.prompt, before, baseline_top_token))
     # A resource barrier confirms selected-label derivation before the capture.
     labels = s.read("attribution", "labels", minimum_step=before_reply["step"])
     expected_steps = {"attribution": labels["step"], "example_tokens": first_page["step"],

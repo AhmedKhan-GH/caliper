@@ -467,6 +467,8 @@ The fixture prompt is `The red cube is beside a tree.`
 The default model prompt is `Fact: the capital of the state containing Dallas is`.
 The expected answer is `Austin`.
 `--prompt` supplies another prompt within the token limit.
+Gemma acceptance requires a baseline top-token probability above 0.5 for a custom prompt.
+The default Dallas prompt has no confidence threshold.
 
 The Gemma profile selects a 40 GB process limit and refuses `--quality-override`.
 Every control operation uses Caliper MCP, including feature selection, examples, clamps, validation, and window capture.
