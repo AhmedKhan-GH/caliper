@@ -200,7 +200,7 @@ Ordinary indexes retain their compatible policies and limits.
 
 The historical F32 research comparison contains 52,231 source positions and 52,174 metric observations.
 It retains `status="partial"`, `source_budget_complete=false`, and stop reason `signal 2` against a 200,000-position resume budget.
-Founder Decision 8 and Coordinator Decision 10 define this result as separate comparison evidence.
+This F32 result remains separate comparison evidence.
 It cannot qualify the new BF16 artifact or index, and the published profile adds no quality gate.
 The generic `research_v1` protocol retains its sample, identity, context, and per-layer loss checks.
 Qwen CPU protocol paths remain supported, but further Qwen GPU runs, regrading, and acceptance attempts remain shelved.

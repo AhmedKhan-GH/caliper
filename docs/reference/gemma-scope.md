@@ -404,7 +404,7 @@ Its stop reason is `signal 2`.
 These counts do not establish full-budget completion.
 Quality measurements supply comparison evidence, not a numerical release gate.
 
-Under Founder Decision 8 and Coordinator Decision 10, this F32 result remains separate comparison evidence.
+This F32 result remains separate comparison evidence.
 It cannot qualify new BF16 artifact bytes, arithmetic, or an original-coordinate index.
 Published qualification discloses absent or supplied historical quality evidence without a new quality gate.
 

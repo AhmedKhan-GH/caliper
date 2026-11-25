@@ -8,7 +8,8 @@ The app does not wait for a model operation on its frame thread.
 ## Commands
 
 Each command has one MCP tool. Replace the dot with an underscore, as in `feature_examples`.
-Read commands keep the `read` effect. `trace.run` has the `run` effect and uses the existing approval policy.
+Read commands keep the `read` effect.
+`trace.run`, `patch.sweep`, and `trace.validate` have the `run` effect and use the existing approval policy.
 A read-only stream accepts interpretation reads. It refuses trace changes.
 
 | Command | Request Fields | Result Data |
@@ -16,9 +17,11 @@ A read-only stream accepts interpretation reads. It refuses trace changes.
 | `feature.dictionary` | None | Registered dictionary metadata |
 | `feature.show` | `layer`, `feature`, or `node` | Label, count, maximum, promoted tokens, example tokens |
 | `feature.examples` | `layer`, `feature`, or `node`; optional `limit` | Real example windows and tensor bindings |
-| `trace.run` | `prompt`; optional `max_targets`, `max_nodes`, `max_edges` | Trace state, step, duration, counts, diagnostics |
+| `trace.run` | `prompt`; optional `max_targets`, `max_nodes`, `max_edges`, `profile`, `max_n_logits`, `desired_logit_prob`, `node_threshold`, `edge_threshold`, `batch_size`, `update_interval` | Trace state, step, duration, counts, diagnostics |
 | `trace.status` | None | Last trace state and diagnostics |
 | `trace.read` | Optional node and edge offsets and limits | Graph records, counts, diagnostics, next offsets |
+| `patch.sweep` | `clean_prompt`, `corrupted_prompt`, `metric` | Clean and corrupted metrics, recovery grid, tensor binding |
+| `trace.validate` | None | Validation diagnostics for the latest trace and intervention snapshot |
 
 Every command returns `request_id`, `pending`, and `result`.
 When `pending` is true, `result` is null.
@@ -35,7 +38,13 @@ The response keeps full token text and real per-token activations.
 
 A prompt has at most 4,096 UTF-8 bytes and 32 model tokens, including special tokens.
 The tracer refuses excess tokens without truncation.
-The maximum values are 512 feature targets, 512 nodes, and 8,192 edges.
+
+The default `caliper` profile permits at most 512 feature targets, 512 nodes, and 8,192 edges.
+The explicit `circuit_tracer_82996f14` profile permits at most 5,000 feature targets, 8,192 nodes, and 262,144 edges.
+The published Dallas request supplies its limits and trace settings explicitly.
+The [reference graph contract](../reference/gemma-scope.md#reference-graph) lists those settings and their source provenance.
+A reference graph that exceeds the requested node or edge limit is refused without truncation.
+
 A graph page has at most 256 nodes and 256 edges.
 The default page has 128 nodes and 256 edges.
 
@@ -119,7 +128,9 @@ Set `activation_max` from the selected feature maximum, with a positive minimum 
 Use `graph_counts`, `node_i`, `node_f`, `edge_i`, and `edge_f` for the graph inputs.
 Their sources are `live:trace.counts`, `live:trace.node_i`, `live:trace.node_f`, `live:trace.edge_i`, and `live:trace.edge_f`.
 The graph and example strip use the existing pieces and shared state tools.
-The optional graph `label_text` input uses `live:trace.label_text`, with shape `(544, 16)`.
+
+The optional graph `label_text` input uses `live:trace.label_text`.
+Its shape is `(544, 16)` for `caliper` or `(8224, 16)` for `circuit_tracer_82996f14`.
 Rows zero through 31 contain prompt tokens. Row `32 + index` contains the node label.
 The graph exposes at most 34 labels, and the token strip exposes 200 per page.
 
@@ -145,7 +156,8 @@ Smaller panels, more token columns, or more layers can place multiple centers in
 At that limit, raster order determines the pixel ID. Enlarge the panel or zoom to separate the centers before individual selection.
 
 All node records and IDs remain in the published resource.
-The Qwen acceptance capture still requires every visible node ID in its raster buffer.
+Gemma acceptance captures require every visible node ID in the raster buffer.
+Qwen acceptance attempts remain shelved.
 Token, hover, and selected labels retain the existing bounds and overlap checks.
 
 ### Output Bars
