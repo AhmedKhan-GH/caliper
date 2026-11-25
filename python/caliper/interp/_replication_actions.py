@@ -277,6 +277,7 @@ class PublishedCases:
                         captured.clear()
                 if self._model_identity() != identity or not self._model_matches():
                     raise ValueError('published source model changed during preparation')
+                self._model_snapshot.bind_public_identity(self)
             service._check_revision(revision)
         binding = {'protocol': PROTOCOL, 'source_revision': SOURCE_REVISION, 'producer': 'caliper',
                    'model_content_hash': identity[4], 'model_settings': dict(identity[5]),
@@ -295,6 +296,7 @@ class PublishedCases:
         self._identity, self.preparation = identity, binding
         self._handles.append(self.model.register_forward_pre_hook(self._enter_forward, with_kwargs=True))
         self._handles.append(self.model.register_forward_hook(self._exit_forward, always_call=True))
+        self._model_snapshot.register_public_identity()
         return deepcopy(binding)
 
     def _enter_forward(self, module, args, kwargs):

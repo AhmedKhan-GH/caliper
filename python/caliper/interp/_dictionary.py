@@ -35,6 +35,9 @@ _MAX_METADATA_DEPTH = 64
 _HASH_CHUNK_BYTES = 1024 * 1024
 _UNVERIFIED_CPU_BYTES = 64 * 1024 * 1024
 _VERIFIED_MODELS = weakref.WeakKeyDictionary()
+# Neither a model attribute nor a public identity string grants this authority.
+# Values are weak references to snapshots owned by prepared published cases.
+_PUBLISHED_MODELS = weakref.WeakKeyDictionary()
 _VERIFICATION_GUARD = ContextVar("caliper_checkpoint_verification_guard", default=None)
 
 
@@ -202,6 +205,22 @@ def model_identity(model, *, memory_limit_gb=None, memory=None, check=None):
     in fixed-size chunks, including changes through ``.data`` aliases. A device or
     large external model requires ``verify_hf_model`` before it can use a pinned HF dictionary.
     """
+    reference = _PUBLISHED_MODELS.get(model) if isinstance(model, nn.Module) else None
+    snapshot = None if reference is None else reference()
+    if snapshot is not None:
+        try:
+            memory = snapshot.public_memory(memory, memory_limit_gb)
+            public = snapshot.public_identity(model, memory, check)
+        except BaseException:
+            snapshot.reject_public_identity()
+            raise
+        if public is not None:
+            return public
+    return _full_model_identity(model, memory_limit_gb=memory_limit_gb, memory=memory, check=check)
+
+
+def _full_model_identity(model, *, memory_limit_gb=None, memory=None, check=None):
+    """Verify the public identity without a prepared snapshot proof."""
     if memory is not None:
         memory = BudgetMemory(memory, memory.limit / 1e9 if memory_limit_gb is None else memory_limit_gb)
     config = getattr(model, "config", None)
