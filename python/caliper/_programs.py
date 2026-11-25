@@ -1059,7 +1059,9 @@ def inference_pending() -> bool:
             if not changed:
                 continue
             try:
-                _resolve_inputs(p.inputs)
+                # Piece buffers and unbound optional tensors have no producer source.
+                inputs = [(var, src) for var, src in p.inputs if src] if p.kind == "piece" else p.inputs
+                _resolve_inputs(inputs)
             except _Waiting:
                 continue
             except _Refused:
