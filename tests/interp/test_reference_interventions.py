@@ -21,6 +21,9 @@ from .test_intervention_replay import hook_objects
 
 
 class Tokenizer:
+    bos_token_id = 1
+    all_special_ids = [0, 1, 2]
+
     def __call__(self, text, **kwargs):
         ids = [1, 4, 6, 9, 2, 11, 3] if text in ("prompt", "generation") else [1, 3, 11, 2, 9, 6, 4, 7]
         if text == "generation":

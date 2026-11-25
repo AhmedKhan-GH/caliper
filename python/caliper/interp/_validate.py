@@ -96,7 +96,7 @@ def validate_trace(model, tokenizer, dictionary, interventions, graph, *, prompt
     guard = _validation_guard(model, dictionary, interventions, guard, memory_limit_gb)
     if guard is not None:
         guard.check("validation admission")
-    inputs = prompt_inputs(model, tokenizer, prompt)
+    inputs = prompt_inputs(model, tokenizer, prompt, profile=getattr(graph, "settings", {}).get("profile", "caliper"))
     if inputs["input_ids"][0].tolist() != [t["token_id"] for t in graph.tokens]:
         raise ValueError("validation prompt does not match the trace")
     targets = [n for n in graph.nodes if n["kind"] == "logit"]

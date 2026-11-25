@@ -26,11 +26,20 @@ def is_internal_forward():
     return _INTERNAL.get()
 
 
-def prompt_inputs(model, tokenizer, prompt):
-    """Encode one bounded prompt without truncation or a device change."""
+def prompt_inputs(model, tokenizer, prompt, *, profile=None):
+    """Encode one bounded prompt with an explicit or installed reference profile."""
     if not text(prompt, MAX_STRING, empty=False):
         raise ValueError(f"prompt must contain 1 to {MAX_STRING} valid UTF-8 bytes without NUL")
-    encoded = tokenizer(prompt, return_tensors="pt", truncation=False)
+    from ._reference_graph import PROFILE
+    if profile is None:
+        profile = getattr(model, "_caliper_reference_profile", None) or "caliper"
+    if profile == PROFILE:
+        from ._prompt import reference_prompt_inputs
+        encoded = reference_prompt_inputs(model, tokenizer, prompt)
+    elif profile == "caliper":
+        encoded = tokenizer(prompt, return_tensors="pt", truncation=False)
+    else:
+        raise ValueError("unsupported prompt profile")
     ids = encoded["input_ids"]
     if (ids.ndim != 2 or ids.shape[0] != 1 or not 1 <= ids.shape[1] <= 32
             or ids.dtype not in (torch.int32, torch.int64)):

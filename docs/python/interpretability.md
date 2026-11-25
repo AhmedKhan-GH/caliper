@@ -278,6 +278,13 @@ Node and edge ceilings are 8,192 and 262,144.
 An excess causes refusal without truncation of the pruned result.
 The [reference graph contract](../reference/gemma-scope.md#reference-graph) distinguishes published parameters from unpublished reconstruction choices.
 
+Reference prompts disable automatic special tokens and retain any existing special prefix, such as explicit BOS or EOS.
+If the first token is not special, the prompt receives one valid BOS token.
+The 32-token limit includes that prefix, and an attention mask must describe one unpadded prompt.
+Trace, validation, hosted admission, and output use this rule for reference requests.
+Output and patch sources use the installed model profile.
+Ordinary requests retain tokenizer defaults.
+
 The reference objective centers unembedding directions before the final softcap derivative.
 Its projection excludes BOS feature and error sources before influence normalization.
 Separate Caliper diagnostics retain completeness over all sources.
