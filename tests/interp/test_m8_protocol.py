@@ -114,3 +114,20 @@ def test_missing_index_and_model_are_structured_refusals(actual):
         assert service.submit({"version": 1, "method": method, "params": params}, lambda *args: replies.append(args))[0] == "queued"
         service.step()
         assert replies[-1][0] == "error" and replies[-1][2]["code"] == code
+
+
+TRACE_CASES = json.loads((Path(__file__).parents[1] / "fixtures/wire_v3/replication_trace.json").read_text())
+
+
+@pytest.mark.parametrize("case", TRACE_CASES, ids=lambda case: case["name"])
+def test_shared_replication_trace_cases(case):
+    value = case["request"]
+    assert request(value) == case["accepted"]
+    message = wire.Control(1, "interpret", interpretation=value)
+    if case["accepted"]:
+        assert wire.decode(wire.encode(message)).interpretation == value
+    else:
+        with pytest.raises(wire.MessageError):
+            wire.encode(message)
+        with pytest.raises(wire.MessageError):
+            wire.decode(wire.encode_frame(wire.MsgType.CONTROL, message.to_meta()))

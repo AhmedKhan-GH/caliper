@@ -107,13 +107,13 @@ test('Interpretation Integer and Page Bounds', () => {
   const bounds: [string, string, number, number, Record<string, unknown>][] = [
     ['feature.show', 'layer', 0, 4095, { feature: 0 }],
     ['feature.show', 'feature', 0, 2147483647, { layer: 0 }],
-    ['feature.show', 'node', 0, 511, {}],
+    ['feature.show', 'node', 0, 8191, {}],
     ['feature.examples', 'limit', 0, 16, { node: 0 }],
     ['trace.run', 'max_targets', 0, 512, { prompt: 'x' }],
     ['trace.run', 'max_nodes', 1, 512, { prompt: 'x' }],
     ['trace.run', 'max_edges', 0, 8192, { prompt: 'x' }],
-    ['trace.read', 'node_offset', 0, 512, {}], ['trace.read', 'node_limit', 0, 256, {}],
-    ['trace.read', 'edge_offset', 0, 8192, {}], ['trace.read', 'edge_limit', 0, 256, {}],
+    ['trace.read', 'node_offset', 0, 8192, {}], ['trace.read', 'node_limit', 0, 256, {}],
+    ['trace.read', 'edge_offset', 0, 262144, {}], ['trace.read', 'edge_limit', 0, 256, {}],
   ];
   for (const [method, key, low, high, base] of bounds) {
     for (const value of [low, high]) accepts(MSG.control, request(method, { ...base, [key]: value }));
@@ -387,4 +387,28 @@ test('Fresh Interpretation Negative Zero', () => {
   assert.equal(decoded.type, 'control_reply');
   if (decoded.type === 'control_reply') assert.ok(Object.is(decoded.result?.value, -0));
   assert.deepEqual(encode(decoded), frame);
+});
+
+
+test('Shared Replication Trace Contract', () => {
+  const cases = JSON.parse(readFileSync(join(fixtures, 'replication_trace.json'), 'utf8'));
+  for (const item of cases) {
+    const meta = { request_id: 1, op: 'interpret', interpretation: item.request };
+    const message = { type: 'control', ...meta } as Message;
+    const bytes = rawFrame(MSG.control, canonicalJson(meta));
+    if (item.accepted) {
+      assert.deepEqual(plain(decode(encode(message))), message, item.name);
+      assert.deepEqual(plain(decode(bytes)), message, item.name);
+      assert.deepEqual(encode(decode(bytes) as Message), bytes, item.name);
+    } else {
+      assert.throws(() => encode(message), MessageError, item.name);
+      assert.throws(() => decode(bytes), MessageError, item.name);
+    }
+  }
+  for (const key of ['max_n_logits', 'batch_size', 'update_interval']) {
+    for (const value of ['4.0', '4e0', 'true']) {
+      const meta = request('trace.run', { prompt: 'AB', [key]: 'COUNT' });
+      assert.throws(() => decode(rawFrame(MSG.control, canonicalJson(meta).replace('"COUNT"', value))), MessageError);
+    }
+  }
 });

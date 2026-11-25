@@ -18106,7 +18106,7 @@
           },
           "node": {
             "description": "The selected graph row. Supply node or layer and feature.",
-            "maximum": 511,
+            "maximum": 8191,
             "minimum": 0,
             "type": "integer"
           },
@@ -18187,7 +18187,7 @@
           },
           "node": {
             "description": "The selected graph row. Supply node or layer and feature.",
-            "maximum": 511,
+            "maximum": 8191,
             "minimum": 0,
             "type": "integer"
           },
@@ -18247,23 +18247,70 @@
       "args": {
         "additionalProperties": false,
         "properties": {
+          "batch_size": {
+            "default": null,
+            "description": "The logical target batch size, at most 64 for caliper or 512 for the reference profile. Null uses the profile default.",
+            "maximum": 512,
+            "minimum": 1,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "desired_logit_prob": {
+            "default": 0.95,
+            "description": "The cumulative probability target for selected logits.",
+            "maximum": 1,
+            "minimum": 0,
+            "type": "number"
+          },
+          "edge_threshold": {
+            "default": 0.98,
+            "description": "The cumulative edge influence threshold.",
+            "maximum": 1,
+            "minimum": 0,
+            "type": "number"
+          },
           "max_edges": {
-            "description": "The edge cap.",
-            "maximum": 8192,
+            "description": "The edge cap. The caliper limit is 8192. The reference profile limit is 262144.",
+            "maximum": 262144,
             "minimum": 0,
             "type": "integer"
           },
+          "max_n_logits": {
+            "default": 10,
+            "description": "The maximum selected logit count.",
+            "maximum": 10,
+            "minimum": 1,
+            "type": "integer"
+          },
           "max_nodes": {
-            "description": "The node cap.",
-            "maximum": 512,
+            "description": "The node cap. The caliper limit is 512. The reference profile limit is 8192.",
+            "maximum": 8192,
             "minimum": 1,
             "type": "integer"
           },
           "max_targets": {
-            "description": "The feature target cap.",
-            "maximum": 512,
+            "description": "The feature target cap. The caliper limit is 512. The reference profile limit is 5000.",
+            "maximum": 5000,
             "minimum": 0,
             "type": "integer"
+          },
+          "node_threshold": {
+            "default": 0.8,
+            "description": "The cumulative node influence threshold.",
+            "maximum": 1,
+            "minimum": 0,
+            "type": "number"
+          },
+          "profile": {
+            "default": "caliper",
+            "description": "The trace semantics. Reference ceilings require circuit_tracer_82996f14.",
+            "enum": [
+              "caliper",
+              "circuit_tracer_82996f14"
+            ],
+            "type": "string"
           },
           "prompt": {
             "description": "The prompt, at most 4096 UTF-8 bytes and 32 model tokens.",
@@ -18274,6 +18321,13 @@
           "request_id": {
             "description": "Poll a prior request of this command without another model operation.",
             "maximum": 4294967295,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "update_interval": {
+            "default": 4,
+            "description": "The reference selection update interval.",
+            "maximum": 128,
             "minimum": 1,
             "type": "integer"
           }
@@ -18389,7 +18443,7 @@
           },
           "edge_offset": {
             "description": "The first edge.",
-            "maximum": 8192,
+            "maximum": 262144,
             "minimum": 0,
             "type": "integer"
           },
@@ -18401,7 +18455,7 @@
           },
           "node_offset": {
             "description": "The first node.",
-            "maximum": 512,
+            "maximum": 8192,
             "minimum": 0,
             "type": "integer"
           },

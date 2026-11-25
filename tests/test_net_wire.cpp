@@ -1225,3 +1225,27 @@ TEST_CASE("net/wire: legacy set values retain v3.1 round trips") {
         CHECK(std::get<ControlReply>(decoded).value == value);
     }
 }
+
+
+TEST_CASE("net/wire: replication trace requests match the shared codec contract") {
+    const auto cases = read_json(fixtures() / "replication_trace.json");
+    for (const auto& item : cases.items()) {
+        INFO(item.find("name")->as_string());
+        Control request;
+        request.request_id = 1;
+        request.op = "interpret";
+        request.interpretation = *item.find("request");
+        const bool expected = item.find("accepted")->as_bool();
+        std::vector<uint8_t> bytes;
+        CHECK(encode(request, &bytes) == expected);
+        Message message;
+        const auto inbound = frame_of(CALIPER_NET_MSG_CONTROL,
+            "{\"request_id\":1,\"op\":\"interpret\",\"interpretation\":" + request.interpretation.dump() + "}");
+        CHECK(decode_bytes(inbound, &message).ok() == expected);
+        if (expected) {
+            CHECK(std::get<Control>(message).interpretation == request.interpretation);
+            REQUIRE(decode_bytes(bytes, &message).ok());
+            CHECK(std::get<Control>(message).interpretation == request.interpretation);
+        }
+    }
+}

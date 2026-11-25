@@ -255,6 +255,23 @@ CommandOutput interpretation_command(const CommandContext& context, RunControl* 
     }
     if (!request && name == "trace.run" && !params.contains("prompt"))
         return CommandOutput::fail(fail("command.invalid_args", "A trace requires a prompt."));
+    if (!request && name == "trace.run") {
+        const bool reference = params.value("profile", std::string("caliper")) == "circuit_tracer_82996f14";
+        for (const auto* key : {"max_targets", "max_nodes", "max_edges", "max_n_logits", "batch_size", "update_interval"}) {
+            const auto it = params.find(key);
+            if (it == params.end() || (std::string(key) == "batch_size" && it->is_null())) continue;
+            if (!it->is_number_integer())
+                return CommandOutput::fail(fail("command.invalid_args", "Use an integer count.", std::string("args.") + key));
+        }
+        if (!reference) {
+            for (const auto* key : {"max_targets", "max_nodes", "max_edges", "batch_size"}) {
+                const auto it = params.find(key);
+                const auto limit = std::string(key) == "max_edges" ? 8192 : std::string(key) == "batch_size" ? 64 : 512;
+                if (it != params.end() && !it->is_null() && *it > limit)
+                    return CommandOutput::fail(fail("command.invalid_args", "The count exceeds the caliper profile limit.", std::string("args.") + key));
+            }
+        }
+    }
     if (!request && name == "patch.sweep") {
         if (!params.contains("clean_prompt") || !params.contains("corrupted_prompt") || !params.contains("metric"))
             return CommandOutput::fail(fail("command.invalid_args", "A sweep requires both prompts and its metric."));

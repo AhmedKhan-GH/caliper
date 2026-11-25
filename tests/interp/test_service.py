@@ -642,3 +642,35 @@ action.remove()
     result = subprocess.run([sys.executable, "-S", "-c", script, str(source)],
                             text=True, capture_output=True, timeout=15)
     assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_reference_trace_options_reach_tracer_and_result_metadata():
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+    params = {"prompt": "Fact: the capital of the state containing Dallas is",
+              "profile": "circuit_tracer_82996f14", "max_targets": 5000, "max_nodes": 8192,
+              "max_edges": 262144, "max_n_logits": 10, "desired_logit_prob": 0.95,
+              "node_threshold": 0.7, "edge_threshold": 0.9, "batch_size": 512, "update_interval": 4}
+    summary = {"nodes": [], "edges": [], "tokens": [], "settings": params,
+               "counts": {"nodes": 855, "edges": 34801}}
+    graph = SimpleNamespace(read=Mock(return_value=summary))
+    tracer = SimpleNamespace(trace=Mock(return_value=graph), bind_index=Mock())
+    service = InterpretationService(tracer=tracer)
+    replies = []
+    try:
+        assert service.submit({"version": 1, "method": "trace.run", "params": params},
+                              lambda *args: replies.append(args))[0] == "queued"
+        service.step(7)
+        tracer.trace.assert_called_once_with(**params)
+        graph.read.assert_called_once_with(node_limit=0, edge_limit=0)
+        assert replies[-1][0] == "ok", replies
+        assert replies[-1][1]["settings"] == params
+        assert replies[-1][1]["counts"] == summary["counts"]
+        page = {"node_offset": 768, "edge_offset": 32768, "node_limit": 256, "edge_limit": 256}
+        assert service.submit({"version": 1, "method": "trace.read", "params": page},
+                              lambda *args: replies.append(args))[0] == "queued"
+        service.step(8)
+        graph.read.assert_called_with(**page)
+        assert replies[-1][0] == "ok"
+    finally:
+        service.close()

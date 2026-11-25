@@ -379,13 +379,15 @@ const INTERPRET_PARAMS: Record<string, readonly string[]> = {
   'patch.sweep': ['clean_prompt', 'corrupted_prompt', 'metric'],
   'feature.show': ['layer', 'feature', 'node'],
   'feature.examples': ['layer', 'feature', 'node', 'limit'],
-  'trace.run': ['prompt', 'max_targets', 'max_nodes', 'max_edges'],
+  'trace.run': ['prompt', 'max_targets', 'max_nodes', 'max_edges', 'profile', 'max_n_logits',
+    'desired_logit_prob', 'node_threshold', 'edge_threshold', 'batch_size', 'update_interval'],
   'trace.read': ['node_offset', 'node_limit', 'edge_offset', 'edge_limit'],
 };
 const INTERPRET_BOUNDS: Record<string, readonly [number, number]> = {
-  layer: [0, 4095], feature: [0, 2147483647], node: [0, 511], limit: [0, 16],
+  layer: [0, 4095], feature: [0, 2147483647], node: [0, 8191], limit: [0, 16],
   max_targets: [0, 512], max_nodes: [1, 512], max_edges: [0, 8192],
-  node_offset: [0, 512], edge_offset: [0, 8192], node_limit: [0, 256], edge_limit: [0, 256],
+  max_n_logits: [1, 10], update_interval: [1, 128],
+  node_offset: [0, 8192], edge_offset: [0, 262144], node_limit: [0, 256], edge_limit: [0, 256],
 };
 function isInterpretationRequest(v: unknown, source?: unknown): boolean {
   if (!isInterpretationObject(v, source)) return false;
@@ -395,7 +397,11 @@ function isInterpretationRequest(v: unknown, source?: unknown): boolean {
   const params = o.params as Record<string, unknown>;
   if (Object.keys(params).some((k) => !INTERPRET_PARAMS[o.method as string].includes(k))) return false;
   const rawParams = sourceField(source, 'params');
-  for (const [key, [low, high]] of Object.entries(INTERPRET_BOUNDS))
+  if (Object.hasOwn(params, 'profile') && params.profile !== 'caliper' && params.profile !== 'circuit_tracer_82996f14') return false;
+  const bounds = params.profile === 'circuit_tracer_82996f14'
+    ? { ...INTERPRET_BOUNDS, max_targets: [0, 5000], max_nodes: [1, 8192], max_edges: [0, 262144] }
+    : INTERPRET_BOUNDS;
+  for (const [key, [low, high]] of Object.entries(bounds))
     if (Object.hasOwn(params, key) && !interpretationInteger(params[key], sourceField(rawParams, key), low, high)) return false;
   if (o.method === 'feature.show' || o.method === 'feature.examples')
     return ('node' in params && !('layer' in params) && !('feature' in params))
@@ -409,7 +415,14 @@ function isInterpretationRequest(v: unknown, source?: unknown): boolean {
       && ['positive_token', 'negative_token'].every((key) => interpretationInteger(metric[key], sourceField(raw, key), 0, 2147483647))
       && metric.positive_token !== metric.negative_token;
   }
-  return o.method !== 'trace.run' || interpretationText(params.prompt, INTERPRET_LIMITS.maxString, false);
+  if (o.method === 'trace.run') {
+    if (Object.hasOwn(params, 'batch_size') && params.batch_size !== null
+      && !interpretationInteger(params.batch_size, sourceField(rawParams, 'batch_size'), 1, params.profile === 'circuit_tracer_82996f14' ? 512 : 64)) return false;
+    for (const key of ['desired_logit_prob', 'node_threshold', 'edge_threshold'])
+      if (Object.hasOwn(params, key) && (!isFinite(params[key]) || (params[key] as number) < 0 || (params[key] as number) > 1)) return false;
+    return interpretationText(params.prompt, INTERPRET_LIMITS.maxString, false);
+  }
+  return true;
 }
 
 const isAscending = (v: number[]) => v.every((x, i) => i === 0 || v[i - 1] < x);

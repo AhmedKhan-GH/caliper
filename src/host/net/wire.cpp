@@ -624,14 +624,21 @@ bool interpretation_request(const Json& v) {
     else if (m == "patch.sweep") allowed = {"clean_prompt", "corrupted_prompt", "metric"};
     else if (m == "feature.show") allowed = {"layer", "feature", "node"};
     else if (m == "feature.examples") allowed = {"layer", "feature", "node", "limit"};
-    else if (m == "trace.run") allowed = {"prompt", "max_targets", "max_nodes", "max_edges"};
+    else if (m == "trace.run") allowed = {"prompt", "max_targets", "max_nodes", "max_edges", "profile",
+        "max_n_logits", "desired_logit_prob", "node_threshold", "edge_threshold", "batch_size", "update_interval"};
     else if (m == "trace.read") allowed = {"node_offset", "node_limit", "edge_offset", "edge_limit"};
     else return false;
     for (const auto& kv : params->members()) if (!allowed.count(kv.first)) return false;
+    const auto* profile = params->find("profile");
+    if (profile && (!profile->is_string() ||
+        (profile->as_string() != "caliper" && profile->as_string() != "circuit_tracer_82996f14"))) return false;
+    const bool reference = profile && profile->as_string() == "circuit_tracer_82996f14";
     const struct { const char* key; uint64_t low, high; } bounds[] = {
-        {"layer",0,4095}, {"feature",0,2147483647}, {"node",0,511}, {"limit",0,16},
-        {"max_targets",0,512}, {"max_nodes",1,512}, {"max_edges",0,8192},
-        {"node_offset",0,512}, {"edge_offset",0,8192}, {"node_limit",0,256}, {"edge_limit",0,256}};
+        {"layer",0,4095}, {"feature",0,2147483647}, {"node",0,8191}, {"limit",0,16},
+        {"max_targets",0,reference ? 5000u : 512u}, {"max_nodes",1,reference ? 8192u : 512u},
+        {"max_edges",0,reference ? 262144u : 8192u},
+        {"max_n_logits",1,10}, {"update_interval",1,128},
+        {"node_offset",0,8192}, {"edge_offset",0,262144}, {"node_limit",0,256}, {"edge_limit",0,256}};
     for (const auto& b : bounds) if (auto* x = params->find(b.key); x && !int_in(*x,b.low,b.high)) return false;
     if (m == "feature.show" || m == "feature.examples")
         return (params->has("node") && !params->has("layer") && !params->has("feature")) ||
@@ -648,6 +655,10 @@ bool interpretation_request(const Json& v) {
         return positive && negative && int_in(*positive,0,2147483647) && int_in(*negative,0,2147483647) && *positive != *negative;
     }
     if (m == "trace.run") {
+        if (auto* batch = params->find("batch_size"); batch && !batch->is_null() && !int_in(*batch,1,reference ? 512 : 64)) return false;
+        for (const auto* key : {"desired_logit_prob", "node_threshold", "edge_threshold"}) {
+            if (const auto* x = params->find(key); x && (!is_finite(*x) || x->as_double() < 0 || x->as_double() > 1)) return false;
+        }
         auto* prompt = params->find("prompt");
         return prompt && interpretation_text(*prompt,CALIPER_NET_INTERPRET_STRING_MAX,false);
     }

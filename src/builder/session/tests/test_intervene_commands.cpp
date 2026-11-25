@@ -380,3 +380,35 @@ TEST_CASE("interpretation: one approval admits a request and polling cannot subm
     CHECK(err(*session, "trace.run", {{"request_id", id}}, CommandOrigin::mcp) == "command.denied");
     session->set_run_control(nullptr);
 }
+
+
+TEST_CASE("interpretation: reference trace settings reach the transport with legacy limits intact") {
+    auto session = open_session(fresh_dir("reference_trace") + "/workspace");
+    FakeRun run = training();
+    session->set_run_control(&run);
+    const json params{{"prompt", "Fact: the capital of the state containing Dallas is"},
+        {"profile", "circuit_tracer_82996f14"}, {"max_targets", 5000}, {"max_nodes", 8192},
+        {"max_edges", 262144}, {"max_n_logits", 10}, {"desired_logit_prob", 0.95},
+        {"node_threshold", 0.7}, {"edge_threshold", 0.9}, {"batch_size", 512}, {"update_interval", 4}};
+    CHECK(ok(*session, "trace.run", params)["pending"] == true);
+    REQUIRE(run.interpretations.size() == 1);
+    CHECK(run.interpretations.back() == params);
+    for (const auto* profile : {"caliper", ""}) {
+        auto legacy = params;
+        if (*profile) legacy["profile"] = profile; else legacy.erase("profile");
+        CHECK(err(*session, "trace.run", legacy) == "command.invalid_args");
+    }
+    for (const auto* field : {"max_n_logits", "batch_size", "update_interval"}) {
+        auto malformed = params;
+        malformed[field] = 4.0;
+        CHECK(err(*session, "trace.run", malformed) == "command.invalid_args");
+    }
+    auto automatic = params;
+    automatic["batch_size"] = nullptr;
+    CHECK(ok(*session, "trace.run", automatic)["pending"] == true);
+    CHECK(run.interpretations.back() == automatic);
+    CHECK(ok(*session, "trace.read", {{"node_offset", 8192}, {"edge_offset", 262144},
+                                     {"node_limit", 256}, {"edge_limit", 256}})["pending"] == true);
+    CHECK(err(*session, "trace.read", {{"edge_limit", 257}}) == "command.invalid_args");
+    session->set_run_control(nullptr);
+}

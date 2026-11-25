@@ -1,0 +1,1481 @@
+[
+  {
+    "name": "published reference settings",
+    "request": {
+      "version": 1,
+      "method": "trace.run",
+      "params": {
+        "prompt": "Fact: the capital of the state containing Dallas is",
+        "profile": "circuit_tracer_82996f14",
+        "max_targets": 5000,
+        "max_nodes": 8192,
+        "max_edges": 262144,
+        "max_n_logits": 10,
+        "desired_logit_prob": 0.95,
+        "node_threshold": 0.7,
+        "edge_threshold": 0.9,
+        "batch_size": 512,
+        "update_interval": 4
+      }
+    },
+    "accepted": true
+  },
+  {
+    "name": "legacy ceilings",
+    "request": {
+      "version": 1,
+      "method": "trace.run",
+      "params": {
+        "prompt": "AB",
+        "max_targets": 512,
+        "max_nodes": 512,
+        "max_edges": 8192
+      }
+    },
+    "accepted": true
+  },
+  {
+    "name": "explicit default profile",
+    "request": {
+      "version": 1,
+      "method": "trace.run",
+      "params": {
+        "prompt": "AB",
+        "profile": "caliper",
+        "batch_size": null
+      }
+    },
+    "accepted": true
+  },
+  {
+    "name": "reference default batch",
+    "request": {
+      "version": 1,
+      "method": "trace.run",
+      "params": {
+        "prompt": "Fact: the capital of the state containing Dallas is",
+        "profile": "circuit_tracer_82996f14",
+        "max_targets": 5000,
+        "max_nodes": 8192,
+        "max_edges": 262144,
+        "max_n_logits": 10,
+        "desired_logit_prob": 0.95,
+        "node_threshold": 0.7,
+        "edge_threshold": 0.9,
+        "batch_size": null,
+        "update_interval": 4
+      }
+    },
+    "accepted": true
+  },
+  {
+    "name": "reference max_targets overflow",
+    "request": {
+      "version": 1,
+      "method": "trace.run",
+      "params": {
+        "prompt": "Fact: the capital of the state containing Dallas is",
+        "profile": "circuit_tracer_82996f14",
+        "max_targets": 5001,
+        "max_nodes": 8192,
+        "max_edges": 262144,
+        "max_n_logits": 10,
+        "desired_logit_prob": 0.95,
+        "node_threshold": 0.7,
+        "edge_threshold": 0.9,
+        "batch_size": 512,
+        "update_interval": 4
+      }
+    },
+    "accepted": false
+  },
+  {
+    "name": "legacy max_targetsNone",
+    "request": {
+      "version": 1,
+      "method": "trace.run",
+      "params": {
+        "prompt": "AB",
+        "max_targets": 513
+      }
+    },
+    "accepted": false
+  },
+  {
+    "name": "legacy max_targetscaliper",
+    "request": {
+      "version": 1,
+      "method": "trace.run",
+      "params": {
+        "prompt": "AB",
+        "max_targets": 513,
+        "profile": "caliper"
+      }
+    },
+    "accepted": false
+  },
+  {
+    "name": "reference max_nodes overflow",
+    "request": {
+      "version": 1,
+      "method": "trace.run",
+      "params": {
+        "prompt": "Fact: the capital of the state containing Dallas is",
+        "profile": "circuit_tracer_82996f14",
+        "max_targets": 5000,
+        "max_nodes": 8193,
+        "max_edges": 262144,
+        "max_n_logits": 10,
+        "desired_logit_prob": 0.95,
+        "node_threshold": 0.7,
+        "edge_threshold": 0.9,
+        "batch_size": 512,
+        "update_interval": 4
+      }
+    },
+    "accepted": false
+  },
+  {
+    "name": "legacy max_nodesNone",
+    "request": {
+      "version": 1,
+      "method": "trace.run",
+      "params": {
+        "prompt": "AB",
+        "max_nodes": 513
+      }
+    },
+    "accepted": false
+  },
+  {
+    "name": "legacy max_nodescaliper",
+    "request": {
+      "version": 1,
+      "method": "trace.run",
+      "params": {
+        "prompt": "AB",
+        "max_nodes": 513,
+        "profile": "caliper"
+      }
+    },
+    "accepted": false
+  },
+  {
+    "name": "reference max_edges overflow",
+    "request": {
+      "version": 1,
+      "method": "trace.run",
+      "params": {
+        "prompt": "Fact: the capital of the state containing Dallas is",
+        "profile": "circuit_tracer_82996f14",
+        "max_targets": 5000,
+        "max_nodes": 8192,
+        "max_edges": 262145,
+        "max_n_logits": 10,
+        "desired_logit_prob": 0.95,
+        "node_threshold": 0.7,
+        "edge_threshold": 0.9,
+        "batch_size": 512,
+        "update_interval": 4
+      }
+    },
+    "accepted": false
+  },
+  {
+    "name": "legacy max_edgesNone",
+    "request": {
+      "version": 1,
+      "method": "trace.run",
+      "params": {
+        "prompt": "AB",
+        "max_edges": 8193
+      }
+    },
+    "accepted": false
+  },
+  {
+    "name": "legacy max_edgescaliper",
+    "request": {
+      "version": 1,
+      "method": "trace.run",
+      "params": {
+        "prompt": "AB",
+        "max_edges": 8193,
+        "profile": "caliper"
+      }
+    },
+    "accepted": false
+  },
+  {
+    "name": "invalid profile unknown",
+    "request": {
+      "version": 1,
+      "method": "trace.run",
+      "params": {
+        "prompt": "Fact: the capital of the state containing Dallas is",
+        "profile": "unknown",
+        "max_targets": 5000,
+        "max_nodes": 8192,
+        "max_edges": 262144,
+        "max_n_logits": 10,
+        "desired_logit_prob": 0.95,
+        "node_threshold": 0.7,
+        "edge_threshold": 0.9,
+        "batch_size": 512,
+        "update_interval": 4
+      }
+    },
+    "accepted": false
+  },
+  {
+    "name": "invalid profile ",
+    "request": {
+      "version": 1,
+      "method": "trace.run",
+      "params": {
+        "prompt": "Fact: the capital of the state containing Dallas is",
+        "profile": "",
+        "max_targets": 5000,
+        "max_nodes": 8192,
+        "max_edges": 262144,
+        "max_n_logits": 10,
+        "desired_logit_prob": 0.95,
+        "node_threshold": 0.7,
+        "edge_threshold": 0.9,
+        "batch_size": 512,
+        "update_interval": 4
+      }
+    },
+    "accepted": false
+  },
+  {
+    "name": "invalid profile None",
+    "request": {
+      "version": 1,
+      "method": "trace.run",
+      "params": {
+        "prompt": "Fact: the capital of the state containing Dallas is",
+        "profile": null,
+        "max_targets": 5000,
+        "max_nodes": 8192,
+        "max_edges": 262144,
+        "max_n_logits": 10,
+        "desired_logit_prob": 0.95,
+        "node_threshold": 0.7,
+        "edge_threshold": 0.9,
+        "batch_size": 512,
+        "update_interval": 4
+      }
+    },
+    "accepted": false
+  },
+  {
+    "name": "invalid profile True",
+    "request": {
+      "version": 1,
+      "method": "trace.run",
+      "params": {
+        "prompt": "Fact: the capital of the state containing Dallas is",
+        "profile": true,
+        "max_targets": 5000,
+        "max_nodes": 8192,
+        "max_edges": 262144,
+        "max_n_logits": 10,
+        "desired_logit_prob": 0.95,
+        "node_threshold": 0.7,
+        "edge_threshold": 0.9,
+        "batch_size": 512,
+        "update_interval": 4
+      }
+    },
+    "accepted": false
+  },
+  {
+    "name": "invalid profile {}",
+    "request": {
+      "version": 1,
+      "method": "trace.run",
+      "params": {
+        "prompt": "Fact: the capital of the state containing Dallas is",
+        "profile": {},
+        "max_targets": 5000,
+        "max_nodes": 8192,
+        "max_edges": 262144,
+        "max_n_logits": 10,
+        "desired_logit_prob": 0.95,
+        "node_threshold": 0.7,
+        "edge_threshold": 0.9,
+        "batch_size": 512,
+        "update_interval": 4
+      }
+    },
+    "accepted": false
+  },
+  {
+    "name": "invalid profile []",
+    "request": {
+      "version": 1,
+      "method": "trace.run",
+      "params": {
+        "prompt": "Fact: the capital of the state containing Dallas is",
+        "profile": [],
+        "max_targets": 5000,
+        "max_nodes": 8192,
+        "max_edges": 262144,
+        "max_n_logits": 10,
+        "desired_logit_prob": 0.95,
+        "node_threshold": 0.7,
+        "edge_threshold": 0.9,
+        "batch_size": 512,
+        "update_interval": 4
+      }
+    },
+    "accepted": false
+  },
+  {
+    "name": "max_n_logits invalid 0",
+    "request": {
+      "version": 1,
+      "method": "trace.run",
+      "params": {
+        "prompt": "Fact: the capital of the state containing Dallas is",
+        "profile": "circuit_tracer_82996f14",
+        "max_targets": 5000,
+        "max_nodes": 8192,
+        "max_edges": 262144,
+        "max_n_logits": 0,
+        "desired_logit_prob": 0.95,
+        "node_threshold": 0.7,
+        "edge_threshold": 0.9,
+        "batch_size": 512,
+        "update_interval": 4
+      }
+    },
+    "accepted": false
+  },
+  {
+    "name": "max_n_logits invalid -1",
+    "request": {
+      "version": 1,
+      "method": "trace.run",
+      "params": {
+        "prompt": "Fact: the capital of the state containing Dallas is",
+        "profile": "circuit_tracer_82996f14",
+        "max_targets": 5000,
+        "max_nodes": 8192,
+        "max_edges": 262144,
+        "max_n_logits": -1,
+        "desired_logit_prob": 0.95,
+        "node_threshold": 0.7,
+        "edge_threshold": 0.9,
+        "batch_size": 512,
+        "update_interval": 4
+      }
+    },
+    "accepted": false
+  },
+  {
+    "name": "max_n_logits invalid True",
+    "request": {
+      "version": 1,
+      "method": "trace.run",
+      "params": {
+        "prompt": "Fact: the capital of the state containing Dallas is",
+        "profile": "circuit_tracer_82996f14",
+        "max_targets": 5000,
+        "max_nodes": 8192,
+        "max_edges": 262144,
+        "max_n_logits": true,
+        "desired_logit_prob": 0.95,
+        "node_threshold": 0.7,
+        "edge_threshold": 0.9,
+        "batch_size": 512,
+        "update_interval": 4
+      }
+    },
+    "accepted": false
+  },
+  {
+    "name": "max_n_logits invalid 4",
+    "request": {
+      "version": 1,
+      "method": "trace.run",
+      "params": {
+        "prompt": "Fact: the capital of the state containing Dallas is",
+        "profile": "circuit_tracer_82996f14",
+        "max_targets": 5000,
+        "max_nodes": 8192,
+        "max_edges": 262144,
+        "max_n_logits": "4",
+        "desired_logit_prob": 0.95,
+        "node_threshold": 0.7,
+        "edge_threshold": 0.9,
+        "batch_size": 512,
+        "update_interval": 4
+      }
+    },
+    "accepted": false
+  },
+  {
+    "name": "max_n_logits invalid 0.5",
+    "request": {
+      "version": 1,
+      "method": "trace.run",
+      "params": {
+        "prompt": "Fact: the capital of the state containing Dallas is",
+        "profile": "circuit_tracer_82996f14",
+        "max_targets": 5000,
+        "max_nodes": 8192,
+        "max_edges": 262144,
+        "max_n_logits": 0.5,
+        "desired_logit_prob": 0.95,
+        "node_threshold": 0.7,
+        "edge_threshold": 0.9,
+        "batch_size": 512,
+        "update_interval": 4
+      }
+    },
+    "accepted": false
+  },
+  {
+    "name": "max_n_logits invalid 2147483648",
+    "request": {
+      "version": 1,
+      "method": "trace.run",
+      "params": {
+        "prompt": "Fact: the capital of the state containing Dallas is",
+        "profile": "circuit_tracer_82996f14",
+        "max_targets": 5000,
+        "max_nodes": 8192,
+        "max_edges": 262144,
+        "max_n_logits": 2147483648,
+        "desired_logit_prob": 0.95,
+        "node_threshold": 0.7,
+        "edge_threshold": 0.9,
+        "batch_size": 512,
+        "update_interval": 4
+      }
+    },
+    "accepted": false
+  },
+  {
+    "name": "max_n_logits minimum",
+    "request": {
+      "version": 1,
+      "method": "trace.run",
+      "params": {
+        "prompt": "Fact: the capital of the state containing Dallas is",
+        "profile": "circuit_tracer_82996f14",
+        "max_targets": 5000,
+        "max_nodes": 8192,
+        "max_edges": 262144,
+        "max_n_logits": 1,
+        "desired_logit_prob": 0.95,
+        "node_threshold": 0.7,
+        "edge_threshold": 0.9,
+        "batch_size": 512,
+        "update_interval": 4
+      }
+    },
+    "accepted": true
+  },
+  {
+    "name": "batch_size invalid 0",
+    "request": {
+      "version": 1,
+      "method": "trace.run",
+      "params": {
+        "prompt": "Fact: the capital of the state containing Dallas is",
+        "profile": "circuit_tracer_82996f14",
+        "max_targets": 5000,
+        "max_nodes": 8192,
+        "max_edges": 262144,
+        "max_n_logits": 10,
+        "desired_logit_prob": 0.95,
+        "node_threshold": 0.7,
+        "edge_threshold": 0.9,
+        "batch_size": 0,
+        "update_interval": 4
+      }
+    },
+    "accepted": false
+  },
+  {
+    "name": "batch_size invalid -1",
+    "request": {
+      "version": 1,
+      "method": "trace.run",
+      "params": {
+        "prompt": "Fact: the capital of the state containing Dallas is",
+        "profile": "circuit_tracer_82996f14",
+        "max_targets": 5000,
+        "max_nodes": 8192,
+        "max_edges": 262144,
+        "max_n_logits": 10,
+        "desired_logit_prob": 0.95,
+        "node_threshold": 0.7,
+        "edge_threshold": 0.9,
+        "batch_size": -1,
+        "update_interval": 4
+      }
+    },
+    "accepted": false
+  },
+  {
+    "name": "batch_size invalid True",
+    "request": {
+      "version": 1,
+      "method": "trace.run",
+      "params": {
+        "prompt": "Fact: the capital of the state containing Dallas is",
+        "profile": "circuit_tracer_82996f14",
+        "max_targets": 5000,
+        "max_nodes": 8192,
+        "max_edges": 262144,
+        "max_n_logits": 10,
+        "desired_logit_prob": 0.95,
+        "node_threshold": 0.7,
+        "edge_threshold": 0.9,
+        "batch_size": true,
+        "update_interval": 4
+      }
+    },
+    "accepted": false
+  },
+  {
+    "name": "batch_size invalid 4",
+    "request": {
+      "version": 1,
+      "method": "trace.run",
+      "params": {
+        "prompt": "Fact: the capital of the state containing Dallas is",
+        "profile": "circuit_tracer_82996f14",
+        "max_targets": 5000,
+        "max_nodes": 8192,
+        "max_edges": 262144,
+        "max_n_logits": 10,
+        "desired_logit_prob": 0.95,
+        "node_threshold": 0.7,
+        "edge_threshold": 0.9,
+        "batch_size": "4",
+        "update_interval": 4
+      }
+    },
+    "accepted": false
+  },
+  {
+    "name": "batch_size invalid 0.5",
+    "request": {
+      "version": 1,
+      "method": "trace.run",
+      "params": {
+        "prompt": "Fact: the capital of the state containing Dallas is",
+        "profile": "circuit_tracer_82996f14",
+        "max_targets": 5000,
+        "max_nodes": 8192,
+        "max_edges": 262144,
+        "max_n_logits": 10,
+        "desired_logit_prob": 0.95,
+        "node_threshold": 0.7,
+        "edge_threshold": 0.9,
+        "batch_size": 0.5,
+        "update_interval": 4
+      }
+    },
+    "accepted": false
+  },
+  {
+    "name": "batch_size invalid 2147483648",
+    "request": {
+      "version": 1,
+      "method": "trace.run",
+      "params": {
+        "prompt": "Fact: the capital of the state containing Dallas is",
+        "profile": "circuit_tracer_82996f14",
+        "max_targets": 5000,
+        "max_nodes": 8192,
+        "max_edges": 262144,
+        "max_n_logits": 10,
+        "desired_logit_prob": 0.95,
+        "node_threshold": 0.7,
+        "edge_threshold": 0.9,
+        "batch_size": 2147483648,
+        "update_interval": 4
+      }
+    },
+    "accepted": false
+  },
+  {
+    "name": "batch_size minimum",
+    "request": {
+      "version": 1,
+      "method": "trace.run",
+      "params": {
+        "prompt": "Fact: the capital of the state containing Dallas is",
+        "profile": "circuit_tracer_82996f14",
+        "max_targets": 5000,
+        "max_nodes": 8192,
+        "max_edges": 262144,
+        "max_n_logits": 10,
+        "desired_logit_prob": 0.95,
+        "node_threshold": 0.7,
+        "edge_threshold": 0.9,
+        "batch_size": 1,
+        "update_interval": 4
+      }
+    },
+    "accepted": true
+  },
+  {
+    "name": "update_interval invalid 0",
+    "request": {
+      "version": 1,
+      "method": "trace.run",
+      "params": {
+        "prompt": "Fact: the capital of the state containing Dallas is",
+        "profile": "circuit_tracer_82996f14",
+        "max_targets": 5000,
+        "max_nodes": 8192,
+        "max_edges": 262144,
+        "max_n_logits": 10,
+        "desired_logit_prob": 0.95,
+        "node_threshold": 0.7,
+        "edge_threshold": 0.9,
+        "batch_size": 512,
+        "update_interval": 0
+      }
+    },
+    "accepted": false
+  },
+  {
+    "name": "update_interval invalid -1",
+    "request": {
+      "version": 1,
+      "method": "trace.run",
+      "params": {
+        "prompt": "Fact: the capital of the state containing Dallas is",
+        "profile": "circuit_tracer_82996f14",
+        "max_targets": 5000,
+        "max_nodes": 8192,
+        "max_edges": 262144,
+        "max_n_logits": 10,
+        "desired_logit_prob": 0.95,
+        "node_threshold": 0.7,
+        "edge_threshold": 0.9,
+        "batch_size": 512,
+        "update_interval": -1
+      }
+    },
+    "accepted": false
+  },
+  {
+    "name": "update_interval invalid True",
+    "request": {
+      "version": 1,
+      "method": "trace.run",
+      "params": {
+        "prompt": "Fact: the capital of the state containing Dallas is",
+        "profile": "circuit_tracer_82996f14",
+        "max_targets": 5000,
+        "max_nodes": 8192,
+        "max_edges": 262144,
+        "max_n_logits": 10,
+        "desired_logit_prob": 0.95,
+        "node_threshold": 0.7,
+        "edge_threshold": 0.9,
+        "batch_size": 512,
+        "update_interval": true
+      }
+    },
+    "accepted": false
+  },
+  {
+    "name": "update_interval invalid 4",
+    "request": {
+      "version": 1,
+      "method": "trace.run",
+      "params": {
+        "prompt": "Fact: the capital of the state containing Dallas is",
+        "profile": "circuit_tracer_82996f14",
+        "max_targets": 5000,
+        "max_nodes": 8192,
+        "max_edges": 262144,
+        "max_n_logits": 10,
+        "desired_logit_prob": 0.95,
+        "node_threshold": 0.7,
+        "edge_threshold": 0.9,
+        "batch_size": 512,
+        "update_interval": "4"
+      }
+    },
+    "accepted": false
+  },
+  {
+    "name": "update_interval invalid 0.5",
+    "request": {
+      "version": 1,
+      "method": "trace.run",
+      "params": {
+        "prompt": "Fact: the capital of the state containing Dallas is",
+        "profile": "circuit_tracer_82996f14",
+        "max_targets": 5000,
+        "max_nodes": 8192,
+        "max_edges": 262144,
+        "max_n_logits": 10,
+        "desired_logit_prob": 0.95,
+        "node_threshold": 0.7,
+        "edge_threshold": 0.9,
+        "batch_size": 512,
+        "update_interval": 0.5
+      }
+    },
+    "accepted": false
+  },
+  {
+    "name": "update_interval invalid 2147483648",
+    "request": {
+      "version": 1,
+      "method": "trace.run",
+      "params": {
+        "prompt": "Fact: the capital of the state containing Dallas is",
+        "profile": "circuit_tracer_82996f14",
+        "max_targets": 5000,
+        "max_nodes": 8192,
+        "max_edges": 262144,
+        "max_n_logits": 10,
+        "desired_logit_prob": 0.95,
+        "node_threshold": 0.7,
+        "edge_threshold": 0.9,
+        "batch_size": 512,
+        "update_interval": 2147483648
+      }
+    },
+    "accepted": false
+  },
+  {
+    "name": "update_interval minimum",
+    "request": {
+      "version": 1,
+      "method": "trace.run",
+      "params": {
+        "prompt": "Fact: the capital of the state containing Dallas is",
+        "profile": "circuit_tracer_82996f14",
+        "max_targets": 5000,
+        "max_nodes": 8192,
+        "max_edges": 262144,
+        "max_n_logits": 10,
+        "desired_logit_prob": 0.95,
+        "node_threshold": 0.7,
+        "edge_threshold": 0.9,
+        "batch_size": 512,
+        "update_interval": 1
+      }
+    },
+    "accepted": true
+  },
+  {
+    "name": "desired_logit_prob endpoint 0",
+    "request": {
+      "version": 1,
+      "method": "trace.run",
+      "params": {
+        "prompt": "Fact: the capital of the state containing Dallas is",
+        "profile": "circuit_tracer_82996f14",
+        "max_targets": 5000,
+        "max_nodes": 8192,
+        "max_edges": 262144,
+        "max_n_logits": 10,
+        "desired_logit_prob": 0,
+        "node_threshold": 0.7,
+        "edge_threshold": 0.9,
+        "batch_size": 512,
+        "update_interval": 4
+      }
+    },
+    "accepted": true
+  },
+  {
+    "name": "desired_logit_prob endpoint 1",
+    "request": {
+      "version": 1,
+      "method": "trace.run",
+      "params": {
+        "prompt": "Fact: the capital of the state containing Dallas is",
+        "profile": "circuit_tracer_82996f14",
+        "max_targets": 5000,
+        "max_nodes": 8192,
+        "max_edges": 262144,
+        "max_n_logits": 10,
+        "desired_logit_prob": 1,
+        "node_threshold": 0.7,
+        "edge_threshold": 0.9,
+        "batch_size": 512,
+        "update_interval": 4
+      }
+    },
+    "accepted": true
+  },
+  {
+    "name": "desired_logit_prob invalid -0.01",
+    "request": {
+      "version": 1,
+      "method": "trace.run",
+      "params": {
+        "prompt": "Fact: the capital of the state containing Dallas is",
+        "profile": "circuit_tracer_82996f14",
+        "max_targets": 5000,
+        "max_nodes": 8192,
+        "max_edges": 262144,
+        "max_n_logits": 10,
+        "desired_logit_prob": -0.01,
+        "node_threshold": 0.7,
+        "edge_threshold": 0.9,
+        "batch_size": 512,
+        "update_interval": 4
+      }
+    },
+    "accepted": false
+  },
+  {
+    "name": "desired_logit_prob invalid 1.01",
+    "request": {
+      "version": 1,
+      "method": "trace.run",
+      "params": {
+        "prompt": "Fact: the capital of the state containing Dallas is",
+        "profile": "circuit_tracer_82996f14",
+        "max_targets": 5000,
+        "max_nodes": 8192,
+        "max_edges": 262144,
+        "max_n_logits": 10,
+        "desired_logit_prob": 1.01,
+        "node_threshold": 0.7,
+        "edge_threshold": 0.9,
+        "batch_size": 512,
+        "update_interval": 4
+      }
+    },
+    "accepted": false
+  },
+  {
+    "name": "desired_logit_prob invalid True",
+    "request": {
+      "version": 1,
+      "method": "trace.run",
+      "params": {
+        "prompt": "Fact: the capital of the state containing Dallas is",
+        "profile": "circuit_tracer_82996f14",
+        "max_targets": 5000,
+        "max_nodes": 8192,
+        "max_edges": 262144,
+        "max_n_logits": 10,
+        "desired_logit_prob": true,
+        "node_threshold": 0.7,
+        "edge_threshold": 0.9,
+        "batch_size": 512,
+        "update_interval": 4
+      }
+    },
+    "accepted": false
+  },
+  {
+    "name": "desired_logit_prob invalid None",
+    "request": {
+      "version": 1,
+      "method": "trace.run",
+      "params": {
+        "prompt": "Fact: the capital of the state containing Dallas is",
+        "profile": "circuit_tracer_82996f14",
+        "max_targets": 5000,
+        "max_nodes": 8192,
+        "max_edges": 262144,
+        "max_n_logits": 10,
+        "desired_logit_prob": null,
+        "node_threshold": 0.7,
+        "edge_threshold": 0.9,
+        "batch_size": 512,
+        "update_interval": 4
+      }
+    },
+    "accepted": false
+  },
+  {
+    "name": "desired_logit_prob invalid 0.7",
+    "request": {
+      "version": 1,
+      "method": "trace.run",
+      "params": {
+        "prompt": "Fact: the capital of the state containing Dallas is",
+        "profile": "circuit_tracer_82996f14",
+        "max_targets": 5000,
+        "max_nodes": 8192,
+        "max_edges": 262144,
+        "max_n_logits": 10,
+        "desired_logit_prob": "0.7",
+        "node_threshold": 0.7,
+        "edge_threshold": 0.9,
+        "batch_size": 512,
+        "update_interval": 4
+      }
+    },
+    "accepted": false
+  },
+  {
+    "name": "node_threshold endpoint 0",
+    "request": {
+      "version": 1,
+      "method": "trace.run",
+      "params": {
+        "prompt": "Fact: the capital of the state containing Dallas is",
+        "profile": "circuit_tracer_82996f14",
+        "max_targets": 5000,
+        "max_nodes": 8192,
+        "max_edges": 262144,
+        "max_n_logits": 10,
+        "desired_logit_prob": 0.95,
+        "node_threshold": 0,
+        "edge_threshold": 0.9,
+        "batch_size": 512,
+        "update_interval": 4
+      }
+    },
+    "accepted": true
+  },
+  {
+    "name": "node_threshold endpoint 1",
+    "request": {
+      "version": 1,
+      "method": "trace.run",
+      "params": {
+        "prompt": "Fact: the capital of the state containing Dallas is",
+        "profile": "circuit_tracer_82996f14",
+        "max_targets": 5000,
+        "max_nodes": 8192,
+        "max_edges": 262144,
+        "max_n_logits": 10,
+        "desired_logit_prob": 0.95,
+        "node_threshold": 1,
+        "edge_threshold": 0.9,
+        "batch_size": 512,
+        "update_interval": 4
+      }
+    },
+    "accepted": true
+  },
+  {
+    "name": "node_threshold invalid -0.01",
+    "request": {
+      "version": 1,
+      "method": "trace.run",
+      "params": {
+        "prompt": "Fact: the capital of the state containing Dallas is",
+        "profile": "circuit_tracer_82996f14",
+        "max_targets": 5000,
+        "max_nodes": 8192,
+        "max_edges": 262144,
+        "max_n_logits": 10,
+        "desired_logit_prob": 0.95,
+        "node_threshold": -0.01,
+        "edge_threshold": 0.9,
+        "batch_size": 512,
+        "update_interval": 4
+      }
+    },
+    "accepted": false
+  },
+  {
+    "name": "node_threshold invalid 1.01",
+    "request": {
+      "version": 1,
+      "method": "trace.run",
+      "params": {
+        "prompt": "Fact: the capital of the state containing Dallas is",
+        "profile": "circuit_tracer_82996f14",
+        "max_targets": 5000,
+        "max_nodes": 8192,
+        "max_edges": 262144,
+        "max_n_logits": 10,
+        "desired_logit_prob": 0.95,
+        "node_threshold": 1.01,
+        "edge_threshold": 0.9,
+        "batch_size": 512,
+        "update_interval": 4
+      }
+    },
+    "accepted": false
+  },
+  {
+    "name": "node_threshold invalid True",
+    "request": {
+      "version": 1,
+      "method": "trace.run",
+      "params": {
+        "prompt": "Fact: the capital of the state containing Dallas is",
+        "profile": "circuit_tracer_82996f14",
+        "max_targets": 5000,
+        "max_nodes": 8192,
+        "max_edges": 262144,
+        "max_n_logits": 10,
+        "desired_logit_prob": 0.95,
+        "node_threshold": true,
+        "edge_threshold": 0.9,
+        "batch_size": 512,
+        "update_interval": 4
+      }
+    },
+    "accepted": false
+  },
+  {
+    "name": "node_threshold invalid None",
+    "request": {
+      "version": 1,
+      "method": "trace.run",
+      "params": {
+        "prompt": "Fact: the capital of the state containing Dallas is",
+        "profile": "circuit_tracer_82996f14",
+        "max_targets": 5000,
+        "max_nodes": 8192,
+        "max_edges": 262144,
+        "max_n_logits": 10,
+        "desired_logit_prob": 0.95,
+        "node_threshold": null,
+        "edge_threshold": 0.9,
+        "batch_size": 512,
+        "update_interval": 4
+      }
+    },
+    "accepted": false
+  },
+  {
+    "name": "node_threshold invalid 0.7",
+    "request": {
+      "version": 1,
+      "method": "trace.run",
+      "params": {
+        "prompt": "Fact: the capital of the state containing Dallas is",
+        "profile": "circuit_tracer_82996f14",
+        "max_targets": 5000,
+        "max_nodes": 8192,
+        "max_edges": 262144,
+        "max_n_logits": 10,
+        "desired_logit_prob": 0.95,
+        "node_threshold": "0.7",
+        "edge_threshold": 0.9,
+        "batch_size": 512,
+        "update_interval": 4
+      }
+    },
+    "accepted": false
+  },
+  {
+    "name": "edge_threshold endpoint 0",
+    "request": {
+      "version": 1,
+      "method": "trace.run",
+      "params": {
+        "prompt": "Fact: the capital of the state containing Dallas is",
+        "profile": "circuit_tracer_82996f14",
+        "max_targets": 5000,
+        "max_nodes": 8192,
+        "max_edges": 262144,
+        "max_n_logits": 10,
+        "desired_logit_prob": 0.95,
+        "node_threshold": 0.7,
+        "edge_threshold": 0,
+        "batch_size": 512,
+        "update_interval": 4
+      }
+    },
+    "accepted": true
+  },
+  {
+    "name": "edge_threshold endpoint 1",
+    "request": {
+      "version": 1,
+      "method": "trace.run",
+      "params": {
+        "prompt": "Fact: the capital of the state containing Dallas is",
+        "profile": "circuit_tracer_82996f14",
+        "max_targets": 5000,
+        "max_nodes": 8192,
+        "max_edges": 262144,
+        "max_n_logits": 10,
+        "desired_logit_prob": 0.95,
+        "node_threshold": 0.7,
+        "edge_threshold": 1,
+        "batch_size": 512,
+        "update_interval": 4
+      }
+    },
+    "accepted": true
+  },
+  {
+    "name": "edge_threshold invalid -0.01",
+    "request": {
+      "version": 1,
+      "method": "trace.run",
+      "params": {
+        "prompt": "Fact: the capital of the state containing Dallas is",
+        "profile": "circuit_tracer_82996f14",
+        "max_targets": 5000,
+        "max_nodes": 8192,
+        "max_edges": 262144,
+        "max_n_logits": 10,
+        "desired_logit_prob": 0.95,
+        "node_threshold": 0.7,
+        "edge_threshold": -0.01,
+        "batch_size": 512,
+        "update_interval": 4
+      }
+    },
+    "accepted": false
+  },
+  {
+    "name": "edge_threshold invalid 1.01",
+    "request": {
+      "version": 1,
+      "method": "trace.run",
+      "params": {
+        "prompt": "Fact: the capital of the state containing Dallas is",
+        "profile": "circuit_tracer_82996f14",
+        "max_targets": 5000,
+        "max_nodes": 8192,
+        "max_edges": 262144,
+        "max_n_logits": 10,
+        "desired_logit_prob": 0.95,
+        "node_threshold": 0.7,
+        "edge_threshold": 1.01,
+        "batch_size": 512,
+        "update_interval": 4
+      }
+    },
+    "accepted": false
+  },
+  {
+    "name": "edge_threshold invalid True",
+    "request": {
+      "version": 1,
+      "method": "trace.run",
+      "params": {
+        "prompt": "Fact: the capital of the state containing Dallas is",
+        "profile": "circuit_tracer_82996f14",
+        "max_targets": 5000,
+        "max_nodes": 8192,
+        "max_edges": 262144,
+        "max_n_logits": 10,
+        "desired_logit_prob": 0.95,
+        "node_threshold": 0.7,
+        "edge_threshold": true,
+        "batch_size": 512,
+        "update_interval": 4
+      }
+    },
+    "accepted": false
+  },
+  {
+    "name": "edge_threshold invalid None",
+    "request": {
+      "version": 1,
+      "method": "trace.run",
+      "params": {
+        "prompt": "Fact: the capital of the state containing Dallas is",
+        "profile": "circuit_tracer_82996f14",
+        "max_targets": 5000,
+        "max_nodes": 8192,
+        "max_edges": 262144,
+        "max_n_logits": 10,
+        "desired_logit_prob": 0.95,
+        "node_threshold": 0.7,
+        "edge_threshold": null,
+        "batch_size": 512,
+        "update_interval": 4
+      }
+    },
+    "accepted": false
+  },
+  {
+    "name": "edge_threshold invalid 0.7",
+    "request": {
+      "version": 1,
+      "method": "trace.run",
+      "params": {
+        "prompt": "Fact: the capital of the state containing Dallas is",
+        "profile": "circuit_tracer_82996f14",
+        "max_targets": 5000,
+        "max_nodes": 8192,
+        "max_edges": 262144,
+        "max_n_logits": 10,
+        "desired_logit_prob": 0.95,
+        "node_threshold": 0.7,
+        "edge_threshold": "0.7",
+        "batch_size": 512,
+        "update_interval": 4
+      }
+    },
+    "accepted": false
+  },
+  {
+    "name": "unknown option",
+    "request": {
+      "version": 1,
+      "method": "trace.run",
+      "params": {
+        "prompt": "Fact: the capital of the state containing Dallas is",
+        "profile": "circuit_tracer_82996f14",
+        "max_targets": 5000,
+        "max_nodes": 8192,
+        "max_edges": 262144,
+        "max_n_logits": 10,
+        "desired_logit_prob": 0.95,
+        "node_threshold": 0.7,
+        "edge_threshold": 0.9,
+        "batch_size": 512,
+        "update_interval": 4,
+        "extra": true
+      }
+    },
+    "accepted": false
+  },
+  {
+    "name": "full graph page",
+    "request": {
+      "version": 1,
+      "method": "trace.read",
+      "params": {
+        "node_offset": 8192,
+        "edge_offset": 262144,
+        "node_limit": 256,
+        "edge_limit": 256
+      }
+    },
+    "accepted": true
+  },
+  {
+    "name": "node_offset overflow",
+    "request": {
+      "version": 1,
+      "method": "trace.read",
+      "params": {
+        "node_offset": 8193
+      }
+    },
+    "accepted": false
+  },
+  {
+    "name": "edge_offset overflow",
+    "request": {
+      "version": 1,
+      "method": "trace.read",
+      "params": {
+        "edge_offset": 262145
+      }
+    },
+    "accepted": false
+  },
+  {
+    "name": "node_limit overflow",
+    "request": {
+      "version": 1,
+      "method": "trace.read",
+      "params": {
+        "node_limit": 257
+      }
+    },
+    "accepted": false
+  },
+  {
+    "name": "edge_limit overflow",
+    "request": {
+      "version": 1,
+      "method": "trace.read",
+      "params": {
+        "edge_limit": 257
+      }
+    },
+    "accepted": false
+  },
+  {
+    "name": "full graph feature",
+    "request": {
+      "version": 1,
+      "method": "feature.show",
+      "params": {
+        "node": 8191
+      }
+    },
+    "accepted": true
+  },
+  {
+    "name": "full graph examples",
+    "request": {
+      "version": 1,
+      "method": "feature.examples",
+      "params": {
+        "node": 8191,
+        "limit": 16
+      }
+    },
+    "accepted": true
+  },
+  {
+    "name": "feature row overflow",
+    "request": {
+      "version": 1,
+      "method": "feature.show",
+      "params": {
+        "node": 8192
+      }
+    },
+    "accepted": false
+  },
+  {
+    "name": "max_n_logits bound 10",
+    "request": {
+      "version": 1,
+      "method": "trace.run",
+      "params": {
+        "prompt": "Fact: the capital of the state containing Dallas is",
+        "profile": "circuit_tracer_82996f14",
+        "max_targets": 5000,
+        "max_nodes": 8192,
+        "max_edges": 262144,
+        "max_n_logits": 10,
+        "desired_logit_prob": 0.95,
+        "node_threshold": 0.7,
+        "edge_threshold": 0.9,
+        "batch_size": 512,
+        "update_interval": 4
+      }
+    },
+    "accepted": true
+  },
+  {
+    "name": "max_n_logits bound 11",
+    "request": {
+      "version": 1,
+      "method": "trace.run",
+      "params": {
+        "prompt": "Fact: the capital of the state containing Dallas is",
+        "profile": "circuit_tracer_82996f14",
+        "max_targets": 5000,
+        "max_nodes": 8192,
+        "max_edges": 262144,
+        "max_n_logits": 11,
+        "desired_logit_prob": 0.95,
+        "node_threshold": 0.7,
+        "edge_threshold": 0.9,
+        "batch_size": 512,
+        "update_interval": 4
+      }
+    },
+    "accepted": false
+  },
+  {
+    "name": "batch_size bound 512",
+    "request": {
+      "version": 1,
+      "method": "trace.run",
+      "params": {
+        "prompt": "Fact: the capital of the state containing Dallas is",
+        "profile": "circuit_tracer_82996f14",
+        "max_targets": 5000,
+        "max_nodes": 8192,
+        "max_edges": 262144,
+        "max_n_logits": 10,
+        "desired_logit_prob": 0.95,
+        "node_threshold": 0.7,
+        "edge_threshold": 0.9,
+        "batch_size": 512,
+        "update_interval": 4
+      }
+    },
+    "accepted": true
+  },
+  {
+    "name": "batch_size bound 513",
+    "request": {
+      "version": 1,
+      "method": "trace.run",
+      "params": {
+        "prompt": "Fact: the capital of the state containing Dallas is",
+        "profile": "circuit_tracer_82996f14",
+        "max_targets": 5000,
+        "max_nodes": 8192,
+        "max_edges": 262144,
+        "max_n_logits": 10,
+        "desired_logit_prob": 0.95,
+        "node_threshold": 0.7,
+        "edge_threshold": 0.9,
+        "batch_size": 513,
+        "update_interval": 4
+      }
+    },
+    "accepted": false
+  },
+  {
+    "name": "update_interval bound 128",
+    "request": {
+      "version": 1,
+      "method": "trace.run",
+      "params": {
+        "prompt": "Fact: the capital of the state containing Dallas is",
+        "profile": "circuit_tracer_82996f14",
+        "max_targets": 5000,
+        "max_nodes": 8192,
+        "max_edges": 262144,
+        "max_n_logits": 10,
+        "desired_logit_prob": 0.95,
+        "node_threshold": 0.7,
+        "edge_threshold": 0.9,
+        "batch_size": 512,
+        "update_interval": 128
+      }
+    },
+    "accepted": true
+  },
+  {
+    "name": "update_interval bound 129",
+    "request": {
+      "version": 1,
+      "method": "trace.run",
+      "params": {
+        "prompt": "Fact: the capital of the state containing Dallas is",
+        "profile": "circuit_tracer_82996f14",
+        "max_targets": 5000,
+        "max_nodes": 8192,
+        "max_edges": 262144,
+        "max_n_logits": 10,
+        "desired_logit_prob": 0.95,
+        "node_threshold": 0.7,
+        "edge_threshold": 0.9,
+        "batch_size": 512,
+        "update_interval": 129
+      }
+    },
+    "accepted": false
+  },
+  {
+    "name": "legacy batch bound 64",
+    "request": {
+      "version": 1,
+      "method": "trace.run",
+      "params": {
+        "prompt": "AB",
+        "batch_size": 64
+      }
+    },
+    "accepted": true
+  },
+  {
+    "name": "legacy batch bound 65",
+    "request": {
+      "version": 1,
+      "method": "trace.run",
+      "params": {
+        "prompt": "AB",
+        "batch_size": 65
+      }
+    },
+    "accepted": false
+  }
+]

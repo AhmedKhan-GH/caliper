@@ -308,7 +308,9 @@ export type InterpretationRequest = { version: 1 } & (
   | { method: 'feature.dictionary' | 'trace.status' | 'trace.validate'; params: Record<string, never> }
   | { method: 'feature.show'; params: FeatureSelector }
   | { method: 'feature.examples'; params: FeatureSelector & { limit?: number } }
-  | { method: 'trace.run'; params: { prompt: string; max_targets?: number; max_nodes?: number; max_edges?: number } }
+  | { method: 'trace.run'; params: { prompt: string; max_targets?: number; max_nodes?: number; max_edges?: number;
+      profile?: 'caliper' | 'circuit_tracer_82996f14'; max_n_logits?: number; desired_logit_prob?: number;
+      node_threshold?: number; edge_threshold?: number; batch_size?: number | null; update_interval?: number } }
   | { method: 'trace.read'; params: { node_offset?: number; node_limit?: number; edge_offset?: number; edge_limit?: number } }
   | { method: 'patch.sweep'; params: { clean_prompt: string; corrupted_prompt: string; metric: { positive_token: number; negative_token: number } } }
 );
