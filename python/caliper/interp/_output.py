@@ -1,6 +1,7 @@
 """Paired next-token probabilities and bounded greedy continuations."""
 from contextlib import contextmanager
 from contextvars import ContextVar
+from inspect import Parameter, signature
 
 import torch
 
@@ -110,8 +111,13 @@ class Output:
             ids = torch.argsort(scores, descending=True, stable=True)[:10].clone()
             argmax_ids = probabilities.argmax(dim=-1)
             baseline_top = int(argmax_ids[0])
-            baseline_top_text = self.tokenizer.decode(
-                [baseline_top], skip_special_tokens=False, clean_up_tokenization_spaces=False)
+            decode = self.tokenizer.decode
+            parameters = signature(decode).parameters
+            accepts_kwargs = any(p.kind == Parameter.VAR_KEYWORD for p in parameters.values())
+            options = {name: False for name in ("skip_special_tokens", "clean_up_tokenization_spaces")
+                       if accepts_kwargs or (name in parameters and parameters[name].kind in
+                                             (Parameter.POSITIONAL_OR_KEYWORD, Parameter.KEYWORD_ONLY))}
+            baseline_top_text = decode([baseline_top], **options)
             baseline_top_probability = float(probabilities[0, baseline_top])
             # Reserve both row winners before filling the fixed comparison slots.
             winners = set(argmax_ids.tolist())

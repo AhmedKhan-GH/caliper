@@ -53,7 +53,8 @@ def test_paired_probabilities_use_one_batch_and_preserve_baseline(output_case):
     assert service.specifications()[0]["feature"] == feature
 
 
-def test_baseline_evidence_uses_full_row_argmax_and_exact_decode(output_case, monkeypatch):
+@pytest.mark.parametrize("decode_options", [False, True])
+def test_baseline_evidence_uses_full_row_argmax_and_exact_decode(output_case, monkeypatch, decode_options):
     from caliper.interp import _output
     model, tokenizer, _, _, output = output_case
     logits = torch.zeros((2, 1, model.config.vocab_size), dtype=torch.float64)
@@ -67,7 +68,9 @@ def test_baseline_evidence_uses_full_row_argmax_and_exact_decode(output_case, mo
         assert skip_special_tokens is False and clean_up_tokenization_spaces is False
         return " Austin" if ids == [73] else "other"
     monkeypatch.setattr(_output, "forward_logits", forward)
-    monkeypatch.setattr(tokenizer, "decode", decode)
+    decoder = decode if decode_options else lambda ids: decode(
+        ids, skip_special_tokens=False, clean_up_tokenization_spaces=False)
+    monkeypatch.setattr(tokenizer, "decode", decoder)
     monkeypatch.setattr(tokenizer, "convert_ids_to_tokens", lambda token: "vocabulary spelling")
     result = output.compare("AB")
     assert calls == [1]
