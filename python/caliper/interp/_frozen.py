@@ -156,14 +156,15 @@ def _decode_selected(layer, indices, activations, *, check=_no_check):
     return result
 
 
-def _decode_reference(layer, indices, activations, *, check=_no_check):
+def _decode_reference(layer, indices, activations, *, check=_no_check, include_zeros=False):
     """Scale decoder rows before the ordered per-position accumulation."""
     width = layer.W_dec.shape[1]
     result = activations.new_zeros(*activations.shape[:-1], width)
     step = max(1, _ENCODER_BLOCK_ELEMENTS // width)
     for position in range(indices.shape[0]):
         active = activations[..., position, :] != 0
-        selected = active if active.ndim == 1 else active.any(0)
+        selected = (torch.ones_like(indices[position], dtype=torch.bool) if include_zeros else
+                    active if active.ndim == 1 else active.any(0))
         features = indices[position, selected]
         values = activations[..., position, selected]
         for start in range(0, len(features), step):
@@ -577,12 +578,19 @@ class FrozenFeatures:
         self.activations = self.coefficients * self.original + self.constants
 
     def evaluate(self, read, layer, *, original=False):
+        if original:
+            # The pinned encoder uses one F.linear, including its bias. A
+            # selected einsum followed by bias addition changes BF16 rounding.
+            # The reference workspace admits this token-by-feature buffer.
+            preactivation = F.linear(read, layer.W_enc_original.detach(), layer.b_enc.detach())
+            values = preactivation.gather(-1, self.indices.expand(*read.shape[:-1], -1))
+            return values * self.coefficients + self.constants
         values = read.new_empty(*read.shape[:-1], self.indices.shape[-1])
         step = max(1, _ENCODER_BLOCK_ELEMENTS // max(1, self.indices.shape[0] * read.shape[-1]))
         for start in range(0, self.indices.shape[-1], step):
             with autorelease_scope(read.device):
                 indices = self.indices[:, start:start + step]
-                encoder = (layer.W_enc_original if original else layer.W_enc).detach()[indices].to(read.dtype)
+                encoder = layer.W_enc.detach()[indices].to(read.dtype)
                 values[..., start:start + step] = (torch.einsum("btw,tkw->btk", read, encoder) +
                                                     layer.b_enc.detach()[indices].to(read.dtype))
         return values * self.coefficients + self.constants
@@ -846,8 +854,11 @@ class FrozenPath:
                 self.unembedding = head.weight.detach()
                 self.unembedding_mean = self.unembedding.mean(0)
                 self.unembedding_bias = _bias(head)
-                self.writes = [(y - b - c).detach() for y, b, c in
-                               zip(self.outputs, self.decoder_biases, self.output_offsets)]
+                # Pinned attribution retains complete MLP values with stopped
+                # gradients. Subtraction of BF16 biases loses recorded bits.
+                self.writes = (list(self.outputs) if self.reference else
+                               [(y - b - c).detach() for y, b, c in
+                                zip(self.outputs, self.decoder_biases, self.output_offsets)])
                 reads, final = self.run(self.embedding, self.writes, check=check)
                 self.reference_final = self.final_norm(recorded["final_norm"]).detach()
                 self._freeze_logits(model, self.final_norm(recorded["final_norm"])[:, -1], memory_check)
@@ -886,6 +897,7 @@ class FrozenPath:
         """Preserve softcap value and derivative with a prompt-local tangent."""
         self.logit_scale = self.logit_offset = None
         cap = getattr(model.config, "final_logit_softcapping", None) if self.family.name == "gemma2" else None
+        self.reference_logit_cap = cap if self.reference else None
         if cap is None:
             return
         if isinstance(cap, bool) or not isinstance(cap, (int, float)) or not math.isfinite(cap) or cap <= 0:
@@ -908,9 +920,15 @@ class FrozenPath:
         self.unembedding_mean /= len(raw)
 
     def logits_from_final(self, final):
-        """Apply the affine prompt-local logit map to normalized residuals."""
+        """Return forward logits or the ordinary prompt-local affine logits."""
         self.guard.check("frozen logits admission")
         logits = F.linear(final, self.unembedding, self.unembedding_bias)
+        if self.reference_logit_cap is not None:
+            # Published targets use pre-softcap directions in logit_target.
+            # Forward checks use the actual softcap, without a BF16 tangent
+            # offset whose subtraction and addition can change the live value.
+            cap = self.reference_logit_cap
+            return cap * (logits / cap).tanh()
         if self.logit_scale is not None:
             logits = logits * self.logit_scale + self.logit_offset
         return logits
@@ -934,11 +952,13 @@ class FrozenPath:
 
         Bias mask rows are decoder, normalization, attention, and intervention contributions.
         A zero mask gives the strictly linear residual path.
+        Reference writes include the complete output unless bias masks are supplied.
         """
         self.guard.check("frozen path admission")
         masks = (1., 1., 1., 1.) if bias_masks is None else bias_masks
         decoder, norm, attention = masks[:3]
         intervention = masks[3] if len(masks) == 4 else 0.
+        complete_writes = self.reference and bias_masks is None
         x = embedding
         reads = []
         for i, (input_norm, post_norm, mixer, write) in enumerate(zip(self.norms, self.post_norms, self.mixers, writes)):
@@ -950,7 +970,8 @@ class FrozenPath:
                 x = x + mixed
                 reads.append(post_norm.pure(x) if self.raw_reference_input else
                              self.mlp_inputs[i](post_norm(x, norm), intervention))
-                x = x + write + decoder * self.decoder_biases[i] + intervention * self.output_offsets[i]
+                x = (x + write if complete_writes else
+                     x + write + decoder * self.decoder_biases[i] + intervention * self.output_offsets[i])
                 self.guard.check(f"frozen layer {i}")
                 check(f"frozen layer {i}")
         return reads, self.final_norm(x, norm)
@@ -961,6 +982,8 @@ class FrozenPath:
 
         This affine forward verifies the complete local replacement. Direct
         edges use ``run`` with independent writes and never differentiate here.
+        The reference uses decoded activation deltas around complete recorded
+        writes. Its rounded reconstruction errors remain separate graph sources.
         """
         self.guard.check("replacement path admission")
         x = embedding
@@ -978,8 +1001,17 @@ class FrozenPath:
                 output = self.feature_outputs[i]
                 activation = output.evaluate(read, layer, original=self.raw_reference_input)
                 decode = _decode_reference if self.reference else _decode_selected
-                x = (x + decode(layer, output.indices, activation, check=check) +
-                     self.decoder_biases[i] + self.errors[i] + self.output_offsets[i])
+                if self.reference:
+                    # Pinned intervention hooks subtract activations before
+                    # decoder scaling, then add the delta to the MLP output.
+                    # A rounded reconstruction plus its rounded error cannot
+                    # recover that output exactly in BF16.
+                    delta = decode(layer, output.indices, activation - output.activations,
+                                   check=check, include_zeros=True)
+                    x = x + (self.outputs[i] + delta)
+                else:
+                    x = (x + decode(layer, output.indices, activation, check=check) +
+                         self.decoder_biases[i] + self.errors[i] + self.output_offsets[i])
                 self.guard.check(f"replacement layer {i}")
                 check(f"replacement layer {i}")
         return reads, self.final_norm(x)
