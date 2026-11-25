@@ -88,7 +88,8 @@ def test_random_gemma_dictionary_inspection_uses_ordinary_service(random_artifac
     folder, model, dictionary = random_artifact
     assert dictionary.metadata["model_hash"].startswith("sha256:")
     assert imported.verified_import_binding(folder, dictionary.metadata, model=model) is None
-    tokenizer = SimpleNamespace(eos_token_id=2, convert_ids_to_tokens=lambda value: str(value))
+    tokenizer = SimpleNamespace(bos_token_id=1, pad_token_id=0, eos_token_id=2,
+                                convert_ids_to_tokens=lambda value: str(value))
     build_index(folder, [("fixture", [3, 4, 5, 6])], model=model, tokenizer=tokenizer,
                 dictionary=dictionary, provenance={"partition": "fixture"}, context_length=4)
     with FeatureIndex(folder, model=model, tokenizer=tokenizer, dictionary=dictionary) as index:
@@ -179,7 +180,8 @@ def test_live_import_check_survives_fresh_quality_and_index(artifact, fault):
     dictionary.metadata["quality"].update(status="passed", fvu=.1, dead_fraction=.1, cross_entropy_delta=.1,
                                            dictionary_hash=dictionary_fingerprint(folder, dictionary.metadata))
     (folder / "dictionary.json").write_text(json.dumps(dictionary.metadata))
-    tokenizer = SimpleNamespace(eos_token_id=2, convert_ids_to_tokens=lambda value: str(value))
+    tokenizer = SimpleNamespace(bos_token_id=1, pad_token_id=0, eos_token_id=2,
+                                convert_ids_to_tokens=lambda value: str(value))
     build_index(folder, [("fixture", [3, 4, 5, 6])], model=model, tokenizer=tokenizer,
                 dictionary=dictionary, provenance={"partition": "fixture"}, context_length=4)
     with FeatureIndex(folder, model=model, tokenizer=tokenizer, dictionary=dictionary) as index:

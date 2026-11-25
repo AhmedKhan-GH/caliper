@@ -26,11 +26,13 @@ def test_evaluation_sync_precedes_binding_recheck_and_cursor(tmp_path, monkeypat
     dictionary = load_dictionary(tmp_path, model=model, device="cpu")
     identity = checkpoint_state.dictionary_fingerprint(tmp_path, metadata)
     binding = EvaluationBinding(tmp_path, dictionary, identity, model=model)
-    stream = TextStream([], TinyTokenizer(), "quality")
+    stream = TextStream(documents(), TinyTokenizer(), "quality")
     stats = evaluation.quality_stats(metadata)
+    settings = {"tokens": 4, "batch_tokens": 2}
     folder = tmp_path / "evaluation"
-    evaluation.save_evaluation(folder, stats, stream, None, identity, {}, 0, binding)
+    evaluation.save_evaluation(folder, stats, stream, None, identity, settings, 0, binding)
     previous = {p.name: p.read_bytes() for p in folder.iterdir()}
+    pending = stream.next_tokens(4).input_ids[2:].tolist()
     events, handles = [], {}
     opened, sync = Path.open, checkpoint_state.os.fsync
     save, verify, write = checkpoint_state.save_file, binding.verify, evaluation.write_json
@@ -68,21 +70,23 @@ def test_evaluation_sync_precedes_binding_recheck_and_cursor(tmp_path, monkeypat
     stats.mean.fill_(3)
     if fail_sync:
         with pytest.raises(OSError, match="statistics sync failure"):
-            evaluation.save_evaluation(folder, stats, stream, [1, 2], identity, {}, 1, binding)
+            evaluation.save_evaluation(folder, stats, stream, pending, identity, settings, 1, binding)
         assert events == ["verify", "write", "sync"]
         assert all((folder / name).read_bytes() == value for name, value in previous.items())
         restored = evaluation.quality_stats(metadata)
-        assert evaluation.restore_evaluation(folder, restored, stream, identity, {}, binding) == (None, 0)
+        assert evaluation.restore_evaluation(folder, restored, stream, identity, settings, binding) == (None, 0)
         assert restored.count == 0 and torch.equal(restored.mean, torch.zeros_like(restored.mean))
+        assert stream.next_tokens(4).input_ids[2:].tolist() == pending
         fail_sync = False
         events.clear()
-    evaluation.save_evaluation(folder, stats, stream, [1, 2], identity, {}, 1, binding)
+    evaluation.save_evaluation(folder, stats, stream, pending, identity, settings, 1, binding)
     assert events == ["verify", "write", "sync", "verify", "cursor"]
     assert json.loads((folder / "state.json").read_text())["tensors"] == "stats-b.safetensors"
     restored = evaluation.quality_stats(metadata)
-    assert evaluation.restore_evaluation(folder, restored, stream, identity, {}, binding) == ([1, 2], 1)
+    assert evaluation.restore_evaluation(folder, restored, stream, identity, settings, binding) == (pending, 1)
     assert restored.count == 2 and torch.equal(restored.mean, stats.mean)
-    evaluation.save_evaluation(folder, stats, stream, None, identity, {}, 2, binding)
+    stats.count = 4
+    evaluation.save_evaluation(folder, stats, stream, None, identity, settings, 2, binding)
     assert json.loads((folder / "state.json").read_text())["tensors"] == "stats-a.safetensors"
 
 

@@ -3,7 +3,8 @@
 Caliper LIB supports Gemma 2 semantic probes, frozen attribution paths, and JumpReLU dictionaries.
 The converter imports the pinned Gemma Scope selection for `google/gemma-2-2b`.
 Qwen3.5 support remains available, and generic Llama support remains deferred.
-M8 remains held until Gemma passes every quality and acceptance check and platform CI passes.
+Gemma is the only M8 acceptance model.
+M8 remains held until Gemma passes every required acceptance check and platform CI passes.
 
 ## Verification Scope
 
@@ -193,7 +194,7 @@ Their fresh context can produce activations that differ from the original indexe
 The index excludes prefix and padding positions from feature counts, offsets, and returned example activations.
 
 An older Gemma index without these policies requires a rebuild.
-Release qualification requires the corrected policy in both quality and index evidence.
+Release qualification requires the research quality report and both corrected index policies.
 The live response also checks both index policies against the current model and tokenizer.
 Example admission includes the additional prefix position and retains a lower memory limit when supplied.
 The public Gemma tokenizer and index windows both place BOS before content.
@@ -315,7 +316,10 @@ Queries preserve example order and cache the complete result only after all batc
 If one window cannot fit, the query refuses before its tensor allocation.
 The budget is a limit, not a measured memory result or a speed guarantee.
 
-Gemma quality requires exactly 200,000 tokens, mean FVU at most 0.30, dead fraction at most 0.15, and cross-entropy rise at most 0.5 nats.
+Gemma research quality requires exactly 200,000 source tokens and records separate observation and loss-target counts.
+Historical comparisons retain 0.30 mean FVU, 0.15 dead fraction, and 0.5 nats all-layer loss rise.
+The founder sets final quality bars from the published comparison.
+Quality values do not block the index or hidden acceptance after the complete research result exists.
 Quality evidence binds the evaluated model, dictionary tensor bytes, forward settings, and evaluation device.
 Use the acceptance device for evaluation. A device change requires a new evaluation because kernel arithmetic can differ.
 The index requires exactly 2,000,000 tokens.
