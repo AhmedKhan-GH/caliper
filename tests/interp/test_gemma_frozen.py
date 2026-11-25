@@ -206,8 +206,9 @@ def test_jumprelu_all_active_features_padding_edits_and_mixed_precision(monkeypa
     original = torch.zeros(1, 3, 19)
     original[0, 0] = torch.arange(1., 20.)
     original[0, 1, [0, 7]] = torch.tensor([.2, .6])
-    specs = [{"op": "scale", "feature": 7, "positions": [1], "multiplier": -2.},
-             {"op": "clamp", "feature": 14, "positions": [1, 2], "value": -.4}]
+    point = dictionary.metadata["write_points"][0]
+    specs = [{"op": "scale", "point": point, "feature": 7, "positions": [1], "multiplier": -2.},
+             {"op": "clamp", "point": point, "feature": 14, "positions": [1, 2], "value": -.4}]
     output = FrozenFeatures(original, layer, specs)
     assert output.indices.shape == (3, 19)
     assert (output.indices[:, 1:] > output.indices[:, :-1]).all()
