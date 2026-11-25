@@ -6,6 +6,7 @@ from copy import deepcopy
 from pathlib import Path
 
 from _mcp import Failure
+from _published_qualification import VOCAB_SIZE
 from _published import PROBABILITY_ABSOLUTE_TOLERANCE, PROBABILITY_POLICY
 from _published import (CASES, MANIFEST_SHA256, PROFILE, PROMPT, SOURCE, TRACE_REQUEST, action_name,
                         descriptor, digest, file_hash, finite, private_path, read_full_graph, read_json,
@@ -164,6 +165,8 @@ def verify_review(root, collection_path, review_path):
                     "A published callback failed or detached.")
             evidence = validate_case(root, action["status"], cell, previous_sequence=sequence,
                                      preparation_id=result["preparation_id"])
+            require(evidence["result"]["evidence"]["shape"] == [2, VOCAB_SIZE],
+                    f"Published acceptance requires both rows across all {VOCAB_SIZE} vocabulary columns.")
             require(evidence == action["evidence"], "A collected case differs from its current private evidence.")
             for item in _case_files(evidence, complete=True):
                 inventoried(item)
@@ -232,7 +235,8 @@ def verify_review(root, collection_path, review_path):
                     and row.get("reference_top_token_ids") == record["top_token_ids"]
                     and row.get("reference_top_text") == [record["top_five"][i][0]["text"] for i in (0, 1)]
                     and row["reference_top_text"] == [" Austin", expected]
-                    and row.get("probabilities_compared") == 2 * record["evidence"]["shape"][1]
+                    and type(row.get("probabilities_compared")) is int
+                    and row["probabilities_compared"] == 2 * VOCAB_SIZE
                     and finite(row.get("maximum_probability_absolute_error"))
                     and row["maximum_probability_absolute_error"] <= PROBABILITY_ABSOLUTE_TOLERANCE
                     and row.get("published_outcome") == {"reference": True, "caliper": True},

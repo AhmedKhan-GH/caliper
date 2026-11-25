@@ -1,4 +1,4 @@
-"""Published source and evidence checks with tiny private arrays and MCP boundaries."""
+"""Published source checks and full-vocabulary acceptance at MCP boundaries."""
 from copy import deepcopy
 import hashlib
 import json
@@ -52,14 +52,24 @@ def evidence_factory(tmp_path):
     prepared["seconds"] = .1
     write_json(tmp_path / "preparation.json", prepared)
 
-    def make(cell=14, sequence=1):
+    native_archives = {}
+
+    def make(cell=14, sequence=1, *, vocab_size=5):
         import torch
         from caliper.interp._replication_native import write_native, write_native_tensor
-        probabilities = np.array([[.5, .25, .125, .0625, .0625]] * 2, dtype=np.float32)
+        probabilities = np.full((2, vocab_size), 2 ** -21, dtype=np.float32)
+        probabilities[:, :5] = ([.5, .25, .125, .0625, .0625] if vocab_size == 5 else
+                                [.5, .25, .125, .001953125, .0009765625])
         if cell != 10:
-            probabilities[1] = probabilities[1, [1, 0, 2, 3, 4]]
-        archive = tmp_path / f"cell{cell}-{sequence}.npz"
-        np.savez(archive, logits=probabilities, probabilities=probabilities)
+            probabilities[1, :2] = probabilities[1, [1, 0]]
+        # Identical arrays share files within one fixture. Metadata retains each sequence.
+        archive = tmp_path / f"arrays-{vocab_size}-{'baseline' if cell == 10 else 'case'}.npz"
+        if archive not in native_archives:
+            np.savez(archive, logits=probabilities, probabilities=probabilities)
+            native_archives[archive] = write_native(
+                archive.with_suffix(".pt"),
+                {name: torch.from_numpy(probabilities).to(torch.bfloat16) for name in ("logits", "probabilities")},
+                root=tmp_path, created=[], reserve=lambda amount: None)
         top = []
         expected = published.CASES[cell]["published_output_labels"][0].rsplit(" ", 1)[0]
         for row in (0, 1):
@@ -76,12 +86,9 @@ def evidence_factory(tmp_path):
             "argmax_token_ids": probabilities.argmax(axis=1).tolist(), "top_token_ids": [row[0]["id"] for row in top],
             "top_five": top, "baseline_top_text": " Austin", "baseline_top_probability": .5,
             "logits_dtype": "torch.bfloat16", "softmax_dtype": "torch.bfloat16", "compute_export_seconds": .01,
-            "evidence": {**published.descriptor(tmp_path, archive), "shape": [2, 5], "rows": ["baseline", "case"],
+            "evidence": {**published.descriptor(tmp_path, archive), "shape": [2, vocab_size], "rows": ["baseline", "case"],
                          "storage_dtype": "float32", "native_values_preserved": True}}
-        record["native_evidence"] = write_native(
-            archive.with_suffix(".pt"),
-            {name: torch.from_numpy(probabilities).to(torch.bfloat16) for name in ("logits", "probabilities")},
-            root=tmp_path, created=[], reserve=lambda amount: None)
+        record["native_evidence"] = deepcopy(native_archives[archive])
         if cell == 29:
             record["observations"] = {"Say Victoria": {
                 "node": deepcopy(published.SOURCE["groups"]["Say Victoria"][0]),
@@ -325,7 +332,7 @@ def test_partial_collection_is_not_acceptance(tmp_path):
 @pytest.fixture
 def callback_boundary(evidence_factory):
     root, prepared, make = evidence_factory
-    state = {"value": make(10, 0), "sequence": 0, "calls": [], "fail_cell": None}
+    state = {"value": make(10, 0), "sequence": 0, "calls": [], "fail_cell": None, "vocab_size": 5}
     state["value"]["inference"]["replication"].update(last_attempt=None, result=None)
     session = driver.Session.__new__(driver.Session)
     session.out, session.private_output_directory, session.run_id = root, root, "test-run"
@@ -336,7 +343,7 @@ def callback_boundary(evidence_factory):
             cell = next(cell for cell in published.CASES if published.action_name(cell) == name)
             state["calls"].append(cell)
             state["sequence"] += 1
-            candidate = make(cell, state["sequence"])
+            candidate = make(cell, state["sequence"], vocab_size=state["vocab_size"])
             failed = cell == state["fail_cell"]
             if failed:
                 state["value"]["inference"]["replication"]["last_attempt"] = {
@@ -371,9 +378,10 @@ def test_all_cases_execute_real_callback_route_from_fresh_baselines(callback_bou
 
 
 @pytest.fixture
-def reviewed_collection(callback_boundary):
+def reviewed_collection(callback_boundary, request):
     from test_published_qualification import published_reply
     root, prepared, session, state = callback_boundary
+    state["vocab_size"] = getattr(request, "param", 256000)
     actions = [driver.published_action(session, 10, prepared["id"])]
     for cell, before, case in driver.published_cases(session, prepared["id"]):
         actions.extend((before, case))
@@ -429,7 +437,8 @@ def reviewed_collection(callback_boundary):
                   "union_edges_compared": 3, "absent_edges_counted_as_zero": True},
         "cases": [{"case_id": published.action_name(cell), "caliper_sequence": cases[cell]["sequence"],
                    "caliper_npz_sha256": cases[cell]["evidence"]["sha256"], "reference_top_token_ids": cases[cell]["top_token_ids"],
-                   "reference_top_text": [row[0]["text"] for row in cases[cell]["top_five"]], "probabilities_compared": 10,
+                   "reference_top_text": [row[0]["text"] for row in cases[cell]["top_five"]],
+                   "probabilities_compared": 2 * state["vocab_size"],
                    "maximum_probability_absolute_error": .015, "published_outcome": {"reference": True, "caliper": True}}
                   for cell in published.CASES], "british_columbia_ineffective": True,
         "browser": {"program_views": True, "attached_before": True, "attached_after": True, "evidence": evidence},
@@ -445,19 +454,48 @@ def reviewed_collection(callback_boundary):
 def test_review_cli_separates_complete_collection_from_acceptance(reviewed_collection):
     from _replication_review import main
     root, review, result = reviewed_collection
+    assert result["dictionary_evidence"]["index"]["vocab_size"] == 256000
+    assert {row["probabilities_compared"] for row in review["cases"]} == {512000}
+    for action in result["published_actions"]:
+        record = action["evidence"]["result"]
+        assert record["evidence"]["shape"] == [2, 256000]
+        with np.load(root / record["evidence"]["file"], allow_pickle=False) as data:
+            assert data["logits"].shape == data["probabilities"].shape == (2, 256000)
+            assert np.all(data["probabilities"][:, 5:] > 0)
     assert finish(result) == 1 and not result["accepted_replication"]
     assert main(["--private-output-directory", str(root), "--collection", "driver/collection.json",
                  "--review", "review.json", "--out", str(root / "verified.json")]) == 0
     verified = json.loads((root / "verified.json").read_text())
-    assert verified["accepted_replication"] and verified["gemma_acceptance"] and not verified["qwen_acceptance"]
+    assert verified["accepted_replication"] and verified["gemma_acceptance"] and verified["acceptance_complete"]
+    assert not verified["qwen_acceptance"]
     assert not json.loads((root / "driver/collection.json").read_text())["accepted_replication"]
 
 
-@pytest.mark.parametrize("fault", ["missing_reference", "missing_browser", "missing_parity", "missing_inspection", "memory_cap",
-                                  "reserve", "reference_prompt", "reference_settings", "case_coverage", "case_hash", "case_sequence",
-                                  "full_vocabulary", "probability_error", "probability_policy", "top_id", "published_outcome", "british_columbia",
-                                  "node_overlap", "edge_tolerance", "edge_coverage", "artifact", "collection_file"])
-def test_required_external_evidence_cannot_be_missing_or_stale(reviewed_collection, fault):
+@pytest.mark.parametrize("fault,message", [
+    ("missing_reference", "Invalid external replication review: 'reference'"),
+    ("missing_browser", "Invalid external replication review: 'browser'"),
+    ("missing_parity", "Invalid external replication review: 'parity'"),
+    ("missing_inspection", "Invalid external replication review: 'capture_inspection'"),
+    ("memory_cap", "Memory or host reserve evidence failed"),
+    ("reserve", "Memory or host reserve evidence failed"),
+    ("reference_prompt", "Reference identity or parameters differ"),
+    ("reference_settings", "Reference identity or parameters differ"),
+    ("case_coverage", "External case comparison coverage differs"),
+    ("case_hash", "full-vocabulary reference agreement failed"),
+    ("case_sequence", "full-vocabulary reference agreement failed"),
+    ("full_vocabulary", "full-vocabulary reference agreement failed"),
+    ("probability_error", "full-vocabulary reference agreement failed"),
+    ("probability_policy", "comparison lacks the approved reference envelope"),
+    ("top_id", "full-vocabulary reference agreement failed"),
+    ("published_outcome", "full-vocabulary reference agreement failed"),
+    ("british_columbia", "full-vocabulary reference agreement failed"),
+    ("node_overlap", "Independent graph comparison failed or is incomplete"),
+    ("edge_tolerance", "Independent graph comparison failed or is incomplete"),
+    ("edge_coverage", "Independent graph comparison failed or is incomplete"),
+    ("artifact", "Private evidence hash differs"),
+    ("collection_file", "Private evidence hash differs"),
+])
+def test_required_external_evidence_cannot_be_missing_or_stale(reviewed_collection, fault, message):
     root, review, result = reviewed_collection
     if fault.startswith("missing_"):
         review.pop({"missing_reference": "reference", "missing_browser": "browser", "missing_parity": "parity",
@@ -482,7 +520,7 @@ def test_required_external_evidence_cannot_be_missing_or_stale(reviewed_collecti
     elif fault == "artifact": (root / "external-receipt.json").write_text("changed")
     elif fault == "collection_file": (root / "driver/result.json").write_text("{}")
     write_json(root / "review.json", review)
-    with pytest.raises(Failure):
+    with pytest.raises(Failure, match=message):
         verify_review(root, "driver/collection.json", "review.json")
 
 

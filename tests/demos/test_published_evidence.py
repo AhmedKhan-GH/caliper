@@ -169,14 +169,28 @@ def test_complete_inventory_cannot_omit_bound_files(reviewed_collection, kind):
               "graph": {"file": f"trace-{result['trace']['trace_id']}.json"}}[kind]
     collection["files"] = [item for item in collection["files"] if item["file"] != target["file"]]
     rebind_collection(root, review, collection)
-    with pytest.raises(Failure):
+    with pytest.raises(Failure, match="Required evidence is absent from the collection inventory"):
         verify_review(root, "driver/collection.json", "review.json")
 
 
-@pytest.mark.parametrize("fault", ["trace_id", "counts", "settings", "tokens", "nodes", "edges", "schedule", "diagnostics",
-                                  "logical_schedule", "duplicate_index", "duplicate_edge", "endpoint", "boolean_endpoint",
-                                  "next_node", "next_edge"])
-def test_full_graph_must_match_collection_identity(reviewed_collection, fault):
+@pytest.mark.parametrize("fault,message", [
+    ("trace_id", "Full graph identity or counts differ"),
+    ("counts", "Full graph identity or counts differ"),
+    ("settings", "Full graph settings or completeness differ"),
+    ("tokens", "Full graph prompt token identities differ"),
+    ("nodes", "Full graph coverage differs"),
+    ("edges", "Full graph coverage differs"),
+    ("schedule", "Full graph schedules are absent"),
+    ("diagnostics", "Full graph target diagnostics are incomplete"),
+    ("logical_schedule", "Full graph schedules are absent"),
+    ("duplicate_index", "Full graph node coverage differs"),
+    ("duplicate_edge", "Full graph edges differ"),
+    ("endpoint", "Full graph edges differ"),
+    ("boolean_endpoint", "Full graph edges differ"),
+    ("next_node", "Full graph node coverage differs"),
+    ("next_edge", "Full graph node coverage differs"),
+])
+def test_full_graph_must_match_collection_identity(reviewed_collection, fault, message):
     root, review, result = reviewed_collection
     target = root / f"trace-{result['trace']['trace_id']}.json"
     graph = json.loads(target.read_text())
@@ -216,7 +230,7 @@ def test_full_graph_must_match_collection_identity(reviewed_collection, fault):
         if item["file"] == target.name:
             item.update(published.descriptor(root, target))
     rebind_collection(root, review, collection)
-    with pytest.raises(Failure):
+    with pytest.raises(Failure, match=message):
         verify_review(root, "driver/collection.json", "review.json")
 
 
@@ -226,7 +240,7 @@ def test_review_memory_cannot_understate_driver(reviewed_collection, field, chec
     measured = next(gate["measured"] for gate in result["checks"] if gate["name"] == check)
     review["memory"][field] = measured - 1
     write_json(root / "review.json", review)
-    with pytest.raises(Failure):
+    with pytest.raises(Failure, match="External memory evidence understates the driver measurement"):
         verify_review(root, "driver/collection.json", "review.json")
 
 
@@ -253,7 +267,7 @@ def test_duplicate_memory_measurements_cannot_hide_a_peak(reviewed_collection):
     write_json(root / "driver/result.json", result)
     collection = write_collection(root / "driver", root, result)
     rebind_collection(root, review, collection)
-    with pytest.raises(Failure):
+    with pytest.raises(Failure, match="External memory evidence understates the driver measurement"):
         verify_review(root, "driver/collection.json", "review.json")
 
 

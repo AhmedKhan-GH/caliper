@@ -10,6 +10,7 @@ from _qualification import (GEMMA_HASH, GEMMA_ID, GEMMA_REVISION, INDEX_TOKENS, 
                             _gemma_index_context, _gemma_provenance, _integer, _require, _same_json)
 
 PROFILE = "published_dallas_v1"
+VOCAB_SIZE = 256000
 REFERENCE_PROFILE = "circuit_tracer_82996f14"
 REFERENCE_REVISION = "82996f144b3371ae858ea5713590d004c218f0c2"
 REFERENCE_INPUT = {"coordinate": "gemma_scope_pre_gain", "encoder": "W_enc_original", "dtype": "bfloat16"}
@@ -179,7 +180,7 @@ def _index_evidence(metadata, response, source):
              and _integer(index.get("layers"), 26) and _integer(index.get("features"), 16384)
              and _integer(index.get("top_examples"), 16) and _integer(index.get("window_tokens"), 33)
              and index.get("tie_order") == "activation_desc,global_offset_asc"
-             and _integer(index.get("vocab_size"), 256000)
+             and _integer(index.get("vocab_size"), VOCAB_SIZE)
              and type(index.get("documents")) is int and 0 < index["documents"] <= INDEX_TOKENS,
              "Published Gemma requires a complete 2000000-position reference index and exact example policy.")
     _gemma_index_context(index)
