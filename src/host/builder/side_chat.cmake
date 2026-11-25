@@ -22,7 +22,12 @@ if(NOT TARGET caliper_widget_surface OR NOT TARGET caliper_api_session OR NOT TA
 endif()
 
 set(_chat_dir ${CMAKE_SOURCE_DIR}/src/host/builder)
-add_library(caliper_side_chat STATIC ${_chat_dir}/side_chat.cpp ${_chat_dir}/chat_markdown.cpp)
+add_library(caliper_side_chat STATIC
+    ${_chat_dir}/side_chat.cpp
+    ${_chat_dir}/side_chat_agents.cpp
+    ${_chat_dir}/side_chat_layout.cpp
+    ${_chat_dir}/side_chat_draw.cpp
+    ${_chat_dir}/chat_markdown.cpp)
 target_include_directories(caliper_side_chat PUBLIC ${CMAKE_SOURCE_DIR}/src/host)
 target_link_libraries(caliper_side_chat PUBLIC caliper_widget_surface caliper_builder_acp caliper_builder_commands)
 # A development build finds caliper-mcp in its build tree when it is not
