@@ -20,6 +20,7 @@ from torch import nn
 from torch.nn import functional as F
 
 from ._admission import (GEMMA_REVISION, _admit_model_load, _admit_model_transfer, _load_gemma_model)
+from .._controls import intervention_key
 from ._output import Output, bounded_text, internal_forward, prompt_inputs
 from ._qwen_family import MODEL_ID as QWEN_ID, MODEL_REVISION as QWEN_REVISION
 from ._service import InterpretationService, Refused, register_service, unregister_service
@@ -82,7 +83,8 @@ def _checkpoint_reserve():
     envelope = {"format": CHECKPOINT_FORMAT, "version": 1, "run": text, "parent": text,
                 "step": step, "params": {str(i).zfill(NAME_MAX): text for i in range(MAX_PARAMS)},
                 "bindings": {key: text for key in ("model", "model_hash", "dictionary",
-                                                   "dictionary_hash", "tokenizer_hash")},
+                                                   "dictionary_hash", "tokenizer_hash",
+                                                   "replication_profile", "dtype")},
                 "interventions": {"version": 1, "interventions": []},
                 "selection": {key: step for key in ("layer", "feature", "position")},
                 "owned_clamp": clamp, "generation_id": step}
@@ -468,7 +470,7 @@ def fixture_resources(folder):
     return folder
 
 
-def load_resources(model_name, dictionary_path):
+def load_resources(model_name, dictionary_path, *, replication_profile=None):
     """Load local safe weights for a fixture or an exact pinned text model."""
     from ._dictionary import load_dictionary, _record_verified_hf_load
     from ._index import FeatureIndex
@@ -484,7 +486,8 @@ def load_resources(model_name, dictionary_path):
         snapshot = Path(model_name).resolve(strict=True)
         device = "mps" if torch.backends.mps.is_available() else "cpu"
         guard = MemoryGuard(40, device)
-        model = _load_gemma_model(snapshot, device=device, memory=guard)
+        options = {"dtype": torch.bfloat16} if replication_profile == "published_dallas_v1" else {}
+        model = _load_gemma_model(snapshot, device=device, memory=guard, **options)
         tokenizer = AutoTokenizer.from_pretrained(snapshot, local_files_only=True, trust_remote_code=False)
     else:
         from ._qwen_family import load_hosted_model
@@ -613,12 +616,22 @@ class HostedService(InterpretationService):
 
 class HostedInference:
     """Own one model, its controls, and safe checkpoint metadata."""
-    def __init__(self, model_name, dictionary_path, prompt, *, resources=None):
+    def __init__(self, model_name, dictionary_path, prompt, *, resources=None,
+                 replication_profile=None, private_output_directory=None):
+        if replication_profile not in (None, "published_dallas_v1"):
+            raise ValueError("unknown replication profile")
+        if replication_profile is not None and private_output_directory is None:
+            raise ValueError("published replication requires a private output directory")
+        self.replication_profile = replication_profile
+        self.private_output_directory = private_output_directory
+        self.replication = None
         display_guard = _fixture_display_guard(model_name)
         self.model_name = model_name
         self.dictionary_path = str(Path(dictionary_path).resolve())
         self.model, self.tokenizer, self.dictionary, self.index, self.guard = (
-            load_resources(model_name, dictionary_path) if resources is None else resources)
+            (load_resources(model_name, dictionary_path, replication_profile=replication_profile)
+             if replication_profile is not None else load_resources(model_name, dictionary_path))
+            if resources is None else resources)
         try:
             if display_guard is not None and self.guard is None:
                 from ._memory import MemoryGuard
@@ -702,6 +715,9 @@ class HostedInference:
         bindings = {"model": self.model_name, "model_hash": identity,
                     "dictionary": self.dictionary_path, "dictionary_hash": self.index.metadata["dictionary_hash"],
                     "tokenizer_hash": self.index.metadata["tokenizer_hash"]}
+        if self.replication_profile is not None:
+            bindings["replication_profile"] = self.replication_profile
+            bindings["dtype"] = str(next(self.model.parameters()).dtype)
         self._verified_bindings = deepcopy(bindings)
         return bindings
 
@@ -776,7 +792,10 @@ class HostedInference:
                 return {"state": "starting", "prompt_hash": None, "interventions_hash": None,
                         "comparison": None, "generation": deepcopy(self._generation),
                         "dictionary_validation": None}
-        binding = self._input_hashes(self._input_state())
+        input_state = self._input_state()
+        binding = self._input_hashes(input_state)
+        if self.replication is not None:
+            binding["replication"] = self.replication.status(*input_state)
         identity = self.interventions.executor._dictionary_status()
         with self._inference_lock:
             return dict(binding, state="ready", comparison=deepcopy(self._comparison), generation=deepcopy(self._generation),
@@ -786,7 +805,7 @@ class HostedInference:
         """Resolve slider ownership by request or retained effect identity under the lock."""
         if self.interventions._ctl._iv_model is not self.interventions or self._owned_clamp is None:
             return None
-        iv = self.interventions._ctl._ivs.get((self._owned_clamp["point"], "clamp"))
+        iv = self.interventions._ctl._ivs.get(intervention_key(self._owned_clamp))
         if iv is None or iv.clear or iv.state == "ended":
             self._owned_clamp = self._owned_applied_spec = None
             return None
@@ -809,7 +828,7 @@ class HostedInference:
             self._check_watch()
             self._owned_clamp = self._owned_applied_spec = None
             if owned is not None:
-                iv = self.controls._ivs.get((owned["point"], "clamp"))
+                iv = self.controls._ivs.get(intervention_key(owned))
                 if iv is not None and iv.spec == owned and not iv.clear and iv.state != "ended":
                     self._owned_clamp = iv.spec
 
@@ -845,6 +864,14 @@ class HostedInference:
                                          resource_guard=self.guard)
             self.interventions.executor._prepare_dictionary_identity()
             self.output = Output(self.model, self.tokenizer, self.interventions, guard=self.guard)
+            if self.replication_profile is not None:
+                from ._replication_actions import PublishedCases, PROMPTS
+                if self.initial_prompt != PROMPTS["dallas"]:
+                    raise ValueError("published replication requires the exact Dallas prompt")
+                self.replication = PublishedCases(self.model, self.tokenizer, self.interventions, guard=self.guard,
+                                                  output_directory=self.private_output_directory)
+                self.replication.prepare()
+                self.output.attention_scope = self.replication.output_scope
             def param(name, value, **kwargs):
                 result = caliper.param(name, value, **kwargs)
                 self.parameters.append(result)
@@ -861,6 +888,11 @@ class HostedInference:
             self.status = param("output.status", "ready")
             self.actions = [caliper.action("generate", self.generate), caliper.action("reset", self.reset),
                             caliper.action("apply_clamp", self.apply_clamp)]
+            if self.replication is not None:
+                from ._replication_actions import CASES, PROTOCOL
+                for cell, case in CASES.items():
+                    self.actions.append(caliper.action(f"{PROTOCOL}.cell{cell}",
+                                        lambda cell=cell: self.apply_published_case(cell), help=case["label"]))
             if self.restored is not None:
                 self.interventions.load_state_dict(self.restored["interventions"])
                 self.selection = deepcopy(self.restored.get("selection"))
@@ -877,6 +909,36 @@ class HostedInference:
         except BaseException:
             self.close()
             raise
+
+    def apply_published_case(self, cell):
+        """Apply one prepared case and publish its actual model output."""
+        from ._replication_actions import PROMPTS
+        self._check_stop()
+        if self.replication is None:
+            raise ValueError("published replication is not configured")
+        with self._watch_resources():
+            with self.controls.lock:
+                if self.prompt.value != PROMPTS["dallas"] or self.prompt.pending is not None:
+                    raise ValueError("published actions require the unchanged Dallas prompt")
+                prompt_version = self.prompt._version
+            def publish(logits):
+                with self.controls.lock:
+                    if self.prompt._version != prompt_version or self.prompt.pending is not None:
+                        raise ValueError("published prompt changed during the action")
+                self.output.publish_logits(logits)
+                if self.fixture_display is not None:
+                    self.fixture_display.publish()
+                if self.guard is not None:
+                    self.guard.check("published case complete")
+            result = self.replication.run(cell, publish=publish)
+            self._owned_clamp = self._owned_applied_spec = None
+            key = self._input_state()
+            with self._inference_lock:
+                self._comparison = dict(self._input_hashes(key), argmax_token_ids=result["argmax_token_ids"],
+                                        completed_step=self.controls.n, case_id=result["case_id"],
+                                        compute_publish_seconds=result["action_seconds"])
+            self._output_key = deepcopy(key)
+        return f"{result['label']} completed. Evidence: {result['metadata_file']}"
 
     def _check_watch(self):
         """Require this watch and stable resources with the Controls lock held."""
@@ -970,7 +1032,7 @@ class HostedInference:
 
     def _cancel_clamp_request(self, record, request, previous):
         """Cancel only an uncommitted hosted request, with the Controls lock held."""
-        key = (record.point, record.op)
+        key = intervention_key(record.spec)
         if (self.controls._iv_model is not self.interventions
                 or self.controls._ivs.get(key) is not record or record.spec is not request
                 or record.clear or record.error is not None):
@@ -1031,14 +1093,14 @@ class HostedInference:
                 return True
             # Admission and installation each validate resources. Do not hash the
             # same dictionary a third time merely to construct the request.
-            previous = self.controls._ivs.get((point, "clamp"))
+            previous = self.controls._ivs.get(intervention_key(spec))
             previous = copy(previous) if previous is not None else None
             owner, applied = self._owned_clamp, self._owned_applied_spec
-            cross_layer = owner is not None and owner["point"] != point
+            cross_layer = owner is not None and intervention_key(owner) != intervention_key(spec)
             refused = self.controls._intervene({"set": spec})
             if refused is not None:
                 raise ValueError(refused[1])
-            record = self.controls._ivs[(point, "clamp")]
+            record = self.controls._ivs[intervention_key(spec)]
             request = record.spec
             failures = self.controls._iv_boundary_failures
             self.controls._update_busy()
@@ -1053,7 +1115,7 @@ class HostedInference:
             raise
         with self.controls.lock:
             self._check_watch()
-            committed = (self.controls._ivs.get((point, "clamp")) is record and record.spec is request
+            committed = (self.controls._ivs.get(intervention_key(spec)) is record and record.spec is request
                          and record.state == "active" and record.hook is not None and not record.clear
                          and not getattr(record.hook, "removed", False)
                          and not record.replace and record.applied_spec == spec)
@@ -1075,7 +1137,7 @@ class HostedInference:
             self._apply()
             with self.controls.lock:
                 self._check_watch()
-                if require_commit and (self.controls._ivs.get((point, "clamp")) is not record
+                if require_commit and (self.controls._ivs.get(intervention_key(spec)) is not record
                         or record.hook is None or getattr(record.hook, "removed", False)
                         or record.clear or record.applied_spec != spec):
                     raise ValueError("The selected feature clamp changed before completion. Retry the action.")
@@ -1312,6 +1374,8 @@ class HostedInference:
                 self.status.set(bounded_text(f"{type(exc).__name__}: {exc}"))
 
     def close(self):
+        if self.replication is not None:
+            self.replication.close()
         if self.service is not None:
             unregister_service(self.service, controls=self.controls)
             self.service = None
@@ -1333,6 +1397,8 @@ def main(argv=None):
     parser.add_argument("--dictionary")
     parser.add_argument("--prompt")
     parser.add_argument("--fixture-dir")
+    parser.add_argument("--replication-profile", choices=["published_dallas_v1"])
+    parser.add_argument("--private-output-directory")
     args = parser.parse_args(argv)
     if args.fixture_dir:
         if any((args.model, args.dictionary, args.prompt)):
@@ -1341,7 +1407,9 @@ def main(argv=None):
         return
     if not all((args.model, args.dictionary, args.prompt)):
         parser.error("model, dictionary, and prompt are required")
-    run = HostedInference(args.model, args.dictionary, args.prompt)
+    run = HostedInference(args.model, args.dictionary, args.prompt,
+                          replication_profile=args.replication_profile,
+                          private_output_directory=args.private_output_directory)
     try:
         run.start()
         print(f"caliper: inference ready at step {run.controls.n}", flush=True)

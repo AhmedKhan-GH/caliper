@@ -38,6 +38,7 @@ _SUSPENDED = ContextVar("caliper_interventions_suspended", default=frozenset())
 _ROWS = ContextVar("caliper_intervention_rows", default={})
 _MUTED_HOOKS = ContextVar("caliper_muted_intervention_hooks", default=frozenset())
 _ACTIVE_REPLAYS = ContextVar("caliper_intervention_replays", default=())
+_DICTIONARY_ADMISSIONS = ContextVar("caliper_group_dictionary_admissions", default=())
 
 
 class InterventionError(ValueError):
@@ -611,6 +612,28 @@ class InterventionService:
         self.preparing_source = False
         self._hooks = weakref.WeakSet()
         self._retiring_sources = frozenset()
+        self._feature_groups = {}
+        self._published_forward_depth = 0
+
+    @contextmanager
+    def dictionary_admission(self):
+        """Share one complete byte scan within a pinned synchronous transaction."""
+        identity = (self, self.dictionary, self.dictionary_id, self._dictionary_snapshot)
+        admitted = _DICTIONARY_ADMISSIONS.get()
+        if identity in admitted:
+            yield
+            return
+        if self._default_dictionary_id and not self._dictionary_matches():
+            raise InterventionError("dictionary content changed. Reconfigure before use",
+                                    "intervene.unknown_dictionary")
+        token = _DICTIONARY_ADMISSIONS.set((*admitted, identity))
+        try:
+            yield
+        finally:
+            _DICTIONARY_ADMISSIONS.reset(token)
+
+    def _dictionary_admitted(self):
+        return (self, self.dictionary, self.dictionary_id, self._dictionary_snapshot) in _DICTIONARY_ADMISSIONS.get()
 
     def suspend(self):
         return suspend(self.model)
@@ -792,7 +815,7 @@ class InterventionService:
         elif kind in ("scale", "clamp"):
             if self.dictionary is None or spec.get("dictionary", self.dictionary_id) != self.dictionary_id:
                 raise InterventionError("unknown or absent dictionary", "intervene.unknown_dictionary")
-            if self._default_dictionary_id and not self._dictionary_matches():
+            if self._default_dictionary_id and not self._dictionary_admitted() and not self._dictionary_matches():
                 raise InterventionError("dictionary content changed. Reconfigure before use",
                                         "intervene.unknown_dictionary")
             if probe is None or not point.endswith(".mlp_out"):
@@ -1072,6 +1095,15 @@ class InterventionService:
                 hook.on_error = on_error
         else:
             module, event, width, probe = self._target(spec["point"])
+            if spec["op"] in ("scale", "clamp") and "positions" in spec:
+                group = self._feature_groups.get(spec["point"])
+                if group is None or all(member in self._retiring_sources for member in group.members):
+                    group = _PositionedFeatures(self, spec, width, probe, module)
+                    self._feature_groups[spec["point"]] = group
+                hook = _PositionedMember(self, spec, width, probe, on_error, group)
+                group.members.append(hook)
+                self._hooks.add(hook)
+                return hook
             if spec["op"] == "patch":
                 source = self._source(spec)
                 positions = spec.get("positions")
@@ -1281,3 +1313,110 @@ class Intervention:
 
     def clear_read(self, module, args, output):
         self.live_input = self.read_stack.pop() if self.read_stack else None
+
+
+class _PositionedMember(Intervention):
+    """One lifecycle record within a shared layer hook."""
+
+    def __init__(self, service, spec, width, probe, on_error, group):
+        super().__init__(service, spec, width, probe, on_error)
+        self.group = group
+
+    @property
+    def removed(self):
+        return self.group is None
+
+    def _remove(self, *, retain_source=False):
+        if self.group is not None:
+            group, self.group = self.group, None
+            group.members.remove(self)
+            if not group.members:
+                group._remove()
+                point = self.spec["point"]
+                if self.service._feature_groups.get(point) is group:
+                    retained = next((hook.group for hook in self.service._hooks
+                                     if isinstance(hook, _PositionedMember) and hook.group is not None
+                                     and hook.spec["point"] == point), None)
+                    if retained is None:
+                        self.service._feature_groups.pop(point, None)
+                    else:
+                        self.service._feature_groups[point] = retained
+        self.on_error = None
+
+
+class _PositionedFeatures(Intervention):
+    """Compute sorted decoder deltas from one layer input before output addition."""
+
+    def __init__(self, service, spec, width, probe, module):
+        super().__init__(service, spec, width, probe, None)
+        self.members = []
+        try:
+            read = service._target(service.dictionary.metadata["read_points"][probe.layer])
+            if read[0] is not module:
+                if read[1] != "input":
+                    raise InterventionError("feature groups require a semantic input probe")
+                self.separate_read = True
+                block = service.model.get_submodule(spec["point"].rsplit(".", 1)[0])
+                self.handles.append(read[0].register_forward_hook(self.read, with_kwargs=True))
+                self.handles.append(block.register_forward_pre_hook(self.enter_read))
+                self.handles.append(block.register_forward_hook(self.clear_read, always_call=True))
+            self.handles.append(module.register_forward_hook(self.post, with_kwargs=True))
+        except BaseException:
+            self._remove()
+            raise
+
+    def post(self, module, args, kwargs, output):
+        live_input = self.live_input if self.separate_read else _input(args, kwargs)
+        self.live_input = None
+        members = [member for member in self.members if not _hook_muted(member)]
+        if not members or selected_rows(self.service.model) == ():
+            return None
+        try:
+            for member in members:
+                member.calls += 1
+            return self._apply_members(output, live_input, members)
+        except Exception as error:
+            for member in members:
+                member._failed(error)
+            # A group failure must abort the forward. A partial case is never output.
+            if len(members) > 1 or self.service._published_forward_depth or isinstance(error, CleanStop):
+                raise
+            return None
+
+    def _apply_members(self, value, live_input, members):
+        if (not isinstance(value, torch.Tensor) or value.ndim != 3 or value.shape[-1] != self.width
+                or not value.is_floating_point() or not isinstance(live_input, torch.Tensor)
+                or live_input.shape != value.shape):
+            raise InterventionError("live feature group input and output shapes differ")
+        chosen = selected_rows(self.service.model)
+        batch = list(range(value.shape[0])) if chosen is None else list(chosen)
+        if any(row >= value.shape[0] for row in batch):
+            raise InterventionError("selected row is outside the live tensor")
+        if any(pos >= value.shape[1] for member in members for pos in member.spec["positions"]):
+            raise InterventionError("selected position is outside the live tensor")
+        weights = self.service.dictionary.layers[self.probe.layer]
+        if self.service.resource_guard is not None:
+            memory = _DeviceSnapshotMemory(self.service.resource_guard)
+            elements = value.shape[0] * value.shape[1] * weights.W_enc.shape[0]
+            # Encoder, activation delta, nonzero indices, and decoder products.
+            reserve = elements * (4 * value.element_size() + 24) + value.numel() * value.element_size() * 4
+            reserve += len(batch) * sum(len(m.spec["positions"]) for m in members) * self.width * value.element_size() * 2
+            _DictionarySnapshot._admit(memory, reserve, force=True)
+        activations = _trace_features(weights, live_input.to(weights.W_enc.device), self.service.resource_guard)
+        changes = torch.zeros_like(activations)
+        b = torch.tensor(batch, device=activations.device, dtype=torch.long)[:, None]
+        for member in members:
+            spec = member.spec
+            p = torch.tensor(spec["positions"], device=activations.device, dtype=torch.long)[None, :]
+            current = activations[b, p, spec["feature"]]
+            changes[b, p, spec["feature"]] = (spec["value"] - current if spec["op"] == "clamp"
+                                             else (spec["multiplier"] - 1) * current)
+        # nonzero traverses batch, position, then feature in ascending order.
+        rows_, positions, features = changes.nonzero(as_tuple=True)
+        vectors = weights.W_dec[features].to(activations.dtype) * changes[rows_, positions, features, None]
+        delta = torch.zeros_like(value).reshape(-1, self.width)
+        delta.index_add_(0, (rows_ * value.shape[1] + positions).to(value.device), vectors.to(value))
+        result = value + delta.reshape_as(value)
+        if not torch.isfinite(result).all().item():
+            raise InterventionError("feature group produced a nonfinite tensor")
+        return result

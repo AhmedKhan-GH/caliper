@@ -305,7 +305,7 @@ def test_gemma_feature_hook_reads_pre_mlp_and_writes_after_norm(gemma_semantics,
             actual = model(ids, use_cache=False).logits
         torch.testing.assert_close(actual, expected)
         torch.testing.assert_close(actual[0], baseline[0])
-        assert hook.live_input is None and hook.errors == 0 and len(hook.handles) == 4
+        assert hook.group.live_input is None and hook.errors == 0 and len(hook.group.handles) == 4
     finally:
         service.close()
     assert hook.removed and hook.live_input is None

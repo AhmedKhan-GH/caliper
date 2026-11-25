@@ -236,7 +236,8 @@ def test_slider_registration_refusal_preserves_owner_and_reset(hosted_run, monke
     assert hook_objects(run.model) == hooks
     assert run._owned_record() is record and run._owned_clamp is record.spec
     assert record.spec == applied and not record.replace
-    failed = run.controls._ivs[(run.dictionary.metadata["write_points"][layer], "clamp")]
+    failed = next(iv for iv in run.controls._ivs.values()
+                  if iv.point == run.dictionary.metadata["write_points"][layer] and iv.error is not None)
     assert failed.error == "RuntimeError: slider hook registration refused"
     assert failed.error_code == "intervene.hook_failed"
     assert "Live slider clamp:" in run.clamp_status.value

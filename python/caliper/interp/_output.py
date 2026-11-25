@@ -1,5 +1,5 @@
 """Paired next-token probabilities and bounded greedy continuations."""
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from contextvars import ContextVar
 from inspect import Parameter, signature
 
@@ -90,6 +90,7 @@ class Output:
         self.model, self.tokenizer, self.interventions = model, tokenizer, interventions
         self.guard = guard
         self.prompt = None
+        self.attention_scope = None
 
     def _inputs(self, prompt):
         inputs = prompt_inputs(self.model, self.tokenizer, prompt)
@@ -100,10 +101,17 @@ class Output:
 
     def compare(self, prompt):
         with autorelease_scope(next(self.model.parameters()).device):
-            from . import publish
             inputs = self._inputs(prompt)
-            with self.interventions.rows([1]):
+            scope = (self.attention_scope(prompt, self.interventions.specifications())
+                     if self.attention_scope is not None else nullcontext())
+            with scope, self.interventions.rows([1]):
                 logits = forward_logits(self.model, inputs, guard=self.guard)[:, -1]
+            return self.publish_logits(logits)
+
+    def publish_logits(self, logits):
+        """Publish bounded rows from actual baseline and candidate logits."""
+        with autorelease_scope(next(self.model.parameters()).device):
+            from . import publish
             probabilities = logits.softmax(-1)
             if probabilities.shape[-1] < 10:
                 raise ValueError("output comparison requires at least ten vocabulary tokens")

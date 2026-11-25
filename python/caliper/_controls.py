@@ -207,6 +207,14 @@ def _check_help(help) -> str | None:
     return help
 
 
+def intervention_key(spec):
+    """Keep legacy keys and distinguish each positioned feature record."""
+    key = (spec["point"], spec.get("op", spec.get("kind")))
+    if key[1] in ("clamp", "scale") and "positions" in spec:
+        return (*key, spec["feature"], tuple(sorted(spec["positions"])))
+    return key
+
+
 def _check_controls_budget(meta, *, ivs=None):
     """Check a detached prospective message with space for automatic state changes."""
     from ._intervention_protocol import MAX_BYTES
@@ -224,7 +232,7 @@ def _check_controls_budget(meta, *, ivs=None):
     entries = meta.get("interventions", {}).get("active", [])
     for index, entry in enumerate(entries):
         alternatives = [entry]
-        iv = (ivs or {}).get((entry["point"], entry["op"]))
+        iv = (ivs or {}).get(intervention_key(entry))
         if iv is not None and iv.applied_spec is not None:
             # A refused replacement restores the applied specification and schedule.
             # Reserve each record's largest outcome before any control uses the space.
@@ -729,7 +737,7 @@ class _DetailsWorker:
 # interventions
 # ===========================================================================
 class _Intervention:
-    """One intervention of the watched model, keyed by its point and its op."""
+    """One intervention of the watched model, with a stable specification key."""
 
     __slots__ = ("point", "op", "from_step", "until_step", "since_step", "state", "hook",
                  "clear", "error", "error_code", "spec", "applied_spec", "replace", "report")
@@ -862,7 +870,7 @@ class Interventions:
         """Queue removal at the next step boundary."""
         self._request({"clear_all": True} if point is None else {"clear": point})
 
-    def clear_feature(self, point, feature, *, kind="clamp"):
+    def clear_feature(self, point, feature, *, kind="clamp", positions=None):
         """Queue removal only if the latest specification matches this feature.
 
         Return True for a new clear. Preserve replacements for other features and
@@ -878,7 +886,11 @@ class Interventions:
                 raise InterventionError("unknown intervention point", "intervene.unknown_point")
             if kind not in ("clamp", "scale") or type(feature) is not int or feature < 0:
                 raise InterventionError("clear_feature requires a feature index and clamp or scale kind")
-            iv = self._ctl._ivs.get((point, kind))
+            spec = {"point": point, "op": kind, "feature": feature}
+            if positions is not None:
+                from .interp._intervene import _indices
+                spec["positions"] = _indices(positions, "positions", limit=32)
+            iv = self._ctl._ivs.get(intervention_key(spec))
             if iv is None or iv.state == IV_ENDED or iv.clear or iv.spec.get("feature") != feature:
                 return False
             iv.clear = True
@@ -966,7 +978,7 @@ class Interventions:
                 specifications, keys = [], set()
                 for record in records:
                     spec, applied = _record_specifications(record, replay.executor)
-                    key = spec["point"], spec["op"]
+                    key = intervention_key(spec)
                     if key in keys:
                         raise InterventionError("duplicate intervention record")
                     keys.add(key)
@@ -1007,14 +1019,14 @@ class Interventions:
             if not specifications:
                 return
             revision = self._ctl._iv_revision
-            records = {(record["specification"]["point"], record["specification"]["op"]): record
+            records = {intervention_key(record["specification"]): record
                        for record in self._state_dict()["interventions"]}
             keys = set()
             step = self._ctl._next_step()
             for request in specifications:
                 with self._ctl._outside_lock():
                     spec = self.executor.validate(request)
-                key = spec["point"], spec["op"]
+                key = intervention_key(spec)
                 if key in keys:
                     raise InterventionError("duplicate intervention override")
                 keys.add(key)
@@ -1034,7 +1046,24 @@ class Interventions:
             self._restore_records(list(records.values()), restore_active=True, evict_ended=True)
         self._ctl._publish()
 
-    def _restore_records(self, records, *, restore_active, evict_ended=False):
+    def replace_atomic(self, specifications, evaluate, *, finalize=None):
+        """Evaluate a complete candidate before its records replace the live state."""
+        from .interp._intervene import InterventionError
+        if not isinstance(specifications, list) or len(specifications) > MAX_INTERVENTIONS:
+            raise InterventionError("invalid atomic intervention records")
+        with self._ctl.lock, self._operation("transaction"):
+            step = self._ctl._next_step()
+            records = [{"specification": spec, "state": IV_ACTIVE, "since_step": step,
+                        "clear": False, "error": None, "error_code": None}
+                       for spec in specifications]
+            # The lifecycle owner pins resources across admission and installation.
+            with self._ctl._outside_lock(), self.executor.dictionary_admission():
+                with self._ctl.lock:
+                    result = self._restore_records(records, restore_active=True, evaluate=evaluate, finalize=finalize)
+        self._ctl._publish()
+        return result
+
+    def _restore_records(self, records, *, restore_active, evict_ended=False, evaluate=None, finalize=None):
         """Prepare a complete replacement, then commit if its input still owns the state."""
         from .interp._intervene import InterventionError
         revision = self._ctl._iv_revision
@@ -1042,10 +1071,10 @@ class Interventions:
         with self._ctl._outside_lock():
             for record in records:
                 spec, applied = _record_specifications(record, self.executor)
-                key = spec["point"], spec["op"]
+                key = intervention_key(spec)
                 if key in restored:
                     raise InterventionError("duplicate intervention record")
-                iv = _Intervention(*key, spec.get("from_step"), spec.get("until_step"), spec)
+                iv = _Intervention(spec["point"], spec["op"], spec.get("from_step"), spec.get("until_step"), spec)
                 iv.state, iv.since_step = record["state"], record["since_step"]
                 iv.clear, iv.error, iv.error_code = record["clear"], record["error"], record["error_code"]
                 iv.applied_spec = applied
@@ -1062,18 +1091,31 @@ class Interventions:
             raise InterventionError(str(error), _w().ERR_LIMIT) from None
         cache, identity = self.executor._cache.copy(), self.executor._cache_identity
         retiring = [iv.hook for iv in self._ctl._ivs.values()]
+        result = None
         try:
             if restore_active:
                 with self._ctl._outside_lock(), self.executor._retire_sources(retiring):
                     for iv in restored.values():
                         if iv.applied_spec is not None:
                             self._ctl._install_intervention(self, iv, iv.applied_spec)
+                    if evaluate is not None:
+                        from .interp._intervene import _mute_hooks
+                        with _mute_hooks(retiring):
+                            result = evaluate()
+                        if any(getattr(iv.hook, "errors", 0) or getattr(iv.hook, "removed", False)
+                               for iv in restored.values()):
+                            raise InterventionError("atomic intervention hook failed", "intervene.hook_failed")
             self._check_revision(revision)
             # Other controls can consume metadata space during preparation.
             try:
                 restored = self._ctl._admit_interventions(restored, evict_ended=evict_ended)
             except ValueError as error:
                 raise InterventionError(str(error), _w().ERR_LIMIT) from None
+            if finalize is not None:
+                with self._ctl._outside_lock():
+                    finalize(result)
+                self._check_revision(revision)
+                restored = self._ctl._admit_interventions(restored, evict_ended=evict_ended)
         except BaseException:
             with self._ctl._outside_lock():
                 for iv in restored.values():
@@ -1091,6 +1133,7 @@ class Interventions:
             for iv in old:
                 self._ctl._unhook(iv, retain_source=True)
             self.executor._discard_unused_sources()
+        return result
 
     def _check_revision(self, revision):
         from .interp._intervene import InterventionError
@@ -1126,8 +1169,8 @@ def _record_specifications(record, executor):
     applied = record.get("applied_specification", spec if state == IV_ACTIVE else None)
     if state == IV_ACTIVE:
         applied = executor.validate(applied)
-        if (applied["point"], applied["op"]) != (spec["point"], spec["op"]):
-            raise InterventionError("applied intervention must match the record point and kind")
+        if intervention_key(applied) != intervention_key(spec):
+            raise InterventionError("applied intervention must match the record identity")
     elif applied is not None:
         raise InterventionError("inactive intervention cannot have an applied specification")
     return spec, applied
@@ -1225,7 +1268,7 @@ class Controls:
         self._details_worker = _DetailsWorker()
         self.counters = collections.Counter()
         self._iv_model: Interventions | None = None   # the watched model of the interventions
-        self._ivs: dict = {}                     # (point, op) -> _Intervention, oldest first
+        self._ivs: dict = {}                     # intervention_key(spec) -> record, oldest first
         self._iv_due = False                     # the next checkpoint has intervention work
         self._iv_boundary_failures = 0           # successful nested calls cannot erase a deferral
         self._iv_revision = 0                    # cancels preparation after a lifecycle edit
@@ -2053,7 +2096,7 @@ class Controls:
             frm, until = spec.get("from_step"), spec.get("until_step")
             if until is not None and until <= nxt:
                 return (ERR_BAD_RANGE, f"until_step {until} is in the past: the next step is {nxt}")
-            key = (point, op)
+            key = intervention_key(spec)
             iv = self._ivs.get(key)
             candidate = _Intervention(point, op, frm, until, spec)
             if iv is not None and iv.state != IV_ENDED:
@@ -2177,7 +2220,7 @@ class Controls:
         """End a failed hook now and publish its error at the next boundary."""
         from copy import copy
         with self.lock:
-            if self._ivs.get((iv.point, iv.op)) is not iv:
+            if self._ivs.get(intervention_key(iv.spec)) is not iv:
                 return
             removed = copy(iv)
             iv.hook, iv.applied_spec = None, None
@@ -2328,7 +2371,7 @@ class Controls:
             retained.hook, retained.applied_spec = None, None
         retained.replace = False
         retained.error, retained.error_code = failed.error, failed.error_code
-        self._check_metadata_budget(ivs={**self._ivs, (retained.point, retained.op): retained})
+        self._check_metadata_budget(ivs={**self._ivs, intervention_key(retained.spec): retained})
         # Preserve request identity for owners such as the hosted slider.
         restored_spec = deepcopy(retained.spec)
         original.spec.clear()
