@@ -1,7 +1,6 @@
 """Original-coordinate indexes with tiny BF16 CPU fixtures."""
 from contextlib import ExitStack, nullcontext
 from copy import deepcopy
-import json
 from types import SimpleNamespace
 
 import numpy as np
@@ -11,12 +10,12 @@ from safetensors.torch import save_file
 from torch.nn import functional as F
 
 from caliper.interp import _index
-from caliper.interp._dictionary import (Dictionary, JumpReLUTranscoder, dictionary_fingerprint,
-                                       load_dictionary, model_identity)
-from caliper.interp._gemma_reference import PROFILE, install_reference_profile, profile_metadata
+from caliper.interp._dictionary import dictionary_fingerprint, load_dictionary, model_identity
+from caliper.interp._gemma_reference import profile_metadata
 from caliper.interp._memory import CleanStop
 from tools.interp.model_load import hidden_forward
-from .test_gemma_reference import reference_fixture
+from .test_gemma_reference_artifact import loaded_fixture_model
+from .test_index_qualification import deterministic_cpu_pressure, qualified_index, reference_artifact
 from .test_gemma_runtime import memory
 from .test_index_precision import rewrite_manifest
 
@@ -25,36 +24,8 @@ REFERENCE_INPUT = {"coordinate": "gemma_scope_pre_gain", "encoder": "W_enc_origi
 
 
 @pytest.fixture
-def original_index(tmp_path):
-    model = reference_fixture()
-    model.config.bos_token_id, model.config.pad_token_id = 1, 0
-    install_reference_profile(model, PROFILE)
-    tokenizer = SimpleNamespace(bos_token_id=1, pad_token_id=0, eos_token_id=2,
-        convert_ids_to_tokens=lambda i: str(i), decode=lambda ids, **kwargs: " ".join(map(str, ids)))
-    layers = []
-    generator = torch.Generator().manual_seed(8123)
-    for block in model.model.layers:
-        source = torch.randn(7, 24, generator=generator) * .5
-        gain = (block.pre_feedforward_layernorm.weight.float() + 1).bfloat16()
-        layers.append(JumpReLUTranscoder(
-            (source / gain.float()).bfloat16(), torch.full((7,), .5, dtype=torch.bfloat16),
-            torch.randn(7, 24, generator=generator).bfloat16(), torch.zeros(24, dtype=torch.bfloat16),
-            torch.full((7,), .25, dtype=torch.bfloat16), W_enc_original=source.bfloat16()))
-    metadata = {"format_version": 1, "model_id": model.config._name_or_path,
-        "model_hash": model_identity(model), "revision": model.config._commit_hash,
-        "layers": 2, "width": 24, "latents": 7, "activation": "jumprelu", "k": None,
-        "read_points": [f"model.layers.{i}.mlp_in" for i in range(2)],
-        "write_points": [f"model.layers.{i}.mlp_out" for i in range(2)],
-        "reference_input": dict(REFERENCE_INPUT),
-        "training": {"dataset_id": "fixture", "dataset_config": "random-inputs",
-            "dataset_revision": "seed-8123", "split": "train", "partitions": {},
-            "tokens": 0, "elapsed_seconds": 0, "peak_memory_bytes": 0},
-        "quality": {"fvu": None, "dead_fraction": None, "cross_entropy_delta": None, "evaluated_tokens": 0}}
-    dictionary = Dictionary(metadata, layers)
-    (tmp_path / "dictionary.json").write_text(json.dumps(metadata))
-    for i, layer in enumerate(layers):
-        save_file(layer.state_dict(), tmp_path / f"layer_{i:02d}.safetensors")
-    return SimpleNamespace(root=tmp_path, model=model, tokenizer=tokenizer, dictionary=dictionary)
+def original_index(qualified_index):
+    return qualified_index
 
 
 def oracle(case, ids, mask):
@@ -116,7 +87,7 @@ def test_reference_top_examples_use_exact_source_encoder_and_source_offsets(orig
         for i in range(2):
             values = torch.cat(expected[i]).float().numpy()
             np.testing.assert_array_equal(index.counts[i], (values > 0).sum(0))
-            for feature in range(7):
+            for feature in range(case.dictionary.metadata["latents"]):
                 ranked = sorted((offset for offset in range(8) if values[offset, feature] > 0),
                                 key=lambda offset: (-values[offset, feature], offset))
                 np.testing.assert_array_equal(index.table[i, feature]["offset"][:len(ranked)], ranked)
@@ -218,13 +189,13 @@ def test_reference_artifact_mismatch_refuses_before_index_output(original_index,
     if damage == "missing":
         del case.dictionary.layers[0].W_enc_original
     elif damage == "shape":
-        case.dictionary.layers[0].W_enc_original = torch.nn.Parameter(torch.ones(1, 24, dtype=torch.bfloat16))
+        case.dictionary.layers[0].W_enc_original = torch.nn.Parameter(torch.ones(1, 16, dtype=torch.bfloat16))
     elif damage == "dtype":
         case.dictionary.layers[0].threshold.data = case.dictionary.layers[0].threshold.float()
     elif damage == "declaration":
         del case.dictionary.metadata["reference_input"]
     else:
-        ordinary = reference_fixture()
+        ordinary = loaded_fixture_model(case.snapshot)
         ordinary.config.bos_token_id, ordinary.config.pad_token_id = 1, 0
         case.model = ordinary
         case.dictionary.metadata["model_hash"] = model_identity(ordinary)
@@ -299,15 +270,15 @@ def test_reference_capture_and_encoder_admit_before_allocation(original_index, m
     case = original_index
     ids = torch.tensor([[1, 3, 5]])
     guard = memory()
-    retained = ids.numel() * 24 * 2 * 2
+    retained = ids.numel() * 16 * 2 * 2
     guard.limit = retained - 1
     with pytest.raises(CleanStop, match="capture allocation"):
         with _index._capture_inputs(case.model, case.dictionary, case.dictionary.metadata["read_points"], ids, guard):
             pytest.fail("capture entered before admission")
     assert not any(module._forward_hooks or module._forward_pre_hooks for module in case.model.modules())
-    x = torch.ones(3, 24, dtype=torch.bfloat16)
+    x = torch.ones(3, 16, dtype=torch.bfloat16)
     guard = memory()
-    guard.limit = 3 * 7 * (4 * 2 + 1) - 1
+    guard.limit = 3 * 20 * (4 * 2 + 1) - 1
     monkeypatch.setattr(F, "linear", lambda *args: pytest.fail("encoder allocated before admission"))
     with pytest.raises(CleanStop, match="encoder allocation"):
         _index._index_features(case.dictionary, 0, x, memory=guard)

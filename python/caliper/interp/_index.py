@@ -365,6 +365,19 @@ def _forward_bytes(model, dictionary, rows, context):
     return size * (workspace + patterns + recurrent + logits) + tokens * 32 + 512_000_000
 
 
+class _QualificationMemory(BudgetMemory):
+    """Keep caller cancellation active in bounded source verification checks."""
+
+    def __init__(self, memory, cancel):
+        super().__init__(memory, memory.limit / 1e9)
+        self.cancel = cancel
+
+    def check(self, stage, *, force=True):
+        if self.cancel is not None:
+            self.cancel(stage)
+        return super().check(stage, force=force)
+
+
 def build_index(dictionary_path, documents, *, model, tokenizer, provenance,
                 dictionary=None, max_tokens=MAX_TOKENS, context_length=256, memory_guard=None,
                 memory=None, memory_limit_gb=None):
@@ -374,6 +387,7 @@ def build_index(dictionary_path, documents, *, model, tokenizer, provenance,
     Context blocks reset within each document. The last document can end at the token cap.
     Gemma reserves one model position for BOS. Stored offsets count source tokens only.
     The caller supplies disjoint partition provenance. The tool validates T2 partitions.
+    Reference artifacts require source qualification before index output or model batches.
     An existing index is never overwritten. A failed build has no completion manifest.
     """
     _positive_integer(max_tokens, "max_tokens", MAX_TOKENS)
@@ -404,6 +418,14 @@ def build_index(dictionary_path, documents, *, model, tokenizer, provenance,
         root, model=model, memory_limit_gb=limit, memory=memory)
     data = _compatible(model, dictionary, memory_limit_gb=limit, memory=memory)
     check("dictionary")
+    if _reference_coordinates(data) is not None:
+        from ._evaluation_identity import evaluation_dictionary_evidence
+        from ._qualification import qualify_import
+        qualification_memory = _QualificationMemory(memory, memory_guard)
+        qualify_import(root, data, model=model, memory=qualification_memory)
+        # A supplied dictionary must use the exact tensors from the qualified files.
+        evaluation_dictionary_evidence(dictionary, folder=root, memory=qualification_memory)
+        check("reference qualification complete")
     identity = _dictionary_hash(dictionary, memory=memory)
     source_hash = _source_hash(root, data["layers"])
     vocab = model.get_output_embeddings().weight.shape[0]
