@@ -2,6 +2,7 @@
 from copy import deepcopy
 import hashlib
 import json
+import os
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -429,6 +430,7 @@ def test_graph_prompt_identity_is_bound_to_preparation():
 
 
 @pytest.mark.parametrize("show", [False, True])
+@pytest.mark.skipif(os.name == "nt", reason="The owned child uses a POSIX executable.")
 def test_missing_native_profile_retains_startup_and_owned_error_path(tmp_path, monkeypatch, show):
     import sys
     child = tmp_path / "owned-child"
