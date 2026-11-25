@@ -144,6 +144,21 @@ def _content_identity(state, guard):
     return _state_hash(state, memory=_identity_memory(state, guard))
 
 
+def _model_state(model):
+    state = {"parameter:" + name: value for name, value in model.named_parameters()}
+    state.update({"buffer:" + name: value for name, value in model.named_buffers()})
+    return state
+
+
+def _model_identity_parts(model, tokenizer, state, content, settings):
+    return (id(model), id(tokenizer),
+            tuple((id(m), m.training) for m in model.modules()),
+            tuple((name, id(value), value.device) for name, value in state.items()), content,
+            tuple(sorted(settings.items())),
+            tuple((name, id(module.act_fn)) for name, module in model.named_modules()
+                  if hasattr(module, "act_fn")))
+
+
 def _source_input_identity(inputs, guard):
     """Canonicalize admitted prompt views without a change to weight admission."""
     from ._dictionary import _hash_admission, _state_hash
@@ -917,16 +932,10 @@ class InterventionService:
         from ._forward_identity import source_settings
         # Include nonpersistent buffers and alias writes. Inference tensors have
         # no version counter, but their materialized bytes obey the same contract.
-        state = {"parameter:" + name: value for name, value in self.model.named_parameters()}
-        state.update({"buffer:" + name: value for name, value in self.model.named_buffers()})
+        state = _model_state(self.model)
         settings = source_settings(self.model, tensor_hash=lambda values: _content_identity(values, self.resource_guard))
         content = _content_identity(state, self.resource_guard)
-        return (id(self.model), id(self.tokenizer),
-                tuple((id(m), m.training) for m in self.model.modules()),
-                tuple((name, id(value), value.device) for name, value in state.items()), content,
-                tuple(sorted(settings.items())),
-                tuple((name, id(module.act_fn)) for name, module in self.model.named_modules()
-                      if hasattr(module, "act_fn")))
+        return _model_identity_parts(self.model, self.tokenizer, state, content, settings)
 
     def _source_keys(self):
         return {(hook.spec["source_prompt"], hook.spec["point"]) for hook in self._hooks
