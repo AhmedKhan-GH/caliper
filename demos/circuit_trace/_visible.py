@@ -29,10 +29,11 @@ def configure_assets(env):
 
 
 def startup_instrument(session):
-    session.mcp.body("spec.new", id="circuit-trace", title="Circuit Trace")
+    session.mcp.body("spec.new", id="circuit-trace-startup", title="Circuit Trace")
     session.mcp.body("panel.create", id="startup", primitive="text", title="Model Initialization",
                      options={"text": "The model and dictionary must load before the graph is available."})
     session.mcp.body("layout.set", layout={"root": "startup", "nodes": []})
+    session.mcp.body("applet.save")
 
 
 def check_assets(session):

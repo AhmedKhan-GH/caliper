@@ -15,7 +15,29 @@ import pytest
 
 from test_circuit_trace import driver, ROOT
 from _mcp import Failure
-from _visible import ASSETS, configure_assets, check_assets, hold_after_error, show_error
+from _visible import ASSETS, configure_assets, check_assets, hold_after_error, show_error, startup_instrument
+
+
+def test_startup_is_saved_without_replacing_the_final_instrument():
+    state = {"dirty": False, "id": None, "saved": set()}
+    def body(method, **args):
+        if method == "spec.new":
+            if state["dirty"]:
+                raise Failure("Discard of an unsaved spec requires approval.")
+            state.update(id=args["id"], dirty=True)
+        elif method == "applet.save":
+            if state["id"] in state["saved"]:
+                raise Failure("Overwrite requires approval.")
+            state["saved"].add(state["id"])
+            state["dirty"] = False
+        else:
+            state["dirty"] = True
+    session = SimpleNamespace(mcp=SimpleNamespace(body=body), family="fixture", quality_override=None)
+    startup_instrument(session)
+    driver.instrument(session)
+    session.mcp.body("applet.save")
+    assert state["id"] == "circuit-trace"
+    assert state["saved"] == {"circuit-trace-startup", "circuit-trace"}
 
 
 @pytest.mark.parametrize("explicit", [False, True])
