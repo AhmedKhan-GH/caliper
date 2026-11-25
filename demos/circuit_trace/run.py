@@ -1009,7 +1009,7 @@ def main(argv=None):
     session = None
     completed = False
     try:
-        if args.replication_profile:
+        if args.replication_profile and not (args.show or args.demo):
             # Bound the explicit model preparation and baseline before the full trace.
             session = Session(args, out / "bounded")
             _, catalog = published.replication_state(session.events.complete("trace.status"))
@@ -1025,7 +1025,7 @@ def main(argv=None):
             peak = memory_bytes(out / "bounded")
             result["checks"].append(check("bounded_memory", peak <= memory_limit, peak, memory_limit))
             published.require(peak <= memory_limit, "The bounded published baseline exceeds the process memory limit.")
-        else:
+        elif not args.replication_profile:
             # Generic acceptance retains its bounded precursor.
             session = Session(args, out / "bounded")
             measured = session.events.complete("trace.run", prompt=args.prompt, max_targets=32, max_nodes=64, max_edges=256)

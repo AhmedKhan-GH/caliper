@@ -552,3 +552,24 @@ def test_absent_native_requirements_cannot_be_accepted(reviewed_collection, miss
     write_json(root / "review.json", review)
     with pytest.raises(Failure, match="Required native"):
         verify_review(root, "driver/collection.json", "review.json")
+
+
+@pytest.mark.parametrize("mode", ["--show", "--demo"])
+def test_published_live_cli_starts_interactive_session_before_any_preflight(tmp_path, monkeypatch, mode):
+    import sys
+    launches = []
+    def launch(command, **kwargs):
+        launches.append(kwargs["env"])
+        raise Failure("The external app boundary refused this test launch.")
+    monkeypatch.setattr(driver, "executable", lambda *args: Path(sys.executable))
+    monkeypatch.setattr(driver.subprocess, "Popen", launch)
+    model = tmp_path / "models--google--gemma-2-2b" / "snapshots" / driver.GEMMA_REVISION
+    out = tmp_path / "driver"
+    code = driver.main(["--model", str(model), "--dictionary", str(tmp_path / "dictionary"),
+                        "--replication-profile", published.PROFILE, "--private-output-directory", str(tmp_path),
+                        "--out", str(out), mode])
+    assert code == 1 and len(launches) == 1
+    assert not (out / "bounded").exists() and (out / "acceptance").is_dir()
+    assert launches[0]["CALIPER_HIDDEN"] == ("0" if mode == "--show" else "1")
+    result = json.loads((out / "result.json").read_text())
+    assert not result["accepted_replication"] and "external app boundary" in result["error"]
