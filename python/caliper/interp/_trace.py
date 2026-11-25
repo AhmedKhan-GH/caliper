@@ -241,7 +241,7 @@ class _DirectEffects:
         A single backward computes all rows. Later feature activations cannot
         enter this path because ``FrozenPath.run`` never evaluates an encoder.
         """
-        bounded_integer(len(indices), "target batch", 1, 64)
+        bounded_integer(len(indices), "target batch", 1, 512 if self.reference else 64)
         self.check("target batch admission")
         path = self.path
         self.prepare_decoders()

@@ -145,7 +145,7 @@ def build(effects, *, max_targets, max_nodes, max_edges, batch_size, update_inte
     order = features + errors + tokens + effects.logit_nodes
     inverse = {node: i for i, node in enumerate(order)}
     budget = len(effects.logit_nodes) + min(max_targets, len(features))
-    guard.reserve("reference edge workspace", len(order) * (budget * 12 + 64 * 8 + 64))
+    guard.reserve("reference edge workspace", len(order) * (budget * 12 + max(64, batch_size) * 8 + 64))
     weights = torch.zeros((len(order), budget), dtype=torch.float32)
     seeds = torch.zeros(len(order), dtype=torch.float32)
     seeds[-len(effects.logit_nodes):] = torch.tensor(
@@ -163,7 +163,9 @@ def build(effects, *, max_targets, max_nodes, max_edges, batch_size, update_inte
             offset = 0
             while offset < len(logical):
                 check("reference batch admission")
-                size = guard.batch_size(min(64, len(logical) - offset), layers=path.layers,
+                # The reference permits 512 targets. The unchanged memory
+                # model can split each logical batch according to capacity.
+                size = guard.batch_size(len(logical) - offset, layers=path.layers,
                     tokens=path.tokens, width=path.width, mixer_width=path.mixer_width,
                     itemsize=path.embedding.element_size())
                 batch = logical[offset:offset + size]
