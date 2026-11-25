@@ -11,6 +11,127 @@ from .test_intervention_replay import hook_objects
 from .test_service import Transport
 
 
+def test_source_capacity_refusal_preserves_an_independent_add_request(monkeypatch):
+    from caliper._controls import Controls
+    from caliper.interp import _intervene
+    from .fixture import make_fixture
+
+    model, tokenizer = make_fixture(layers=1, width=4, heads=1, latents=8, k=2)
+    controls = Controls()
+    service = controls.interventions_on(model)
+    service.configure(tokenizer=tokenizer)
+    first = {"kind": "patch", "point": "layers.0.resid_pre", "source_prompt": "a"}
+    add = {"kind": "add", "point": "layers.0.mlp_out", "vector": [1.] * 4, "coefficient": 1}
+    last = {"kind": "patch", "point": "layers.0.mlp_in", "source_prompt": "a"}
+    route = controls.attach(Transport())
+    observed = []
+    try:
+        for spec in (first, add, last):
+            service.set(spec)
+        controls.step()
+        original = [(iv, iv.hook, iv.applied_spec) for iv in controls._ivs.values()]
+        hooks = hook_objects(model)
+        cache = service.executor._cache
+        sources, identity = list(cache.items()), service.executor._cache_identity
+        assert [tensor.numel() * tensor.element_size() for _, tensor in sources] == [64, 64]
+        before = model(**tokenizer("c")).logits
+        monkeypatch.setattr(_intervene, "MAX_SOURCE_BYTES", 128)
+        service.set(dict(first, source_prompt="bb"))
+        service.set(dict(add, coefficient=2))
+        request = original[1][0].spec
+        controls.action("inspect", lambda: observed.append(service.specifications()))
+        route.on_control(None, _wire.Control(1, "run", name="inspect").to_meta())
+        with pytest.warns(RuntimeWarning, match="bounded source cache"):
+            controls.step()
+        patch_record, add_record, last_record = [iv for iv, *_ in original]
+        assert patch_record.error == "InterventionError: active patch sources exceed the bounded source cache"
+        assert patch_record.error_code == "intervene.hook_failed" and not patch_record.replace
+        assert patch_record.spec == patch_record.applied_spec
+        assert add_record.spec is request and add_record.spec["coefficient"] == 2
+        assert add_record.replace and add_record.error is None and last_record.error is None
+        assert all(iv.hook is hook and iv.applied_spec is applied and not hook.removed
+                   for iv, hook, applied in original)
+        assert hook_objects(model) == hooks
+        assert service.executor._cache is cache and service.executor._cache_identity is identity
+        assert list(cache) == [key for key, _ in sources]
+        assert all(cache[key] is tensor for key, tensor in sources)
+        torch.testing.assert_close(model(**tokenizer("c")).logits, before, rtol=0, atol=0)
+        assert not observed and not route.transport.replies
+        controls.step()
+        assert observed == [service.specifications()]
+        assert observed[0][0]["source_prompt"] == "a" and observed[0][1]["coefficient"] == 2
+        assert not add_record.replace and add_record.error is None
+        assert patch_record.hook is original[0][1]
+        assert [(reply.request_id, reply.status) for reply in route.transport.replies] == [(1, "ok")]
+        controls.step()
+        assert len(route.transport.replies) == 1 and not controls.queue
+    finally:
+        route.detach()
+        service.remove()
+
+
+@pytest.mark.parametrize("capacity", ["bytes", "entries"])
+def test_deferred_restore_refusal_ends_saved_effect_without_a_hook(monkeypatch, capacity):
+    from caliper._controls import Controls
+    from caliper.interp import _intervene
+    from .fixture import make_fixture
+
+    model, tokenizer = make_fixture(layers=1, width=4, heads=1, latents=8, k=2)
+    controls = Controls()
+    service = controls.interventions_on(model)
+    service.configure(tokenizer=tokenizer)
+    route = controls.attach(Transport())
+    observed, due = [], []
+    try:
+        service.set({"kind": "patch", "point": "layers.0.resid_pre", "source_prompt": "bb"})
+        service.set({"kind": "patch", "point": "layers.0.mlp_in", "source_prompt": "a", "from_step": 1})
+        controls.step(2)
+        saved = service.state_dict()
+        monkeypatch.setattr(_intervene, "MAX_SOURCE_BYTES" if capacity == "bytes" else "MAX_SOURCE_ENTRIES",
+                            128 if capacity == "bytes" else 1)
+        service.load_state_dict(saved, restore_active=False)
+        first, second = controls._ivs.values()
+        assert all(iv.hook is None and iv.applied_spec is not None for iv in (first, second))
+        install = service.executor.install
+
+        def installed(spec, **kwargs):
+            # Capture the committed due effect before speculative source preparation.
+            if spec["point"] == first.point:
+                due.append((second.hook, hook_objects(model), list(service.executor._cache.items()),
+                            service.executor._cache_identity))
+            return install(spec, **kwargs)
+
+        monkeypatch.setattr(service.executor, "install", installed)
+        cache = service.executor._cache
+        controls.action("recover", lambda: observed.append(service.specifications()))
+        route.on_control(None, _wire.Control(1, "run", name="recover").to_meta())
+        with pytest.warns(RuntimeWarning, match="bounded source cache"):
+            controls.step()
+        assert first.state == "ended" and first.hook is None and first.applied_spec is None
+        assert not first.replace and first.error_code == "intervene.hook_failed"
+        assert first.error == "InterventionError: active patch sources exceed the bounded source cache"
+        hook, hooks, sources, identity = due[0]
+        assert second.hook is hook and not hook.removed and second.error is None
+        assert hook_objects(model) == hooks
+        assert service.executor._cache is cache and service.executor._cache_identity is identity
+        assert list(cache) == [key for key, _ in sources]
+        assert all(cache[key] is tensor for key, tensor in sources)
+        entry = controls.controls_meta()["interventions"]["active"][0]
+        assert entry["state"] == "ended" and entry["error"] == first.error
+        assert not observed and not route.transport.replies
+        resolved = service.state_dict()
+        controls.step()
+        assert len(due) == 1 and service.state_dict() == resolved
+        assert observed == [[second.applied_spec]]
+        assert [(reply.request_id, reply.status) for reply in route.transport.replies] == [(1, "ok")]
+        controls.step()
+        assert len(route.transport.replies) == 1 and not controls.queue
+        assert second.hook is hook and service.executor._cache_identity is identity
+    finally:
+        route.detach()
+        service.remove()
+
+
 @pytest.mark.parametrize("request_kind", ["replacement", "activation", "scheduled"])
 def test_reinstallation_refusal_resolves_the_request_that_changes_the_final_set(monkeypatch, request_kind):
     from caliper.interp import _intervene

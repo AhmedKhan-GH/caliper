@@ -37,9 +37,10 @@ _ACTIVE_REPLAYS = ContextVar("caliper_intervention_replays", default=())
 class InterventionError(ValueError):
     """A request refusal with a stable wire error code."""
 
-    def __init__(self, message, code="intervene.bad_request"):
+    def __init__(self, message, code="intervene.bad_request", *, resource=None):
         super().__init__(message)
         self.code = code
+        self.resource = resource
 
 
 class _IdentityMemory:
@@ -692,7 +693,8 @@ class InterventionService:
                 evict.append(key)
                 total, count = total - size, count - 1
         if total > MAX_SOURCE_BYTES or count > MAX_SOURCE_ENTRIES:
-            raise InterventionError("active patch sources exceed the bounded source cache")
+            resource = "source_bytes" if total > MAX_SOURCE_BYTES else "source_entries"
+            raise InterventionError("active patch sources exceed the bounded source cache", resource=resource)
         return evict
 
     @contextmanager

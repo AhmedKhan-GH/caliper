@@ -2275,12 +2275,14 @@ class Controls:
         from copy import copy, deepcopy
 
         retained = copy(previous)
-        if retained.applied_spec is not None:
+        if (retained.hook is not None and not getattr(retained.hook, "removed", False)
+                and retained.applied_spec is not None):
             retained.spec = retained.applied_spec
             retained.from_step = retained.spec.get("from_step")
             retained.until_step = retained.spec.get("until_step")
         else:
             retained.state = IV_ENDED
+            retained.hook, retained.applied_spec = None, None
         retained.replace = False
         retained.error, retained.error_code = failed.error, failed.error_code
         self._check_metadata_budget(ivs={**self._ivs, (retained.point, retained.op): retained})
@@ -2423,7 +2425,17 @@ class Controls:
 
         changed = False
         reinstall = False
-        cause = None
+        causes = {}
+        # Attribute a cache refusal only to a request that increases its resource.
+        # Other edits can change hook order without additional source capacity.
+        source_sizes = {}
+        for key, iv in records.items():
+            if iv.op == "patch" and iv.hook is not None:
+                source = m.executor._cache.get((iv.applied_spec["source_prompt"], iv.point))
+                if source is not None:
+                    source_sizes[key] = source.numel() * source.element_size()
+                else:
+                    source_sizes[key] = 0
         reports = []
         for key in list(records):
             iv = records[key]
@@ -2456,7 +2468,13 @@ class Controls:
                     self._install_intervention(m, iv, iv.spec, owner=originals[key])
                     reinstall = True
                     if requested:
-                        cause = key
+                        causes[None] = key
+                        if iv.op == "patch":
+                            source = m.executor._cache[(iv.spec["source_prompt"], iv.point)]
+                            if source.numel() * source.element_size() > source_sizes.get(key, 0):
+                                causes["source_bytes"] = key
+                            if key not in source_sizes:
+                                causes["source_entries"] = key
                 except Exception as e:
                     if isinstance(e, CleanStop) or self._resource_stop(e):
                         raise
@@ -2467,7 +2485,7 @@ class Controls:
                     if originals[key].hook is not None:
                         # An unchanged hook can fail after a prior request consumes capacity.
                         # Resolve that request, then roll back the complete hook sequence.
-                        refused = key if requested else cause
+                        refused = key if requested else causes.get(getattr(e, "resource", None), key)
                         records[refused].error, records[refused].error_code = iv.error, iv.error_code
                         return None, reports, refused
             if not on:
