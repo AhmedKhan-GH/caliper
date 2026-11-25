@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 from functools import partial
+from itertools import chain
 
 import torch
 
@@ -10,6 +11,7 @@ from . import _qwen_family
 
 
 _MAX_CHECKPOINT_BUFFER_BYTES = 1024 * 1024
+_ARITHMETIC_CONTEXT = "__arithmetic_context__"
 
 
 _MODULE_FIELDS = (
@@ -107,6 +109,8 @@ def forward_settings(model, *, tensor_hash):
 
     Qwen permits eager and SDPA attention. Gemma requires eager attention for
     its softcap. Cache outputs and placement are absent from this signature.
+    Runtime arithmetic belongs to source, trace, and evaluation evidence. It
+    does not change checkpoint verification against a reference on meta.
     """
     return _settings(model, tensor_hash=tensor_hash, source=False)
 
@@ -117,7 +121,34 @@ def source_settings(model, *, tensor_hash):
     Known decoder families retain their backend restrictions. Callable activation
     fields accept only the bounded functions and modules above.
     """
-    return _settings(model, tensor_hash=tensor_hash, source=True)
+    settings = _settings(model, tensor_hash=tensor_hash, source=True)
+    settings.update(arithmetic_settings(model))
+    return settings
+
+
+def arithmetic_settings(model):
+    """Bind arithmetic without tensor copies or device allocations.
+
+    The canonical default is disabled autocast and highest float32 matmul
+    precision. It adds no fields, which preserves exact legacy evaluation and
+    index hashes. A disabled autocast dtype has no effect and is absent too.
+
+    Check CPU and every device type in the model's parameters and buffers.
+    CPU can also execute host operations for a model on another device.
+    Checkpoint settings remain independent of this runtime context.
+    """
+    devices = {"cpu"}
+    devices.update(value.device.type for value in chain(model.parameters(), model.buffers()))
+    autocast = {device: str(torch.get_autocast_dtype(device))
+                for device in sorted(devices) if torch.is_autocast_enabled(device)}
+    context = {}
+    if autocast:
+        context["autocast"] = autocast
+    precision = torch.get_float32_matmul_precision()
+    if precision != "highest":
+        context["float32_matmul_precision"] = precision
+    return ({_ARITHMETIC_CONTEXT: json.dumps(context, sort_keys=True, allow_nan=False)}
+            if context else {})
 
 
 def _settings(model, *, tensor_hash, source):
