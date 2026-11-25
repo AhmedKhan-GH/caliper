@@ -1051,6 +1051,9 @@ class Interventions:
         from .interp._intervene import InterventionError
         if not isinstance(specifications, list) or len(specifications) > MAX_INTERVENTIONS:
             raise InterventionError("invalid atomic intervention records")
+        if any(isinstance(spec, dict) and any(spec.get(key) is not None for key in ("from_step", "until_step"))
+               for spec in specifications):
+            raise InterventionError("atomic replacement requires immediate unscheduled specifications")
         with self._ctl.lock, self._operation("transaction"):
             step = self._ctl._next_step()
             records = [{"specification": spec, "state": IV_ACTIVE, "since_step": step,

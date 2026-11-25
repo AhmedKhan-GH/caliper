@@ -255,3 +255,84 @@ def test_published_china_contract_has_thirteen_distinct_members():
     assert len(specs) == len({intervention_key(s) for s in specs}) == 13
     assert {(m['feature'], m['position']) for m in members if m['layer'] == 4} == {(4257, 9), (11570, 9), (13154, 9)}
     assert {(m['feature'], m['position']) for m in members if m['layer'] == 19} == {(7477, 9), (12274, 9), (12274, 10)}
+
+
+@pytest.fixture
+def replicated_hosted(tmp_path, monkeypatch, request):
+    import caliper
+    from types import SimpleNamespace
+    from caliper.interp import _replication_actions as actions
+    from tests.interp import test_hosted
+    from tests.interp.cpu_pressure import cpu_fixture_pressure
+    hosted_type = test_hosted.HostedInference
+    monkeypatch.setattr(actions, 'PROMPTS', {'dallas': 'AB', 'oakland': 'CD', 'shanghai': 'EF', 'vancouver': 'GH'})
+    monkeypatch.setattr(actions, 'GROUPS', {name: [(layer % 4, feature % 256, position % 3)
+                                                 for layer, feature, position in nodes]
+                                          for name, nodes in actions.GROUPS.items()})
+    monkeypatch.setattr(caliper, 'serve', lambda: SimpleNamespace(url='in-process'))
+    monkeypatch.setattr(test_hosted, 'HostedInference', lambda *a, **k: hosted_type(
+        *a, **k, replication_profile='published_dallas_v1', private_output_directory=tmp_path / 'private'))
+    with cpu_fixture_pressure():
+        yield from test_hosted._hosted_run(tmp_path, monkeypatch, request)
+
+
+def test_named_published_action_completes_once_and_exposes_bounded_status(replicated_hosted):
+    from caliper import _wire
+    run, route = replicated_hosted
+    names = [f'published_dallas_v1.cell{cell}' for cell in (10, 14, 16, 18, 20, 24, 26, 29)]
+    assert all(name in run.controls.actions for name in names)
+    queued = route.on_control(None, _wire.Control(70, 'run', name=names[-2]).to_meta())
+    assert queued['status'] == 'queued'
+    run.boundary()
+    replies = [reply for reply in route.transport.replies if reply.request_id == 70]
+    assert len(replies) == 1 and replies[0].status == 'ok'
+    status, result = run.service.submit({'version': 1, 'method': 'trace.status', 'params': {}}, lambda *a: None)
+    assert status == 'ok'
+    evidence = result['inference']['replication']['result']
+    assert evidence['case_id'] == names[-2]
+    assert len(evidence['group_values']) == len(run.interventions.specifications()) == 13
+    assert evidence['argmax_token_ids'] == result['inference']['comparison']['argmax_token_ids']
+    assert (run.replication.output_directory / evidence['evidence']['file']).is_file()
+    import json
+    assert len(json.dumps(result)) < 32768
+    run.boundary()
+    assert len([reply for reply in route.transport.replies if reply.request_id == 70]) == 1
+
+
+def test_named_published_action_failure_keeps_prior_case_and_one_error(replicated_hosted, monkeypatch):
+    from caliper import _wire
+    run, route = replicated_hosted
+    run.apply_published_case(18)
+    before, result = run.interventions.state_dict(), deepcopy(run.replication.last_result)
+    def fail(*args):
+        raise RuntimeError('publication refusal')
+    monkeypatch.setattr(run.output, 'publish_logits', fail)
+    queued = route.on_control(None, _wire.Control(71, 'run', name='published_dallas_v1.cell26').to_meta())
+    assert queued['status'] == 'queued'
+    with pytest.warns(RuntimeWarning, match='publication refusal'):
+        run.boundary()
+    replies = [reply for reply in route.transport.replies if reply.request_id == 71]
+    assert len(replies) == 1 and replies[0].status == 'error'
+    assert run.interventions.state_dict() == before
+    assert run.replication.last_result == result and run.replication.last_attempt['status'] == 'error'
+    assert len(run.interventions.specifications()) == 6
+
+
+def test_donor_token_change_refuses_before_forward(published, monkeypatch):
+    from caliper.interp import _replication_actions as actions
+    _, _, _, service, runtime = published
+    inputs = actions.prompt_inputs
+    def changed(model, tokenizer, prompt):
+        return inputs(model, tokenizer, 'ZZ' if prompt == 'EF' else prompt)
+    monkeypatch.setattr(actions, 'prompt_inputs', changed)
+    monkeypatch.setattr(actions, 'forward_logits', lambda *a, **k: pytest.fail('forward after donor change'))
+    with pytest.raises(ValueError, match='tokenizer'):
+        runtime.run(26)
+    assert not service.specifications() and runtime.last_attempt['status'] == 'error'
+
+
+def test_atomic_schedules_refuse_before_any_effect(grouped):
+    _, _, _, service = grouped
+    with pytest.raises(InterventionError, match='unscheduled'):
+        service.replace_atomic([dict(clamp(1, 1), from_step=99)], lambda: pytest.fail('scheduled candidate ran'))
+    assert not service.specifications()

@@ -935,6 +935,8 @@ class HostedInference:
             key = self._input_state()
             with self._inference_lock:
                 self._comparison = dict(self._input_hashes(key), argmax_token_ids=result["argmax_token_ids"],
+                                        baseline_top_text=result["baseline_top_text"],
+                                        baseline_top_probability=result["baseline_top_probability"],
                                         completed_step=self.controls.n, case_id=result["case_id"],
                                         compute_publish_seconds=result["action_seconds"])
             self._output_key = deepcopy(key)

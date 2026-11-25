@@ -485,3 +485,62 @@ def test_hosted_gemma_tracer_receives_explicit_budget(monkeypatch):
     assert service._gemma_tracer() is sentinel
     assert calls[0][1]["memory_limit_gb"] == 40
     assert calls[0][1]["memory"] is owner.guard
+
+
+def test_published_attention_replay_uses_live_values_and_reports_frozen_patterns():
+    from caliper.interp._points import capture
+    from caliper.interp._replication_actions import attention_patterns
+    model = gemma_model().to(torch.bfloat16)
+    ids = torch.tensor([[1, 5, 8, 9]])
+    names = [f'model.layers.{layer}.attn_pattern' for layer in range(2)]
+    with torch.no_grad(), capture(model, names) as baseline:
+        model(ids, use_cache=False)
+    patterns = {name: value.clone() for name, value in baseline.items()}
+    # Change the input to attention without a change to its projection weights.
+    embeddings = model.get_input_embeddings()(ids).detach().clone()
+    embeddings[:, 1] += torch.arange(16).to(embeddings) * .2
+    projected, normalized, mlp_outputs = {}, {}, {}
+    handles = []
+    for layer, block in enumerate(model.model.layers):
+        handles.append(block.self_attn.o_proj.register_forward_hook(
+            lambda mod, args, out, layer=layer: projected.update({layer: out.detach().clone()})))
+        handles.append(block.input_layernorm.register_forward_hook(
+            lambda mod, args, out, layer=layer: normalized.update({layer: out.detach().clone()})))
+        handles.append(block.mlp.register_forward_hook(
+            lambda mod, args, out, layer=layer: mlp_outputs.update({layer: out.detach().clone()})))
+    try:
+        with torch.no_grad():
+            model(ids, use_cache=False)
+        baseline_norms = {layer: value.clone() for layer, value in normalized.items()}
+        baseline_mlps = {layer: value.clone() for layer, value in mlp_outputs.items()}
+        with torch.no_grad(), capture(model, names) as observed, attention_patterns(model, patterns):
+            model(inputs_embeds=embeddings, use_cache=False)
+        for layer, block in enumerate(model.model.layers):
+            value = block.self_attn.v_proj(normalized[layer]).view(1, 4, 1, 8).transpose(1, 2)
+            value = value.repeat_interleave(2, dim=1)
+            expected = (patterns[names[layer]] @ value).transpose(1, 2).reshape(1, 4, 16)
+            expected = torch.nn.functional.linear(expected, block.self_attn.o_proj.weight, block.self_attn.o_proj.bias)
+            torch.testing.assert_close(projected[layer], expected, rtol=0, atol=0)
+            torch.testing.assert_close(observed[names[layer]], patterns[names[layer]], rtol=0, atol=0)
+            assert not torch.equal(normalized[layer], baseline_norms[layer])
+            assert not torch.equal(mlp_outputs[layer], baseline_mlps[layer])
+        with torch.no_grad(), capture(model, names) as live:
+            model(inputs_embeds=embeddings, use_cache=False)
+        assert not torch.equal(live[names[0]], patterns[names[0]])
+    finally:
+        for handle in handles:
+            handle.remove()
+    assert not model.model.layers[0].self_attn.v_proj._forward_hooks
+
+
+def test_published_hosted_loader_selects_bfloat16_without_a_model_load(tmp_path, monkeypatch):
+    snapshot = tmp_path / GEMMA_REVISION
+    snapshot.mkdir()
+    monkeypatch.setattr('caliper.interp._memory.MemoryGuard', lambda *args: memory(40))
+    def refused(snapshot, *, device, memory, dtype):
+        assert dtype == torch.bfloat16 and device == 'cpu'
+        raise RuntimeError('bounded loader sentinel')
+    monkeypatch.setattr(_hosted, '_load_gemma_model', refused)
+    monkeypatch.setattr(torch.backends.mps, 'is_available', lambda: False)
+    with pytest.raises(RuntimeError, match='bounded loader sentinel'):
+        _hosted.load_resources(str(snapshot), tmp_path, replication_profile='published_dallas_v1')

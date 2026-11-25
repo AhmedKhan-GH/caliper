@@ -16,7 +16,7 @@ from ._frozen import _trace_features
 from ._intervene import (InterventionError, _DeviceSnapshotMemory, _DictionarySnapshot,
                          _ACTIVE_REPLAYS, _hook_muted)
 from ._memory import autorelease_scope
-from ._output import forward_logits, prompt_inputs
+from ._output import bounded_text, forward_logits, prompt_inputs
 from ._points import _architecture, capture
 
 PROTOCOL = 'published_dallas_v1'
@@ -111,6 +111,11 @@ def attention_patterns(model, patterns):
                 return (mixed,) + args[1:]
             stack.callback(module.v_proj.register_forward_hook(read).remove)
             stack.callback(module.o_proj.register_forward_pre_hook(replace).remove)
+            def report(_module, _args, output, pattern=pattern):
+                weights = pattern.expand(output[0].shape[0], -1, -1, -1)
+                return (output[0], weights, *output[2:])
+            # Semantic capture must observe the pattern that produced the output.
+            stack.callback(module.register_forward_hook(report, prepend=True).remove)
             stack.callback(values.clear)
         yield
 
@@ -329,19 +334,27 @@ class PublishedCases:
                 if (executor.dictionary_id != self.preparation['dictionary_identity']
                         or not executor._default_dictionary_id or executor._identity() != self._identity):
                     raise ValueError('published preparation no longer matches the model')
-                inputs = prompt_inputs(self.model, self.tokenizer, PROMPTS['dallas'])
-                if inputs['input_ids'][0].tolist() != self.preparation['prompts']['dallas']['token_ids']:
+                sources = {source: prompt_inputs(self.model, self.tokenizer, prompt)
+                           for source, prompt in PROMPTS.items()}
+                if any(source_inputs['input_ids'][0].tolist() != self.preparation['prompts'][source]['token_ids']
+                       for source, source_inputs in sources.items()):
                     raise ValueError('published preparation no longer matches the tokenizer')
+                inputs = sources['dallas']
                 self._reserve(self.model.config.vocab_size * 64)
                 with attention_patterns(self.model, self.patterns):
                     logits = forward_logits(self.model, inputs, guard=self.guard)[0, -1]
+                if executor._identity() != self._identity:
+                    raise ValueError('published model changed during the case forward')
                 pair = torch.stack((self.baseline_logits, logits))
                 probabilities = pair.softmax(-1)
                 top_probs, top_ids = probabilities.topk(5, dim=-1)
                 result = {'case_id': case_id, 'cell': cell, 'label': CASES[cell]['label'], 'producer': 'caliper',
                           'preparation_id': self.preparation['id'], 'sequence': sequence, 'group_values': members,
                           'argmax_token_ids': probabilities.argmax(-1).tolist(),
-                          'top_five': [[{'id': token, 'text': self.tokenizer.decode([token]), 'probability': probability}
+                          'top_token_ids': top_ids[:, 0].tolist(),
+                          'baseline_top_text': bounded_text(self.tokenizer.decode([int(probabilities[0].argmax())])),
+                          'baseline_top_probability': float(probabilities[0].max()),
+                          'top_five': [[{'id': token, 'text': bounded_text(self.tokenizer.decode([token])), 'probability': probability}
                                         for token, probability in zip(ids, scores)]
                                        for ids, scores in zip(top_ids.tolist(), top_probs.tolist())],
                           'logits_dtype': str(pair.dtype), 'softmax_dtype': str(probabilities.dtype)}
