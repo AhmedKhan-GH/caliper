@@ -1583,12 +1583,7 @@ def step(step=None) -> None:
     service = c.intervention_service
     if service is not None and service.executor.preparing_source:
         return
-    if step is None:
-        c.n += 1
-    else:
-        c.n = step
-    if c.busy:
-        c.checkpoint()
+    c.step(step)
     if _programs.ACTIVE:                                       # GPU programs (caliper._programs)
         _programs.at_step(c.n)
 
