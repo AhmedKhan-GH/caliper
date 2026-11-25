@@ -379,23 +379,32 @@ cb::Error AppRunControl::intervene_clear(const std::string& point) {
 
 void AppRunControl::feed_interventions(const json& interventions, const json& step, bool baseline,
                                        cb::EventSink& sink) {
-    // The interventions the script applies now, by point and op, with the
-    // step it applied each at.
-    std::map<std::pair<std::string, std::string>, json> now;
-    for (const cb::Intervention& i : interventions_of(interventions))
-        if (i.state == "active") now[{i.point, i.op}] = i.since_step ? json(*i.since_step) : step;
+    std::map<std::string, json> now;
+    for (const cb::Intervention& i : interventions_of(interventions)) {
+        if (i.state != "active") continue;
+        json key = json::array({i.point, i.op});
+        if ((i.op == "clamp" || i.op == "scale") && i.specification.contains("positions")) {
+            auto positions = i.specification.at("positions").get<std::vector<std::int64_t>>();
+            std::sort(positions.begin(), positions.end());
+            key.push_back(i.specification.at("feature"));
+            key.push_back(positions);
+        }
+        now[key.dump()] = {{"point", i.point}, {"op", i.op}, {"step", i.since_step ? json(*i.since_step) : step}};
+    }
     if (!baseline) {
-        for (const auto& [key, since] : now) {
+        for (const auto& [key, fields] : now) {
             const auto it = applied_.find(key);
-            if (it == applied_.end() || it->second != since)
-                push_run(sink, json{{"change", "intervene"}, {"point", key.first}, {"op", key.second}, {"step", since}});
+            if (it == applied_.end() || it->second != fields) {
+                auto event = fields;
+                event["change"] = "intervene";
+                push_run(sink, std::move(event));
+            }
         }
     }
-    // A stop also in a baseline: applied_ then holds what the same script applied before its
-    // link dropped (feed()), else nothing.
-    for (const auto& [key, since] : applied_)
+    // A baseline also reports effects that ended while the link was absent.
+    for (const auto& [key, fields] : applied_)
         if (!now.count(key))
-            push_run(sink, json{{"change", "intervene"}, {"point", key.first}, {"op", nullptr}, {"step", step}});
+            push_run(sink, json{{"change", "intervene"}, {"point", fields.at("point")}, {"op", nullptr}, {"step", step}});
     applied_ = std::move(now);
 }
 

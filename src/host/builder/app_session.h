@@ -193,9 +193,9 @@ private:
     std::string run_state_ = "none";
     std::map<std::string, std::pair<nlohmann::json, nlohmann::json>> params_;   // name: value, pending
     std::map<std::string, std::uint64_t> results_;                              // action: at_ns of its last result
-    std::map<std::pair<std::string, std::string>, nlohmann::json> applied_;    // (point, op): the step applied at
+    std::map<std::string, nlohmann::json> applied_;    // canonical specification key: applied event fields
     std::string dropped_script_;                                                // the script of the dropped link
-    std::map<std::pair<std::string, std::string>, nlohmann::json> dropped_;    // its applied_ then
+    std::map<std::string, nlohmann::json> dropped_;    // its applied_ then
 };
 
 // The points and the interventions of a CONTROLS key "interventions"
