@@ -16,7 +16,7 @@ from ._families import model_family
 from ._forward_identity import arithmetic_settings
 from . import _qwen_family
 from ._frozen import (FrozenPath, MemoryGuard, _validate_dictionary, _validate_ablation_points,
-                      _validate_intervention_positions, _finite_max, _require_finite, _no_check,
+                      _validate_intervention_positions, _finite_max, _no_check,
                       _DictionaryAdmission, _ENCODER_BLOCK_ELEMENTS)
 from ._memory import BudgetMemory, CleanStop, allocation_bytes, autorelease_scope, family_memory_limit
 from ._graph import Graph, bounded_integer
@@ -348,10 +348,16 @@ class _DirectEffects:
         unembedding = torch.stack([target.unembedding_bias for target in targets]).to(account_dtype)
         incoming = weights.sum(0, dtype=account_dtype)
         residual = (incoming + affine.sum(-1) + encoder + unembedding - expected).abs()
-        _require_finite(residual, "direct-effect completeness residual", self.check)
-        # One bounded readback per target batch avoids thousands of MPS scalar synchronizations.
-        accounting = torch.cat((expected[:, None], incoming[:, None], affine, encoder[:, None],
-                                unembedding[:, None], residual[:, None]), dim=1).tolist()
+        # The same bounded readback supplies diagnostics and the finite-value check.
+        # At most 512 targets retain nine scalars each, with no separate scalar readback.
+        with autorelease_scope(path.device):
+            self.check("finite block")
+            accounting = torch.cat((expected[:, None], incoming[:, None], affine, encoder[:, None],
+                                    unembedding[:, None], residual[:, None]), dim=1)
+            self.check("finite block complete")
+            accounting = accounting.tolist()
+            self.check("finite block readback")
+            _finite_max((row[8] for row in accounting), "direct-effect completeness residual")
         diagnostics = []
         for target, row in zip(targets, accounting):
             biases = dict(zip(("decoder", "normalization", "attention", "intervention", "encoder", "unembedding"), row[2:8]))
