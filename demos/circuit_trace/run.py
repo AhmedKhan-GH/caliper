@@ -28,7 +28,7 @@ import _published as published
 
 ROOT = Path(__file__).resolve().parents[2]
 CAPTURE_RESOURCES = {
-    "attribution": ("nodes", "curves", "labels", "strings"),
+    "attribution": ("nodes", "curves", "labels", "strings", "cells"),
     "example_tokens": ("rows", "cells", "labels", "strings"),
     "probabilities": ("cells", "labels", "strings"),
 }

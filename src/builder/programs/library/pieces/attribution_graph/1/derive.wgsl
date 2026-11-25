@@ -25,7 +25,7 @@ fn finite_value(v: f32) -> f32 { return select(0.0, v, abs(v) <= 3.402823e38); }
 fn assign_cells(@builtin(global_invocation_id) id: vec3<u32>) {
     let i = id.x;
     let n = node_count();
-    if (i == 0u) { atomicStore(&nodes_count, n); }
+    if (i == 0u) { atomicStore(&nodes_count, n); atomicStore(&cells_count, n); }
     if (i >= n) { return; }
     let k = u32(clamp(node_i[4u*i], 0, 3));
     let t = clamp(node_i[4u*i+2u], 0, i32(token_count())-1);
@@ -36,7 +36,8 @@ fn assign_cells(@builtin(global_invocation_id) id: vec3<u32>) {
     let x = select(0.0, -0.88 + 1.76*f32(t)/f32(max(token_count()-1u,1u)), token_count()>1u);
     let center = vec2<f32>(x, -0.82 + 1.64*f32(l+1)/f32(layer_count()+1u));
     let influence = finite_value(node_f[4u*i+1u]);
-    cells[i] = Cell(center, width, influence, u32(l+1)*32u+u32(t));
+    cells[i] = Cell(center, width, influence, u32(l+1)*32u+u32(t),
+                    1.64/f32(layer_count()+1u), 0u, 0u, select(0.0,0.15,edge_count()>0u));
     nodes[i] = Node(vec4<f32>(center, 0.0, 0.0), i, k, l, t, node_i[4u*i+3u], influence);
 }
 
@@ -82,13 +83,15 @@ fn order_influence(@builtin(global_invocation_id) id: vec3<u32>) {
     var rank = 0u;
     var count = 0u;
     for (var j = 0u; j < n; j++) {
-        let other = cells[j];
-        if (other.key == c.key) {
+        if (cells[j].key == c.key) {
             count++;
-            if (other.influence > c.influence || (other.influence == c.influence && j < i)) { rank++; }
+            let influence = cells[j].influence;
+            if (influence > c.influence || (influence == c.influence && j < i)) { rank++; }
         }
     }
     let height = 1.64/f32(layer_count()+1u);
+    cells[i].rank = rank;
+    cells[i].size = count;
     let columns = min(count, max(1u, u32(ceil(sqrt(f32(count)*c.width/height)))));
     let rows = (count+columns-1u)/columns;
     let spacing = vec2<f32>(0.8*c.width/f32(columns), 0.8*height/f32(rows));

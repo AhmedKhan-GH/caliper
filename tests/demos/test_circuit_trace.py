@@ -2034,7 +2034,7 @@ class CaptureResources:
         events = _mcp.Events(self)
         monkeypatch.setattr(_mcp, "time", SimpleNamespace(monotonic=lambda: self.clock))
         def wait(timeout):
-            self.clock += .25
+            self.clock += .2
             self.stage += 1
             self.frames += 1
             self.advance()
@@ -2089,7 +2089,7 @@ def test_capture_waits_for_received_and_displayed_resources_after_selection(tmp_
     harness.received["attribution"] = dict.fromkeys(driver.CAPTURE_RESOURCES["attribution"], 1)
     harness.shown["attribution"] = dict(harness.received["attribution"])
     def advance():
-        if harness.stage <= 4:
+        if harness.stage <= len(driver.CAPTURE_RESOURCES["attribution"]):
             resource = driver.CAPTURE_RESOURCES["attribution"][harness.stage - 1]
             harness.received["attribution"][resource] = 2
             if resource != "strings":
@@ -2099,13 +2099,13 @@ def test_capture_waits_for_received_and_displayed_resources_after_selection(tmp_
     harness.advance = advance
     png, metadata = harness.capture()
     assert png.read_bytes() == b"png" and metadata is None
-    assert harness.captures[0][0] == 5
+    assert harness.captures[0][0] == len(driver.CAPTURE_RESOURCES["attribution"]) + 1
     assert harness.cursor["live"]
     evidence = harness.session.program_evidence["before"]
     assert evidence["expected_steps"]["attribution"] == 2
     assert evidence["resource_steps"] == harness.shown
     assert {item["resource"] for item in harness.reads if item["id"] == "attribution"} == {
-        "nodes", "curves", "labels", "strings"}
+        "nodes", "curves", "labels", "strings", "cells"}
 
 
 @pytest.mark.parametrize("program,resource", [(p, r) for p, resources in driver.CAPTURE_RESOURCES.items() for r in resources])
@@ -2133,7 +2133,7 @@ def test_capture_resource_failure_is_bounded_without_pixels_or_sleeps(tmp_path, 
     with pytest.raises(Failure, match="Timed out"):
         harness.capture()
     assert not harness.captures
-    assert harness.stage == 4
+    assert harness.stage == 5
     assert harness.cursor["live"]
 
 
@@ -2154,7 +2154,7 @@ def test_new_selection_requires_a_new_frame_after_an_existing_capture(tmp_path, 
     start = harness.stage
     def advance():
         index = harness.stage - start - 1
-        if index < 4:
+        if index < len(driver.CAPTURE_RESOURCES["attribution"]):
             resource = driver.CAPTURE_RESOURCES["attribution"][index]
             harness.received["attribution"][resource] = 3
             if resource != "strings":
@@ -2165,7 +2165,7 @@ def test_new_selection_requires_a_new_frame_after_an_existing_capture(tmp_path, 
     harness.capture("second")
     second = harness.session.program_evidence["second"]["status"]["programs"][0]["draw"]["frames"]
     assert second > first
-    assert [stage for stage, _ in harness.captures] == [1, 6]
+    assert [stage for stage, _ in harness.captures] == [1, len(driver.CAPTURE_RESOURCES["attribution"]) + 2]
     assert harness.session.program_evidence["second"]["resource_steps"]["attribution"] == dict.fromkeys(
         driver.CAPTURE_RESOURCES["attribution"], 3)
 

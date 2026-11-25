@@ -42,11 +42,11 @@ def compare(app, app_ids, web, web_ids):
 
 
 def export_resources(session, out):
-    from run import save
+    from run import CAPTURE_RESOURCES, save
     out.mkdir()
     snapshot = {"selected_node": session.mcp.body("state.get", ids=["selected_node"])["states"][0]["value"], "resources": {}}
     step = None
-    for name in ("nodes", "curves", "labels", "strings"):
+    for name in CAPTURE_RESOURCES["attribution"]:
         reply = session.read("attribution", name)
         if step is None:
             step = reply["step"]

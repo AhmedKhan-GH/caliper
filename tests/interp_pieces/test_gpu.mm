@@ -1072,4 +1072,5 @@ TEST_CASE("panel layouts retain graph coverage and disjoint example and probabil
         }
     }
 }
+#include "dense_cells.h"
 CALIPER_GPU_TEST_MAIN()

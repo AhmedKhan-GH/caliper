@@ -105,10 +105,10 @@ publish = true
 id = "cells"
 kind = "buffer"
 struct = "Cell"
-fields = ["center: vec2<f32>", "width: f32", "influence: f32", "key: u32"]
+fields = ["center: vec2<f32>", "width: f32", "influence: f32", "key: u32", "height: f32", "rank: u32", "size: u32", "motion: f32"]
 count = 8192
-counted = false
-publish = false
+counted = true
+publish = true
 
 [[resources]]
 id = "offset_a"
@@ -136,7 +136,7 @@ writes = ["nodes", "cells"]
 [[derive.passes]]
 entry = "order_influence"
 workgroups = [128, 1, 1]
-writes = ["offset_a", "nodes", "strings", "labels"]
+writes = ["offset_a", "nodes", "strings", "labels", "cells"]
 
 [[derive.passes]]
 entry = "relax_one"

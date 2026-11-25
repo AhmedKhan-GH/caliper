@@ -119,7 +119,7 @@ TEST_CASE("draw status tracks staggered attribution resources and a new selected
     const auto first = graph.runtime.status();
     CHECK(first.frames == 1);
     CHECK(first.resource_steps == std::map<std::string, std::int64_t>{
-        {"nodes", 1}, {"curves", 1}, {"labels", 1}, {"strings", 1}});
+        {"nodes", 1}, {"curves", 1}, {"labels", 1}, {"strings", 1}, {"cells", 1}});
     std::map<std::string, std::vector<std::uint8_t>> bytes;
     for (const auto& slot : graph.runtime.internals().slots)
         if (slot.shown) bytes[slot.id] = slot.shown->bytes;
@@ -144,7 +144,7 @@ TEST_CASE("draw status tracks staggered attribution resources and a new selected
     graph.draw(1);
     CHECK(graph.runtime.status().frames == first.frames + 4);
     CHECK(graph.runtime.status().resource_steps == std::map<std::string, std::int64_t>{
-        {"nodes", 2}, {"curves", 2}, {"labels", 2}, {"strings", 2}});
+        {"nodes", 2}, {"curves", 2}, {"labels", 2}, {"strings", 2}, {"cells", 1}});
     REQUIRE(graph.runtime.labels().size() == 2);
     CHECK(graph.runtime.labels()[1].text == "New Selected Feature");
 }
