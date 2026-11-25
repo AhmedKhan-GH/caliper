@@ -149,6 +149,8 @@ def _memory_gb(value):
 class _IndexParser(argparse.ArgumentParser):
     def parse_args(self, args=None, namespace=None):
         result = super().parse_args(args, namespace)
+        if result.model == GEMMA_ID and result.context < 2:
+            self.error("Gemma context must reserve one BOS position and one source position")
         ceiling = 40 if result.model == GEMMA_ID else MEMORY_LIMIT_GB
         result.memory_gb = ceiling if result.memory_gb is None else result.memory_gb
         if result.memory_gb > ceiling:

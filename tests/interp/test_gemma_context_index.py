@@ -75,7 +75,7 @@ def test_example_windows_match_public_bos_context_and_exclude_padding(artifact):
             assert all(value is None for value, valid in zip(row["activations"], row["valid"]) if not valid)
 
 
-@pytest.mark.parametrize("change", ["missing", "prefix", "window", "context"])
+@pytest.mark.parametrize("change", ["missing", "prefix", "window", "context", "boolean", "float"])
 def test_stale_index_context_requires_rebuild(artifact, monkeypatch, change):
     folder, model, dictionary, _ = artifact
     manifest = build_index(folder, [("a", [3, 4])], model=model, tokenizer=tokenizer(),
@@ -87,9 +87,26 @@ def test_stale_index_context_requires_rebuild(artifact, monkeypatch, change):
     else:
         key = "example_context_policy" if change == "window" else "context_policy"
         policy = deepcopy(manifest[key])
-        policy["prefix_ids"] = []
+        if change in ("boolean", "float"):
+            policy["pad_id"] = False if change == "boolean" else 0.0
+        else:
+            policy["prefix_ids"] = []
         changes = {key: policy}
     rewrite_manifest(folder, **changes)
     monkeypatch.setattr(np, "load", lambda *a, **kw: pytest.fail("stale index arrays were opened"))
     with pytest.raises(ValueError, match="context policy differs; rebuild"):
         FeatureIndex(folder, model=model, tokenizer=tokenizer(), dictionary=dictionary)
+
+
+def test_invalid_gemma_context_refuses_before_resource_admission(tmp_path, monkeypatch):
+    from caliper.interp import _index
+    from tools.interp.build_index import main
+
+    model = SimpleNamespace(config=SimpleNamespace(model_type="gemma2"))
+    monkeypatch.setattr(_index, "family_memory_limit", lambda *a, **kw: pytest.fail("late admission refusal"))
+    with pytest.raises(ValueError, match="reserve"):
+        build_index(tmp_path, [], model=model, tokenizer=tokenizer(),
+                    provenance={"partition": "fixture"}, context_length=1)
+    with pytest.raises(SystemExit) as refusal:
+        main(["--dictionary", str(tmp_path / "absent"), "--model", "google/gemma-2-2b", "--context", "1"])
+    assert refusal.value.code == 2

@@ -239,11 +239,13 @@ def build_index(dictionary_path, documents, *, model, tokenizer, provenance,
 
     IDs must be unique UTF-8 strings of at most 128 bytes. Each pair is one nonempty document.
     Context blocks reset within each document. The last document can end at the token cap.
+    Gemma reserves one model position for BOS. Stored offsets count source tokens only.
     The caller supplies disjoint partition provenance. The tool validates T2 partitions.
     An existing index is never overwritten. A failed build has no completion manifest.
     """
     _positive_integer(max_tokens, "max_tokens", MAX_TOKENS)
     _positive_integer(context_length, "context_length", 256)
+    policy = context_policy(model, context_length, tokenizer=tokenizer)
     if not isinstance(provenance, dict) or not provenance:
         raise ValueError("index requires text partition provenance")
     _json(provenance)
@@ -272,7 +274,6 @@ def build_index(dictionary_path, documents, *, model, tokenizer, provenance,
     vocab = model.get_output_embeddings().weight.shape[0]
     tokenizer_hash = _tokenizer_hash(tokenizer, vocab)
     model_encoding = _model_encoding(model, memory)
-    policy = context_policy(model, context_length, tokenizer=tokenizer)
     content_context = context_length if policy is None else policy["content_context"]
     folder = root / "index"
     folder.mkdir()  # An incomplete prior build also requires explicit removal by its owner.
@@ -354,6 +355,7 @@ class FeatureIndex:
     ``show(layer, feature)`` returns JSON data with label, count, maximum, and token lists.
     ``examples(layer, feature, limit=16)`` returns rows sorted by indexed activation.
     Each row has 33 token slots. Missing document-edge slots contain null values.
+    Gemma adds BOS before each window, with at most 34 model positions.
     The first query recomputes all retained windows in admitted forward batches.
     A window has fresh context, thus its center value can differ from the indexed maximum.
     Model weights, dictionary weights, tokenizer, and forward settings must remain fixed.
@@ -388,8 +390,8 @@ class FeatureIndex:
             _encoding_policy(manifest, model, self.dictionary, self.memory)
             self.context_policy = context_policy(model, manifest["context_length"], tokenizer=tokenizer)
             self.example_context_policy = context_policy(model, WINDOW_TOKENS + 1, tokenizer=tokenizer)
-            if (manifest.get("context_policy") != self.context_policy or
-                    manifest.get("example_context_policy") != self.example_context_policy):
+            if (_json(manifest.get("context_policy")) != _json(self.context_policy) or
+                    _json(manifest.get("example_context_policy")) != _json(self.example_context_policy)):
                 raise ValueError("index context policy differs; rebuild the index")
             if (manifest["complete"] is not True or
                     manifest["top_examples"] != TOP_EXAMPLES or manifest["window_tokens"] != WINDOW_TOKENS):
