@@ -1,6 +1,8 @@
 """Exact dictionary bytes with bounded snapshots and unchanged restore identities."""
 from contextlib import contextmanager
 from types import SimpleNamespace
+
+import psutil
 import weakref
 
 import pytest
@@ -236,7 +238,7 @@ def test_snapshot_requires_the_device_guard_before_any_device_operation(controll
 
 @pytest.fixture
 def device_snapshot(controlled, monkeypatch):
-    """Label CPU views as MPS tensors and replace transfers with private CPU copies."""
+    """Exercise the MPS queue with CPU storage and explicit device seams."""
     def make(*, model_id=GEMMA_ID, device="mps", guard=None):
         model, tokenizer, _, service = controlled
         dictionary = dictionary_for(model)
@@ -249,7 +251,8 @@ def device_snapshot(controlled, monkeypatch):
         guard.device = torch.device(device)
         service.configure(dictionary=dictionary, tokenizer=tokenizer, resource_guard=guard)
         case = SimpleNamespace(dictionary=dictionary, service=service, executor=service.executor,
-                               guard=guard, transfers=[], scopes=[], readback=None)
+                               guard=guard, transfers=[], scopes=[], readback=None, copies=[],
+                               comparisons=[], reductions=[], allocations=[], drains=[])
 
         @contextmanager
         def scope(device):
@@ -273,6 +276,60 @@ def device_snapshot(controlled, monkeypatch):
                 case.readback = weakref.ref(result)
                 return result
 
+        empty_like, copy, eq, reduce = torch.empty_like, torch.Tensor.copy_, torch.eq, torch.all
+        active = set()
+
+        @contextmanager
+        def outer(name):
+            first = name not in active
+            active.add(name)
+            try:
+                yield first
+            finally:
+                if first:
+                    active.remove(name)
+
+        def allocate(tensor, *args, **kwargs):
+            with outer("allocate") as first:
+                if first and tensor.device.type == "mps":
+                    assert case.scopes and guard.stages[-1] == "dictionary identity"
+                result = empty_like(tensor, *args, **kwargs)
+                if first:
+                    case.allocations.append(weakref.ref(result))
+                return result
+
+        def copied(tensor, source, *args, **kwargs):
+            with outer("copy") as first:
+                if first and source.device.type == "mps":
+                    case.copies.append((source.numel(), len(guard.stages)))
+                return copy(tensor, source, *args, **kwargs)
+
+        def compare(left, right, **kwargs):
+            with outer("compare") as first:
+                if first and left.device.type == "mps":
+                    assert left.dtype == right.dtype == torch.uint8
+                    assert left.data_ptr() != right.data_ptr()
+                    assert case.scopes
+                    case.comparisons.append((left.numel(), len(guard.stages)))
+                return eq(left, right, **kwargs)
+
+        def reduced(tensor, **kwargs):
+            with outer("reduce") as first:
+                if first and tensor.device.type == "mps":
+                    assert case.scopes
+                    case.reductions.append((tensor.numel(), len(guard.stages)))
+                return reduce(tensor, **kwargs)
+
+        def drain():
+            assert case.scopes
+            case.drains.append(len(case.copies) + len(case.comparisons))
+
+        monkeypatch.setattr(torch, "empty_like", allocate)
+        monkeypatch.setattr(torch.Tensor, "copy_", copied)
+        monkeypatch.setattr(torch, "eq", compare)
+        monkeypatch.setattr(torch, "all", reduced)
+        monkeypatch.setattr(torch.mps, "synchronize", drain)
+        monkeypatch.setattr(psutil, "virtual_memory", lambda: SimpleNamespace(available=64_000_000_000))
         state_dict = dictionary.state_dict
         if device != "cpu":
             monkeypatch.setattr(dictionary, "state_dict", lambda: {
@@ -285,16 +342,17 @@ def device_snapshot(controlled, monkeypatch):
 
 
 @pytest.mark.parametrize("model_id,device,retained", [
-    (GEMMA_ID, "mps", "cpu"), (GEMMA_ID, "mps:0", "cpu"),
+    (GEMMA_ID, "mps", "mps"), (GEMMA_ID, "mps:0", "mps:0"),
     (GEMMA_ID, "cpu", "cpu"), ("Qwen/Qwen3.5-0.8B", "mps", "mps"),
     ("fixture", "cpu", "cpu"),
 ])
-def test_snapshot_selects_cpu_retention_only_for_gemma_mps(device_snapshot, model_id, device, retained):
+def test_snapshot_selects_device_reductions_only_for_gemma_mps(device_snapshot, model_id, device, retained):
     case = device_snapshot(model_id=model_id, device=device)
     identifier = case.executor.dictionary_id
     case.executor._prepare_dictionary_identity()
     snapshot = case.executor._dictionary_snapshot
     assert snapshot is not None
+    assert snapshot.device_compare == (model_id == GEMMA_ID and device.startswith("mps"))
     assert {str(t.device) for t in snapshot.state.values()} == {retained}
     assert set(snapshot.source_devices.values()) == {torch.device(device)}
     assert case.executor.dictionary_id == identifier
@@ -303,59 +361,48 @@ def test_snapshot_selects_cpu_retention_only_for_gemma_mps(device_snapshot, mode
     assert not case.scopes
 
 
-def test_cpu_snapshot_bounds_copy_and_reads_every_live_block(device_snapshot, monkeypatch):
+def test_device_snapshot_bounds_copy_and_reads_every_live_block(device_snapshot, monkeypatch):
     case = device_snapshot()
-    empty, clone, equal = torch.empty, torch.Tensor.clone, torch.equal
-    allocations, comparisons = [], []
-
-    def allocate(*args, **kwargs):
-        assert kwargs["device"] == "cpu"
-        assert case.guard.stages[-1] == "dictionary identity"
-        tensor = empty(*args, **kwargs)
-        allocations.append(tensor.numel() * tensor.element_size())
-        return tensor
-
-    def copy(tensor, *args, **kwargs):
-        assert tensor.device.type == "cpu"
-        return clone(tensor, *args, **kwargs)
-
-    def compare(left, right):
-        assert left.device.type == right.device.type == "cpu"
-        assert left.dtype == right.dtype == torch.uint8
-        assert left.data_ptr() != right.data_ptr()
-        comparisons.append(left.numel())
-        return equal(left, right)
-
-    monkeypatch.setattr(torch, "empty", allocate)
-    monkeypatch.setattr(torch.Tensor, "clone", copy)
-    monkeypatch.setattr(torch, "equal", compare)
-    monkeypatch.setattr(_intervene, "_cpu_byte_equal", compare)
     case.executor._prepare_dictionary_identity()
     total = sum(t.numel() * t.element_size() for t in case.dictionary.state_dict().values())
-    assert sum(allocations) == total
-    assert max(size for size, _ in case.transfers) <= 4096
-    assert sum(size for size, _ in case.transfers) == 2 * total
-    assert sum(comparisons) == total
+    assert sum(size for size, _ in case.copies) == total
+    assert max(size for size, _ in case.copies) <= 4096
+    # Creation hashes retained bytes once, then compares all live bytes.
+    blocks = len(case.comparisons)
+    assert sum(size for size, _ in case.comparisons) == total
+    assert sum(size for size, _ in case.transfers) == total + blocks
     case.transfers.clear()
-    comparisons.clear()
+    case.comparisons.clear()
+    case.reductions.clear()
+    case.drains.clear()
+
     def forbidden(*args, **kwargs):
-        pytest.fail("CPU snapshot validation must compare the complete live bytes")
+        pytest.fail("snapshot validation must reduce complete live bytes")
+
     monkeypatch.setattr(_intervene, "_content_identity", forbidden)
+    monkeypatch.setattr(torch, "equal", forbidden)
     case.executor.validate(feature_spec())
-    assert sum(size for size, _ in case.transfers) == sum(comparisons) == total
-    assert max(comparisons) <= 4096
-    checks = [count for _, count in case.transfers]
+    assert sum(size for size, _ in case.comparisons) == total
+    assert max(size for size, _ in case.comparisons) <= 4096
+    assert sum(size for size, _ in case.transfers) == blocks
+    assert max(size for size, _ in case.transfers) <= _intervene._SNAPSHOT_BATCH_BLOCKS
+    assert len(case.transfers) == (blocks + _intervene._SNAPSHOT_BATCH_BLOCKS - 1) // _intervene._SNAPSHOT_BATCH_BLOCKS
+    assert not case.drains  # The flag readback already drains each batch.
+    assert [size for size, _ in case.reductions] == [size for size, _ in case.comparisons]
+    checks = [count for _, count in case.comparisons]
     assert all(right > left for left, right in zip(checks, checks[1:]))
+    assert all(reduce_check > compare_check for (_, reduce_check), (_, compare_check)
+               in zip(case.reductions, case.comparisons))
     case.dictionary.layers[-1].threshold.data[-1].add_(.125)
     with pytest.raises(InterventionError, match="dictionary content changed"):
         case.executor.validate(feature_spec())
 
 
-def test_cpu_snapshot_preserves_source_device_identity(device_snapshot, monkeypatch):
+def test_device_snapshot_preserves_source_device_identity(device_snapshot, monkeypatch):
     case = device_snapshot()
     case.executor._prepare_dictionary_identity()
     snapshot = case.executor._dictionary_snapshot
-    # The retained CPU bytes cannot make a later source move appear unchanged.
+    # A later source move must fail before any device comparison.
     state = torch.nn.Module.state_dict(case.dictionary)
     monkeypatch.setattr(case.dictionary, "state_dict", lambda: state)
     case.transfers.clear()
@@ -367,7 +414,7 @@ def test_cpu_snapshot_preserves_source_device_identity(device_snapshot, monkeypa
     "normal", "data", "numpy", "storage", "replacement", "late_block",
     "signed_zero", "shape", "dtype", "metadata", "activation", "threshold",
 ])
-def test_cpu_snapshot_refuses_alias_and_identity_changes(device_snapshot, write):
+def test_device_snapshot_refuses_alias_and_identity_changes(device_snapshot, write):
     case = device_snapshot()
     case.executor._prepare_dictionary_identity()
     layer = case.dictionary.layers[-1]
@@ -408,7 +455,7 @@ def test_cpu_snapshot_refuses_alias_and_identity_changes(device_snapshot, write)
     assert not case.executor._hooks
 
 
-def test_cpu_snapshot_preserves_nan_payloads_without_version_counters(device_snapshot):
+def test_device_snapshot_preserves_nan_payloads_without_version_counters(device_snapshot):
     with torch.inference_mode():
         case = device_snapshot()
         parameter = case.dictionary.layers[-1].b_dec
@@ -428,14 +475,15 @@ def test_cpu_snapshot_preserves_nan_payloads_without_version_counters(device_sna
 
 @pytest.mark.parametrize("lower", ["outer", "inner"])
 @pytest.mark.parametrize("margin", [-1, 0])
-def test_cpu_snapshot_admits_the_complete_reserve_before_allocation(device_snapshot, monkeypatch, lower, margin):
+def test_device_snapshot_admits_the_complete_reserve_before_allocation(device_snapshot, monkeypatch, lower, margin):
     guard = IdentityGuard()
     guard._guard = IdentityGuard()
     case = device_snapshot(guard=guard)
     state = case.dictionary.state_dict()
     sizes = [t.numel() * t.element_size() for t in state.values()]
-    scratch = max(4 * min(max(sizes), _intervene._SNAPSHOT_COMPARE_BYTES),
-                  4 * _dictionary._HASH_CHUNK_BYTES)
+    scratch = max(_intervene._snapshot_workspace(
+        min(max(sizes), _intervene._SNAPSHOT_COMPARE_BYTES), _intervene._SNAPSHOT_BATCH_BLOCKS),
+        4 * _dictionary._HASH_CHUNK_BYTES)
     selected = guard if lower == "outer" else guard._guard
     selected.peak = 321
     selected.limit = selected.peak + sum(sizes) + scratch + margin
@@ -443,7 +491,7 @@ def test_cpu_snapshot_admits_the_complete_reserve_before_allocation(device_snaps
         pytest.fail("the complete snapshot must fit before its first allocation")
     with monkeypatch.context() as patch:
         if margin < 0:
-            patch.setattr(torch, "empty", forbidden)
+            patch.setattr(torch, "empty_like", forbidden)
         case.executor._prepare_dictionary_identity()
     if margin == 0:
         assert case.executor._dictionary_snapshot is not None
@@ -460,18 +508,21 @@ def test_cpu_snapshot_admits_the_complete_reserve_before_allocation(device_snaps
 
 @pytest.mark.parametrize("phase", ["create", "compare"])
 @pytest.mark.parametrize("failure", ["outer_limit", "inner_limit", "stop"])
-def test_cpu_snapshot_stops_between_blocks(device_snapshot, monkeypatch, phase, failure):
+def test_device_snapshot_stops_between_blocks(device_snapshot, monkeypatch, phase, failure):
     guard = IdentityGuard()
     guard._guard = IdentityGuard()
     case = device_snapshot(guard=guard)
     if phase == "compare":
         case.executor._prepare_dictionary_identity()
         case.transfers.clear()
+        case.comparisons.clear()
+        case.copies.clear()
+    work = case.copies if phase == "create" else case.comparisons
     check = guard.check
 
     def stopped(stage):
         check(stage)
-        if case.transfers:
+        if work:
             if failure == "stop":
                 raise CleanStop("snapshot stop")
             selected = guard if failure == "outer_limit" else guard._guard
@@ -483,13 +534,15 @@ def test_cpu_snapshot_stops_between_blocks(device_snapshot, monkeypatch, phase, 
             case.executor._prepare_dictionary_identity()
         else:
             case.executor.validate(feature_spec())
-    assert len(case.transfers) == 1 and not case.scopes and case.readback() is None
+    assert len(work) == 1 and not case.scopes
+    assert case.readback is None or case.readback() is None
+    assert len(case.drains) >= 1
     if phase == "create":
         assert case.executor._dictionary_snapshot is None
 
 
 @pytest.mark.parametrize("target", ["copied", "pending"])
-def test_cpu_snapshot_refuses_changes_during_copy(device_snapshot, monkeypatch, target):
+def test_device_snapshot_refuses_changes_during_copy(device_snapshot, monkeypatch, target):
     case = device_snapshot()
     copy, copies = torch.Tensor.copy_, []
 
@@ -508,7 +561,7 @@ def test_cpu_snapshot_refuses_changes_during_copy(device_snapshot, monkeypatch, 
     assert case.executor._dictionary_snapshot is None and not case.scopes
 
 
-def test_cpu_snapshot_replay_release_and_live_weights(device_snapshot, controlled):
+def test_device_snapshot_replay_release_and_live_weights(device_snapshot, controlled):
     case = device_snapshot()
     model, tokenizer, controls, _ = controlled
     case.executor._prepare_dictionary_identity()
@@ -564,3 +617,216 @@ def test_cpu_byte_comparison_refuses_invalid_views_before_native_call(monkeypatc
     monkeypatch.setattr(_intervene, "_native_byte_compare", lambda: pytest.fail("invalid native comparison"))
     with pytest.raises(ValueError, match="contiguous CPU byte views"):
         _intervene._cpu_byte_equal(left, right)
+
+
+@pytest.mark.parametrize("mutation", [False, True])
+def test_device_snapshot_scans_admission_and_installation_independently(device_snapshot, mutation):
+    case = device_snapshot()
+    case.executor._prepare_dictionary_identity()
+    total = sum(t.numel() * t.element_size() for t in case.dictionary.state_dict().values())
+    case.comparisons.clear()
+    admitted = case.executor.validate(feature_spec())
+    assert sum(size for size, _ in case.comparisons) == total
+    case.comparisons.clear()
+    if mutation:
+        # An early mismatch must not skip the rest of the live dictionary.
+        case.dictionary.layers[0].W_enc.data[0, 0].add_(.125)
+        with pytest.raises(InterventionError, match="dictionary content changed"):
+            case.executor.install(admitted)
+        assert not case.executor._hooks
+    else:
+        hook = case.executor.install(admitted)
+        hook()
+    assert sum(size for size, _ in case.comparisons) == total
+    assert not case.scopes
+
+
+def test_device_snapshot_checks_topk_and_never_reuses_reduction_flags(device_snapshot):
+    case = device_snapshot()
+    case.executor._prepare_dictionary_identity()
+    snapshot = case.executor._dictionary_snapshot
+    identifier = case.executor.dictionary_id
+    parameter = case.dictionary.layers[0].W_enc.data
+    original = parameter[0, 0].item()
+    parameter[0, 0] = original + .125
+    assert not snapshot.matches(case.dictionary, identifier, case.guard)
+    parameter[0, 0] = original
+    assert snapshot.matches(case.dictionary, identifier, case.guard)
+    case.dictionary.layers[0].k = 1
+    assert not snapshot.matches(case.dictionary, identifier, case.guard)
+
+
+@pytest.mark.parametrize("failure", ["allocation", "reduction", "readback", "hash"])
+def test_device_snapshot_creation_failure_releases_private_storage(device_snapshot, monkeypatch, failure):
+    case = device_snapshot()
+    failure_error = RuntimeError("injected snapshot failure")
+    if failure == "allocation":
+        allocate = torch.empty_like
+        def failed(*args, **kwargs):
+            if case.allocations:
+                raise failure_error
+            return allocate(*args, **kwargs)
+        monkeypatch.setattr(torch, "empty_like", failed)
+    elif failure == "reduction":
+        def failed(*args, **kwargs):
+            raise failure_error
+        monkeypatch.setattr(torch, "all", failed)
+    elif failure == "readback":
+        # Fail after the hash, when the bounded flag vector reaches the host.
+        def failed(tensor):
+            raise failure_error
+        monkeypatch.setattr(torch.Tensor, "tolist", failed)
+    else:
+        check = case.guard.check
+        def failed(stage):
+            check(stage)
+            if stage == "model_identity":
+                raise failure_error
+        monkeypatch.setattr(case.guard, "check", failed)
+    with pytest.raises(RuntimeError, match="injected snapshot failure") as caught:
+        case.executor._prepare_dictionary_identity()
+    assert caught.value is failure_error
+    assert case.executor._dictionary_snapshot is None and not case.scopes
+    # Keep the exception and traceback alive while storage must be released.
+    assert case.allocations and all(reference() is None for reference in case.allocations)
+
+
+@pytest.mark.parametrize("failure", ["unsupported", "memory", "readback", "cleanup"])
+def test_device_snapshot_comparison_failure_never_returns_success(device_snapshot, monkeypatch, failure):
+    case = device_snapshot()
+    case.executor._prepare_dictionary_identity()
+    case.allocations.clear()
+    case.drains.clear()
+    failure_error = (NotImplementedError("unsupported byte reduction") if failure == "unsupported" else
+                     CleanStop("device memory stop") if failure in ("memory", "cleanup") else
+                     RuntimeError("failed flag readback"))
+    if failure == "readback":
+        def failed(tensor):
+            raise failure_error
+        monkeypatch.setattr(torch.Tensor, "tolist", failed)
+    else:
+        def failed(*args, **kwargs):
+            raise failure_error
+        monkeypatch.setattr(torch, "all", failed)
+    if failure == "cleanup":
+        def drain_failed():
+            raise RuntimeError("failed device drain")
+        monkeypatch.setattr(torch.mps, "synchronize", drain_failed)
+    with pytest.raises(type(failure_error)) as caught:
+        case.executor.validate(feature_spec())
+    assert caught.value is failure_error and not case.scopes and not case.executor._hooks
+    assert case.allocations and all(reference() is None for reference in case.allocations)
+    if failure == "cleanup":
+        assert str(caught.value.__cause__) == "failed device drain"
+    else:
+        assert len(case.drains) == 1
+
+
+@pytest.mark.parametrize("stage", ["mask", "flags", "compare", "reduce", "readback"])
+@pytest.mark.parametrize("lower", ["outer", "inner"])
+def test_device_snapshot_admits_each_allocation_and_dispatch(device_snapshot, monkeypatch, stage, lower):
+    guard = IdentityGuard()
+    guard._guard = IdentityGuard()
+    case = device_snapshot(guard=guard)
+    case.executor._prepare_dictionary_identity()
+    case.allocations.clear()
+    case.comparisons.clear()
+    case.reductions.clear()
+    case.transfers.clear()
+    check = guard.check
+    def lower_limit(where):
+        check(where)
+        ready = {"mask": True, "flags": len(case.allocations) == 1,
+                 "compare": len(case.allocations) == 2,
+                 "reduce": bool(case.comparisons),
+                 "readback": len(case.reductions) == _intervene._SNAPSHOT_BATCH_BLOCKS}[stage]
+        if ready:
+            (guard if lower == "outer" else guard._guard).limit = 1
+    monkeypatch.setattr(guard, "check", lower_limit)
+    with pytest.raises(CleanStop, match="allocation exceeds"):
+        case.executor.validate(feature_spec())
+    expected = {"mask": (0, 0, 0), "flags": (1, 0, 0), "compare": (2, 0, 0),
+                "reduce": (2, 1, 0), "readback": (2, 8, 8)}[stage]
+    assert (len(case.allocations), len(case.comparisons), len(case.reductions)) == expected
+    assert not case.transfers and not case.scopes
+    assert all(reference() is None for reference in case.allocations)
+
+
+@pytest.mark.parametrize("margin", [-1, 0])
+@pytest.mark.parametrize("phase", ["create", "compare"])
+def test_device_snapshot_preserves_prospective_host_reserve(device_snapshot, monkeypatch, margin, phase):
+    case = device_snapshot()
+    total = sum(t.numel() * t.element_size() for t in case.dictionary.state_dict().values())
+    if phase == "create":
+        scratch = max(4 * _dictionary._HASH_CHUNK_BYTES,
+                      _intervene._snapshot_workspace(4096, _intervene._SNAPSHOT_BATCH_BLOCKS))
+        required = total + scratch
+    else:
+        case.executor._prepare_dictionary_identity()
+        case.allocations.clear()
+        required = 2 * total + _intervene._snapshot_workspace(4096, _intervene._SNAPSHOT_BATCH_BLOCKS)
+    monkeypatch.setattr(psutil, "virtual_memory", lambda: SimpleNamespace(available=8_000_000_000 + required + margin))
+    action = case.executor._prepare_dictionary_identity if phase == "create" else lambda: case.executor.validate(feature_spec())
+    if margin < 0:
+        with pytest.raises(CleanStop, match="host reserve"):
+            action()
+        assert not case.allocations
+    else:
+        action()
+        assert case.executor._dictionary_snapshot is not None
+
+
+@pytest.mark.parametrize("limit", [40_000_000_000, 50_000_000_000])
+@pytest.mark.parametrize("historical", [False, True])
+def test_device_snapshot_enforces_decimal_process_cap(monkeypatch, limit, historical):
+    monkeypatch.setattr(psutil, "virtual_memory", lambda: SimpleNamespace(available=64_000_000_000))
+    guard = IdentityGuard(limit=limit, peak=40_000_000_001 if historical else 0)
+    guard.current = 40_000_000_000
+    memory = _intervene._DeviceSnapshotMemory(guard)
+    assert memory.limit == 40_000_000_000
+    if not historical:
+        _intervene._DictionarySnapshot._admit(memory, 0)
+    with pytest.raises(CleanStop, match="process memory limit"):
+        _intervene._DictionarySnapshot._admit(memory, 1)
+
+
+@pytest.mark.gpu
+def test_mps_snapshot_exact_bytes_across_bounded_batches(monkeypatch):
+    if not torch.backends.mps.is_available():
+        pytest.skip("MPS is unavailable")
+    monkeypatch.setattr(_intervene, "_SNAPSHOT_COMPARE_BYTES", 17)
+    monkeypatch.setattr(_intervene, "_SNAPSHOT_BATCH_BLOCKS", 3)
+    guard = IdentityGuard()
+    guard.device = torch.device("mps")
+    with _memory.autorelease_scope("mps"), torch.inference_mode():
+        bits = torch.tensor([0, -2147483648, 0x7FC00001, 0x7FC00002] * 9, dtype=torch.int32).to("mps")
+        state = {"weight": bits.view(torch.float32)}
+        dictionary = SimpleNamespace(metadata={"model_id": GEMMA_ID}, layers=[SimpleNamespace(k=1)],
+                                     state_dict=lambda: state)
+        identifier = _intervene._dictionary_identifier(dictionary, guard)
+        snapshot = _intervene._DictionarySnapshot.create(dictionary, identifier, guard)
+        assert snapshot is not None and snapshot.state["weight"].device.type == "mps"
+        assert snapshot.matches(dictionary, identifier, guard)
+        bits[-1] = 0x7FC00003
+        assert not snapshot.matches(dictionary, identifier, guard)
+        bits[-1] = 0x7FC00002
+        assert snapshot.matches(dictionary, identifier, guard)
+        bits[0] = -2147483648
+        assert not snapshot.matches(dictionary, identifier, guard)
+
+
+@pytest.mark.parametrize("failure", ["process", "host"])
+def test_device_snapshot_hash_fallback_preserves_resource_bounds(device_snapshot, monkeypatch, failure):
+    case = device_snapshot()
+    case.guard.limit = 4 * _dictionary._HASH_CHUNK_BYTES + 1
+    case.executor._prepare_dictionary_identity()
+    assert case.executor._dictionary_snapshot is None
+    case.guard.limit = 50_000_000_000
+    if failure == "process":
+        case.guard.current = 40_000_000_000
+    else:
+        available = 8_000_000_000 + 4 * _dictionary._HASH_CHUNK_BYTES - 1
+        monkeypatch.setattr(psutil, "virtual_memory", lambda: SimpleNamespace(available=available))
+    with pytest.raises(CleanStop, match="memory limit|host reserve"):
+        case.executor.validate(feature_spec())
+    assert not case.transfers and not case.executor._hooks

@@ -6,12 +6,14 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from copy import deepcopy
 from functools import lru_cache
+from itertools import islice
 import hashlib
 import json
 import math
 import sys
 import threading
 import time
+import traceback
 import weakref
 
 import torch
@@ -27,6 +29,8 @@ MAX_PROMPT_BYTES = 4096
 MAX_SOURCE_BYTES = 16 * 1024 * 1024
 MAX_SOURCE_ENTRIES = 64
 _SNAPSHOT_COMPARE_BYTES = 16 * 1024 * 1024
+_SNAPSHOT_BATCH_BLOCKS = 8
+_SNAPSHOT_FLAG_RESERVE = 64 * 1024
 KINDS = ("ablate", "add", "scale", "clamp", "patch")
 _SUSPENDED = ContextVar("caliper_interventions_suspended", default=frozenset())
 _ROWS = ContextVar("caliper_intervention_rows", default={})
@@ -116,7 +120,15 @@ def _source_input_identity(inputs, guard):
 
 def _dictionary_identifier(dictionary, guard):
     """Bind default restore compatibility to content, metadata, and actual TopK values."""
-    return _dictionary_digest(dictionary, _content_identity(dictionary.state_dict(), guard))
+    from ._admission import GEMMA_ID
+    from ._dictionary import _HASH_CHUNK_BYTES
+    state = dictionary.state_dict()
+    if (dictionary.metadata.get("model_id") == GEMMA_ID
+            and any(tensor.device.type == "mps" for tensor in state.values())):
+        # Full-hash fallback must preserve the same process cap and host reserve.
+        guard = _DictionarySnapshot._memory(state, guard, device_compare=True)
+        _DictionarySnapshot._admit(guard, 4 * _HASH_CHUNK_BYTES, force=True)
+    return _dictionary_digest(dictionary, _content_identity(state, guard))
 
 
 def _dictionary_digest(dictionary, content):
@@ -156,21 +168,71 @@ def _cpu_byte_equal(left, right):
     return compare(left.data_ptr(), right.data_ptr(), left.numel()) == 0
 
 
+class _DeviceSnapshotMemory(_IdentityMemory):
+    """Reserve host headroom for private MPS bytes and bounded device work."""
+
+    def __init__(self, guard):
+        super().__init__(guard)
+        self.reserve = self.reserve_floor = 0
+
+    @property
+    def limit(self):
+        return min(super().limit, 40_000_000_000)
+
+    def check(self, stage, *, force=True):
+        import psutil
+        super().check(stage, force=force)
+        # A stale process reader must not hide admitted but untouched pages.
+        observed = max(getattr(self.guard, "current", 0) or 0,
+                       getattr(self.inner, "current", 0) or 0,
+                       self._checked_current or 0)
+        pending = max(0, max(self.floor, self.reserve_floor) - observed)
+        if psutil.virtual_memory().available - pending - self.reserve < 8_000_000_000:
+            raise CleanStop("dictionary identity allocation exceeds the host reserve")
+
+
+def _snapshot_workspace(block_bytes, blocks):
+    # Four byte workspaces per queued block cover masks and reduction scratch.
+    # Each flag also reserves allocator pages, its host copy, and dispatch data.
+    return blocks * (4 * block_bytes + _SNAPSHOT_FLAG_RESERVE)
+
+
+@contextmanager
+def _snapshot_device_batch(device):
+    """Drain a bounded queue before its autorelease scope ends, also on failure."""
+    from ._memory import autorelease_scope
+    completed = []
+    with autorelease_scope(device):
+        try:
+            yield completed
+        except BaseException as error:
+            try:
+                torch.mps.synchronize()
+            except BaseException as cleanup:
+                # Preserve a memory stop or device failure if cleanup also fails.
+                raise error from cleanup
+            raise
+        else:
+            if not completed:
+                torch.mps.synchronize()
+
+
 class _DictionarySnapshot:
     """Prove unchanged content with private bytes, without version-counter assumptions.
 
-    Every lookup compares all live bytes. Gemma MPS snapshots retain CPU bytes
-    and read back bounded blocks for comparison. Data aliases, NumPy writes, and
+    Every lookup compares all live bytes. Gemma MPS snapshots retain MPS bytes
+    and read back bounded reduction flags. Data aliases, NumPy writes, and
     inference tensors need no mutation notification. The snapshot never supplies
     model weights, and a mismatch requires reconfiguration.
     """
 
-    def __init__(self, state, content, source_devices):
+    def __init__(self, state, content, source_devices, *, device_compare=False):
         self.state, self.content = state, content
         self.source_devices = source_devices
+        self.device_compare = device_compare
 
     @staticmethod
-    def _memory(state, guard):
+    def _memory(state, guard, *, device_compare=False):
         from ._dictionary import _canonical_device
         memory = _IdentityMemory(guard) if guard is not None else None
         for tensor in state.values():
@@ -179,12 +241,16 @@ class _DictionarySnapshot:
                     raise ValueError("device content identity requires a bounded process memory guard")
                 if _canonical_device(tensor.device) != _canonical_device(memory.device):
                     raise ValueError("dictionary identity requires a guard for its device")
+        if device_compare:
+            memory = guard if isinstance(guard, _DeviceSnapshotMemory) else _DeviceSnapshotMemory(guard)
         return memory
 
     @staticmethod
     def _admit(memory, reserve, *, force=False, floor=0):
         from ._memory import CleanStop
         if memory is not None:
+            if isinstance(memory, _DeviceSnapshotMemory):
+                memory.reserve, memory.reserve_floor = reserve, floor
             memory.check("dictionary identity", force=force)
             if allocation_bytes(memory, floor=floor) + reserve > memory.limit:
                 raise CleanStop("dictionary identity allocation exceeds the process memory limit")
@@ -196,53 +262,121 @@ class _DictionarySnapshot:
         from ._memory import autorelease_scope
         state = _dense_state(dictionary.state_dict())
         source_devices = {name: tensor.device for name, tensor in state.items()}
-        retain_cpu = (dictionary.metadata.get("model_id") == GEMMA_ID
-                      and any(device.type == "mps" for device in source_devices.values()))
+        device_compare = (dictionary.metadata.get("model_id") == GEMMA_ID
+                          and any(device.type == "mps" for device in source_devices.values()))
         sizes = [tensor.numel() * tensor.element_size() for tensor in state.values()]
         total, largest = sum(sizes), max(sizes, default=0)
-        memory = cls._memory(state, guard)
+        memory = cls._memory(state, guard, device_compare=device_compare)
         # Account for the retained copy, hash chunks, and comparison workspace.
         scratch = max(4 * min(largest, _SNAPSHOT_COMPARE_BYTES), 4 * _HASH_CHUNK_BYTES)
+        if device_compare:
+            scratch = max(scratch, _snapshot_workspace(min(largest, _SNAPSHOT_COMPARE_BYTES),
+                                                      _SNAPSHOT_BATCH_BLOCKS))
         if memory is None:
             if any(t.device.type != "cpu" for t in state.values()) or total + scratch > _UNVERIFIED_CPU_BYTES:
                 return None
             initial = 0
         else:
-            memory.check("dictionary identity", force=True)
+            cls._admit(memory, 0, force=True)
             initial = allocation_bytes(memory)
             if not math.isfinite(memory.limit) or initial + total + scratch > memory.limit:
                 return None
-        snapshot, copied = {}, 0
-        for name, tensor in state.items():
-            cls._admit(memory, total - copied + scratch, floor=initial + copied)
-            if retain_cpu:
-                # Complete admission precedes every private allocation. Count the
-                # whole destination before its first block, even with lazy pages.
-                snapshot[name] = torch.empty(tensor.shape, dtype=tensor.dtype, device="cpu")
+        snapshot, copied, result = {}, 0, None
+        tensor = current = original = None
+        try:
+            for name, tensor in state.items():
+                cls._admit(memory, total - copied + scratch, floor=initial + copied)
+                if not device_compare or tensor.device.type != "mps":
+                    with autorelease_scope(tensor.device):
+                        snapshot[name] = tensor.detach().clone()
+                    copied += tensor.numel() * tensor.element_size()
+                    continue
+                # Count the entire private destination before its first write.
+                with autorelease_scope(tensor.device):
+                    snapshot[name] = torch.empty_like(tensor)
                 copied += tensor.numel() * tensor.element_size()
                 current = tensor.detach().reshape(-1).view(torch.uint8)
                 original = snapshot[name].reshape(-1).view(torch.uint8)
+                stride = _SNAPSHOT_COMPARE_BYTES * _SNAPSHOT_BATCH_BLOCKS
+                for batch in range(0, current.numel(), stride):
+                    with _snapshot_device_batch(tensor.device):
+                        for start in range(batch, min(batch + stride, current.numel()), _SNAPSHOT_COMPARE_BYTES):
+                            stop = min(start + _SNAPSHOT_COMPARE_BYTES, current.numel())
+                            cls._admit(memory, total - copied + scratch, floor=initial + copied)
+                            original[start:stop].copy_(current[start:stop])
+            if memory is not None:
+                memory.floor = initial + copied
+            cls._admit(memory, scratch, force=True, floor=initial + copied)
+            content = _content_identity(snapshot, memory)
+            result = cls(snapshot, content, source_devices, device_compare=device_compare)
+            cls._admit(memory, scratch, force=True, floor=initial + copied)
+            # The copied bytes must reproduce the configured full-content identity.
+            if _dictionary_digest(dictionary, content) != identifier or not result.matches(dictionary, identifier, memory):
+                raise InterventionError("dictionary content changed. Reconfigure before use",
+                                        "intervene.unknown_dictionary")
+            return result
+        except BaseException as error:
+            snapshot.clear()
+            result = None
+            traceback.clear_frames(error.__traceback__)
+            raise
+        finally:
+            # A retained exception must not keep a partial destination alive.
+            tensor = current = original = None
+
+    def _device_equal(self, blocks, memory):
+        """Compare one bounded byte batch with one flag readback."""
+        largest = max(left.numel() for left, _ in blocks)
+        reserve = _snapshot_workspace(largest, len(blocks))
+        initial = allocation_bytes(memory)
+        mask = flags = host = left = right = template = None
+        try:
+            with _snapshot_device_batch(blocks[0][0].device) as completed:
+                self._admit(memory, reserve, floor=initial)
+                template = max((left for left, _ in blocks), key=lambda value: value.numel())
+                mask = torch.empty_like(template, dtype=torch.bool)
+                self._admit(memory, reserve, floor=initial)
+                flags = torch.empty_like(template[:1].expand(len(blocks)), dtype=torch.bool)
+                for index, (left, right) in enumerate(blocks):
+                    self._admit(memory, reserve, floor=initial)
+                    torch.eq(left, right, out=mask[:left.numel()])
+                    self._admit(memory, reserve, floor=initial)
+                    torch.all(mask[:left.numel()], out=flags[index])
+                self._admit(memory, reserve, floor=initial)
+                host = flags.to(device="cpu")
+                completed.append(True)
+                equal = all(host.tolist())
+                self._admit(memory, 0, force=True)
+                return equal
+        except BaseException as error:
+            # Backend tracebacks can retain the output mask through out views.
+            traceback.clear_frames(error.__traceback__)
+            raise
+        finally:
+            mask = flags = host = left = right = template = None
+
+    def _device_matches(self, state, memory):
+        def blocks():
+            for name, tensor in state.items():
+                if tensor.device.type != "mps":
+                    continue
+                current = tensor.detach().reshape(-1).view(torch.uint8)
+                original = self.state[name].reshape(-1).view(torch.uint8)
                 for start in range(0, current.numel(), _SNAPSHOT_COMPARE_BYTES):
-                    stop = min(start + _SNAPSHOT_COMPARE_BYTES, current.numel())
-                    cls._admit(memory, total - copied + scratch, floor=initial + copied)
-                    with autorelease_scope(tensor.device):
-                        block = current[start:stop].to(device="cpu")
-                        original[start:stop].copy_(block)
-                        del block
-                continue
-            with autorelease_scope(tensor.device):
-                snapshot[name] = tensor.detach().clone()
-            copied += tensor.numel() * tensor.element_size()
-        if memory is not None:
-            memory.floor = initial + copied
-        content = _content_identity(snapshot, memory)
-        result = cls(snapshot, content, source_devices)
-        cls._admit(memory, scratch, force=True, floor=initial + copied)
-        # The copied bytes must reproduce the configured full-content identity.
-        if _dictionary_digest(dictionary, content) != identifier or not result.matches(dictionary, identifier, memory):
-            raise InterventionError("dictionary content changed. Reconfigure before use",
-                                    "intervene.unknown_dictionary")
-        return result
+                    yield current[start:start + _SNAPSHOT_COMPARE_BYTES], original[start:start + _SNAPSHOT_COMPARE_BYTES]
+
+        pending = blocks()
+        batch = []
+        equal = True
+        try:
+            while batch := list(islice(pending, _SNAPSHOT_BATCH_BLOCKS)):
+                # Do not short-circuit later batches after a content mismatch.
+                equal = self._device_equal(batch, memory) and equal
+                batch.clear()
+            return equal
+        finally:
+            batch.clear()
+            pending.close()
 
     def matches(self, dictionary, identifier, guard):
         from ._dictionary import _dense_state
@@ -250,13 +384,21 @@ class _DictionarySnapshot:
         state = _dense_state(dictionary.state_dict())
         if state.keys() != self.state.keys() or _dictionary_digest(dictionary, self.content) != identifier:
             return False
-        memory = self._memory(state, guard)
+        memory = self._memory(state, guard, device_compare=self.device_compare)
+        if self.device_compare:
+            memory.floor = max(memory.floor, sum(t.numel() * t.element_size()
+                                                for t in (*state.values(), *self.state.values())))
         self._admit(memory, 0, force=True)
         for name, tensor in state.items():
             saved = self.state[name]
             if (tensor.shape != saved.shape or tensor.dtype != saved.dtype
                     or tensor.device != self.source_devices[name]):
                 return False
+        equal = self._device_matches(state, memory) if self.device_compare else True
+        for name, tensor in state.items():
+            saved = self.state[name]
+            if self.device_compare and tensor.device.type == "mps":
+                continue
             # Byte views also distinguish signed zero and preserve NaN bits.
             current = tensor.detach().reshape(-1).view(torch.uint8)
             original = saved.reshape(-1).view(torch.uint8)
@@ -269,11 +411,11 @@ class _DictionarySnapshot:
                         block = block.to(device="cpu")
                         equal = _cpu_byte_equal(block, original[start:stop])
                     else:
-                        equal = torch.equal(block, original[start:stop])
+                        equal = torch.equal(block, original[start:stop]) and equal
                     del block
                     if not equal:
                         return False
-        return True
+        return equal
 
 
 def _indices(value, name, *, limit=None):
