@@ -55,7 +55,9 @@ def test_graph_identity_distinguishes_adaptive_visited_targets(tracer, monkeypat
     class SyntheticEffects:
         """A three-feature DAG whose ranking changes after the first target."""
 
-        def __init__(self, path, dictionary, ids, tokenizer, *, check=None):
+        def __init__(self, path, dictionary, ids, tokenizer, *, check=None,
+                     profile="caliper", max_n_logits=10, desired_logit_prob=.95):
+            assert profile == "caliper" and max_n_logits == 10 and desired_logit_prob == .95
             self.path = path
             self.tokens = [{"position": i, "token_id": token, "text": str(token)} for i, token in enumerate(ids)]
             self.nodes = [{"id": f"token:{i}", "kind": "token", "layer": -1,

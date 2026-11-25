@@ -10,7 +10,7 @@ from caliper.interp._memory import CleanStop
 
 def test_cpu_target_admission_preserves_headroom_and_float64_cost():
     checks = []
-    guard = SimpleNamespace(device=torch.device("cpu"), limit=12_000_000_000,
+    guard = SimpleNamespace(device=torch.device("cpu"), limit=12_000_000_000, host_reserve_bytes=0,
                             check=lambda stage: checks.append(stage) or 9_000_000_000)
     dimensions = dict(layers=24, tokens=32, width=1024, mixer_width=2048)
     single = MemoryGuard.batch_size(guard, 64, itemsize=4, **dimensions)
