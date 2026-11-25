@@ -13,6 +13,7 @@ import torch
 
 from ._dictionary import _HASH_CHUNK_BYTES, _canonical_device, _state_hash, weights_hash
 from ._families import model_family
+from ._forward_identity import arithmetic_settings
 from . import _qwen_family
 from ._frozen import (FrozenPath, MemoryGuard, _validate_dictionary, _validate_ablation_points,
                       _validate_intervention_positions, _finite_max, _require_finite, _no_check,
@@ -247,7 +248,7 @@ def _versions(module):
 def _forward_settings(model, memory):
     """Snapshot settings read by the fixture and Qwen text forward paths.
 
-    Keep this admission state separate from checkpoint and dictionary hashes.
+    Bind runtime arithmetic separately from checkpoint and dictionary hashes.
     Capture temporarily selects eager attention. The configured backend does not
     affect the frozen path. Recorded outputs such as ``last_scale`` are not inputs.
     """
@@ -271,7 +272,7 @@ def _forward_settings(model, memory):
                      "head_dim", "num_attention_heads", "num_key_value_heads",
                      "sliding_window", "attn_logit_softcapping", "final_logit_softcapping",
                      "query_pre_attn_scalar", "use_bidirectional_attention", "hidden_activation")
-    settings = {}
+    settings = arithmetic_settings(model)
 
     def record(name, value):
         if isinstance(value, torch.Tensor):
@@ -638,6 +639,7 @@ class Tracer:
                         "dictionary_metadata": self.dictionary.metadata,
                         "tokenizer": id(self.tokenizer), "prompt": prompt, "tokens": ids.tolist(),
                         "interventions": state}
+            identity.update(arithmetic_settings(self.model))
             state_key = hashlib.sha256(json.dumps(identity, sort_keys=True, allow_nan=False).encode()).hexdigest()
             cache_key = (state_key, max_targets, max_nodes, max_edges, self.target_batch_size, label_key)
             self._validate_forward_settings(check)

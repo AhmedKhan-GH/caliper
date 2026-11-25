@@ -10,7 +10,7 @@ import torch
 from safetensors import safe_open
 
 from ._dictionary import _canonical_device, _checkpoint_slices, _dense_state, _hf_digest, _state_hash, weight_names
-from ._forward_identity import forward_settings
+from ._forward_identity import _ARITHMETIC_CONTEXT, arithmetic_settings, forward_settings
 from ._memory import CleanStop, allocation_bytes, autorelease_scope
 from ._trace import _forward_settings
 
@@ -70,6 +70,8 @@ def evaluation_dictionary_evidence(dictionary, *, memory=None, folder=None):
 
 
 def _evaluation_settings(model, memory):
+    # Shared trace settings include runtime arithmetic. The canonical default
+    # adds no fields, so legacy evaluation and index digests stay exact.
     settings = _forward_settings(model, memory)
     if getattr(getattr(model, "config", None), "model_type", None) == "gemma2":
         # Include every Gemma checkpoint setting, such as activation approximation.
@@ -103,7 +105,12 @@ def _settings_digest(model, settings):
 
 def evaluation_model_evidence(model, model_hash, *, memory=None, settings=None):
     """Describe exact tensors and settings after the caller verifies model_hash."""
-    settings = _evaluation_settings(model, memory) if settings is None else settings
+    if settings is None:
+        settings = _evaluation_settings(model, memory)
+    elif settings.get(_ARITHMETIC_CONTEXT) != arithmetic_settings(model).get(_ARITHMETIC_CONTEXT):
+        # A supplied snapshot must describe the current arithmetic before any
+        # tensor readback. Never relabel stale evidence with the current context.
+        raise ValueError("evaluation arithmetic context changed after settings capture")
     return {"version": 2, "model_hash": model_hash,
             "tensor_hash": _hf_digest(model, memory=memory),
             "forward_settings_hash": _settings_digest(model, settings)}
