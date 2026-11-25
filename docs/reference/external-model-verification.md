@@ -93,7 +93,7 @@ A real device change also requires verification again when the previous memory g
 The spellings `mps` and `mps:0` refer to the same sole MPS device.
 
 Verification defaults to a total process limit of 12 GB.
-Only the exact pinned Gemma identity permits an explicit `memory_limit_gb` above 12, with a maximum of 28 GB.
+Only the exact pinned Gemma identity permits an explicit `memory_limit_gb` above 12, with a maximum of 40 GB.
 Qwen and other identities retain the 12 GB ceiling.
 The MPS process limit remains active after verification, as required by the run policy.
 Library memory diagnostics use stderr, and tool result records retain their stdout channel.

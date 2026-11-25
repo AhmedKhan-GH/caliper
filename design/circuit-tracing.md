@@ -155,13 +155,18 @@ Evaluation replaces the semantic residual write and uses the actual final softca
 Gemma receives no Qwen quality override or upper-half fallback.
 No new dictionary training is authorized.
 
-The explicit Gemma process budget is at most 28 GB.
+The explicit Gemma process budget is at most 40 decimal GB.
 Standalone verification, dictionary loads, and traces retain a 12 GB default.
-The Gemma-only converter defaults to 28 GB because the model and complete dictionary exceed 12 GB.
+The Gemma converter defaults to 40 GB because the model and complete dictionary exceed 12 GB.
 A supplied lower converter limit remains active.
+
 Only the pinned Gemma identity permits a larger verification or dictionary limit, and only the Gemma family permits a larger trace limit.
-Hosted Gemma inference and acceptance select 28 GB explicitly.
+Hosted Gemma inference and acceptance select 40 GB explicitly.
 Qwen and fixture limits remain 12 GB, and Qwen training retains 24 GB.
+
+Shared Parquet admission requires at least 8 decimal GB of available host memory after the requested allocation.
+It also requires sufficient process headroom and retains historical peak checks.
+The pressure stop thresholds remain unchanged.
 
 The loader admits CPU load and device transfer separately, verifies checkpoint identity on the CPU, then checks that identity after transfer.
 The identity includes tied weights, effective settings, default RoPE buffers, and the nonpersistent embedding scale.
@@ -389,7 +394,7 @@ The driver finds that token's exact probability by its ID, even when the bar ord
 Validation needs at least eight correct signs among ten features and a Spearman correlation of at least 0.6.
 
 The trace budget is 20 seconds, and the steering budget is one second.
-The demo process limit is 12 GB for Qwen and 28 GB for Gemma.
+The demo process limit is 12 GB for Qwen and 40 GB for Gemma.
 The driver checks graph node IDs and the original top token's bar height in each capture.
 The bar height must match that token's current probability times scale within two pixels.
 The original top token's bar must also change in the predicted direction after the Qwen or Gemma clamp.

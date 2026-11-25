@@ -69,7 +69,7 @@ The manifest records model identity, probe points, dimensions, activation type, 
 An explicit `model_hash` can supply the expected identity instead.
 The loader refuses an absent identity or a mismatch.
 Its `memory_limit_gb` argument caps total process memory at 12 GB by default.
-Only the exact pinned Gemma identity permits an explicit larger limit, up to 28 GB.
+Only the exact pinned Gemma identity permits an explicit larger limit, up to 40 GB.
 The optional `memory` argument retains the supplied guard, its lower limit, and any prior stop.
 
 The loader admits metadata before the read and JSON parse.
@@ -84,7 +84,7 @@ The local snapshot must contain the checkpoint tensors and `config.json` for the
 Verification compares weights and forward settings with that trusted snapshot, including normalization epsilon, activation functions, rotary settings, and layer types.
 The local snapshot is trusted input. Verification does not authenticate its files against the remote repository.
 The model must use evaluation mode.
-Set `memory_limit_gb=28` at initial Gemma verification when the complete run needs that budget.
+Set `memory_limit_gb=40` at initial Gemma verification when the complete run needs that budget.
 Later callers cannot raise an earlier verification limit or clear its recorded stop.
 Qwen permits eager and SDPA attention with the same checkpoint identity.
 Gemma requires eager attention because the supported SDPA backend cannot apply its attention softcap.
@@ -127,6 +127,9 @@ This dataset stream can require network access. Local model files do not imply a
 
 Local Parquet input supports flat UTF-8 text with uncompressed or SNAPPY pages.
 Each decode uses one row and checks process and host memory.
+Admission requires at least 8 decimal GB of available host memory after the requested decode allocation.
+The allocation must also fit the remaining process budget.
+Historical peak checks and pressure stop thresholds remain active.
 Other codecs and unbounded decode units are refused before data allocation.
 
 The Qwen preparation commands below use local resource folders.
@@ -182,7 +185,7 @@ A Qwen dictionary cannot serve Gemma.
 Gemma retains the original quality gates on exactly 200,000 tokens.
 Mean FVU must be at most 0.30, dead fraction at most 0.15, and cross-entropy rise at most 0.5 nats.
 The example index requires exactly 2,000,000 tokens from the unchanged index partition.
-The explicit Gemma process limit is 28 GB.
+The explicit Gemma process limit is 40 decimal GB.
 The Qwen quality override does not apply to Gemma.
 
 CPU tests with random Gemma configurations verify the implemented paths without gated weights.
@@ -224,7 +227,7 @@ Its centered constant enters completeness accounting.
 Live output and interventions retain the actual nonlinear softcap.
 
 `Tracer` defaults to `memory_limit_gb=12`.
-An explicit Gemma trace can use at most 28 GB, and hosted Gemma inference supplies that limit.
+An explicit Gemma trace can use at most 40 GB, and hosted Gemma inference supplies that limit.
 Other supported families retain the 12 GB ceiling.
 
 The hosted trace and validation paths use inference forwards without autograd or autocast.
@@ -431,7 +434,7 @@ The fixture prompt is `The red cube is beside a tree.`
 The Qwen and Gemma default prompt is `Paris is the capital of`.
 `--prompt` supplies another prompt within the token limit.
 
-The Gemma profile selects a 28 GB process limit and refuses `--quality-override`.
+The Gemma profile selects a 40 GB process limit and refuses `--quality-override`.
 This entry point does not establish a completed Gemma run.
 Every control operation uses Caliper MCP, including feature selection, examples, clamps, validation, and window capture.
 The driver waits for file events, run events, and published steps.
@@ -499,7 +502,7 @@ Acceptance for Qwen and Gemma requires feature share of at least 0.30, 20 to 512
 It also requires 16 positive sorted examples, at least eight correct signs among ten features, and Spearman correlation of at least 0.6.
 Every target residual must remain at most 0.02.
 The trace limit is 20 seconds, and the steering limit is one second.
-The process limit is 12 GB for Qwen and 28 GB for Gemma.
+The process limit is 12 GB for Qwen and 40 GB for Gemma.
 
 The absolute probability change for the original top token must reach 0.05, or the top token must change.
 Both alternatives require the original token's probability to change in the predicted direction.

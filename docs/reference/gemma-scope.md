@@ -128,12 +128,12 @@ An active set that exceeds memory admission receives a refusal.
 ## Conversion And Provenance
 
 `tools/interp/convert_gemma_scope.py` converts the exact local Scope snapshot against a verified pinned Gemma model.
-Its API is `convert_gemma_scope(source, output, *, model, memory_limit_gb=28, evaluation_source=None)`.
+Its API is `convert_gemma_scope(source, output, *, model, memory_limit_gb=40, evaluation_source=None)`.
 The CLI accepts `--source`, `--output`, `--model-snapshot`, `--memory-limit-gb`, and `--evaluation-source`.
 The model and source paths must identify their exact revisions in the standard Hugging Face cache layout.
 The converter performs no download or training.
 
-The API and CLI default to 28 GB because this converter accepts only the pinned Gemma model.
+The API and CLI default to 40 GB because this converter accepts only the pinned Gemma model.
 A supplied lower limit remains active and can refuse the model load before allocation.
 
 The converter checks bounded NPZ headers before array allocation and uses `allow_pickle=False`.
@@ -156,21 +156,26 @@ These partitions separate local evaluation data from local index data.
 They establish no disjointness from publisher training data, and both result records retain `publisher_training_overlap="unknown"`.
 
 The evaluation and index tools use this source contract with `--model google/gemma-2-2b`.
-They select a 28 GB limit by default for that explicit model choice.
+The index selects a 40 GB limit by default for that explicit model choice.
 Evaluation must replace the semantic residual write and apply the actual final softcap during cross-entropy computation.
 The local affine tangent belongs only to attribution.
 
 ## Resource And Acceptance Limits
 
-The explicit Gemma process budget is at most 28 GB in decimal units.
+The explicit Gemma process budget is at most 40 GB in decimal units.
 Standalone verification, dictionary loads, and traces default to 12 GB unless the caller supplies a larger permitted limit.
-The Gemma converter defaults to 28 GB.
+The Gemma converter defaults to 40 GB.
 Verification and dictionary admission permit more than 12 GB only for the exact pinned Gemma identity.
-The trace family permits an explicit limit up to 28 GB for Gemma 2.
-Hosted Gemma inference and the Gemma acceptance profile select 28 GB explicitly.
+
+The trace family permits an explicit limit up to 40 GB for Gemma 2.
+Hosted Gemma inference and the Gemma acceptance profile select 40 GB explicitly.
 Qwen and fixture paths retain 12 GB, and the Qwen trainer retains 24 GB.
 
-Standalone `register_service`, `Tracer`, `FeatureIndex`, `build_index`, and `validate_trace` accept `memory_limit_gb=28` for Gemma.
+Shared Parquet admission leaves at least 8 decimal GB of available host memory after each requested allocation.
+The same allocation must fit the remaining process budget.
+Historical peak checks and pressure stop thresholds remain active.
+
+Standalone `register_service`, `Tracer`, `FeatureIndex`, `build_index`, and `validate_trace` accept `memory_limit_gb=40` for Gemma.
 The service, tracer, and index APIs also accept a process guard through `memory`.
 Validation accepts that guard through `guard` and otherwise reuses a matching intervention executor guard.
 A supplied lower guard takes precedence over a larger requested budget, including subsequent limit changes and stop requests.
