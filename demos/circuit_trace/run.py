@@ -24,6 +24,7 @@ from _qualification import (GEMMA_REVISION, MODEL_REVISION, dictionary_qualifica
                              validate_quality_override)
 from _spec import scene_programs
 from _visible import StartupFailure, check_assets, configure_assets, hold_after_error, startup_instrument
+import _published as published
 
 ROOT = Path(__file__).resolve().parents[2]
 METHOD_DISCLOSURES = {
@@ -75,6 +76,8 @@ class Session:
     def __init__(self, args, out, *, show=False, interactive=False):
         self.out, self.show = out, show
         self.quality_override = getattr(args, "quality_override", None)
+        self.replication_profile = getattr(args, "replication_profile", None)
+        self.private_output_directory = getattr(args, "private_output_directory", None)
         self.family = getattr(args, "family", "fixture" if args.model == "tiny-lm" else "qwen")
         self.app = self.mcp = self.events = None
         self.app_process = None
@@ -139,8 +142,11 @@ class Session:
             self.events = Events(self.mcp)
             if show or interactive:
                 startup_instrument(self)
+            options = ({"replication_profile": self.replication_profile,
+                        "private_output_directory": str(self.private_output_directory)}
+                       if self.replication_profile else {})
             self.mcp.body("run.start", kind="inference", id=self.run_id, model=args.model,
-                          dictionary=str(Path(args.dictionary).resolve()), prompt=args.prompt)
+                          dictionary=str(Path(args.dictionary).resolve()), prompt=args.prompt, **options)
             self.started = True
             def ready():
                 runs = self.mcp.body("run.list")["runs"]
@@ -352,6 +358,9 @@ def read_graph(session):
 
 
 def instrument(session):
+    if getattr(session, "replication_profile", None) == published.PROFILE:
+        from _published_ui import instrument as published_instrument
+        return published_instrument(session)
     m = session.mcp
     disclosures = dict(METHOD_DISCLOSURES)
     if getattr(session, "family", None) == "gemma":
@@ -477,6 +486,24 @@ class Bridge:
 
     def handle(self, event):
         s = self.session
+        if getattr(s, "replication_profile", None) == published.PROFILE:
+            from _published_ui import display_result, group_text
+            if event["kind"] == "control" and event.get("control") == "published_group":
+                s.mcp.body("state.set", id="published_members", value=group_text(int(event["value"])))
+                return
+            if event["kind"] == "run" and event.get("change") == "action" and event.get("name", "").startswith(published.PROFILE + "."):
+                if event.get("status") != "ok":
+                    s.mcp.body("state.set", id="published_status", value=f"{event['name']}: {event.get('text', 'Action failed.')}")
+                    return
+                status = s.events.complete("trace.status")
+                _, replication = published.replication_state(status)
+                record = replication.get("result") or {}
+                published.require(record.get("case_id") == event["name"], "The live case publication is stale.")
+                evidence = published.validate_case(s.private_output_directory, status, record["cell"],
+                                                   previous_sequence=record["sequence"] - 1)
+                display_result(s, evidence)
+                save(s.out / "live-case.json", evidence)
+                return
         if event["kind"] == "pick" and event.get("panel") == "graph":
             fields = event.get("fields") or {}
             index = fields.get("index", event.get("index"))
@@ -545,6 +572,8 @@ class Bridge:
 
 
 def acceptance(session, args, result):
+    if getattr(session, "replication_profile", None) == published.PROFILE:
+        return published_demo(session, args, result, collect=True)
     s = session
     if result.get("dictionary_quality_override") is not None:
         qualification = dictionary_qualification(s.events.complete("feature.dictionary"),
@@ -697,6 +726,8 @@ def acceptance(session, args, result):
 
 def live_demo(session, args, result):
     """Publish a baseline instrument, then let its controls drive the model."""
+    if getattr(session, "replication_profile", None) == published.PROFILE:
+        return published_demo(session, args, result, collect=False)
     result["browser_assets"] = check_assets(session)
     instrument(session)
     trace = session.events.complete("trace.run", prompt=args.prompt)
@@ -731,12 +762,162 @@ def live_demo(session, args, result):
     return bridge
 
 
+
+def published_action(session, cell, preparation_id):
+    """Measure a real callback through terminal reply and current publication."""
+    s = session
+    before = s.events.complete("trace.status")
+    _, prior = published.replication_state(before)
+    attempt_record = prior.get("last_attempt")
+    sequence = 0 if attempt_record is None else attempt_record["sequence"]
+    attachment = s.mcp.body("run.state", run=s.run_id)
+    entry = {"case_id": published.action_name(cell), "prior_sequence": sequence,
+             "before_status": before, "attachment_before": attachment, "completed": False}
+    started = time.monotonic()
+    try:
+        published.require(attachment.get("attached") is True, "The producer detached before the action.")
+        entry["event"] = s.action(published.action_name(cell))
+        entry["callback_seconds"] = time.monotonic() - started
+        status = s.events.complete("trace.status")
+        entry["status"] = status
+        evidence = published.validate_case(s.private_output_directory, status, cell,
+                                            previous_sequence=sequence, preparation_id=preparation_id)
+        # The array publication and its case metadata must refer to one output step.
+        step = status["inference"]["comparison"]["completed_step"]
+        if getattr(s, "published_programs_ready", False):
+            reply = s.read("probabilities", "cells", minimum_step=step)
+            bars = bar_rows(reply)
+            comparison_evidence(status, published.PROMPT, bars)
+            import numpy as np
+            with np.load(published.private_path(s.private_output_directory, evidence["result"]["evidence"]["file"]),
+                         allow_pickle=False) as archive:
+                probabilities = archive["probabilities"]
+                published.require(all(0 <= row["token"] < probabilities.shape[1]
+                                      and abs(row["baseline"] - float(probabilities[0, row["token"]])) <= 1e-7
+                                      and abs(row["probability"] - float(probabilities[1, row["token"]])) <= 1e-7
+                                      for row in bars), "Displayed output differs from the private case arrays.")
+            entry.update(bars=bars, publication_step=reply["step"])
+        current = s.events.complete("trace.status")
+        published.require(current["inference"] == status["inference"], "The output changed during case publication.")
+        entry["attachment_after"] = s.mcp.body("run.state", run=s.run_id)
+        published.require(entry["attachment_after"].get("attached") is True, "The producer detached after the action.")
+        entry.update(evidence=evidence, completed=True)
+        from _published_ui import display_result
+        display_result(s, evidence)
+    except Exception as error:
+        entry["error"] = error_detail(error)
+    finally:
+        entry["full_action_seconds"] = time.monotonic() - started
+        save(s.out / f"action-{sequence + 1}.json", entry)
+    return entry
+
+
+def published_demo(session, args, result, *, collect):
+    """Collect published cases or expose the same baseline through live controls."""
+    s = session
+    result.update(replication_profile=published.PROFILE, source_manifest_sha256=published.MANIFEST_SHA256,
+                  evidence_collection_complete=False, accepted_replication=False, published_actions=[])
+    result["browser_assets"] = check_assets(s)
+    result["dictionary_evidence"] = s.events.complete("feature.dictionary")
+    state, catalog = published.replication_state(s.events.complete("trace.status"))
+    prepared = published.preparation(s.private_output_directory, catalog)
+    result["preparation_id"] = prepared["id"]
+    instrument(s)
+    baseline = published_action(s, 10, prepared["id"])
+    result["published_actions"].append(baseline)
+    published.require(baseline["completed"], baseline.get("error", "The published baseline failed."))
+    trace = s.events.complete("trace.run", prompt=published.PROMPT, **published.TRACE_REQUEST)
+    graph, pages = published.read_graph(s, trace)
+    save(s.out / "graph-pages.json", pages)
+    save(s.out / "graph.json", graph)
+    result["trace"] = trace
+    result["checks"].extend([
+        check("trace_time", published.finite(trace.get("seconds")) and trace["seconds"] <= 20, trace.get("seconds"), 20),
+        check("completeness", published.finite(graph["completeness"].get("max_absolute_residual"))
+              and graph["completeness"]["max_absolute_residual"] <= .02, graph["completeness"], .02),
+        check("complete_graph", True, graph["counts"], "all node and edge pages with one trace identity"),
+    ])
+    programs(s)
+    s.ready_programs(["attribution", "probabilities"])
+    s.published_programs_ready = True
+    s.read("attribution", "nodes", minimum_step=trace["step"])
+    bridge = Bridge(s)
+    s.bridge = bridge
+    selected = published.published_selection(graph)
+    result["example_feature"] = selected
+    examples = bridge.select(selected["index"])
+    rows, cells = s.example_page(0)
+    bars_reply = s.read("probabilities", "cells")
+    bars = bar_rows(bars_reply)
+    baseline_top = baseline["evidence"]["result"]["argmax_token_ids"][0]
+    steps = {"attribution": trace["step"], "probabilities": bars_reply["step"], "example_tokens": rows["step"]}
+
+    def capture_case(name, bars):
+        png, metadata = s.capture(name, dict(steps))
+        result["checks"].extend(dict(gate, name=name + "." + gate["name"])
+                                for gate in program_budget_checks(s.program_evidence[name]))
+        if metadata is None:
+            result["checks"].append(check(name + ".native_pixels", False, None, "native diagnostic capture"))
+            return
+        gates, measured = capture_checks(s.out / "captures", metadata, png, graph, bars,
+                                         selected=selected, baseline_top_token=baseline_top)
+        result["checks"].extend(dict(gate, name=name + "." + gate["name"]) for gate in gates)
+        result["pixel_evidence_collected"] = True
+
+    capture_case("cell10", bars)
+    if collect:
+        from _checks import example_page_check
+        result["checks"].append(example_page_check(examples, rows, cells, 0))
+        s.mcp.body("control.set", id="page", value=1)
+        s.events.complete("feature.examples", node=selected["index"], limit=16)
+        page, page_cells = s.example_page(1, minimum_step=rows["step"] + 1)
+        result["checks"].append(example_page_check(examples, page, page_cells, 1))
+        steps["example_tokens"] = page["step"]
+        capture_case("examples-page-2", bars)
+        save(s.out / "example-pages.json", {"first": rows, "second": page, "first_cells": cells, "second_cells": page_cells})
+        s.mcp.body("control.set", id="page", value=0)
+        s.events.complete("feature.examples", node=selected["index"], limit=16)
+        rows, _ = s.example_page(0, minimum_step=page["step"] + 1)
+        steps["example_tokens"] = rows["step"]
+        for cell in published.CASES:
+            if cell == 10:
+                continue
+            fresh = published_action(s, 10, prepared["id"])
+            result["published_actions"].append(fresh)
+            case = (published_action(s, cell, prepared["id"]) if fresh["completed"] else
+                    {"case_id": published.action_name(cell), "completed": False, "error": "The fresh baseline failed."})
+            result["published_actions"].append(case)
+            result["checks"].append(check(f"cell{cell}.current_evidence", fresh["completed"] and case["completed"],
+                                           case.get("error"), "fresh baseline, callback, publication, private evidence, attachment"))
+            if case["completed"]:
+                record = case["evidence"]["result"]
+                duration = max(case["full_action_seconds"], record["action_seconds"])
+                result["checks"].append(check(f"cell{cell}.steering_time", duration <= 1, duration, 1))
+                steps["probabilities"] = case["publication_step"]
+                capture_case(f"cell{cell}", case["bars"])
+            save(s.out.parent / "result.json", result)
+        from parity import export_resources
+        export_resources(s, s.out / "parity")
+        result["evidence_collection_complete"] = all(item["completed"] for item in result["published_actions"])
+    s.mcp.body("applet.save")
+    (s.out / "instrument.toml").write_text(s.mcp.body("spec.get")["text"], encoding="utf-8")
+    attachment = s.mcp.body("run.state", run=s.run_id)
+    save(s.out / "attachment.json", attachment)
+    published.require(attachment.get("attached") is True, "The hosted model detached before completion.")
+    if not collect:
+        result["demo_ready"] = True
+        save(s.out / "demo-ready.json", {"attached": True, "browser_assets": result["browser_assets"],
+                                         "capture": "cell10.png", "acceptance": False, "profile": published.PROFILE})
+    return bridge
+
 def parser():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--model", required=True)
     p.add_argument("--dictionary", required=True)
     p.add_argument("--prompt")
     p.add_argument("--quality-override", type=Path, help="Explicit founder decision for one dictionary and its measured quality")
+    p.add_argument("--replication-profile", choices=[published.PROFILE])
+    p.add_argument("--private-output-directory", type=Path, help="Existing private evidence root; --out must be beneath it")
     group = p.add_mutually_exclusive_group()
     group.add_argument("--hidden", action="store_true", default=True)
     group.add_argument("--show", action="store_true", help="Founder-only live window")
@@ -769,6 +950,14 @@ def main(argv=None):
             raise Failure("A quality override requires Qwen and at most 4096 JSON bytes.")
         args.quality_override = validate_quality_override(json.loads(args.quality_override.read_text(encoding="utf-8")))
     args.prompt = args.prompt or (FIXTURE_PROMPT if args.model == "tiny-lm" else MODEL_PROMPT)
+    if bool(args.replication_profile) != bool(args.private_output_directory):
+        raise Failure("The replication profile and private output directory must appear together.")
+    if args.replication_profile:
+        if family != "gemma" or args.prompt != published.PROMPT:
+            raise Failure("Published Dallas requires the exact Gemma snapshot and lowercase source prompt.")
+        args.private_output_directory = args.private_output_directory.resolve(strict=True)
+        if not args.private_output_directory.is_dir() or not args.out.resolve().is_relative_to(args.private_output_directory):
+            raise Failure("The output folder must be beneath the existing private evidence root.")
     if args.model != "tiny-lm":
         args.model = str(Path(args.model).resolve())
     out = args.out.resolve()
@@ -776,6 +965,7 @@ def main(argv=None):
     if any(out.iterdir()):
         raise Failure("The output folder must be empty to preserve earlier evidence.")
     result = {"mode": family, "prompt": args.prompt, "memory_limit_bytes": memory_limit,
+              "replication_profile": args.replication_profile,
               "method_disclosures": dict(METHOD_DISCLOSURES),
               "fixture_forward_hash": FIXTURE_HASH if args.model == "tiny-lm" else None,
               "checks": [], "acceptance_complete": False, "completed": False,
@@ -785,23 +975,24 @@ def main(argv=None):
     session = None
     completed = False
     try:
-        # One bounded app case establishes measured memory before the full-cap case.
-        session = Session(args, out / "bounded")
-        measured = session.events.complete("trace.run", prompt=args.prompt, max_targets=32, max_nodes=64, max_edges=256)
-        save(out / "bounded-trace.json", measured)
-        if family == "gemma" and args.prompt == MODEL_PROMPT:
-            preflight = dallas_preflight_check(session.events.complete("trace.status"), args.prompt)
-            result["checks"].append(preflight)
-            if not preflight["passed"]:
-                raise Failure("The default Dallas prompt baseline top token is not ' Austin'.")
-        session.close()
-        if session.cleanup_error:
-            raise Failure(session.cleanup_error)
-        session = None
-        peak = memory_bytes(out / "bounded")
-        result["checks"].append(check("bounded_memory", peak <= memory_limit, peak, memory_limit))
-        if peak > memory_limit:
-            raise Failure("The bounded app case exceeds the process memory limit.")
+        if not args.replication_profile:
+            # Generic acceptance retains its bounded precursor.
+            session = Session(args, out / "bounded")
+            measured = session.events.complete("trace.run", prompt=args.prompt, max_targets=32, max_nodes=64, max_edges=256)
+            save(out / "bounded-trace.json", measured)
+            if family == "gemma" and args.prompt == MODEL_PROMPT:
+                preflight = dallas_preflight_check(session.events.complete("trace.status"), args.prompt)
+                result["checks"].append(preflight)
+                if not preflight["passed"]:
+                    raise Failure("The default Dallas prompt baseline top token is not ' Austin'.")
+            session.close()
+            if session.cleanup_error:
+                raise Failure(session.cleanup_error)
+            session = None
+            peak = memory_bytes(out / "bounded")
+            result["checks"].append(check("bounded_memory", peak <= memory_limit, peak, memory_limit))
+            if peak > memory_limit:
+                raise Failure("The bounded app case exceeds the process memory limit.")
         session = Session(args, out / "acceptance", show=args.show, interactive=args.demo)
         if args.show or args.demo:
             bridge = live_demo(session, args, result)
@@ -864,8 +1055,13 @@ def main(argv=None):
             result["completed"] = completed and not result.get("error")
             code = finish(result)
             save(out / "result.json", result)
+            if args.replication_profile and not (args.show or args.demo):
+                from _replication_review import write_collection
+                write_collection(out, args.private_output_directory, result)
     if args.show or args.demo:
         return 0 if result.get("demo_ready") and not result.get("error") and not result.get("cleanup_error") else 1
+    if args.replication_profile:
+        return 0 if result.get("evidence_collection_complete") and not result.get("error") else 1
     return code
 
 

@@ -323,7 +323,23 @@ def finish(result):
                               else "200000 quality tokens")
         result["checks"].append(check("dictionary_qualification", qualification["qualified"], qualification,
                                       f"exact current dictionary, {sample_requirement}, 2000000 index tokens",
-                                      required=result.get("pixel_evidence_collected") is not False))
+                                      required=result["mode"] == "gemma" or result.get("pixel_evidence_collected") is not False))
+    result["accepted_replication"] = False
+    if result["mode"] == "gemma":
+        from _published import PROFILE
+        result["checks"] = [gate for gate in result["checks"] if gate["name"] not in
+                            ("published_profile", "external_replication_review")]
+        explicit = result.get("replication_profile") == PROFILE
+        result["checks"].append(check("published_profile", explicit, result.get("replication_profile"), PROFILE))
+        evidence = {"verified": False, "reason": "Independent reference, outcomes, browser, parity, and memory evidence are required."}
+        if explicit and all(result.get(key) for key in ("replication_evidence_root", "replication_collection", "replication_review")):
+            from _replication_review import verify_review
+            try:
+                evidence = verify_review(result["replication_evidence_root"], result["replication_collection"], result["replication_review"])
+            except Failure as error:
+                evidence["reason"] = str(error)
+        result["checks"].append(check("external_replication_review", evidence["verified"], evidence,
+                                      "verified independent agreement and every required review artifact"))
     failed = [g["name"] for g in result.get("checks", []) if g["required"] and not g["passed"]]
     result["failed_checks"] = failed
     result["passed"] = (result.get("completed") is True and not failed
@@ -334,4 +350,5 @@ def finish(result):
     result["qwen_full_mlp_acceptance"] = result["qwen_acceptance"] and qualification["scope"] == "all_layers"
     result["gemma_acceptance"] = (result["passed"] and result["mode"] == "gemma"
                                  and qualification["qualified"] and result.get("pixel_evidence_collected", False))
+    result["accepted_replication"] = result["gemma_acceptance"]
     return 0 if result["passed"] else 1
