@@ -95,14 +95,14 @@ def test_atomic_failure_retains_exact_prior_records(grouped, monkeypatch, phase)
     torch.testing.assert_close(model(ids).logits, output, rtol=0, atol=0)
 
 
-def test_atomic_group_shares_one_complete_dictionary_check(grouped, monkeypatch):
+def test_atomic_group_shares_admission_and_final_dictionary_checks(grouped, monkeypatch):
     model, tokenizer, ctl, service = grouped
     executor = service.executor
     executor._prepare_dictionary_identity()
     before = executor._dictionary_status()['checks']
-    specs = [clamp(1, 1), clamp(2, 1), clamp(3, 1)]
+    specs = [clamp(1, 1), clamp(2, 1), clamp(3, 1), clamp(4, 1, layer=1)]
     service.replace_atomic(specs, lambda: model(**tokenizer('AB')))
-    assert executor._dictionary_status()['checks'] == before + 1
+    assert executor._dictionary_status()['checks'] == before + 2
     saved = service.state_dict()
     executor.dictionary.layers[0].W_dec.data[0, 0] += 1
     with pytest.raises(InterventionError, match='content changed'):
@@ -211,6 +211,38 @@ def test_published_actions_export_all_probabilities_and_repeat_real_forward(publ
         torch.testing.assert_close(replay, direct, rtol=0, atol=0)
         runtime.run(10)
         assert not service.specifications()
+    finally:
+        handle.remove()
+
+
+def test_published_dictionary_mutation_in_persistent_pre_hook_refuses(published):
+    from caliper.interp._replication_actions import GROUPS
+    model, _, ctl, service, runtime = published
+    first = runtime.run(26)
+    saved, records = service.state_dict(), dict(ctl._ivs)
+    files = set(runtime.directory.iterdir())
+    layer, feature, position = GROUPS['Texas'][0]
+    assert runtime.values['dallas'][(layer, feature, position)] > 0
+    decoder = service.dictionary.layers[layer].W_dec
+    version = decoder._version
+    calls = []
+
+    def mutate(_model, _args):
+        decoder.data[feature, 0] += .1
+        calls.append(1)
+        assert decoder._version == version
+        assert runtime._model_matches()
+
+    handle = model.register_forward_pre_hook(mutate)
+    try:
+        with pytest.raises(InterventionError, match='dictionary content changed'):
+            runtime.run(26)
+        assert calls == [1]
+        assert service.state_dict() == saved
+        assert all(ctl._ivs[key] is record for key, record in records.items())
+        assert runtime.last_result == first
+        assert runtime.last_attempt['status'] == 'error'
+        assert set(runtime.directory.iterdir()) == files
     finally:
         handle.remove()
 

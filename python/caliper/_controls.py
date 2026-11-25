@@ -1073,14 +1073,15 @@ class Interventions:
                         "clear": False, "error": None, "error_code": None}
                        for spec in specifications]
             # The lifecycle owner pins resources across admission and installation.
-            with self._ctl._outside_lock(), self.executor.dictionary_admission():
+            with self._ctl._outside_lock(), self.executor.dictionary_admission() as check_dictionary:
                 with self._ctl.lock:
                     result = self._restore_records(records, restore_active=True, evaluate=evaluate,
-                                                   prepare=prepare, check=check)
+                                                   prepare=prepare, check=check, check_dictionary=check_dictionary)
         self._ctl._publish()
         return result
 
-    def _restore_records(self, records, *, restore_active, evict_ended=False, evaluate=None, prepare=None, check=None):
+    def _restore_records(self, records, *, restore_active, evict_ended=False, evaluate=None, prepare=None,
+                         check=None, check_dictionary=None):
         """Prepare a complete replacement, then commit if its input still owns the state."""
         from .interp._intervene import InterventionError
         revision = self._ctl._iv_revision
@@ -1143,6 +1144,10 @@ class Interventions:
                 restored = self._ctl._admit_interventions(restored, evict_ended=evict_ended)
                 if check is not None:
                     check()
+                # Caller callbacks must finish before the final exact dictionary check.
+                # Keep the commit locks held through verification and state replacement.
+                if check_dictionary is not None:
+                    check_dictionary()
                 old = list(self._ctl._ivs.values())
                 # No fallible preparation follows either state replacement.
                 self._ctl._ivs = {intervention_key(iv.spec): iv for iv in self._ordered_records(restored)}

@@ -711,23 +711,33 @@ class InterventionService:
 
     @contextmanager
     def dictionary_admission(self):
-        """Share one complete byte scan within a pinned synchronous transaction."""
-        identity = (self, self.dictionary, self.dictionary_id, self._dictionary_snapshot)
+        """Share admission and yield a fresh check for the final commit boundary."""
+        identity = self._dictionary_admission_identity()
+
+        def check():
+            if (identity != self._dictionary_admission_identity()
+                    or self._default_dictionary_id and not self._dictionary_matches()):
+                raise InterventionError("dictionary content changed. Reconfigure before use",
+                                        "intervene.unknown_dictionary")
+
         admitted = _DICTIONARY_ADMISSIONS.get()
         if identity in admitted:
-            yield
+            # Nested callers share admission, but each commit needs a fresh check.
+            yield check
             return
-        if self._default_dictionary_id and not self._dictionary_matches():
-            raise InterventionError("dictionary content changed. Reconfigure before use",
-                                    "intervene.unknown_dictionary")
+        check()
         token = _DICTIONARY_ADMISSIONS.set((*admitted, identity))
         try:
-            yield
+            yield check
         finally:
             _DICTIONARY_ADMISSIONS.reset(token)
 
+    def _dictionary_admission_identity(self):
+        return (self, self.dictionary, self.dictionary_id, self._dictionary_snapshot,
+                self._default_dictionary_id)
+
     def _dictionary_admitted(self):
-        return (self, self.dictionary, self.dictionary_id, self._dictionary_snapshot) in _DICTIONARY_ADMISSIONS.get()
+        return self._dictionary_admission_identity() in _DICTIONARY_ADMISSIONS.get()
 
     def suspend(self):
         return suspend(self.model)
