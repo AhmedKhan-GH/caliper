@@ -1085,7 +1085,9 @@ class HostedInference:
             self.status.set("ready")
         if self.retrace.value and (changed or not self._retrace):
             if (self.traced_prompt, self.traced_specifications) != key:
-                self.service._execute("trace.run", {"prompt": self.prompt.value}, self.controls.n)
+                response = self.service._retrace({"prompt": key[0]}, self.controls.n)
+                if response is not None and response[0] == "error":
+                    self.status.set(response[2]["message"])
         self._retrace = self.retrace.value
         self._sync_clamp_control()
         if self.guard is not None:

@@ -339,8 +339,6 @@ class InterpretationService:
             return result
         if method == "trace.run":
             started = time.monotonic()
-            with self.lock:
-                self.status = {"state": "running", "seconds": 0., "step": step}
             tracer = self._resource("tracer")
             index = self._resource("index") if self.index is not None or self.factories["index"] is not None else None
             tracer.bind_index(index)
@@ -351,7 +349,7 @@ class InterpretationService:
             if not protocol.bounded(result):
                 raise Refused("interpret.result_limit", "The trace result exceeds the metadata limits.")
             with self.lock:
-                self.graph, self.status = graph, result
+                self.graph = graph
             return result
         if method == "trace.read":
             if self.graph is None:
@@ -361,6 +359,60 @@ class InterpretationService:
         if handler is None:
             raise Refused("interpret.unsupported", "This run does not support the requested operation.")
         return handler(**params)
+
+    def _run_request(self, method, params, step):
+        """Complete one request before its status permits another trace."""
+        from ._memory import CleanStop
+        if method == "trace.run":
+            with self.lock:
+                self.status = {"state": "running", "seconds": 0., "step": step}
+        try:
+            result = self._execute(method, params, step)
+            if not protocol.bounded(result):
+                raise Refused("interpret.result_limit", "The result exceeds the structured metadata limits.")
+        except CleanStop:
+            raise
+        except BaseException as exc:
+            code = getattr(exc, "code", "interpret.refused")
+            if not protocol.text(code, 63, False):
+                code = "interpret.refused"
+            error = {"code": code,
+                     "message": str(exc).replace("\0", "").encode("utf-8", errors="replace")[:1024].decode("utf-8", errors="ignore")}
+            if method == "trace.run":
+                with self.lock:
+                    self.status = {"state": "error", "seconds": 0., "step": step, "error": error}
+            # Interruptions release trace admission but still reach the run owner.
+            if not isinstance(exc, Exception):
+                raise
+            return "error", None, error
+        if method == "trace.run":
+            with self.lock:
+                self.status = result
+        return "ok", result, None
+
+    def _retrace(self, params, step):
+        """Run an automatic trace only when no accepted trace owns the status."""
+        from ._memory import CleanStop
+        with self.lock:
+            if self.running or self.closed:
+                return None
+            if self.failure is not None:
+                raise self.failure
+            if self.status["state"] in ("pending", "running"):
+                return None
+            self.running = True
+            self.running_thread = threading.get_ident()
+            self.status = {"state": "running", "seconds": 0., "step": step}
+        try:
+            return self._run_request("trace.run", params, step)
+        except CleanStop as exc:
+            self.stop(exc, step)
+            raise self.failure
+        finally:
+            with self.idle:
+                self.running = False
+                self.running_thread = None
+                self.idle.notify_all()
 
     def stop(self, failure, step=None):
         """Latch a resource stop and terminate every queued request."""
@@ -396,9 +448,7 @@ class InterpretationService:
                         break
                     method, params, reply = self.queue.popleft()
                 try:
-                    result = self._execute(method, params, step)
-                    if not protocol.bounded(result):
-                        raise Refused("interpret.result_limit", "The result exceeds the structured metadata limits.")
+                    response = self._run_request(method, params, step)
                 except CleanStop as exc:
                     error = self.stop(exc, step)
                     try:
@@ -406,18 +456,8 @@ class InterpretationService:
                     except Exception:
                         pass
                     raise self.failure
-                except Exception as exc:
-                    code = getattr(exc, "code", "interpret.refused")
-                    if not protocol.text(code, 63, False):
-                        code = "interpret.refused"
-                    error = {"code": code,
-                             "message": str(exc).replace("\0", "").encode("utf-8", errors="replace")[:1024].decode("utf-8", errors="ignore")}
-                    if method == "trace.run":
-                        with self.lock:
-                            self.status = {"state": "error", "seconds": 0., "step": step, "error": error}
-                    reply("error", None, error)
                 else:
-                    reply("ok", result, None)
+                    reply(*response)
             return count
         finally:
             with self.lock:
