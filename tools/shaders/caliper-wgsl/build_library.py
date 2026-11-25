@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Build the runtime WGSL compiler, the static library caliper_wgsl, from source.
 
-    build_library.py --out DIR [--target-dir DIR] [--jobs N] [--offline] [--archive] [--test-hooks]
+    build_library.py --out DIR [--target-dir DIR] [--jobs N] [--cargo PATH] [--offline] [--archive] [--test-hooks]
 
 It runs cargo on tools/shaders/caliper-wgsl with the locked, pinned Naga and copies the
 library to DIR/lib/. With --archive it also writes DIR/caliper_wgsl-<version>-<platform>.tar.gz,
@@ -71,21 +71,52 @@ def main(argv=None):
     ap.add_argument("--offline", action="store_true", help="build from the crates already in CARGO_HOME")
     ap.add_argument("--archive", action="store_true", help="also write the release archive and its hash")
     ap.add_argument("--test-hooks", action="store_true", help="build with the cargo feature test-hooks (developer and test builds only)")
+    ap.add_argument("--cargo", type=pathlib.Path, help="path to the cargo executable (default: cargo on PATH)")
     args = ap.parse_args(argv)
 
-    cargo = shutil.which("cargo")
-    if cargo is None:
-        print("build_library.py: cargo is not on PATH; install Rust or use a prebuilt library", file=sys.stderr)
-        return 1
+    if args.cargo is not None:
+        # Preserve the path without dereferencing symlinks so rustup proxies keep argv[0] as cargo.
+        cargo = os.path.abspath(str(args.cargo))
+        if not os.path.isfile(cargo):
+            print("build_library.py: cargo does not exist: %s" % args.cargo, file=sys.stderr)
+            return 1
+    else:
+        cargo = shutil.which("cargo")
+        if cargo is None:
+            print("build_library.py: cargo is not on PATH; install Rust or use a prebuilt library", file=sys.stderr)
+            return 1
     out = args.out.resolve()
     target_dir = (args.target_dir or out / "cargo-target").resolve()
 
     env = dict(os.environ)
-    sysroot = subprocess.run(["rustc", "--print", "sysroot"], capture_output=True, text=True, check=True).stdout.strip()
+    cargo_dir = os.path.dirname(cargo)
+    if cargo_dir:
+        path_entries = env.get("PATH", "").split(os.pathsep) if env.get("PATH") else []
+        if cargo_dir not in path_entries:
+            env["PATH"] = os.pathsep.join([cargo_dir] + path_entries)
+    rustc = env.get("RUSTC")
+    if not rustc:
+        rustc_name = "rustc.exe" if sys.platform == "win32" else "rustc"
+        sibling_rustc = os.path.join(cargo_dir, rustc_name) if cargo_dir else ""
+        if sibling_rustc and os.path.isfile(sibling_rustc):
+            rustc = sibling_rustc
+        else:
+            rustc = shutil.which("rustc", path=env.get("PATH"))
+    if not rustc:
+        print("build_library.py: rustc is not found beside cargo or on PATH", file=sys.stderr)
+        return 1
+    env["RUSTC"] = rustc
+
+    sysroot = subprocess.run([rustc, "--print", "sysroot"], capture_output=True, text=True, check=True, env=env).stdout.strip()
     cargo_home = env.get("CARGO_HOME") or str(pathlib.Path.home() / ".cargo")
     remaps = [(cargo_home, "/cargo"), (sysroot, "/rustc-sysroot"), (str(REPO), "/caliper"), (str(target_dir), "/target")]
-    flags = " ".join("--remap-path-prefix=%s=%s" % pair for pair in remaps)
-    env["RUSTFLAGS"] = (env.get("RUSTFLAGS", "") + " " + flags).strip()
+    remap_flags = ["--remap-path-prefix=%s=%s" % pair for pair in remaps]
+    if env.get("CARGO_ENCODED_RUSTFLAGS"):
+        existing = [f for f in env["CARGO_ENCODED_RUSTFLAGS"].split("\x1f") if f]
+        env.pop("RUSTFLAGS", None)
+    else:
+        existing = env.pop("RUSTFLAGS", "").split()
+    env["CARGO_ENCODED_RUSTFLAGS"] = "\x1f".join(existing + remap_flags)
     if sys.platform == "darwin":
         env.setdefault("MACOSX_DEPLOYMENT_TARGET", "14.0")
 

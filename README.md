@@ -72,6 +72,7 @@ The `release-notorch` preset builds the host without LibTorch in `cmake-build-no
 - **Git** (for submodule management)
 - **CMake 3.25 or later** and **Ninja** (the presets use the Ninja generator; configuring without a preset needs CMake 3.20)
 - **A C++20 compiler** for the host and the applets
+- **Rust (`cargo`) and Python 3** (optional). The configure presets set `CALIPER_WGSL_FROM_SOURCE=ON` to build the runtime WGSL compiler. Pass `-DCALIPER_WGSL_FROM_SOURCE=OFF` to build without Rust.
 
 ### Windows
 - **Visual Studio 2022** (MSVC v143)
@@ -93,7 +94,8 @@ The `release-notorch` preset builds the host without LibTorch in `cmake-build-no
 | `CALIPER_WITH_TORCH` | ON | Download LibTorch for the adapter tests and for the SDK, which names it for the applets that link it |
 | `CALIPER_BUILD_APPLETS` | OFF | Also build `applets/` inside the core build; forced OFF without LibTorch |
 | `CALIPER_BUILD_PYTHON` | OFF | Build the `caliper` Python extension (nanobind) |
-| `CALIPER_WITH_SLANG` | ON | Configure the vendored slang library |
+| `CALIPER_WITH_SLANG` | OFF | Configure the vendored slang library |
+| `CALIPER_WGSL_FROM_SOURCE` | OFF | Build the runtime WGSL compiler from source with cargo. The `release`, `debug`, and `release-notorch` presets set it ON unless `CALIPER_WGSL_LIBRARY` is set. |
 | `CALIPER_BUILD_VIEWER` | ON | Build `caliper_viewer`, the live viewer process (macOS) |
 | `CALIPER_BUILD_EXAMPLES` | ON | Build the embedding example, `examples/embed_host`. The tutorial applets `hello` and `sine_scope` build with the tests instead. |
 | `CALIPER_WITH_BUILDER` | ON, but OFF on Windows | Build the builder under `src/builder/` (its libraries, `caliper-mcp`, `caliper-acp-harness`, `caliper-builder-host` and their tests) and link DuckDB's json extension into the host's DuckDB. The Python wheel sets it OFF. |
@@ -103,7 +105,7 @@ The `release-notorch` preset builds the host without LibTorch in `cmake-build-no
 ```bash
 cmake --preset debug
 cmake --preset release-notorch
-cmake --preset release -DCALIPER_WITH_SLANG=OFF
+cmake --preset release -DCALIPER_WGSL_FROM_SOURCE=OFF
 ```
 
 ## LibTorch Configuration

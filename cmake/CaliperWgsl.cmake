@@ -65,16 +65,35 @@ if(CALIPER_WGSL_LIBRARY)
     endif()
     set(_wgsl_lib "${CALIPER_WGSL_LIBRARY}")
 elseif(CALIPER_WGSL_FROM_SOURCE)
-    find_program(CALIPER_CARGO cargo)
+    set(_wgsl_cargo_hints "")
+    if(DEFINED ENV{CARGO_HOME} AND NOT "$ENV{CARGO_HOME}" STREQUAL "")
+        list(APPEND _wgsl_cargo_hints "$ENV{CARGO_HOME}/bin")
+    endif()
+    if(DEFINED ENV{HOME} AND NOT "$ENV{HOME}" STREQUAL "")
+        list(APPEND _wgsl_cargo_hints "$ENV{HOME}/.cargo/bin")
+    endif()
+    if(DEFINED ENV{USERPROFILE} AND NOT "$ENV{USERPROFILE}" STREQUAL "")
+        list(APPEND _wgsl_cargo_hints "$ENV{USERPROFILE}/.cargo/bin")
+    endif()
+    if(APPLE)
+        list(APPEND _wgsl_cargo_hints
+            "/opt/homebrew/opt/rustup/bin"
+            "/opt/homebrew/bin"
+            "/usr/local/opt/rustup/bin"
+            "/usr/local/bin")
+    endif()
+    find_program(CALIPER_CARGO cargo HINTS ${_wgsl_cargo_hints})
     find_package(Python3 COMPONENTS Interpreter)
     if(NOT CALIPER_CARGO OR NOT Python3_Interpreter_FOUND)
-        message(FATAL_ERROR "CALIPER_WGSL_FROM_SOURCE needs cargo and Python 3 on PATH "
-            "(cargo: '${CALIPER_CARGO}'). Install Rust, or use CALIPER_WGSL_DOWNLOAD=ON.")
+        message(FATAL_ERROR "CALIPER_WGSL_FROM_SOURCE needs cargo and Python 3 "
+            "(cargo: '${CALIPER_CARGO}', Python3: '${Python3_EXECUTABLE}'). "
+            "Install Rust, pass -DCALIPER_WGSL_LIBRARY=<file>, or disable it with -DCALIPER_WGSL_FROM_SOURCE=OFF.")
     endif()
     set(_wgsl_lib "${_wgsl_dir}/source/lib/${_wgsl_file}")
     add_custom_command(
         OUTPUT "${_wgsl_lib}"
-        COMMAND "${Python3_EXECUTABLE}" "${_wgsl_crate}/build_library.py" --out "${_wgsl_dir}/source" --test-hooks
+        COMMAND "${Python3_EXECUTABLE}" "${_wgsl_crate}/build_library.py"
+                --out "${_wgsl_dir}/source" --test-hooks --cargo "${CALIPER_CARGO}"
         DEPENDS "${_wgsl_crate}/Cargo.toml" "${_wgsl_crate}/Cargo.lock" "${_wgsl_crate}/src/lib.rs"
                 "${_wgsl_crate}/build_library.py"
         COMMENT "Building caliper_wgsl (Naga ${CALIPER_WGSL_NAGA_VERSION}) with cargo"
