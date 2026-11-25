@@ -29,27 +29,18 @@ mkdir -p third_party
 # rather than as submodules (stb's headers).
 # Put those back from HEAD.
 echo "Restoring tracked third_party files..."
-git ls-files -s -- third_party | awk '$1 != "160000" { print $4 }' | while IFS= read -r f; do
+git ls-files -s -- third_party | awk '$1 != "160000" { sub(/^[^\t]*\t/, ""); print }' | while IFS= read -r f; do
     git checkout HEAD -- "$f"
 done
 
-# Remove pytorch from .gitmodules permanently (it's not a real submodule)
-echo "Removing pytorch from .gitmodules..."
-if grep -q "third_party/pytorch" .gitmodules 2>/dev/null; then
-    git config -f .gitmodules --remove-section submodule.third_party/pytorch
-    git add .gitmodules
-    git commit -m "Remove pytorch submodule (using libtorch binaries instead)" --no-verify || true
-    echo "  ✓ PyTorch submodule entry removed"
-fi
-
-# Remove pytorch from .git/config as well
-git config --remove-section submodule.third_party/pytorch 2>/dev/null || true
+# Remove legacy pytorch submodule entry from local .git/config if present
+git config --local --remove-section submodule.third_party/pytorch 2>/dev/null || true
 
 # Sync submodule URLs
 echo "Syncing submodule URLs..."
 git submodule sync --recursive
 
-# Initialize and update submodules (excluding pytorch)
+# Initialize and update submodules
 #
 # We update each submodule individually instead of a single
 # `git submodule update --init --recursive --force`. That single command aborts

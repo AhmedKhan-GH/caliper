@@ -93,7 +93,7 @@ option(CALIPER_BUILD_PYTHON  "Build the caliper Python extension (python/, nanob
 # slang is configured EXCLUDE_FROM_ALL and linked by nothing that
 # libcaliper / the caliper exe / the tests need. OFF skips its configure
 # (slang's boost_regex/mimalloc network clones).
-option(CALIPER_WITH_SLANG "Configure the vendored slang (SystemVerilog) library" ON)
+option(CALIPER_WITH_SLANG "Configure the vendored slang (SystemVerilog) library" OFF)
 # The builder (src/builder, design/builder-overview.md): the spec, catalog,
 # command, loaders, ACP, session, MCP and agent libraries, caliper-mcp,
 # caliper-acp-harness, caliper-builder-host and their tests. ON also links

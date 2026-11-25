@@ -1,8 +1,8 @@
 # Contributing to Caliper
 
-## Build and test
+## Build and Test
 
-The README's [Quick start](README.md#quick-start) and [Prerequisites](README.md#prerequisites) cover a local build. In short:
+[Quick Start](README.md#quick-start) and [Prerequisites](README.md#prerequisites) in `README.md` describe a local build. Run these commands from the repository root:
 
 ```sh
 ./init-submodules.sh
@@ -26,7 +26,7 @@ uv run --no-project --with-requirements requirements-docs.txt mkdocs build --str
 
 ## Submodules
 
-Third-party code is vendored as git submodules under `third_party/`. Initialize them with `./init-submodules.sh` rather than `git submodule update`, because some pins need the script's fallbacks. Don't commit changed submodule pointers unless the change is the point of the commit.
+Caliper keeps third-party code as git submodules in `third_party/`. Run `./init-submodules.sh`, not `git submodule update`, because some submodule pins need the script fallbacks. On Windows without Git Bash, run `init-submodules.bat` in Command Prompt. Both scripts delete `third_party/` and local build folders (`cmake-build-*`, `build/`) before they initialize submodules. Do not commit changed submodule pointers unless that update is the purpose of the commit.
 
 ## Commits
 
@@ -34,7 +34,7 @@ Third-party code is vendored as git submodules under `third_party/`. Initialize 
 - The subject line says what changed, in plain words. Start it with the area when that helps, as in `Site: ...`, `CI: ...` or `Docs: ...`.
 - The body says why, and anything a reviewer cannot see in the diff.
 
-## Where things live
+## Repository Layout
 
 | Path | Contents |
 |---|---|
@@ -49,7 +49,7 @@ Third-party code is vendored as git submodules under `third_party/`. Initialize 
 | `site/` | the landing page, published with the docs |
 | `.github/workflows/` | the Build and Deploy Pages workflows |
 
-## Documentation rules
+## Documentation Rules
 
 - **One home per kind of document.** The docs site lives under `docs/`, in one folder per area: `introduction/`, `python/`, `applets/`, `builder/`, `agents/`, `web/`, `reference/`, `development/` and `roadmap/`, whose feature pages are generated from the roadmap registry. A page covers one topic, has a lowercase hyphenated file name, and sits in its area's folder; only `applets/services/` goes deeper. Each folder's `index.md` introduces the section and lists its pages. The site navigation follows the folders; a `.nav.yml` file in a folder sets its order. A design decision is not a document of its own: the rule goes, with its reason, in the page it shapes, and an open question goes in the design pages.
 - **Nothing new at the root.** The repository root holds only `README.md`, `CONTRIBUTING.md` and `LICENSE` among documents. Proposals go in `design/`, and every other document in `docs/`.
