@@ -270,7 +270,8 @@ jobs:
       # Python, which has torch, websockets and the native sender. The four tests of test_watch.py that
       # need the native core module (caliper._native, which the CMake build does not install into
       # python/caliper) are deselected by name. So is the flood test of the controls, which holds 20,000
-      # requests to a wall-clock limit that a hosted runner does not meet. The tests of programs, of the
+      # requests to a wall-clock limit that a hosted runner does not meet. Idle-step, watch-throughput,
+      # and GPU timeout stress cases are also excluded. The tests of programs, of the
       # network programs, of the ablation and of wire 3.2 run here as well. One test of test_programs.py
       # is deselected: it publishes a program output through the real scene calls, which need the
       # caliper._live module, and the job builds only caliper._producer of the Python modules.
@@ -298,19 +299,33 @@ jobs:
           --deselect "python/tests/test_watch.py::test_watch_registers_produces_and_removes"
           --deselect "python/tests/test_watch.py::test_watch_include_and_every"
           --deselect "python/tests/test_watch.py::test_watch_is_free_when_nothing_is_attached"
+          --deselect "python/tests/test_watch.py::test_the_throughput_cost_of_the_hook"
           --deselect "python/tests/test_controls.py::test_a_flood_of_values_from_several_threads"
+          --deselect "python/tests/test_controls.py::test_step_costs_almost_nothing_when_idle"
           --deselect "python/tests/test_programs.py::test_outputs_pass_the_argument_checks_of_the_real_scene_calls"
-      - name: Native Interpretation Capability
+          --deselect "python/tests/test_programs.py::test_training_keeps_its_step_rate_after_a_pass_times_out"
+          --deselect "python/tests/test_programs.py::test_a_program_over_its_time_limit_stops_and_training_continues"
+          -m "not gpu and not local_model" --strict-markers
+      - name: Native Interpretation And Control Checks
+        # The fixture matrix covers Python controls. This build provides the native sender.
         env:
           CALIPER_AGENT_OFFLINE: '1'
+          CALIPER_TEST_RUN: '1'
+          CALIPER_DATA_DIR: ${{ runner.temp }}/native-controls/data
+          TMPDIR: ${{ runner.temp }}/native-controls/temp
           CALIPER_SESSION: '0'
           CALIPER_TEST_NO_WINDOW: '1'
           HF_HUB_OFFLINE: '1'
           TRANSFORMERS_OFFLINE: '1'
-          PYTHONPATH: python
+          PYTHONPATH: ${{ github.workspace }}/python
         run: |
+          mkdir -p "$TMPDIR" "$CALIPER_DATA_DIR"
           "$RUNNER_TEMP/acceptance-py/bin/python" -c "import caliper._netio"
-          "$RUNNER_TEMP/acceptance-py/bin/python" -m pytest -q -p no:cacheprovider tests/interp/test_native_capability.py
+          "$RUNNER_TEMP/acceptance-py/bin/python" -m pytest -q -p no:cacheprovider \
+            tests/interp/test_native_capability.py python/tests/test_net_controls.py -k native \
+            --deselect python/tests/test_net_controls.py::test_a_flood_of_requests \
+            --deselect python/tests/test_net_controls.py::test_step_stays_cheap_with_a_viewer \
+            -m "not gpu and not local_model" --strict-markers
       - name: Interpretation Command Sidecar
         env:
           CALIPER_AGENT_OFFLINE: '1'
