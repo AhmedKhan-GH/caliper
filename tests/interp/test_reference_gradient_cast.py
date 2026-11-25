@@ -302,3 +302,62 @@ def test_cast_lifetime_ends_at_last_gather(monkeypatch, single_block):
     effects.backward(effects.logit_nodes)
     assert len(products) == len(decoders)
     assert refs and all(ref() is None for ref in refs)
+
+
+def test_singleton_tail_views_reuse_admitted_storage(monkeypatch):
+    effects = position_case(counts=[2, 1, 2])
+    path = effects.path
+    monkeypatch.setattr(_trace, "_ENCODER_BLOCK_ELEMENTS", 2 * path.width)
+    effects.prepare_decoders()
+    targets = effects.logit_nodes * 3
+    refs, casts = observe_casts(monkeypatch, effects, len(targets))
+    tails = [blocks[-1][2] for blocks in effects._decoder_blocks]
+    calls, bmm = [], torch.bmm
+
+    def product(left, right):
+        tail = tails[len(calls)]
+        assert left.shape == (1, len(targets), path.width)
+        assert right.shape == (1, path.width, 1)
+        assert left._base.shape == (len(targets), 1, path.width)
+        assert left.untyped_storage().nbytes() == len(targets) * path.width * tail.element_size()
+        assert right.untyped_storage().data_ptr() == tail.untyped_storage().data_ptr()
+        assert right.untyped_storage().nbytes() == path.width * tail.element_size()
+        cast_bytes = len(targets) * path.tokens * path.width * tail.element_size()
+        scratch = len(targets) * (path.width + 1) * tail.element_size() + 8
+        assert path.reserves[-1] == ("direct decoder contraction", cast_bytes + scratch)
+        assert all(ref() is None for ref in refs)
+        calls.append((left.shape, right.shape))
+        return bmm(left, right)
+
+    monkeypatch.setattr(torch, "bmm", product)
+    effects.backward(targets)
+    assert len(calls) == len(casts) == path.layers
+    assert all(ref() is None for ref in refs)
+
+
+@pytest.mark.parametrize("reason", [CleanStop, _trace.TraceTimeout])
+def test_singleton_tail_refusal_precedes_product_and_releases_cast(monkeypatch, reason):
+    effects = position_case(counts=[2, 1, 2])
+    monkeypatch.setattr(_trace, "_ENCODER_BLOCK_ELEMENTS", 2 * effects.path.width)
+    effects.prepare_decoders()
+    refs, casts = observe_casts(monkeypatch, effects, len(effects.logit_nodes))
+    calls = []
+
+    def reserve(stage, size):
+        if stage == "direct decoder contraction":
+            calls.append(size)
+            if len(calls) == 3:
+                raise reason("singleton tail refusal")
+
+    def product(*args):
+        raise AssertionError("tail product precedes admission")
+
+    effects.path.guard.reserve = reserve
+    monkeypatch.setattr(torch, "bmm", product)
+    with pytest.raises(reason, match="singleton tail refusal") as failure:
+        effects.backward(effects.logit_nodes)
+    assert failure.value.__traceback__ is not None
+    assert len(calls) == 3 and len(casts) == 1
+    assert all(ref() is None for ref in refs)
+    effects.release_decoders()
+    assert effects._decoder_blocks is None

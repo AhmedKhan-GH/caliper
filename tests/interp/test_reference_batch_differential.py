@@ -76,7 +76,12 @@ def test_feature_contraction_uses_pinned_batched_dot_geometry(
     targets = effects.logit_nodes * 3
     with Products() as actual_products:
         (actual, _), gradients, calls, _ = contraction_evidence(effects, targets, monkeypatch)
-    expected, scopes = whole_layer_scores(effects, gradients, pinned_context, pinned_decoder)
+    # SumPath has the same independent derivative at every source position.
+    directions = torch.stack([effects.target(index).direction for index in targets])
+    gradient = directions[:, None].expand(-1, effects.path.tokens, -1)
+    for observed in gradients:
+        torch.testing.assert_close(observed, gradient, rtol=0, atol=0)
+    expected, scopes = whole_layer_scores(effects, [gradient] * len(gradients), pinned_context, pinned_decoder)
     torch.testing.assert_close(actual, expected, rtol=0, atol=0)
     compare_source_products(effects, calls, scopes, len(targets))
     assert calls

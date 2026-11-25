@@ -306,3 +306,20 @@ def test_group_stops_release_storage_with_retained_exception(monkeypatch, reason
     for frame in frames:
         assert all(frame.get(name) is None for name in
                    ("decoder", "position", "positions", "selected_columns", "selected", "values", "gathered", "products"))
+
+
+@pytest.mark.parametrize("bos_count", [0, 1, 7])
+def test_bos_count_does_not_shift_published_blocks(monkeypatch, bos_count):
+    effects = _trace._DirectEffects(*source_case(torch.bfloat16, [[bos_count, 1, 1, 1]]),
+                                   profile=_trace._reference_graph.PROFILE)
+    monkeypatch.setattr(_trace, "_ENCODER_BLOCK_ELEMENTS", 2 * effects.path.width)
+    effects.prepare_decoders()
+    published = []
+    bos_rows = 0
+    for rows, position, decoder in effects._decoder_blocks[0]:
+        if isinstance(position, int) and position == 0:
+            bos_rows += len(decoder)
+        else:
+            published.append([effects.nodes[row]["position"] for row in range(rows.start, rows.stop)])
+    assert bos_rows == bos_count
+    assert published == [[1, 2], [3]]

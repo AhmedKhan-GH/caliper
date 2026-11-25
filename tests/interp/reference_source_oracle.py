@@ -215,12 +215,13 @@ def compare_source_products(effects, calls, scopes, batch):
             for actual, reference in zip(operands, product):
                 assert actual[2] == reference[2]
                 torch.testing.assert_close(actual[3][index], reference[3][ref_index], rtol=0, atol=0)
-            if multi and batch > 1:
+            if multi:
                 # Full gathers use P*D between targets. Bounded gathers use C*D.
-                assert operands[0][1] == (width, count * width, 1)
-                assert product[0][1] == (width, len(scope["rows"]) * width, 1)
-                assert operands[1][1][0:2] == product[1][1][0:2] == (width, 1)
-            elif not multi:
+                assert operands[0][1] == (width, width if batch == 1 else count * width, 1)
+                assert product[0][1] == (width, width if batch == 1 else len(scope["rows"]) * width, 1)
+                assert operands[1][1] == product[1][1] == (width, 1, 1)
+                assert operands[2][1] == product[2][1] == (batch, 1, 1)
+            else:
                 assert [x[1] for x in operands] == [x[1] for x in product]
             observed.append(row)
     assert observed == [row for row in effects.feature_nodes if row in expected]
