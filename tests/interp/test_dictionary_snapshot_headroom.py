@@ -49,7 +49,7 @@ def headroom_snapshot(device_snapshot, monkeypatch):
 @pytest.mark.parametrize("capacity", [64, 3, 1])
 def test_snapshot_creation_adapts_queue_to_host_headroom(headroom_snapshot, capacity):
     case = headroom_snapshot()
-    case.available = 8_000_000_000 + case.total + _intervene._snapshot_workspace(16, capacity)
+    case.available = 8_000_000_000 + case.total + 2 * _intervene._snapshot_workspace(16, capacity)
     case.executor._prepare_dictionary_identity()
     snapshot = case.executor._dictionary_snapshot
     assert snapshot is not None
@@ -65,7 +65,7 @@ def test_snapshot_comparison_adapts_queue_to_host_headroom(headroom_snapshot, ca
     case = headroom_snapshot()
     case.executor._prepare_dictionary_identity()
     case.batches.clear()
-    case.available = 8_000_000_000 + _intervene._snapshot_workspace(16, capacity)
+    case.available = 8_000_000_000 + 2 * _intervene._snapshot_workspace(16, capacity)
     snapshot = case.executor._dictionary_snapshot
     assert snapshot.matches(case.dictionary, case.executor.dictionary_id, case.guard)
     assert sum(map(sum, case.batches)) == case.total
@@ -99,9 +99,9 @@ def test_snapshot_admission_uses_production_block_costs(headroom_snapshot, bound
     workspace = capacity * (4 * block + 64 * 1024)
     retained = 6_000_000_000
     if bound == "host":
-        case.available = 8_000_000_000 + retained + workspace
+        case.available = 8_000_000_000 + retained + 2 * workspace
     else:
-        case.guard.limit = case.guard.current + retained + workspace
+        case.guard.limit = case.guard.current + retained + 2 * workspace
     memory = _intervene._DeviceSnapshotMemory(case.guard)
     count, reserve = _intervene._DictionarySnapshot._admit_batch(
         memory, [block] * 65, retained=retained)
@@ -121,12 +121,12 @@ def test_snapshot_queue_obeys_the_lowest_process_budget(headroom_snapshot, phase
     workspace = _intervene._snapshot_workspace(16, 3)
     if owner == "decimal_cap":
         case.guard.limit = 50_000_000_000
-        case.guard.current = case.guard.peak = 40_000_000_000 - pending - workspace
+        case.guard.current = case.guard.peak = 40_000_000_000 - pending - 2 * workspace
     else:
         selected = case.guard
         if owner == "inner":
             selected = case.guard._guard = IdentityGuard(limit=40_000_000_000)
-        selected.limit = case.guard.current + pending + workspace
+        selected.limit = case.guard.current + pending + 2 * workspace
     if phase == "create":
         case.executor._prepare_dictionary_identity()
     else:
@@ -160,7 +160,7 @@ def test_snapshot_copy_keeps_pending_and_untouched_pages_reserved(headroom_snaps
     case = headroom_snapshot({"first": torch.arange(128, dtype=torch.uint8),
                               "second": torch.arange(128, dtype=torch.uint8)})
     monkeypatch.setattr(_intervene, "_SNAPSHOT_FLAG_RESERVE", 64)
-    case.available = 8_000_000_000 + case.total + _intervene._snapshot_workspace(16, 2)
+    case.available = 8_000_000_000 + case.total + 2 * _intervene._snapshot_workspace(16, 2)
     # The reader never observes destination pages. Both tensors still consume
     # the full retained reserve before allocation and after each copy.
     case.executor._prepare_dictionary_identity()
@@ -184,11 +184,11 @@ def test_snapshot_headroom_subtracts_unobserved_floor_once(headroom_snapshot, re
     memory = _intervene._DeviceSnapshotMemory(case.guard)
     memory.floor = observed + pending // 2
     workspace = _intervene._snapshot_workspace(16, 3)
-    case.available = 8_000_000_000 + pending + workspace
+    case.available = 8_000_000_000 + pending + 2 * workspace
     count, reserve = _intervene._DictionarySnapshot._admit_batch(
         memory, [16] * 64, floor=observed + pending)
     assert (count, reserve) == (3, workspace)
-    assert memory.headroom == workspace
+    assert memory.headroom == 2 * workspace
 
 
 @pytest.mark.parametrize("phase", ["create", "compare"])
@@ -199,10 +199,10 @@ def test_snapshot_replans_after_headroom_falls_between_batches(headroom_snapshot
     case.batches.clear()
     case.drains.clear()
     pending = case.total if phase == "create" else 0
-    case.available = 8_000_000_000 + pending + _intervene._snapshot_workspace(16, 4)
+    case.available = 8_000_000_000 + pending + 2 * _intervene._snapshot_workspace(16, 4)
 
     def lower_headroom():
-        case.available = 8_000_000_000 + pending + _intervene._snapshot_workspace(16, 2)
+        case.available = 8_000_000_000 + pending + 2 * _intervene._snapshot_workspace(16, 2)
 
     if phase == "create":
         drain = torch.mps.synchronize
@@ -242,7 +242,7 @@ def test_snapshot_stops_and_cleans_up_when_admitted_queue_loses_headroom(headroo
     case.drains.clear()
     work = case.copies if phase == "create" else case.comparisons
     pending = case.total if phase == "create" else 0
-    case.available = 8_000_000_000 + pending + _intervene._snapshot_workspace(16, 4)
+    case.available = 8_000_000_000 + pending + 2 * _intervene._snapshot_workspace(16, 4)
     check = case.guard.check
 
     def checked(stage):
@@ -269,7 +269,7 @@ def test_snapshot_admission_preserves_the_hosted_guard_latch(headroom_snapshot, 
     case = headroom_snapshot()
     guard = _RunGuard(case.guard)
     case.executor.resource_guard = guard
-    case.available = 8_000_000_000 + case.total + _intervene._snapshot_workspace(16, 2)
+    case.available = 8_000_000_000 + case.total + 2 * _intervene._snapshot_workspace(16, 2)
     case.executor._prepare_dictionary_identity()
     assert guard.failure is None
     failure = CleanStop("owning guard stop")
@@ -289,7 +289,7 @@ def test_reduced_snapshot_keeps_both_complete_action_scans(headroom_snapshot, mu
     case = headroom_snapshot()
     case.executor._prepare_dictionary_identity()
     case.batches.clear()
-    case.available = 8_000_000_000 + _intervene._snapshot_workspace(16, 3)
+    case.available = 8_000_000_000 + 2 * _intervene._snapshot_workspace(16, 3)
     admitted = case.executor.validate(feature_spec())
     assert sum(map(sum, case.batches)) == case.total
     case.batches.clear()
@@ -313,7 +313,7 @@ def test_reduced_snapshot_checks_mixed_alignment_and_tails(headroom_snapshot):
     case.executor._prepare_dictionary_identity()
     case.batches.clear()
     case.operands.clear()
-    case.available = 8_000_000_000 + _intervene._snapshot_workspace(16, 3)
+    case.available = 8_000_000_000 + 2 * _intervene._snapshot_workspace(16, 3)
     words[0] = -2147483648
     assert not case.executor._dictionary_matches()
     assert case.batches == [[16, 16, 3], [3]]
@@ -324,7 +324,7 @@ def test_reduced_snapshot_checks_mixed_alignment_and_tails(headroom_snapshot):
 def test_snapshot_admits_the_actual_short_tail_cost(headroom_snapshot):
     case = headroom_snapshot({"first": torch.arange(3, dtype=torch.uint8),
                               "second": torch.arange(3, dtype=torch.uint8)})
-    case.available = 8_000_000_000 + case.total + _intervene._snapshot_workspace(3, 2)
+    case.available = 8_000_000_000 + case.total + 2 * _intervene._snapshot_workspace(3, 2)
     case.executor._prepare_dictionary_identity()
     assert case.batches == [[3, 3]]
     case.batches.clear()
@@ -345,7 +345,7 @@ def test_snapshot_creation_retains_hash_reserve_but_comparison_needs_no_hash(hea
         assert not case.allocations
         return
     case.executor._prepare_dictionary_identity()
-    assert max(map(len, case.batches)) == 32
+    assert max(map(len, case.batches)) == 16
     case.batches.clear()
     case.available = 8_000_000_000 + _intervene._snapshot_workspace(16, 1)
     assert case.executor._dictionary_matches()
@@ -415,7 +415,7 @@ def guarded_snapshot(headroom_snapshot, monkeypatch):
 @pytest.mark.parametrize("mismatch", [False, True])
 def test_snapshot_comparison_reads_process_at_entry_and_each_completed_batch(guarded_snapshot, capacity, mismatch):
     case = guarded_snapshot
-    case.available = 8_000_000_000 + _intervene._snapshot_workspace(16, capacity)
+    case.available = 8_000_000_000 + 2 * _intervene._snapshot_workspace(16, capacity)
     if mismatch:
         case.state["weight"][0] ^= 128
     assert case.executor._dictionary_matches() is not mismatch
@@ -491,4 +491,165 @@ def test_snapshot_copy_admission_keeps_forced_process_reads(guarded_snapshot, mo
     assert case.now == 0 and len(case.copies) == 64
     assert not case.comparisons and not case.scopes
     assert case.executor._dictionary_snapshot is None
+    assert all(reference() is None for reference in case.allocations)
+
+
+@pytest.mark.parametrize("boundary", ["selected", "mask"])
+@pytest.mark.parametrize("mismatch", [False, True])
+def test_snapshot_queue_leaves_room_for_allocation_observations(
+        guarded_snapshot, monkeypatch, boundary, mismatch):
+    case = guarded_snapshot
+    workspace = _intervene._snapshot_workspace(16, 1)
+    case.available = 8_000_000_000 + 6 * workspace
+    reads, losses = [], []
+
+    def available():
+        reads.append((len(case.allocations), len(case.comparisons)))
+        # Lookup entry and minimum admission precede selected-queue admission.
+        if boundary == "selected" and len(reads) == 3:
+            case.available -= workspace
+            losses.append(case.available)
+        return SimpleNamespace(available=case.available)
+
+    monkeypatch.setattr(psutil, "virtual_memory", available)
+    allocate = torch.empty_like
+
+    def allocated(*args, **kwargs):
+        result = allocate(*args, **kwargs)
+        if boundary == "mask" and not losses:
+            assert kwargs["dtype"] == torch.bool
+            assert not case.comparisons
+            case.available -= workspace
+            losses.append(case.available)
+        return result
+
+    monkeypatch.setattr(torch, "empty_like", allocated)
+    if mismatch:
+        case.state["weight"][0] ^= 128
+    assert case.executor._dictionary_matches() is not mismatch
+    assert losses == [8_000_000_000 + 5 * workspace]
+    assert len(case.batches[0]) == 3
+    assert sum(size for size, _ in case.comparisons) == case.total
+    assert sum(map(sum, case.batches)) == case.total
+    if boundary == "mask":
+        # The next admission sees the mask before flags allocation or dispatch.
+        assert (1, 0) in reads
+    assert all(reference() is None for reference in case.allocations)
+    assert case.readback() is None and not case.scopes and not case.executor._hooks
+    saved = weakref.ref(next(iter(case.executor._dictionary_snapshot.state.values())))
+    case.executor.close()
+    assert saved() is None
+
+
+@pytest.mark.parametrize("bound", ["host", "process"])
+@pytest.mark.parametrize("size", [1, 3, 16, 16 * 1024 * 1024])
+@pytest.mark.parametrize("margin", [0, 1])
+def test_snapshot_minimum_remains_eligible_without_observation_room(
+        headroom_snapshot, bound, size, margin):
+    case = headroom_snapshot()
+    workspace = _intervene._snapshot_workspace(size, 1)
+    retained, pending = 777, 333
+    memory = _intervene._DeviceSnapshotMemory(case.guard)
+    floor = case.guard.current + pending
+    if bound == "host":
+        case.available = 8_000_000_000 + pending + retained + workspace + margin
+    else:
+        case.guard.limit = floor + retained + workspace + margin
+    assert _intervene._DictionarySnapshot._admit_batch(
+        memory, [size] * 64, retained=retained, floor=floor) == (1, workspace)
+    assert memory.reserve == retained + workspace
+
+
+@pytest.mark.parametrize("bound", ["host", "process"])
+def test_snapshot_queue_accounts_for_live_floor_updates(headroom_snapshot, monkeypatch, bound):
+    case = headroom_snapshot()
+    workspace = _intervene._snapshot_workspace(16, 1)
+    memory = _intervene._DeviceSnapshotMemory(case.guard)
+    initial = case.guard.current
+    case.available = 8_000_000_000 + 6 * workspace
+    case.guard.limit = initial + 6 * workspace
+    check, reads = case.guard.check, []
+
+    def checked(stage):
+        check(stage)
+        reads.append(stage)
+        # The selected admission must account for a newly known pending floor.
+        if len(reads) == 2:
+            memory.floor = initial + workspace
+            if bound == "host":
+                case.guard.limit = 40_000_000_000
+            else:
+                case.available = 64_000_000_000
+
+    monkeypatch.setattr(case.guard, "check", checked)
+    count, reserve = _intervene._DictionarySnapshot._admit_batch(memory, [16] * 64)
+    assert (count, reserve) == (3, 3 * workspace)
+    assert memory.floor == initial + workspace
+
+
+def test_snapshot_minimum_loss_before_flags_propagates_and_releases_storage(
+        guarded_snapshot, monkeypatch):
+    case = guarded_snapshot
+    workspace = _intervene._snapshot_workspace(16, 1)
+    case.available = 8_000_000_000 + workspace
+    allocate = torch.empty_like
+
+    def allocated(*args, **kwargs):
+        result = allocate(*args, **kwargs)
+        case.available -= 1
+        return result
+
+    monkeypatch.setattr(torch, "empty_like", allocated)
+    with pytest.raises(CleanStop, match="host reserve") as caught:
+        case.executor._dictionary_matches()
+    assert caught.value.__traceback__ is not None
+    assert case.batches == [[16]]
+    assert len(case.allocations) == 1 and not case.comparisons
+    assert case.drains == [0] and not case.scopes and not case.executor._hooks
+    assert all(reference() is None for reference in case.allocations)
+
+
+def test_snapshot_copy_has_room_after_destination_allocation(headroom_snapshot, monkeypatch):
+    case = headroom_snapshot()
+    workspace = _intervene._snapshot_workspace(16, 1)
+    case.available = 8_000_000_000 + case.total + 6 * workspace
+    allocate = torch.empty_like
+    losses = []
+
+    def allocated(*args, **kwargs):
+        result = allocate(*args, **kwargs)
+        if not losses:
+            assert result.numel() == case.total
+            case.available -= workspace
+            losses.append(case.available)
+        return result
+
+    monkeypatch.setattr(torch, "empty_like", allocated)
+    case.executor._prepare_dictionary_identity()
+    assert case.executor._dictionary_snapshot is not None
+    assert losses == [8_000_000_000 + case.total + 5 * workspace]
+    assert case.drains[0] == 3
+    assert sum(size for size, _ in case.copies) == case.total
+    assert sum(size for size, _ in case.comparisons) == case.total
+    assert not case.scopes
+    case.executor.close()
+    assert all(reference() is None for reference in case.allocations)
+
+
+@pytest.mark.parametrize("bound", ["host", "process"])
+def test_snapshot_creation_completes_at_the_minimum_boundary(headroom_snapshot, bound):
+    case = headroom_snapshot()
+    workspace = _intervene._snapshot_workspace(16, 1)
+    if bound == "host":
+        case.available = 8_000_000_000 + case.total + workspace
+    else:
+        case.guard.limit = case.guard.current + case.total + workspace
+    case.executor._prepare_dictionary_identity()
+    assert case.executor._dictionary_snapshot is not None
+    assert case.drains == list(range(1, 66))
+    assert sum(size for size, _ in case.copies) == case.total
+    assert sum(map(sum, case.batches)) == case.total
+    assert max(map(len, case.batches)) == 1
+    assert not case.scopes
+    case.executor.close()
     assert all(reference() is None for reference in case.allocations)

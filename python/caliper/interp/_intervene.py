@@ -261,7 +261,7 @@ class _DictionarySnapshot:
 
     @classmethod
     def _admit_batch(cls, memory, sizes, *, retained=0, minimum=0, floor=0, force=True):
-        """Admit the largest bounded prefix that fits both prospective budgets."""
+        """Admit a bounded prefix with room for workspace observations."""
         sizes = sizes[:_SNAPSHOT_BATCH_BLOCKS]
         largest = sizes[0] if sizes else 0
         count = 1 if sizes else 0
@@ -271,8 +271,13 @@ class _DictionarySnapshot:
         budget = min(memory.headroom, memory.limit - allocation_bytes(memory, floor=floor)) - retained
         for blocks, size in enumerate(sizes[1:], 2):
             largest = max(largest, size)
-            candidate = max(minimum, _snapshot_workspace(largest, blocks))
-            if candidate > budget:
+            workspace = _snapshot_workspace(largest, blocks)
+            candidate = max(minimum, workspace)
+            # Fresh observations can include this queue's allocated workspace
+            # while each admission still requests its full prospective reserve.
+            # Leave that workspace free when a larger queue fits. The admitted
+            # minimum remains eligible without this optional room.
+            if candidate + workspace > budget:
                 break
             count, reserve = blocks, candidate
         # Reserve the selected queue again before any allocation or dispatch.
