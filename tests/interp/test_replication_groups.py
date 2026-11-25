@@ -230,11 +230,11 @@ def test_published_failure_has_no_success_or_partial_case(published, monkeypatch
         monkeypatch.setattr(runtime, '_write_json', lambda *a, **k: (_ for _ in ()).throw(RuntimeError('metadata refusal')))
     if phase == 'identity':
         model.layers[0].mlp.W_enc.data[0, 0] += .1
-    def publish(logits):
+    def prepare(logits):
         if phase == 'publication':
             raise RuntimeError('publication refusal')
     with pytest.raises((ValueError, RuntimeError)):
-        runtime.run(10, publish=publish)
+        runtime.run(10, prepare=prepare)
     assert service.state_dict() == saved
     assert all(ctl._ivs[key] is record for key, record in records.items())
     assert runtime.last_result == first
@@ -304,9 +304,9 @@ def test_named_published_action_failure_keeps_prior_case_and_one_error(replicate
     run, route = replicated_hosted
     run.apply_published_case(18)
     before, result = run.interventions.state_dict(), deepcopy(run.replication.last_result)
-    def fail(*args):
+    def fail(*args, **kwargs):
         raise RuntimeError('publication refusal')
-    monkeypatch.setattr(run.output, 'publish_logits', fail)
+    monkeypatch.setattr(run.output, 'prepare_logits', fail)
     queued = route.on_control(None, _wire.Control(71, 'run', name='published_dallas_v1.cell26').to_meta())
     assert queued['status'] == 'queued'
     with pytest.warns(RuntimeWarning, match='publication refusal'):
@@ -349,3 +349,72 @@ def test_published_model_scan_reserves_host_memory_before_readback(published, mo
     with pytest.raises(CleanStop, match='host reserve'):
         runtime.run(26)
     assert not service.specifications() and runtime.last_attempt['status'] == 'error'
+
+
+@pytest.mark.parametrize('phase', ['revision', 'metadata', 'guard', 'prompt', 'watch', 'publication'])
+def test_prepared_candidate_refusal_preserves_public_success(replicated_hosted, monkeypatch, phase):
+    import threading
+    from caliper import _programs
+    from caliper.interp import _publish
+    run, _ = replicated_hosted
+    run.apply_published_case(18)
+    records = dict(run.controls._ivs)
+    state = run.interventions.state_dict()
+    successful = deepcopy(run.replication.last_result)
+    comparison = deepcopy(run._comparison)
+    files = set(run.replication.directory.iterdir())
+    public = {name: (tensor, tensor.clone(), _publish._VERSIONS[name])
+              for name, tensor in _publish._TENSORS.items()}
+    original = run.output.prepare_logits
+    forwards, candidates = [], []
+    handle = run.model.register_forward_hook(lambda *args: forwards.append(1))
+
+    def prepare(*args, **kwargs):
+        publication, result = original(*args, **kwargs)
+        candidates.append(publication)
+        assert set(run.replication.directory.iterdir()) > files
+        assert all(_publish._resolve(name) is tensor for name, (tensor, _, _) in public.items())
+        # A separate owner must acquire both locks while tensor work is private.
+        finished = threading.Event()
+        def edit():
+            with _programs._LOCK, run.controls.lock:
+                if phase == 'revision':
+                    run.interventions.set({'kind': 'ablate', 'point': 'layers.3.mlp_out'})
+                if phase == 'prompt':
+                    run.prompt.set('CD')
+                if phase == 'watch':
+                    monkeypatch.setattr(_programs, '_WATCH_EPOCH', _programs._WATCH_EPOCH + 1)
+            finished.set()
+        worker = threading.Thread(target=edit)
+        worker.start()
+        assert finished.wait(5), 'Candidate preparation retained a publication or Controls lock'
+        worker.join(5)
+        assert not worker.is_alive()
+        if phase == 'metadata':
+            monkeypatch.setattr(run.controls, '_admit_interventions',
+                                lambda *a, **k: (_ for _ in ()).throw(ValueError('late metadata refusal')))
+        if phase == 'guard':
+            raise RuntimeError('late resource refusal')
+        if phase == 'publication':
+            monkeypatch.setattr(_publish, '_model_name', lambda model, name: name == 'output.label_text')
+        return publication, result
+
+    monkeypatch.setattr(run.output, 'prepare_logits', prepare)
+    try:
+        with pytest.raises((InterventionError, ValueError, RuntimeError)):
+            run.apply_published_case(26)
+    finally:
+        handle.remove()
+    assert forwards == [1] and len(candidates) == 1
+    assert all(run.controls._ivs[key] is record for key, record in records.items())
+    if phase != 'revision':
+        assert run.interventions.state_dict() == state
+    else:
+        assert ('layers.3.mlp_out', 'ablate') in run.controls._ivs
+    assert run.replication.last_result == successful and run._comparison == comparison
+    assert run.replication.last_attempt['status'] == 'error'
+    assert set(run.replication.directory.iterdir()) == files
+    assert set(_publish._TENSORS) == set(public)
+    for name, (tensor, value, version) in public.items():
+        assert _publish._resolve(name) is tensor and _publish._VERSIONS[name] == version
+        torch.testing.assert_close(tensor, value, rtol=0, atol=0)

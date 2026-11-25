@@ -100,7 +100,8 @@ class Output:
         return {name: value.repeat(2, 1) for name, value in inputs.items()}
 
     def compare(self, prompt):
-        with autorelease_scope(next(self.model.parameters()).device):
+        from ._publish import _publication_scope
+        with _publication_scope(self.model), autorelease_scope(next(self.model.parameters()).device):
             inputs = self._inputs(prompt)
             scope = (self.attention_scope(prompt, self.interventions.specifications())
                      if self.attention_scope is not None else nullcontext())
@@ -110,8 +111,15 @@ class Output:
 
     def publish_logits(self, logits):
         """Publish bounded rows from actual baseline and candidate logits."""
-        with autorelease_scope(next(self.model.parameters()).device):
-            from . import publish
+        publication, result = self.prepare_logits(logits)
+        publication.commit()
+        return result
+
+    def prepare_logits(self, logits, *, transform=None):
+        """Prepare all output tensors without a change to public bindings."""
+        from ._publish import _publication_scope
+        with _publication_scope(self.model), autorelease_scope(next(self.model.parameters()).device):
+            from ._publish import _prepare_many
             probabilities = logits.softmax(-1)
             if probabilities.shape[-1] < 10:
                 raise ValueError("output comparison requires at least ten vocabulary tokens")
@@ -135,12 +143,14 @@ class Output:
                     ids[replace] = winner
             values = probabilities[:, ids].to(torch.float32)
             labels = [bounded_text(token_label(self.tokenizer, i), 63) for i in ids.tolist()]
-            publish("output.probs", values)
-            publish("output.tokens", ids.to(torch.int32))
-            publish("output.label_text", packed_labels(labels, ids.device))
-            return {"tokens": ids.tolist(), "probabilities": values.tolist(), "labels": labels,
+            tensors = {"output.probs": values, "output.tokens": ids.to(torch.int32),
+                       "output.label_text": packed_labels(labels, ids.device)}
+            result = {"tokens": ids.tolist(), "probabilities": values.tolist(), "labels": labels,
                     "argmax_token_ids": argmax_ids.tolist(), "baseline_top_text": baseline_top_text,
                     "baseline_top_probability": baseline_top_probability}
+            if transform is not None:
+                tensors = transform(tensors)
+            return _prepare_many(tensors), result
 
     def generate(self, prompt):
         """Produce exactly 24 greedy tokens for both rows, including EOS tokens."""

@@ -1046,7 +1046,7 @@ class Interventions:
             self._restore_records(list(records.values()), restore_active=True, evict_ended=True)
         self._ctl._publish()
 
-    def replace_atomic(self, specifications, evaluate, *, finalize=None):
+    def replace_atomic(self, specifications, evaluate, *, prepare=None, check=None):
         """Evaluate a complete candidate before its records replace the live state."""
         from .interp._intervene import InterventionError
         if not isinstance(specifications, list) or len(specifications) > MAX_INTERVENTIONS:
@@ -1062,11 +1062,12 @@ class Interventions:
             # The lifecycle owner pins resources across admission and installation.
             with self._ctl._outside_lock(), self.executor.dictionary_admission():
                 with self._ctl.lock:
-                    result = self._restore_records(records, restore_active=True, evaluate=evaluate, finalize=finalize)
+                    result = self._restore_records(records, restore_active=True, evaluate=evaluate,
+                                                   prepare=prepare, check=check)
         self._ctl._publish()
         return result
 
-    def _restore_records(self, records, *, restore_active, evict_ended=False, evaluate=None, finalize=None):
+    def _restore_records(self, records, *, restore_active, evict_ended=False, evaluate=None, prepare=None, check=None):
         """Prepare a complete replacement, then commit if its input still owns the state."""
         from .interp._intervene import InterventionError
         revision = self._ctl._iv_revision
@@ -1114,11 +1115,37 @@ class Interventions:
                 restored = self._ctl._admit_interventions(restored, evict_ended=evict_ended)
             except ValueError as error:
                 raise InterventionError(str(error), _w().ERR_LIMIT) from None
-            if finalize is not None:
+            if prepare is not None:
                 with self._ctl._outside_lock():
-                    finalize(result)
+                    publication = prepare(result)
+                from .interp._publish import _PreparedPublication
+                if not isinstance(publication, _PreparedPublication):
+                    raise TypeError("atomic output requires a prepared publication")
+            else:
+                publication = None
+
+            def commit(publish=lambda: None):
+                nonlocal restored
                 self._check_revision(revision)
                 restored = self._ctl._admit_interventions(restored, evict_ended=evict_ended)
+                if check is not None:
+                    check()
+                old = list(self._ctl._ivs.values())
+                # No fallible preparation follows either state replacement.
+                self._ctl._ivs = restored
+                self._ctl._iv_revision += 1
+                self._ctl._iv_due = True
+                self._ctl.busy = True
+                publish()
+                return old
+
+            if publication is None:
+                old = commit()
+            else:
+                # Program state precedes Controls state in the lock order.
+                with self._ctl._outside_lock(), publication.transaction() as publish:
+                    with self._ctl.lock:
+                        old = commit(publish)
         except BaseException:
             with self._ctl._outside_lock():
                 for iv in restored.values():
@@ -1127,11 +1154,6 @@ class Interventions:
                 self.executor._cache.update(cache)
                 self.executor._cache_identity = identity
             raise
-        old = list(self._ctl._ivs.values())
-        self._ctl._ivs = restored
-        self._ctl._iv_revision += 1
-        self._ctl._iv_due = True
-        self._ctl._update_busy()
         with self._ctl._outside_lock():
             for iv in old:
                 self._ctl._unhook(iv, retain_source=True)

@@ -245,13 +245,12 @@ class _FixtureDisplay:
     def _transfer(self, tensor):
         return tensor.detach().contiguous().to(device=self.device, copy=True)
 
-    def publish(self):
-        from . import publish
+    def prepare(self, values):
+        """Validate and transfer private display tensors before publication."""
         from ._memory import autorelease_scope
-        from ._publish import _resolve
         pending, total = [], 0
         for name, (shape, dtype) in self.TENSORS.items():
-            tensor = _resolve(name)
+            tensor = values.get(name)
             if tensor is None:
                 continue
             if (tensor.dtype != dtype or tensor.ndim != len(shape)
@@ -266,16 +265,25 @@ class _FixtureDisplay:
         if total > self.MAX_BYTES:
             raise ValueError("fixture display tensors exceed the aggregate byte limit")
         if not pending:
-            return 0
+            return dict(values), 0
         with autorelease_scope(self.device):
             self.guard.check("fixture display copy start")
             try:
                 converted = [(name, self._transfer(tensor)) for name, tensor in pending]
             finally:
                 self.guard.check("fixture display copy complete")
-            for name, tensor in converted:
-                publish(name, tensor)
-        return sum(tensor.numel() * tensor.element_size() for _, tensor in pending)
+        return dict(values, **dict(converted)), sum(tensor.numel() * tensor.element_size() for _, tensor in pending)
+
+    def publish(self):
+        from .. import _programs
+        from . import _publish
+        with _publish._publication_scope():
+            with _programs._LOCK:
+                values = {name: _publish._TENSORS[name] for name in self.TENSORS if name in _publish._TENSORS}
+            converted, size = self.prepare(values)
+            if size:
+                _publish._publish_many({name: tensor for name, tensor in converted.items() if tensor is not values[name]})
+            return size
 
 
 class RMSNorm(nn.Module):
@@ -921,16 +929,18 @@ class HostedInference:
                 if self.prompt.value != PROMPTS["dallas"] or self.prompt.pending is not None:
                     raise ValueError("published actions require the unchanged Dallas prompt")
                 prompt_version = self.prompt._version
-            def publish(logits):
-                with self.controls.lock:
-                    if self.prompt._version != prompt_version or self.prompt.pending is not None:
-                        raise ValueError("published prompt changed during the action")
-                self.output.publish_logits(logits)
-                if self.fixture_display is not None:
-                    self.fixture_display.publish()
+            def check():
+                self._check_watch()
+                if self.prompt._version != prompt_version or self.prompt.pending is not None:
+                    raise ValueError("published prompt changed during the action")
+            def prepare(logits):
+                transform = (None if self.fixture_display is None else
+                             lambda values: self.fixture_display.prepare(values)[0])
+                publication, _ = self.output.prepare_logits(logits, transform=transform)
                 if self.guard is not None:
                     self.guard.check("published case complete")
-            result = self.replication.run(cell, publish=publish)
+                return publication
+            result = self.replication.run(cell, prepare=prepare, check=check)
             self._owned_clamp = self._owned_applied_spec = None
             key = self._input_state()
             with self._inference_lock:

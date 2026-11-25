@@ -253,3 +253,34 @@ def test_comparison_reserves_both_true_winners(output_case, monkeypatch, steered
     assert _resolve("output.probs").shape == (2, 10)
     expected = logits[:, 0].softmax(-1)[:, result["tokens"]].float()
     torch.testing.assert_close(_resolve("output.probs"), expected)
+
+
+@pytest.mark.parametrize('phase', ['labels', 'conflict', 'watch'])
+def test_output_preparation_keeps_complete_prior_bindings(output_case, monkeypatch, phase):
+    from caliper import _programs
+    from caliper.interp import _output, _publish
+    model, tokenizer, _, _, output = output_case
+    output.compare('AB')
+    before = {name: (tensor, tensor.clone(), _publish._VERSIONS[name])
+              for name, tensor in _publish._TENSORS.items()}
+    logits = forward_logits(model, tokenizer('CD'))[:, -1].repeat(2, 1)
+    if phase == 'labels':
+        def fail(*args):
+            raise RuntimeError('label preparation refusal')
+        monkeypatch.setattr(_output, 'packed_labels', fail)
+        with pytest.raises(RuntimeError, match='label preparation'):
+            output.publish_logits(logits)
+    else:
+        publication, _ = output.prepare_logits(logits)
+        if phase == 'conflict':
+            monkeypatch.setitem(_programs._STATE, 'model', model)
+            monkeypatch.setattr(_publish, '_model_name', lambda m, name: name == 'output.label_text')
+        else:
+            monkeypatch.setattr(_programs, '_WATCH_EPOCH', _programs._WATCH_EPOCH + 1)
+        with pytest.raises((ValueError, RuntimeError)):
+            publication.commit()
+    assert set(_publish._TENSORS) == set(before)
+    for name, (tensor, value, version) in before.items():
+        assert _publish._resolve(name) is tensor
+        assert _publish._VERSIONS[name] == version
+        torch.testing.assert_close(tensor, value, rtol=0, atol=0)

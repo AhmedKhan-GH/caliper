@@ -326,7 +326,7 @@ class PublishedCases:
             with attention_patterns(self.model, self.patterns):
                 yield
 
-    def run(self, cell, *, publish=None):
+    def run(self, cell, *, prepare=None, check=None):
         """Execute a fresh forward and commit only after all candidate checks pass."""
         self.sequence += 1
         sequence, started = self.sequence, time.perf_counter()
@@ -380,9 +380,11 @@ class PublishedCases:
                 evidence.append(metadata)
                 result['metadata_file'] = str(metadata.relative_to(self.output_directory))
                 return result, pair
-            with autorelease_scope(next(self.model.parameters()).device):
+            from ._publish import _publication_scope
+            with _publication_scope(self.model), autorelease_scope(next(self.model.parameters()).device):
                 result, _ = self.interventions.replace_atomic(
-                    specs, evaluate, finalize=None if publish is None else lambda evaluated: publish(evaluated[1]))
+                    specs, evaluate, prepare=None if prepare is None else lambda evaluated: prepare(evaluated[1]),
+                    check=check)
             result['action_seconds'] = time.perf_counter() - started
             # Only this committed result makes a candidate export authoritative.
             self.last_result = result
