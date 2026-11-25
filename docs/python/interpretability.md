@@ -181,6 +181,7 @@ The [Gemma Scope reference](../reference/gemma-scope.md) records every source pi
 
 `tools/interp/convert_gemma_scope.py` imports the selected 16,384-feature JumpReLU transcoders without training.
 The ordinary `caliper` profile transposes the source encoder and divides input columns by the learned gain.
+The ordinary hosted Gemma path retains F32.
 The decoder writes after the post-feedforward norm without another normalization.
 A Qwen dictionary cannot serve Gemma.
 
@@ -567,7 +568,8 @@ Feature-node Jaccard overlap must reach 0.9.
 Every union edge must satisfy `abs(caliper - reference) <= 1e-6 + 1e-3 * abs(reference)`.
 A missing edge counts as zero.
 Baseline and intervention probabilities must agree across the full vocabulary within 0.001 absolute, with exact top token IDs.
-Both implementations must reproduce every published semantic outcome, with the ineffective British Columbia intervention.
+Both implementations must reproduce every published semantic outcome.
+The ineffective British Columbia intervention remains part of that requirement.
 
 The published path requires completeness residuals at most 0.02 per target and trace time at most 20 seconds.
 Each complete intervention action must take at most one second.

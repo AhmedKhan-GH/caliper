@@ -43,12 +43,14 @@ These fixed snapshots and historical alias resolution are explicit reconstructio
 ## Published Dallas Profile
 
 The hosted profile `published_dallas_v1` explicitly selects BF16 and the arithmetic profile `circuit_tracer_82996f14`.
+An absent hosted profile retains ordinary F32 Gemma behavior.
 The [pinned tutorial](https://github.com/decoderesearch/circuit-tracer/blob/82996f144b3371ae858ea5713590d004c218f0c2/demos/circuit_tracing_tutorial.ipynb), cell 8, uses exactly `Fact: the capital of the state containing Dallas is`.
 Its baseline top token is ` Austin`.
 The lowercase `the` is part of the input bytes.
 The [published graph JSON](https://neuronpedia-attrib.s3.us-east-1.amazonaws.com/user-graphs/cmao6p1xd0000ypedw0qhlhob/gemma-fact-dallas-austin.json) uses uppercase `The` and cannot substitute for this executable example.
 
-The seven interventions use exact published feature groups and positions, with BOS.
+The seven interventions use exact published feature groups and positions.
+Position IDs count the BOS prefix.
 The runtime catalog retains each source label and every layer, feature, and position ID.
 Cell numbers below are zero-based notebook cells.
 Each `run.action` name is `published_dallas_v1.cellN`, where `N` is the cell number.
@@ -234,7 +236,7 @@ An active set that exceeds memory admission receives a refusal.
 Its API is `convert_gemma_scope(source, output, *, model, memory_limit_gb=40, evaluation_source=None, profile="caliper", model_snapshot=None)`.
 The CLI accepts `--source`, `--output`, `--model-snapshot`, `--memory-limit-gb`, `--evaluation-source`, and `--profile`.
 Select `--profile circuit_tracer_82996f14` explicitly for the original-coordinate BF16 artifact.
-Reference conversion requires the pinned model snapshot, also through the Python API.
+Reference conversion requires the pinned model snapshot for both the CLI and Python API.
 The model and source paths must identify their exact revisions in the standard Hugging Face cache layout.
 The converter performs no download or training.
 
@@ -322,7 +324,7 @@ Construction uses BF16 reference arithmetic and captures original coordinates th
 The lead must qualify the artifact against both pinned snapshots before index construction.
 Index compatibility checks do not replace source qualification.
 
-The index uses 256 model positions per context, with BOS, with at most 255 source positions.
+Each index context has 256 model positions: one BOS prefix and at most 255 source positions.
 It retains 16 examples per feature and 33 source slots per example, with an additional BOS position.
 Prefixes and padding do not enter source counts or example offsets.
 Stable tie order and document partition rules remain unchanged.
@@ -487,7 +489,8 @@ Feature-node Jaccard overlap with the actual reference must reach 0.9.
 Every edge must satisfy `abs(caliper - reference) <= 1e-6 + 1e-3 * abs(reference)`.
 The comparison uses the union of both edge sets and counts missing edges as zero.
 Every baseline and intervention comparison covers the full vocabulary, with absolute probability error at most 0.001 and exact top token IDs.
-Both implementations must reproduce every published semantic outcome, with the ineffective British Columbia intervention.
+Both implementations must reproduce every published semantic outcome.
+The ineffective British Columbia intervention remains part of that requirement.
 
 Caliper completeness residuals must remain at most 0.02 per target.
 Trace time must remain at most 20 seconds, and each complete intervention action must remain at most one second.

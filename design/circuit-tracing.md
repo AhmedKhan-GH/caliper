@@ -464,7 +464,8 @@ Source-library completeness scores do not replace Caliper completeness residuals
 Feature-node Jaccard overlap must reach 0.9.
 Every union edge must satisfy `abs(caliper - reference) <= 1e-6 + 1e-3 * abs(reference)`, with missing edges equal to zero.
 Every baseline and intervention probability must agree across the vocabulary within 0.001 absolute, with exact top token IDs.
-Both implementations must reproduce all published semantic outcomes, with the ineffective British Columbia intervention.
+Both implementations must reproduce all published semantic outcomes.
+The ineffective British Columbia intervention remains part of that requirement.
 A failed reference outcome remains a failure and cannot establish a Caliper pass.
 
 Caliper completeness residuals must remain at most 0.02 per target.
