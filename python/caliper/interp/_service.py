@@ -155,10 +155,10 @@ class InterpretationService:
                 if self.model is None or self.tokenizer is None:
                     raise Refused("interpret.missing_model", "A model and tokenizer are required.")
                 from . import Tracer
-                value = Tracer(self.model, self.tokenizer, self._resource("dictionary"),
-                               controls=getattr(self, "controls", None),
-                               memory_limit_gb=self.memory_limit_gb,
-                               memory=self.memory if self.memory is not None else getattr(self.index, "memory", None))
+                value = Tracer._for_service(
+                    self.model, self.tokenizer, self._resource("dictionary"),
+                    controls=getattr(self, "controls", None), memory_limit_gb=self.memory_limit_gb,
+                    memory=self.memory if self.memory is not None else getattr(self.index, "memory", None))
             if value is None:
                 raise Refused("interpret.missing_" + name, "The run has no " + name + ".")
             with self.lock:

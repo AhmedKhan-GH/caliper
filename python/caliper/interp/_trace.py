@@ -429,12 +429,29 @@ class Tracer:
     """
 
     def __init__(self, model, tokenizer, dictionary, *, controls=None, index=None, memory_limit_gb=None, memory=None):
+        self._initialize(model, tokenizer, dictionary, controls=controls, index=index,
+                         memory_limit_gb=memory_limit_gb, memory=memory, eager_admission=True)
+
+    @classmethod
+    def _for_service(cls, model, tokenizer, dictionary, **kwargs):
+        """Defer the constructor scan to the service's first full request.
+
+        Each request validates after tokenizer callbacks and before cache access
+        or a forward. No validation result survives from construction.
+        """
+        tracer = cls.__new__(cls)
+        tracer._initialize(model, tokenizer, dictionary, eager_admission=False, **kwargs)
+        return tracer
+
+    def _initialize(self, model, tokenizer, dictionary, *, eager_admission, controls=None, index=None,
+                    memory_limit_gb=None, memory=None):
         if dictionary is None:
             raise ValueError("trace requires a dictionary")
         self.memory_limit_gb = family_memory_limit(model, memory_limit_gb, memory)
         self._memory = memory
         self.guard = self._new_guard(next(model.parameters()).device)
-        _validate_dictionary(model, dictionary, self._dictionary_check, memory=self.guard)
+        if eager_admission:
+            _validate_dictionary(model, dictionary, self._dictionary_check, memory=self.guard)
         if controls is None:
             from .._controls import CONTROLS
             controls = CONTROLS
