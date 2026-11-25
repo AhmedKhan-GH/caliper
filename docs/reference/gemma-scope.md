@@ -254,11 +254,13 @@ The separate cursor is `evaluation-research-v1/state.json`, with state schema ve
 The numeric quality thresholds classify comparison results, and a failed result remains failed.
 
 The comparison sample can end at the first published checkpoint with at least 50,000 source positions.
-The evaluator receives SIGINT, and its final report retains `status="partial"`, `source_budget_complete=false`, and `stop_reason="signal 2"`.
+The evaluator accepts SIGINT or SIGTERM for a clean stop at a checkpoint.
+Its partial report retains `status="partial"`, `source_budget_complete=false`, and the exact stop reason.
 The report records the exact committed sample, observation count, loss-target count, and final cursor SHA256.
 The configured budget remains 200,000, and the cursor permits a later resume toward that budget.
 
 The measured Gemma comparison sample contains 52,231 source positions and 52,174 metric observations.
+Its stop reason is `signal 2`.
 These counts do not establish full-budget completion.
 Quality measurements supply comparison evidence, not a numerical release gate.
 
@@ -327,7 +329,8 @@ If one window cannot fit, the query refuses before its tensor allocation.
 The budget is a limit, not a measured memory result or a speed guarantee.
 
 Gemma qualification accepts complete research measurements from a sample of 50,000 through 199,999 source positions.
-That sample requires `status="partial"`, `source_budget_complete=false`, and `stop_reason="signal 2"`.
+That sample requires `status="partial"` and `source_budget_complete=false`.
+Its stop reason must be `signal 2` or `signal 15`.
 Qualification also accepts a full 200,000-position result with consistent completion status and its original quality status.
 Both forms require all per-layer measurements, exact masks, valid aggregates, and the current source and resource identities.
 The service binds the report to the exact cursor bytes.

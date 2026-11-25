@@ -137,6 +137,23 @@ def test_gemma_comparison_reports_actual_sample_and_original_status(source_token
     assert response == original
 
 
+@pytest.mark.parametrize("source_tokens", [50000, 52231, 199999, 200000])
+@pytest.mark.parametrize("stop_reason", ["signal 2", "signal 15"])
+def test_gemma_clean_stop_requires_a_partial_sample(source_tokens, stop_reason):
+    response = gemma_reply(source_tokens=source_tokens)
+    response["research_quality"]["stop_reason"] = stop_reason
+    original = deepcopy(response)
+    result = dictionary_qualification(response, family="gemma")
+    assert result["qualified"] is (source_tokens < 200000)
+    if result["qualified"]:
+        assert result["reported_status"] == "partial"
+        assert result["source_budget_complete"] is False
+        assert result["source_tokens"] == source_tokens
+        assert result["stop_reason"] == stop_reason
+        assert result["checkpoint_sha256"] == response["research_quality"]["checkpoint_sha256"]
+    assert response == original
+
+
 @pytest.mark.parametrize("source_tokens", [50000, 200000])
 def test_gemma_acceptance_result_preserves_comparison_disclosure(source_tokens):
     result = {"mode": "gemma", "dictionary_evidence": gemma_reply(source_tokens=source_tokens),
@@ -167,7 +184,7 @@ def test_gemma_segment_bounds_use_measured_sample(source_tokens):
     ("metric_observations", 49999.), ("metric_observations", True),
     ("cross_entropy_tokens", 200001), ("cross_entropy_tokens", True), ("cross_entropy_tokens", 49999.),
     ("source_budget_complete", 0), ("source_budget_complete", 1),
-    ("stop_reason", "signal 15"), ("stop_reason", "source_exhausted"), ("stop_reason", None),
+    ("stop_reason", "signal 9"), ("stop_reason", "source_exhausted"), ("stop_reason", None),
     ("status", "fallback_partial"), ("status", None), ("partition", "index"),
     ("checkpoint_sha256", None), ("checkpoint_sha256", "A" * 64),
     ("protocol_version", True), ("protocol_version", 1.),
@@ -394,8 +411,10 @@ def test_qwen_retains_legacy_quality_evidence_policy():
     assert dictionary_qualification(response)["qualified"]
 
 
-def test_gemma_finish_keeps_causal_failure_and_separate_model_result():
-    result = {"mode": "gemma", "dictionary_evidence": gemma_reply(), "pixel_evidence_collected": True,
+@pytest.mark.parametrize("source_tokens", [51237, 200000])
+def test_gemma_finish_keeps_causal_failure_and_separate_model_result(source_tokens):
+    result = {"mode": "gemma", "dictionary_evidence": gemma_reply(source_tokens=source_tokens),
+              "pixel_evidence_collected": True,
               "checks": [check("validation", False, {"correct_signs": 6, "spearman": .539},
                                "10 features, >=8 correct signs, Spearman >=0.6")]}
     assert finish(result) == 1 and not result["gemma_acceptance"]

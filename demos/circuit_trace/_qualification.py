@@ -232,7 +232,7 @@ def _gemma_research(metadata, response):
     complete = source_tokens == QUALITY_TOKENS
     _require(quality.get("source_budget_complete") is complete
              and quality.get("status") in (("passed", "failed") if complete else ("partial",))
-             and quality.get("stop_reason") == ("complete" if complete else "signal 2"),
+             and quality.get("stop_reason") in (("complete",) if complete else ("signal 2", "signal 15")),
              "Gemma research status or stop reason contradicts its measured source budget.")
     policy = {"version": 1, "family": "gemma2", "bos_policy": "genuine_bos_prefix",
               "prefix_ids": [2], "pad_id": 0, "eos_ids": [1], "excluded_ids": [0, 1, 2],

@@ -186,9 +186,11 @@ A Qwen dictionary cannot serve Gemma.
 Gemma research evaluation retains a configured resume budget of 200,000 source positions, 1,024 model positions, and explicit special-token masks.
 It reports per-layer splice loss beside all-layer loss.
 The comparison sample can end at the first published checkpoint with at least 50,000 source positions.
-The final report retains the exact sample and observation counts, final cursor SHA256, `status="partial"`, `source_budget_complete=false`, and `stop_reason="signal 2"`.
+The final report retains the exact sample and observation counts, final cursor SHA256, `status="partial"`, and `source_budget_complete=false`.
+The stop reason must be `signal 2` or `signal 15` for a clean checkpoint stop.
 
 The measured Gemma comparison sample contains 52,231 source positions and 52,174 metric observations.
+Its stop reason is `signal 2`.
 The cursor permits a later resume toward 200,000 positions.
 Qualification also accepts a valid full-budget result and preserves its original quality status.
 The acceptance result and quality disclosure state the measured sample count and its comparison role.
