@@ -416,7 +416,7 @@ def main(argv=None):
     if (not 2 <= args.tokens <= 200_000 or not 2 <= args.context <= 256
             or not args.context <= args.batch_tokens <= 4096 or not 1 <= args.chunk_tokens <= 128):
         raise ValueError("requested dimensions exceed the bounded evaluator allocations")
-    ceiling = 28 if args.model == GEMMA_ID else 12
+    ceiling = 40 if args.model == GEMMA_ID else 12
     args.memory_gb = ceiling if args.memory_gb is None else args.memory_gb
     if not 0 < args.memory_gb <= ceiling:
         raise ValueError(f"the evaluator memory limit is at most {ceiling} GB")

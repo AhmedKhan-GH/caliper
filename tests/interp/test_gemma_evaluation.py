@@ -208,20 +208,38 @@ def test_imported_metadata_requires_both_provenance_records(field):
         text_stream.evaluation_source_metadata(metadata)
 
 
-def test_evaluator_explicit_gemma_selection_passes_budget_and_preserves_old_loader_api(tmp_path, monkeypatch):
+@pytest.mark.parametrize("requested", [None, 12, 28, 40])
+def test_evaluator_explicit_gemma_selection_passes_budget_and_preserves_old_loader_api(tmp_path, monkeypatch, requested):
     from .test_gemma_runtime import memory
     observed = []
-    guard = memory(28)
+    expected = 40 if requested is None else requested
+    guard = memory(expected)
     def loader(*, device, memory, model_id):
         observed.append((device, memory, model_id))
         return object(), object()
     def dictionary(*args, **kwargs):
-        assert kwargs["memory_limit_gb"] == 28
+        assert kwargs["memory_limit_gb"] == expected
         return object()
-    monkeypatch.setattr(evaluation, "MemoryGuard", lambda limit, device: guard)
+    def make_guard(limit, device):
+        assert limit == expected
+        return guard
+    monkeypatch.setattr(evaluation, "MemoryGuard", make_guard)
     monkeypatch.setattr(evaluation, "load_text_model", loader)
     monkeypatch.setattr(evaluation, "load_dictionary", dictionary)
     monkeypatch.setattr(evaluation, "fineweb_documents", lambda **kw: [])
     monkeypatch.setattr(evaluation, "evaluate", lambda *a, **kw: {"status": "failed"})
-    assert evaluation.main(["--dictionary", str(tmp_path), "--device", "cpu", "--model", GEMMA_ID]) == 2
+    arguments = ["--dictionary", str(tmp_path), "--device", "cpu", "--model", GEMMA_ID]
+    if requested is not None:
+        arguments += ["--memory-gb", str(requested)]
+    assert evaluation.main(arguments) == 2
     assert observed == [("cpu", guard, GEMMA_ID)]
+
+
+@pytest.mark.parametrize("model,limit", [(GEMMA_ID, 40.000000001), (MODEL_ID, 12.000000001)])
+def test_evaluator_refuses_excess_budget_before_guard_or_model(tmp_path, monkeypatch, model, limit):
+    def unexpected(*args, **kwargs):
+        pytest.fail("Excess evaluator budget reached allocation")
+    monkeypatch.setattr(evaluation, "MemoryGuard", unexpected)
+    monkeypatch.setattr(evaluation, "load_text_model", unexpected)
+    with pytest.raises(ValueError, match="evaluator memory limit"):
+        evaluation.main(["--dictionary", str(tmp_path), "--model", model, "--memory-gb", str(limit)])
