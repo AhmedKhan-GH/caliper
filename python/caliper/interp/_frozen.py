@@ -33,9 +33,17 @@ def _no_check(stage):
 
 def _require_finite(value, name, check=_no_check, memory=None):
     """Check every value with bounded workspace and scalar readbacks."""
+    ieee = {torch.bfloat16: (torch.int16, 0x7F80),
+            torch.float16: (torch.int16, 0x7C00),
+            torch.float32: (torch.int32, 0x7F800000)}.get(value.dtype)
+    if value.layout != torch.strided or value.is_neg() or value.is_conj():
+        ieee = None
     # Allow two input temporaries at float32 width or wider, plus four int32
     # masks per element. This includes copies, promotion, abs, and reduction.
     # Four blocks reserve at most 128 MiB of workspace, plus scalar results.
+    # Retain this admission and block size for the integer path as well.
+    # Its dtype view aliases the input. The explicit exponent buffer has N
+    # elements. Its maximum and comparison are scalars. No floating arithmetic changes.
     element_bytes = 2 * max(4, value.element_size()) + 4 * 4
     block_elements = max(1, _FINITE_BLOCK_BYTES // element_bytes)
     budget = None if memory is None else BudgetMemory(memory, memory.limit / 1e9)
@@ -72,7 +80,14 @@ def _require_finite(value, name, check=_no_check, memory=None):
             results = []
             for block in blocks:
                 checked("finite block", workspace)
-                results.append(torch.isfinite(block).all())
+                if ieee is not None and block.numel():
+                    integer, exponent = ieee
+                    # All exponent bits are one exactly for infinity or NaN.
+                    # The mask removes sign and payload bits. Its nonnegative
+                    # maximum equals the mask exactly when any value is bad.
+                    results.append(torch.bitwise_and(block.view(integer), exponent).amax() != exponent)
+                else:
+                    results.append(torch.isfinite(block).all())
                 checked("finite block complete", workspace)
             finite = (results[0] if len(results) == 1 else torch.stack(results).all()).item()
             del results

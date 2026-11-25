@@ -105,3 +105,141 @@ def test_negative_views_and_unused_nonfinite_storage(dtype):
     require_matches_oracle(alias)
     storage[-1] = float("nan")
     require_matches_oracle(alias)
+
+
+@pytest.mark.parametrize("dtype", DTYPES)
+@pytest.mark.parametrize("transpose", [False, True])
+def test_cpu_tensor_workspace_is_smaller_without_larger_blocks(dtype, transpose):
+    from torch.utils._python_dispatch import TorchDispatchMode
+
+    value = torch.ones(7, 15, dtype=dtype)
+    if transpose:
+        value = value.T
+
+    class Allocations(TorchDispatchMode):
+        def __init__(self):
+            super().__init__()
+            self.storage = {value.untyped_storage().data_ptr()}
+            self.outputs = []
+            self.bytes = []
+
+        def __torch_dispatch__(self, func, types, args=(), kwargs=None):
+            result = func(*args, **(kwargs or {}))
+            if isinstance(result, torch.Tensor):
+                storage = result.untyped_storage()
+                if storage.data_ptr() not in self.storage:
+                    self.storage.add(storage.data_ptr())
+                    self.bytes.append(storage.nbytes())
+                # Retain all outputs, including released intermediates. The sum
+                # bounds tensor storage even if every operation overlaps.
+                self.outputs.append(result)
+            return result
+
+    with Allocations() as baseline:
+        assert bool(torch.isfinite(value).all())
+    with Allocations() as candidate:
+        _frozen._require_finite(value, "workspace")
+    assert sum(candidate.bytes) < sum(baseline.bytes)
+    assert sum(candidate.bytes) <= 24 * value.numel() + 3
+    assert [size for size in candidate.bytes if size > 4] == [value.numel() * value.element_size()]
+
+
+@pytest.mark.parametrize("dtype", DTYPES)
+@pytest.mark.parametrize("reason", ["outer", "inner", "extra", "current", "peak", "host", "latch", "cancel", "batch"])
+def test_integer_scan_refuses_before_allocation(monkeypatch, dtype, reason):
+    from types import SimpleNamespace
+    from caliper.interp._memory import BudgetMemory, CleanStop
+    from .test_finite_workspace import Guard, forbidden
+
+    first, second = Guard(), Guard()
+    supplied = BudgetMemory(first, 10_000 / 1e9, extra=second)
+    failure = CleanStop("latched refusal")
+    # Nine elements reserve 216 bytes plus three scalar bytes.
+    if reason == "outer":
+        supplied.limit = 318
+    elif reason == "inner":
+        first.limit = 318
+    elif reason == "extra":
+        second.limit = 318
+    elif reason == "current":
+        second.current = 9_782
+    elif reason == "peak":
+        second.peak = 10_001
+    elif reason == "host":
+        second.host_reserve_bytes = 8_000_000_000
+        monkeypatch.setattr("psutil.virtual_memory", lambda: SimpleNamespace(available=8_000_000_218))
+    elif reason == "latch":
+        second.failure = failure
+    elif reason == "batch":
+        monkeypatch.setattr(_frozen, "_FINITE_BLOCK_BYTES", 24)
+        first.limit = 204
+
+    def check(stage):
+        if reason == "cancel":
+            raise failure
+
+    monkeypatch.setattr(torch, "bitwise_and", forbidden)
+    monkeypatch.setattr(torch, "isfinite", forbidden)
+    with pytest.raises(CleanStop) as error:
+        _frozen._require_finite(torch.ones(9, dtype=dtype), "guard", check, supplied)
+    if reason in ("latch", "cancel"):
+        assert error.value is failure
+
+
+@pytest.mark.parametrize("dtype", DTYPES)
+@pytest.mark.parametrize("reason", ["cap", "current", "host", "peak", "latch", "cancel", "deadline"])
+def test_integer_scan_keeps_late_refusals(monkeypatch, dtype, reason):
+    from types import SimpleNamespace
+    from caliper.interp._memory import BudgetMemory, CleanStop
+    from caliper.interp._trace import TraceTimeout
+    from .test_finite_workspace import Guard, forbidden
+
+    first, second = Guard(reserve=8_000_000_000), Guard()
+    supplied = BudgetMemory(first, 10_000 / 1e9, extra=second)
+    available = SimpleNamespace(available=8_000_010_000)
+    monkeypatch.setattr("psutil.virtual_memory", lambda: available)
+    monkeypatch.setattr(_frozen, "_FINITE_BLOCK_BYTES", 24)
+    calls = []
+    bitwise_and = torch.bitwise_and
+    failure = TraceTimeout("deadline") if reason == "deadline" else CleanStop("cancel or latch")
+
+    def evaluate(block, exponent):
+        calls.append(block.numel())
+        assert len(calls) == 1
+        return bitwise_and(block, exponent)
+
+    def check(stage):
+        if stage == "finite block complete":
+            # Four one-element blocks reserve 96 bytes and nine scalar bytes.
+            if reason == "cap":
+                second.limit = 204
+            elif reason == "current":
+                second.current = 9_896
+            elif reason == "host":
+                available.available = 8_000_000_104
+            elif reason == "peak":
+                second.peak = 10_001
+            elif reason == "latch":
+                second.failure = failure
+            else:
+                raise failure
+
+    monkeypatch.setattr(torch, "bitwise_and", evaluate)
+    monkeypatch.setattr(torch.Tensor, "item", forbidden)
+    with pytest.raises((CleanStop, TraceTimeout)) as error:
+        _frozen._require_finite(torch.ones(9, dtype=dtype), "guard", check, supplied)
+    assert calls == [1]
+    if reason in ("latch", "cancel", "deadline"):
+        assert error.value is failure
+
+
+@pytest.mark.parametrize("dtype", DTYPES)
+def test_integer_scan_keeps_exact_process_and_host_boundary(monkeypatch, dtype):
+    from types import SimpleNamespace
+    from .test_finite_workspace import Guard
+
+    guard = Guard(limit=319, current=100, peak=318, reserve=8_000_000_000)
+    monkeypatch.setattr("psutil.virtual_memory", lambda: SimpleNamespace(available=8_000_000_219))
+    _frozen._require_finite(torch.ones(9, dtype=dtype), "boundary", memory=guard)
+    assert guard.peak == 318 and guard.limit == 319
+    assert guard.stages == ["finite block", "finite block complete", "finite block readback"]

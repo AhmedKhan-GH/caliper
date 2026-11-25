@@ -31,19 +31,19 @@ def forbidden(*args, **kwargs):
 
 def test_default_workspace_uses_two_reductions_and_one_readback(monkeypatch):
     value = torch.ones(2_097_153, dtype=torch.float32)
-    finite, item = torch.isfinite, torch.Tensor.item
+    bitwise_and, item = torch.bitwise_and, torch.Tensor.item
     sizes, readbacks = [], []
 
-    def inspect(block):
+    def inspect(block, exponent):
         sizes.append(block.numel())
         assert block.numel() * (2 * max(4, block.element_size()) + 16) <= _frozen._FINITE_BLOCK_BYTES
-        return finite(block)
+        return bitwise_and(block, exponent)
 
     def readback(result):
         readbacks.append(result.shape)
         return item(result)
 
-    monkeypatch.setattr(torch, "isfinite", inspect)
+    monkeypatch.setattr(torch, "bitwise_and", inspect)
     monkeypatch.setattr(torch.Tensor, "item", readback)
     _frozen._require_finite(value, "fixture")
     assert sizes == [1_048_576, 1_048_577] and readbacks == [()]
@@ -188,11 +188,12 @@ def test_late_resource_changes_stop_before_next_mask(monkeypatch, late):
 
 
 @pytest.mark.parametrize("stage", ["finite block", "finite block complete", "finite block readback"])
-def test_late_deadline_and_autorelease_cleanup(monkeypatch, stage):
+@pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16, torch.float32, torch.float64])
+def test_late_deadline_and_autorelease_cleanup(monkeypatch, stage, dtype):
     monkeypatch.setattr(_frozen, "_FINITE_BLOCK_BYTES", 32)
     active, scopes, counts = [], [], {}
     failure = TraceTimeout("late deadline")
-    finite, narrow = torch.isfinite, torch.Tensor.narrow
+    finite, bitwise_and, narrow = torch.isfinite, torch.bitwise_and, torch.Tensor.narrow
 
     @contextmanager
     def scope(device):
@@ -215,15 +216,20 @@ def test_late_deadline_and_autorelease_cleanup(monkeypatch, stage):
         assert active
         return finite(block)
 
+    def mask(block, exponent):
+        assert active
+        return bitwise_and(block, exponent)
+
     def view(value, *args):
         assert active
         return narrow(value, *args)
 
     monkeypatch.setattr(_frozen, "autorelease_scope", scope)
     monkeypatch.setattr(torch, "isfinite", evaluate)
+    monkeypatch.setattr(torch, "bitwise_and", mask)
     monkeypatch.setattr(torch.Tensor, "narrow", view)
     with pytest.raises(TraceTimeout) as error:
-        _frozen._require_finite(torch.ones(9, dtype=torch.float64), "fixture", check)
+        _frozen._require_finite(torch.ones(9, dtype=dtype), "fixture", check)
     assert error.value is failure and len(scopes) == 2 and not active
 
 
@@ -247,13 +253,15 @@ def test_finite_scan_retains_owned_allocator_admission(metrics, monkeypatch, lat
     metrics.driver = 32_000_000_000 - workspace + int(not late)
     calls = []
 
-    def evaluate(block):
+    def evaluate(block, exponent):
         calls.append(block.numel())
         assert late and len(calls) == 1
         metrics.driver += 1
-        return torch.isfinite(block)
+        return torch.bitwise_and(block, exponent)
 
-    monkeypatch.setattr(_frozen.torch, "isfinite", evaluate, raising=False)
+    for name in ("bfloat16", "float16", "float32", "int16", "int32", "strided"):
+        monkeypatch.setattr(_frozen.torch, name, getattr(torch, name), raising=False)
+    monkeypatch.setattr(_frozen.torch, "bitwise_and", evaluate, raising=False)
     with pytest.raises(CleanStop, match="MPS allocator limit"):
         _frozen._require_finite(value, "fixture", memory=guard)
     assert calls == ([9] if late else [])
