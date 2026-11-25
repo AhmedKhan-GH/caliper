@@ -13,6 +13,7 @@ import torch
 
 from ._dictionary import _HASH_CHUNK_BYTES, _canonical_device, _state_hash, weights_hash
 from ._families import model_family
+from . import _qwen_family
 from ._frozen import (FrozenPath, MemoryGuard, _validate_dictionary, _validate_ablation_points,
                       _validate_intervention_positions, _finite_max, _require_finite, _no_check,
                       _DictionaryAdmission, _ENCODER_BLOCK_ELEMENTS)
@@ -256,10 +257,10 @@ def _forward_settings(model, memory):
         "num_heads", "n_heads", "n_head", "head_dim", "in_features", "k",
         "num_key_value_groups", "scaling", "attention_dropout",
         # Qwen block routing, DeltaNet dimensions, and both SiLU gates.
-        "block_type", "num_v_heads", "num_k_heads", "head_k_dim", "head_v_dim",
-        "key_dim", "value_dim", "conv_dim", "conv_kernel_size", "activation",
+        *_qwen_family.ROUTING_FIELDS, *_qwen_family.DELTA_HEAD_FIELDS,
+        *_qwen_family.DELTA_DIM_FIELDS, *_qwen_family.DELTA_CONV_FIELDS, "activation",
         # Rotary factors and the embedding's optional weight normalization.
-        "rope_type", "attention_scaling", "mrope_section", "max_seq_len_cached",
+        "rope_type", "attention_scaling", *_qwen_family.ROTARY_FIELDS, "max_seq_len_cached",
         "original_max_seq_len", "long_inv_freq", "max_norm", "norm_type",
         "padding_idx", "scale_grad_by_freq", "sparse", "inplace",
         # Gemma attention routing, softcaps, and scaled embedding.

@@ -5,16 +5,12 @@ import json
 import os
 from pathlib import Path
 
-import torch
-
+from caliper.interp import _qwen_family
+from caliper.interp._qwen_family import MODEL_ID, MODEL_REVISION
 from caliper.interp._dictionary import _canonical_device, _record_verified_hf_load
 from caliper.interp._memory import BudgetMemory, MemoryGuard
 from caliper.interp._admission import (GEMMA_ID, GEMMA_REVISION, _admit_model_load,
                                        _admit_model_transfer, _load_gemma_model)
-
-
-MODEL_ID = "Qwen/Qwen3.5-0.8B"
-MODEL_REVISION = "2fc06364715b967f1860aea9cf38778875588b17"
 
 
 def load_text_model(*, device="mps", memory=None, model_id=MODEL_ID, mode="inference"):
@@ -31,7 +27,8 @@ def load_text_model(*, device="mps", memory=None, model_id=MODEL_ID, mode="infer
         raise ValueError("unsupported text model load mode")
     if mode == "training" and model_id != MODEL_ID:
         raise ValueError("training mode requires the Qwen text model")
-    ceiling = 24 if mode == "training" else 40 if model_id == GEMMA_ID else 12
+    ceiling = (_qwen_family.TRAINING_MEMORY_MAX_GB if mode == "training" else
+               40 if model_id == GEMMA_ID else _qwen_family.INFERENCE_MEMORY_MAX_GB)
     memory = MemoryGuard(ceiling, device) if memory is None else BudgetMemory(memory, ceiling)
     if _canonical_device(memory.device) != _canonical_device(device):
         raise ValueError("text model requires a memory guard for its device")
@@ -47,36 +44,9 @@ def load_text_model(*, device="mps", memory=None, model_id=MODEL_ID, mode="infer
                           "fallback_enabled": os.environ.get("PYTORCH_ENABLE_MPS_FALLBACK", "0")}), flush=True)
         return model, tokenizer
 
-    from transformers import Qwen3_5ForCausalLM, Qwen3_5TextConfig
-
-    snapshot = Path(snapshot_download(MODEL_ID, revision=MODEL_REVISION, local_files_only=True))
-    config = Qwen3_5TextConfig(**json.loads((snapshot / "config.json").read_text())["text_config"])
-    if (config.num_hidden_layers, config.hidden_size) != (24, 1024):
-        raise ValueError("the pinned text model has unexpected dimensions")
-    estimate = _admit_model_load(snapshot, memory, device)
-    model, info = Qwen3_5ForCausalLM.from_pretrained(
-        snapshot, config=config, dtype=torch.float32, attn_implementation="eager",
-        local_files_only=True, output_loading_info=True,
-        key_mapping={r"^model\.language_model\.": "model."},
-    )
-    if any(info.get(key) for key in ("missing_keys", "unexpected_keys", "mismatched_keys", "error_msgs")):
-        raise ValueError(f"text checkpoint load is incomplete: {info}")
-    # These fields come from the resolved snapshot, never from a dictionary.
-    model.config._name_or_path = MODEL_ID
-    model.config._commit_hash = MODEL_REVISION
-    model.requires_grad_(False).eval()
-    if memory:
-        memory.check("after_model_cpu_load")
-    # The complete CPU load establishes the digest in the final float32 dtype.
-    _record_verified_hf_load(model, memory=memory)
-    _admit_model_transfer(memory, estimate, device)
-    model.to(device=device, dtype=torch.float32)
-    if memory:
-        memory.check("after_model_device_load")
-    tokenizer = AutoTokenizer.from_pretrained(snapshot, local_files_only=True)
-    print(json.dumps({"stage": "text_model_ready", "model_id": MODEL_ID, "revision": MODEL_REVISION,
-                      "fallback_enabled": os.environ.get("PYTORCH_ENABLE_MPS_FALLBACK", "0")}), flush=True)
-    return model, tokenizer
+    return _qwen_family.load_text_model(
+        device=device, memory=memory, snapshot_download=snapshot_download, tokenizer_type=AutoTokenizer,
+        admit_load=_admit_model_load, admit_transfer=_admit_model_transfer, record_load=_record_verified_hf_load)
 
 
 def hidden_forward(model, input_ids, attention_mask=None):

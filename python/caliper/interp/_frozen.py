@@ -528,7 +528,7 @@ def _validate_interventions(model, blocks, prefix, interventions):
         name = f"{base}.{'linear_attn' if delta else 'self_attn'}"
         projection = "out_proj" if delta else "o_proj"
         allowed[name] = {"ablate", "add", "patch"}
-        if family.name in ("qwen3_5_text", "gemma2") and not delta:
+        if family.name in (_qwen_family.FAMILY_NAME, "gemma2") and not delta:
             # The live add and patch hooks require a tensor, but this module returns a tuple.
             allowed[name] = {"ablate"}
         allowed[f"{name}.{projection}"] = {"ablate", "add", "patch"}
@@ -569,7 +569,7 @@ class FrozenPath:
             raise ValueError("trace requires an evaluation model")
         if self.dtype not in (torch.float32, torch.float64):
             raise ValueError("trace requires float32 or float64 model weights")
-        self.qwen = model.config.model_type == "qwen3_5_text"
+        self.qwen = model.config.model_type == _qwen_family.FAMILY_NAME
         if self.family.unit_offset_norm and self.dtype != torch.float32:
             raise ValueError(f"{self.family.name} tracing requires float32 model weights")
         modules = dict(model.named_modules())

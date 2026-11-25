@@ -7,10 +7,25 @@ from __future__ import annotations
 
 
 FAMILY_NAME = "qwen3_5_text"
+MODEL_ID = "Qwen/Qwen3.5-0.8B"
+MODEL_REVISION = "2fc06364715b967f1860aea9cf38778875588b17"
+INFERENCE_MEMORY_MAX_GB = 12
+TRAINING_MEMORY_MAX_GB = 24
+
+# Shared identity collectors retain these fields for every observed module.
+# Their order and presence stay identical across decoder families.
+ROUTING_FIELDS = ("block_type",)
+DELTA_HEAD_FIELDS = ("num_v_heads", "num_k_heads", "head_k_dim", "head_v_dim")
+DELTA_DIM_FIELDS = ("key_dim", "value_dim")
+DELTA_CONV_FIELDS = ("conv_dim", "conv_kernel_size")
+ROTARY_FIELDS = ("mrope_section",)
+CONFIG_FIELDS = ("linear_num_value_heads", "linear_num_key_heads",
+                 "linear_key_head_dim", "linear_value_head_dim", "linear_conv_kernel_dim")
+
 FAMILY_METADATA = dict(name=FAMILY_NAME, decoder_class="Qwen3_5TextModel",
                        block_class="Qwen3_5DecoderLayer",
                        module_name="transformers.models.qwen3_5.modeling_qwen3_5",
-                       unit_offset_norm=True)
+                       unit_offset_norm=True, memory_max_gb=INFERENCE_MEMORY_MAX_GB)
 
 
 def mixer(block):
@@ -186,3 +201,54 @@ class FrozenDeltaNet:
 
     def __call__(self, x, bias=1., intervention=1.):
         return self._apply(x, False) + bias * self.offset + intervention * self.intervention_offset
+
+
+def checkpoint_config(data):
+    """Select the text config from a multimodal Qwen snapshot."""
+    return data["text_config"] if "text_config" in data else data
+
+
+def rotary_class():
+    """Return the supported Qwen class for bounded buffer reconstruction."""
+    from transformers.models.qwen3_5.modeling_qwen3_5 import Qwen3_5TextRotaryEmbedding
+    return Qwen3_5TextRotaryEmbedding
+
+
+def load_text_model(*, device, memory, snapshot_download, tokenizer_type,
+                    admit_load, admit_transfer, record_load):
+    """Load the pinned Qwen text checkpoint through shared admission callbacks."""
+    import json
+    import os
+    from pathlib import Path
+
+    import torch
+    from transformers import Qwen3_5ForCausalLM, Qwen3_5TextConfig
+
+    snapshot = Path(snapshot_download(MODEL_ID, revision=MODEL_REVISION, local_files_only=True))
+    config = Qwen3_5TextConfig(**json.loads((snapshot / "config.json").read_text())["text_config"])
+    if (config.num_hidden_layers, config.hidden_size) != (24, 1024):
+        raise ValueError("the pinned text model has unexpected dimensions")
+    estimate = admit_load(snapshot, memory, device)
+    model, info = Qwen3_5ForCausalLM.from_pretrained(
+        snapshot, config=config, dtype=torch.float32, attn_implementation="eager",
+        local_files_only=True, output_loading_info=True,
+        key_mapping={r"^model\.language_model\.": "model."},
+    )
+    if any(info.get(key) for key in ("missing_keys", "unexpected_keys", "mismatched_keys", "error_msgs")):
+        raise ValueError(f"text checkpoint load is incomplete: {info}")
+    # These fields come from the resolved snapshot, never from a dictionary.
+    model.config._name_or_path = MODEL_ID
+    model.config._commit_hash = MODEL_REVISION
+    model.requires_grad_(False).eval()
+    if memory:
+        memory.check("after_model_cpu_load")
+    # The complete CPU load establishes the digest in the final float32 dtype.
+    record_load(model, memory=memory)
+    admit_transfer(memory, estimate, device)
+    model.to(device=device, dtype=torch.float32)
+    if memory:
+        memory.check("after_model_device_load")
+    tokenizer = tokenizer_type.from_pretrained(snapshot, local_files_only=True)
+    print(json.dumps({"stage": "text_model_ready", "model_id": MODEL_ID, "revision": MODEL_REVISION,
+                      "fallback_enabled": os.environ.get("PYTORCH_ENABLE_MPS_FALLBACK", "0")}), flush=True)
+    return model, tokenizer
