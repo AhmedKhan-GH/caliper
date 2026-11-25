@@ -299,7 +299,7 @@ class InterpretationService:
 
     def _execute(self, method, params, step, *, complete=None):
         from ._publish import _publication_scope
-        scope = _publication_scope(self.model) if method in ("trace.run", "feature.examples") else nullcontext()
+        scope = _publication_scope(self.model) if method in ("trace.run", "feature.examples", "patch.sweep") else nullcontext()
         with scope, ExitStack() as stack:
             self._request_stack = stack
             try:

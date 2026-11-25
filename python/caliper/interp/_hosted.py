@@ -1356,8 +1356,9 @@ class HostedInference:
 
     def sweep(self, *, clean_prompt, corrupted_prompt, metric):
         from ._sweep import patch_sweep
-        return patch_sweep(self.model, self.tokenizer, self.interventions, clean_prompt=clean_prompt,
-                           corrupted_prompt=corrupted_prompt, metric=metric, guard=self.guard)
+        with self._watch_resources():
+            return patch_sweep(self.model, self.tokenizer, self.interventions, clean_prompt=clean_prompt,
+                               corrupted_prompt=corrupted_prompt, metric=metric, guard=self.guard)
 
     def validate(self):
         from ._validate import validate_trace

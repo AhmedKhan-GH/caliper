@@ -7,6 +7,7 @@ import torch
 from ._memory import autorelease_scope
 from ._output import forward_logits, prompt_inputs
 from ._points import _architecture, _input, capture
+from ._publish import _publication_scope
 
 
 def patch_sweep(model, tokenizer, interventions, *, clean_prompt, corrupted_prompt, metric, guard=None):
@@ -15,6 +16,12 @@ def patch_sweep(model, tokenizer, interventions, *, clean_prompt, corrupted_prom
     The metric is the positive token logit minus the negative token logit.
     Every forward suspends existing interventions. The clean cache is local.
     """
+    with _publication_scope(model):
+        return _patch_sweep(model, tokenizer, interventions, clean_prompt=clean_prompt,
+                            corrupted_prompt=corrupted_prompt, metric=metric, guard=guard)
+
+
+def _patch_sweep(model, tokenizer, interventions, *, clean_prompt, corrupted_prompt, metric, guard):
     if (type(metric) is not dict or set(metric) != {"positive_token", "negative_token"}
             or any(type(i) is not int or not 0 <= i < model.config.vocab_size for i in metric.values())
             or metric["positive_token"] == metric["negative_token"]):
