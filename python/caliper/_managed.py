@@ -417,7 +417,7 @@ class ManagedRun:
             handle._handles.append(optimizer.register_step_pre_hook(
                 lambda opt, args, kwargs: self._keep(model, optimizer)))
         if self.interventions or self._restored_interventions is not NONE:
-            self._first = model.register_forward_pre_hook(lambda mod, args: self._intervene())
+            self._first = model.register_forward_pre_hook(self._intervene_on_forward)
             handle._handles.append(self._first)
         self.write_link(pkg.serve().url)
 
@@ -472,6 +472,12 @@ class ManagedRun:
             self.kept.off = True
             warnings.warn(f"caliper: run {self.id} keeps no more checkpoints: "
                           f"{type(e).__name__}: {e}", RuntimeWarning, stacklevel=2)
+
+    def _intervene_on_forward(self, module, inputs) -> None:
+        """Leave pending restore state intact during internal preparation forwards."""
+        from .interp._output import is_internal_forward
+        if not is_internal_forward():
+            self._intervene()
 
     def _intervene(self) -> None:
         """Restore saved effects after resource binding and before the first script forward."""

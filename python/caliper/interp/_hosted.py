@@ -955,7 +955,7 @@ class HostedInference:
                 self.selection = deepcopy(self.restored.get("selection"))
                 self._restore_owned_clamp(self.restored.get("owned_clamp"))
                 self._restore_generation(self.restored.get("generation_id", 0))
-            # Fork overrides apply before any internal forward, after resource binding.
+            # Fork overrides follow preparation and parent restore, before the first boundary.
             if self.managed is not None and self.managed.interventions:
                 self.managed._intervene()
             self._clamp_version, self._selected_version = self.clamp._version, self.selected._version
