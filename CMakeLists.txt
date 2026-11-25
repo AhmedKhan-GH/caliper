@@ -326,6 +326,10 @@ add_library(caliper_net STATIC
     src/host/net/upgrade.cpp
     src/host/net/http_door.cpp
     src/host/net/hub.cpp
+    src/host/net/hub_producer.cpp
+    src/host/net/hub_viewer.cpp
+    src/host/net/hub_flow.cpp
+    src/host/net/hub_scene.cpp
 )
 target_include_directories(caliper_net PUBLIC
     ${CMAKE_SOURCE_DIR}/src/host
