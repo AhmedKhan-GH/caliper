@@ -466,7 +466,7 @@ The unchanged thresholds are 8/10 and 0.6.
 These failures remain Qwen limitations and supply no Gemma acceptance evidence.
 
 Attempt 15 clamps L21 F2347 at position 4, with predicted centered-logit change +4.642411 and measured change +4.213848.
-France probability rises from 0.651152 to 0.972334, and its bar grows from 255 to 381 pixels.
+The historical clamp changed the top-token probability by more than 0.05 in the predicted direction.
 The original downward-only checks fail.
 The revised directional checks pass on the same evidence, without a new model run.
 The original influence choice, L3 F5742, remains a secondary result with prediction -0.361462 and measurement +0.003521.

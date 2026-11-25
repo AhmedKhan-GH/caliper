@@ -13,7 +13,7 @@ from _qualification import dictionary_qualification
 
 FIXTURE_HASH = "2464295694bd3690f156dcc7248882f0ad289f55972caafbbd7bd23f4e3d109e"
 FIXTURE_PROMPT = "The red cube is beside a tree."
-QWEN_PROMPT = "Paris is the capital of"
+MODEL_PROMPT = "Fact: the capital of the state containing Dallas is"
 
 
 def selected_feature(graph, *, rule="effect"):

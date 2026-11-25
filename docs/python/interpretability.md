@@ -464,7 +464,8 @@ Use a separate output folder and a `GEMMA GPU MODEL` wrapper description:
 ```
 
 The fixture prompt is `The red cube is beside a tree.`
-The Qwen and Gemma default prompt is `Paris is the capital of`.
+The default model prompt is `Fact: the capital of the state containing Dallas is`.
+The expected answer is `Austin`.
 `--prompt` supplies another prompt within the token limit.
 
 The Gemma profile selects a 40 GB process limit and refuses `--quality-override`.
@@ -593,12 +594,6 @@ The recorded Qwen graph result fails at 6/10 signs and Spearman correlation 0.53
 The requirements remain 8/10 signs and 0.6.
 The quality override does not change those requirements.
 These Qwen results supply no Gemma quality or acceptance evidence.
-
-A measured clamp targets inhibitory feature L21 F2347 at position 4.
-The predicted centered-logit change is +4.642411, and the measured change is +4.213848.
-France remains the top token, and its probability rises from 0.651152 to 0.972334.
-Its bar grows from 255 to 381 pixels.
-These measurements satisfy the directional probability and bar checks.
 
 The influence-based selection, L3 F5742, supplies a secondary comparison.
 It predicts -0.361462 and measures +0.003521.

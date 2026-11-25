@@ -15,7 +15,7 @@ import sys
 import time
 
 from _mcp import Events, Failure, MCP, attempt, stop, wait_file
-from _checks import (FIXTURE_HASH, FIXTURE_PROMPT, QWEN_PROMPT, bar_direction_check, bar_rows, capture_checks,
+from _checks import (FIXTURE_HASH, FIXTURE_PROMPT, MODEL_PROMPT, bar_direction_check, bar_rows, capture_checks,
                      check, finish, math_checks, program_budget_checks, secondary_selection, selected_feature)
 from _inference_evidence import (bound_completion, comparison_evidence, generation_baseline,
                                  generation_evidence, inference_state)
@@ -715,7 +715,7 @@ def main(argv=None):
         if family != "qwen" or args.quality_override.stat().st_size > 4096:
             raise Failure("A quality override requires Qwen and at most 4096 JSON bytes.")
         args.quality_override = validate_quality_override(json.loads(args.quality_override.read_text(encoding="utf-8")))
-    args.prompt = args.prompt or (FIXTURE_PROMPT if args.model == "tiny-lm" else QWEN_PROMPT)
+    args.prompt = args.prompt or (FIXTURE_PROMPT if args.model == "tiny-lm" else MODEL_PROMPT)
     if args.model != "tiny-lm":
         args.model = str(Path(args.model).resolve())
     out = args.out.resolve()
