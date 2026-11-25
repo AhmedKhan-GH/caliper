@@ -16,7 +16,7 @@ from .fixture import TinyLM
 from .test_dictionary import write_fixture
 from .test_gemma_runtime import gemma_model, runtime_dictionary
 from .test_points import hooks
-from .test_research_evaluation import guard, tokenizer
+from .test_research_evaluation import host_headroom, guard, tokenizer
 from .test_trace import random_dictionary
 from .test_training_stream import documents
 

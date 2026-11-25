@@ -13,7 +13,7 @@ from tools.interp.memory_limits import CleanStop
 from tools.interp.text_stream import TextStream, TokenBatch
 from .test_gemma_import_binding import artifact
 from .test_points import hooks
-from .test_research_evaluation import fixture, guard, tokenizer
+from .test_research_evaluation import host_headroom, fixture, guard, tokenizer
 from .test_training_stream import documents
 
 

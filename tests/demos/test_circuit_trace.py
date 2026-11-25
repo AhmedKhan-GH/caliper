@@ -1455,6 +1455,7 @@ def stdio_child(tmp_path, *, refuse=False):
     return path
 
 
+@pytest.mark.skipif(os.name == "nt", reason="This integration case uses a POSIX executable and process launcher.")
 def test_mcp_startup_failure_reaps_owned_standard_library_child(tmp_path):
     from _mcp import MCP
     import psutil
@@ -1465,6 +1466,7 @@ def test_mcp_startup_failure_reaps_owned_standard_library_child(tmp_path):
     assert not psutil.pid_exists(pid)
 
 
+@pytest.mark.skipif(os.name == "nt", reason="This integration case uses a POSIX executable and process launcher.")
 def test_mcp_close_failure_still_reaps_child_and_closes_other_files(tmp_path):
     from _mcp import MCP
     from unittest.mock import patch
@@ -1510,6 +1512,7 @@ def test_session_event_and_mcp_close_faults_preserve_app_cleanup(tmp_path):
 
 
 @pytest.mark.parametrize("model,display", [("tiny-lm", "1"), ("local-qwen", None)])
+@pytest.mark.skipif(os.name == "nt", reason="This integration case uses a POSIX executable and process launcher.")
 def test_session_ready_failure_reaps_owned_standard_library_child(tmp_path, monkeypatch, model, display):
     from types import SimpleNamespace
     from unittest.mock import patch

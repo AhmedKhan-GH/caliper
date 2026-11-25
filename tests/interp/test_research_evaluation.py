@@ -22,6 +22,15 @@ from .test_trace import qwen_for_trace, random_dictionary
 from .test_training_stream import documents
 
 
+@pytest.fixture(autouse=True)
+def host_headroom(monkeypatch):
+    """Keep numerical tests independent of unrelated host memory use."""
+    import psutil
+    memory = psutil.virtual_memory()._replace(total=64_000_000_000, available=48_000_000_000,
+                                             used=16_000_000_000, free=48_000_000_000, percent=25.)
+    monkeypatch.setattr(psutil, "virtual_memory", lambda: memory)
+
+
 def guard(limit=12):
     return MemoryGuard(limit, "cpu", pressure=lambda: 50, resident=lambda: 0,
                        footprint=lambda: 0, peak=lambda: 0, driver=lambda: 0)
