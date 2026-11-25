@@ -91,6 +91,7 @@ void draw_scene_overlays(const SceneOverlayInput& in) {
         texts.push_back(a.text);
     }
     const auto slots = caliper_host::pinned_label_slots(boxes, panel);
+    std::vector<std::optional<float>> fit_widths(boxes.size());
     for (std::size_t i = 0; i < boxes.size(); ++i) {
         auto& b = boxes[i];
         const auto& a = (*in.labels)[i];
@@ -101,7 +102,8 @@ void draw_scene_overlays(const SceneOverlayInput& in) {
             const float available = a.pin == 1 ? slot.x1 - b.anchor_x
                                   : a.pin == 2 ? b.anchor_x - slot.x0
                                                : 2 * std::min(b.anchor_x - slot.x0, slot.x1 - b.anchor_x);
-            texts[i] = caliper_host::fit_with_ellipsis(a.text, std::max(0.0f, available - 2 * pad - 2),
+            fit_widths[i] = std::max(0.0f, available - 2 * pad - 2);
+            texts[i] = caliper_host::fit_with_ellipsis(a.text, *fit_widths[i],
                 [](std::string_view text) { return ImGui::CalcTextSize(text.data(), text.data() + text.size()).x; });
             b.width = std::ceil(ImGui::CalcTextSize(texts[i].c_str()).x) + 2 * pad;
             b.anchor_y = std::round(b.anchor_y - 0.5f * b.height);
@@ -158,7 +160,7 @@ void draw_scene_overlays(const SceneOverlayInput& in) {
             const ImVec2 size = ImGui::CalcTextSize(text.c_str());
             in.drawn->push_back({text, at.x, at.y, at.x + size.x + 1.0f, at.y + size.y + 1.0f,
                 ImGui::GetFont(), ImGui::GetFontSize(), ImGui::GetFont()->CurrentRasterizerDensity,
-                in.ink, in.shade, in.draw->_CmdHeader.ClipRect, in.draw->Flags});
+                in.ink, in.shade, in.draw->_CmdHeader.ClipRect, in.draw->Flags, full, fit_widths[i]});
         }
     }
 }

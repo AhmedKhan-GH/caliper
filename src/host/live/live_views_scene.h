@@ -141,6 +141,10 @@ struct DrawnLabel {
     ImU32 ink = 0, shade = 0;
     ImVec4 clip;
     ImDrawListFlags draw_flags = 0;
+    // Source text and the width passed to fit_with_ellipsis, before placement.
+    // An absent width means that the overlay draws the source text in full.
+    std::string original_text;
+    std::optional<float> fit_width;
 };
 
 // What a scene drawn into a rectangle keeps between frames: the gesture in progress, a click's

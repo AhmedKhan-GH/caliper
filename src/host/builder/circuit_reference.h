@@ -2,7 +2,9 @@
 // Same-frame image placement and independent font references for hidden captures.
 #include "imgui_internal.h"
 #include "live/live_views_scene.h"
+#include "spec_runtime/label_layout.h"
 #include <nlohmann/json.hpp>
+#include <cmath>
 #include <stdexcept>
 
 namespace caliper_host {
@@ -49,7 +51,9 @@ public:
         return result;
     }
     static Json text(const caliper_live_views::DrawnLabel& label) {
-        if (!label.font || label.text.size() > 256 || !(label.font_size > 0))
+        if (!label.font || label.text.size() > 256 || label.original_text.empty() ||
+            label.original_text.size() > 1024 || label.original_text.find('\0') != std::string::npos ||
+            !(label.font_size > 0))
             throw std::runtime_error("The label has no bounded font reference.");
         // This private list never enters the window. It renders the expected string
         // from the saved font state, independently of the actual label draw calls.
@@ -64,20 +68,45 @@ public:
             ~Density() { font.CurrentRasterizerDensity = previous; }
         } restore{*label.font, label.font->CurrentRasterizerDensity};
         label.font->CurrentRasterizerDensity = label.font_density;
+        // Reconstruct the fit from the source and saved font, independently of
+        // the text that the overlay drew. Keep font widths for the CPU oracle.
+        const auto width_of = [&](std::string_view value) {
+            return ImCeilFast(label.font->CalcTextSizeA(label.font_size, FLT_MAX, 0,
+                value.data(), value.data() + value.size()).x);
+        };
+        std::string expected = label.original_text;
+        Json fit = nullptr;
+        if (label.fit_width) {
+            if (!std::isfinite(*label.fit_width) || *label.fit_width < 0)
+                throw std::runtime_error("The label has an invalid fit width.");
+            expected = fit_with_ellipsis(label.original_text, *label.fit_width, width_of);
+            // First the ellipsis alone, then each eligible proper UTF-8 prefix
+            // with the ellipsis. A prefix must not end with an ASCII space.
+            Json widths = Json::array({width_of(kTextEllipsis)});
+            for (std::size_t i = 1; i < label.original_text.size(); ++i)
+                if ((static_cast<unsigned char>(label.original_text[i]) & 0xC0) != 0x80 &&
+                    label.original_text[i - 1] != ' ')
+                    widths.push_back(width_of(label.original_text.substr(0, i) + kTextEllipsis));
+            fit = {{"width", *label.fit_width}, {"full_width", width_of(label.original_text)},
+                   {"prefix_widths", widths}};
+        }
+        if (expected.empty() || expected != label.text)
+            throw std::runtime_error("The drawn label differs from its source fit.");
         // Keep every expected glyph. The saved command clip still applies in the
         // CPU oracle, which rejects a required label if that clip removes text.
         const ImVec4 complete_clip(-FLT_MAX, -FLT_MAX, FLT_MAX, FLT_MAX);
         label.font->RenderText(&reference, label.font_size, ImVec2(label.x0 + 1, label.y0 + 1),
-                               label.shade, complete_clip, label.text.c_str(), nullptr);
+                               label.shade, complete_clip, expected.c_str(), nullptr);
         label.font->RenderText(&reference, label.font_size, ImVec2(label.x0, label.y0),
-                               label.ink, complete_clip, label.text.c_str(), nullptr);
+                               label.ink, complete_clip, expected.c_str(), nullptr);
         if (reference.IdxBuffer.Size > 512 * 6) throw std::runtime_error("The label exceeds the glyph limit.");
         Json quads = Json::array();
         for (const auto& cmd : reference.CmdBuffer) {
             if (cmd.ElemCount % 6 || cmd.UserCallback) throw std::runtime_error("Unsupported glyph geometry.");
             for (unsigned i = 0; i < cmd.ElemCount; i += 6) quads.push_back(quad(reference, cmd, cmd.IdxOffset + i));
         }
-        return {{"text", label.text}, {"box", {label.x0, label.y0, label.x1, label.y1}},
+        return {{"text", label.text}, {"original_text", label.original_text}, {"fit", fit},
+                {"box", {label.x0, label.y0, label.x1, label.y1}},
                 {"font_size", label.font_size}, {"font_density", label.font_density}, {"quads", quads}};
     }
 };

@@ -31,13 +31,16 @@ int main() {
     caliper_live_views::DrawnLabel label{"A", 30, 30, 50, 50, ImGui::GetFont(), ImGui::GetFontSize(),
         ImGui::GetFont()->CurrentRasterizerDensity, IM_COL32_WHITE, IM_COL32_BLACK,
         ImVec4(12, 14, 180, 100)};
+    label.original_text = "A";
     const auto expected = caliper_host::CircuitReference::text(label);
     CIRCUIT_CHECK(expected["quads"].size() == 2); // Shadow and ink use the real default font atlas.
     const int actual_vertices = draw->VtxBuffer.Size;
     label.text = "B";
+    label.original_text = "B";
     const auto wrong = caliper_host::CircuitReference::text(label);
     CIRCUIT_CHECK(wrong["quads"][1]["uv"] != expected["quads"][1]["uv"]);
     label.text = "A";
+    label.original_text = "A";
     label.clip.z = 31;
     const auto clipped = caliper_host::CircuitReference::text(label);
     CIRCUIT_CHECK(clipped["quads"].size() == 2);

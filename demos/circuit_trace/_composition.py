@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from collections import Counter
+import math
 from pathlib import Path
 
 import numpy as np
@@ -177,7 +178,8 @@ def panel_composition(window, panel, color, ids, atlas, metadata):
             ink_pixels = int(np.count_nonzero(ink & valid))
             maximum = int(difference[local][valid].max()) if valid.any() else None
             passed = complete and ink_pixels > 0 and maximum is not None and maximum <= 2
-        text_reports.append({"text": label["text"], "passed": passed, "maximum_difference": maximum,
+        provenance = {key: label[key] for key in ("original_text", "fit") if key in label}
+        text_reports.append({"text": label["text"], **provenance, "passed": passed, "maximum_difference": maximum,
                              "ink_pixels": ink_pixels, "complete": complete})
     summary = {"pixels": compared, "interior_over_two": interior_over,
                "edge_over_two": edge_over, "edge_difference_share": edge_over / compared,
@@ -189,7 +191,49 @@ def panel_composition(window, panel, color, ids, atlas, metadata):
             "actual": actual, "geometry": visible & ~text_mask, "height_scale": float(rect[3] - rect[1])}
 
 
+def source_text(label):
+    """Prove the exact visible fit with widths from the saved native font."""
+    def bounded(value, limit):
+        if not isinstance(value, str) or not value.strip() or "\0" in value:
+            return False
+        try:
+            return len(value.encode("utf-8")) <= limit
+        except UnicodeEncodeError:
+            return False
+
+    visible = label.get("text")
+    if not bounded(visible, 256):
+        return None
+    # Old captures prove only literal equality. They cannot attest a truncation.
+    if "original_text" not in label and "fit" not in label:
+        return visible
+    original = label.get("original_text")
+    if not bounded(original, 1024) or "fit" not in label:
+        return None
+    fit = label["fit"]
+    if fit is None:
+        return original if visible == original else None
+    if not isinstance(fit, dict):
+        return None
+    width, full_width, widths = fit.get("width"), fit.get("full_width"), fit.get("prefix_widths")
+    # Python characters preserve UTF-8 boundaries. Match the native rule that
+    # excludes a proper prefix with an ASCII space at its end.
+    candidates = ["…"] + [original[:i] + "…" for i in range(1, len(original)) if original[i - 1] != " "]
+    if not isinstance(widths, list) or len(widths) != len(candidates):
+        return None
+    if not all(type(value) in (int, float) and math.isfinite(value) and value >= 0
+               for value in [width, full_width, *widths]):
+        return None
+    fitted = original if full_width <= width else next(
+        (text for text, measured in reversed(list(zip(candidates, widths))) if measured <= width), "")
+    # An ellipsis alone carries no source characters. It cannot prove a hidden
+    # required label, although a literal source ellipsis remains valid.
+    if fitted != original and not fitted[:-1].strip():
+        return None
+    return original if visible == fitted else None
+
+
 def required_text(reports, expected):
     required = Counter(expected)
-    proved = Counter(row["text"] for row in reports if row["passed"])
+    proved = Counter(source_text(row) for row in reports if row["passed"])
     return bool(required) and all(proved[text] >= count for text, count in required.items())

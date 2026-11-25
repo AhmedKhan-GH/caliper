@@ -823,6 +823,149 @@ def test_text_oracle_requires_each_repeated_graph_label():
     assert required_text([{"text": "A", "passed": True}] * 2, ["A", "A"])
 
 
+def fitted_label(original, visible, width):
+    """Supply font measurements for a synthetic font with four-pixel advances."""
+    candidates = ["…"] + [original[:i] + "…" for i in range(1, len(original)) if original[i - 1] != " "]
+    return {"original_text": original, "text": visible,
+            "fit": None if width is None else {"width": width, "full_width": 4 * len(original),
+                                               "prefix_widths": [4 * len(text) for text in candidates]}}
+
+
+def fitted_capture(tmp_path):
+    """Paint complete synthetic glyphs for two repeated tokens and a selection."""
+    import numpy as np
+    from PIL import Image
+    metadata, graph, bars = synthetic_capture(tmp_path)
+    panel = metadata["panels"]["graph"]
+    records = [fitted_label("[empty token 256]", "[emp…", 20),
+               fitted_label("[whitespace token 32]", "[whit…", 24),
+               fitted_label("[whitespace token 32]", "[whit…", 24),
+               fitted_label("Output: café λ", "Out…", 16)]
+    graph["tokens"] = [{"text": row["original_text"]} for row in records[:3]]
+    selected = {"label": records[-1]["original_text"]}
+    # Each character has its own small bitmap. These pixels do not come from
+    # the composition oracle or from its provenance validation function.
+    characters = sorted(set("".join(row["text"] for row in records)))
+    atlas = np.full((7, len(characters) * 4 + 1, 4), 255, dtype=np.uint8)
+    atlas[:, :, 3] = 0
+    bitmaps = {}
+    for index, character in enumerate(characters):
+        bitmap = np.zeros((5, 3), dtype=bool)
+        bitmap[0, 1] = bitmap[4, 1] = True
+        for bit in range(6):
+            bitmap[1 + bit // 3, bit % 3] = bool((index + 1) & (1 << bit))
+        bitmaps[character] = bitmap
+        atlas[1:6, 1 + 4 * index:4 + 4 * index, 3] = bitmap * 255
+    atlas.tofile(tmp_path / "atlas.rgba")
+    metadata["font_atlas"].update(width=atlas.shape[1], height=atlas.shape[0])
+    window = np.fromfile(tmp_path / "window.rgba", dtype=np.uint8).reshape(88, 216, 4)
+    source = np.fromfile(tmp_path / "graph.rgba", dtype=np.uint8).reshape(32, 32, 4)
+    painted = np.asarray(Image.fromarray(source).resize((64, 64), Image.Resampling.BILINEAR))
+    window[10:72, 8:68] = painted[2:, 4:]
+    def points(rect):
+        return [rect[0] / 2 + 10, rect[1] / 2 + 20, rect[2] / 2 + 10, rect[3] / 2 + 20]
+    for row, record in enumerate(records):
+        x, y = 18, 40 + row * 8
+        record.update(box=points([x, y, x + len(record["text"]) * 4 + 1, y + 7]), quads=[])
+        # Match the real pass order: the complete shadow, then the complete ink.
+        for offset, color in ((2, [0, 0, 0, 255]), (0, [240, 240, 240, 255])):
+            for column, character in enumerate(record["text"]):
+                left = 1 + 4 * characters.index(character)
+                gx, gy = x + column * 4 + offset, y + offset
+                record["quads"].append({"rect": points([gx, gy, gx + 3, gy + 5]),
+                    "clip": panel["composition"]["clip"], "tint": color,
+                    "uv": [left / atlas.shape[1], 1 / 7, (left + 3) / atlas.shape[1], 6 / 7]})
+                window[gy:gy + 5, gx:gx + 3][bitmaps[character]] = color
+    panel["labels"] = records
+    window.tofile(tmp_path / "window.rgba")
+    Image.fromarray(window).save(tmp_path / "capture.png")
+    return metadata, graph, bars, selected
+
+
+def fitted_gates(tmp_path, metadata, graph, bars, selected):
+    from _checks import capture_checks
+    gates, _ = capture_checks(tmp_path, metadata, tmp_path / "capture.png", graph, bars,
+                              selected=selected, baseline_top_token=7)
+    return {gate["name"]: gate for gate in gates}
+
+
+def test_text_oracle_proves_exact_source_fits_with_complete_glyphs(tmp_path):
+    case = fitted_capture(tmp_path)
+    gates = fitted_gates(tmp_path, *case)
+    for name in ("host_labels", "graph_composition", "graph_label_spacing", "rendered_nodes"):
+        assert gates[name]["passed"], gates[name]
+    proof = gates["host_labels"]["measured"]
+    assert proof["required"] == ["[empty token 256]", "[whitespace token 32]", "[whitespace token 32]", "Output: café λ"]
+    assert all(row["passed"] and row["complete"] and row["ink_pixels"] > 0 for row in proof["glyphs"])
+
+
+@pytest.mark.parametrize("fault", ["source", "selected_source", "visible", "short_prefix", "missing_fit",
+                                    "missing_original", "empty", "ellipsis_only", "duplicate", "selected_identity"])
+def test_text_oracle_rejects_unproved_fits_and_source_changes(tmp_path, fault):
+    metadata, graph, bars, selected = fitted_capture(tmp_path)
+    labels = metadata["panels"]["graph"]["labels"]
+    if fault == "source": labels[0]["original_text"] = "[empty token 257]"
+    elif fault == "selected_source": labels[-1]["original_text"] = "Output: café μ"
+    elif fault == "visible": labels[0]["text"] = "[xyz…"
+    elif fault == "short_prefix": labels[0]["text"] = "[e…"
+    elif fault == "missing_fit": labels[0].pop("fit")
+    elif fault == "missing_original": labels[0].pop("original_text")
+    elif fault == "empty": labels[0]["text"] = ""
+    elif fault == "ellipsis_only": labels[0].update(text="…", fit={**labels[0]["fit"], "width": 4})
+    elif fault == "duplicate": labels.pop(2)
+    else: selected["label"] = "Output: café μ"
+    gates = fitted_gates(tmp_path, metadata, graph, bars, selected)
+    assert not gates["host_labels"]["passed"]
+    if fault != "duplicate":
+        # Correct reference pixels alone cannot prove a different source or fit.
+        assert gates["graph_composition"]["passed"]
+        assert all(row["passed"] for row in gates["host_labels"]["measured"]["glyphs"])
+
+
+@pytest.mark.parametrize("fault", ["wrong_glyph", "partial_clip", "no_quads", "overlap"])
+def test_fitted_provenance_preserves_independent_pixel_and_overlap_checks(tmp_path, fault):
+    import numpy as np
+    from PIL import Image
+    metadata, graph, bars, selected = fitted_capture(tmp_path)
+    labels = metadata["panels"]["graph"]["labels"]
+    if fault == "wrong_glyph":
+        window = np.fromfile(tmp_path / "window.rgba", dtype=np.uint8).reshape(88, 216, 4)
+        window[40:45, 18:21] = [20, 24, 28, 255]
+        window.tofile(tmp_path / "window.rgba")
+        Image.fromarray(window).save(tmp_path / "capture.png")
+    elif fault == "partial_clip":
+        labels[0]["quads"][0]["clip"] = [0, 0, 20.5, 100]
+    elif fault == "no_quads": labels[0]["quads"] = []
+    else: labels[1]["box"] = labels[0]["box"].copy()
+    gates = fitted_gates(tmp_path, metadata, graph, bars, selected)
+    assert gates["capture_generation"]["passed"]
+    assert not gates["graph_label_spacing" if fault == "overlap" else "host_labels"]["passed"]
+
+
+@pytest.mark.parametrize("original,visible,width", [
+    ("é你🙂 suffix", "é你…", 12), ("é你🙂 suffix", "é你🙂…", 16),
+    ("word suffix", "word…", 24), ("é你🙂", "é你🙂", 12), ("literal…", "literal…", None),
+])
+def test_text_provenance_preserves_unicode_boundaries_spaces_and_literal_ellipsis(original, visible, width):
+    from _composition import required_text
+    row = dict(fitted_label(original, visible, width), passed=True)
+    assert required_text([row], [original])
+    assert not required_text([row], [original, original])
+    assert not required_text([dict(row, passed=False)], [original])
+
+
+@pytest.mark.parametrize("fault", ["width", "full_width", "prefix_widths", "nan", "negative", "bool", "surrogate"])
+def test_text_provenance_rejects_incomplete_or_invalid_font_measurements(fault):
+    from _composition import required_text
+    row = dict(fitted_label("é你🙂 suffix", "é你…", 12), passed=True)
+    if fault in ("width", "full_width", "prefix_widths"): row["fit"].pop(fault)
+    elif fault == "nan": row["fit"]["prefix_widths"][0] = float("nan")
+    elif fault == "negative": row["fit"]["width"] = -1
+    elif fault == "bool": row["fit"]["width"] = True
+    else: row["original_text"] = "\ud800 suffix"
+    assert not required_text([row], ["é你🙂 suffix"])
+
+
 def test_text_oracle_rejects_partial_glyphs_under_the_actual_clip(tmp_path):
     from _checks import capture_checks
     metadata, graph, bars = synthetic_capture(tmp_path)
