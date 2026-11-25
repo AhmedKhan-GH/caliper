@@ -28,6 +28,13 @@ def write_native(path, tensors, *, root, created, reserve):
                         for name, value in tensors.items()}}
 
 
+def write_native_tensor(path, name, tensor, *, root, created, reserve):
+    """Keep a single-tensor observation within the hosted status depth limit."""
+    record = write_native(path, {name: tensor}, root=root, created=created, reserve=reserve)
+    return {"file": record["file"], "sha256": record["sha256"], "tensor": name,
+            **record["tensors"][name]}
+
+
 @contextmanager
 def observe_features(model, dictionary, nodes, *, input_shape, guard, reserve):
     """Observe encoder features from the actual forward under the current clamps."""

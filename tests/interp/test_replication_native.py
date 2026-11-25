@@ -4,7 +4,7 @@ import hashlib
 import pytest
 import torch
 
-from caliper.interp._replication_native import write_native
+from caliper.interp._replication_native import write_native, write_native_tensor
 
 
 @pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float16, torch.float32, torch.float64])
@@ -20,6 +20,22 @@ def test_actual_native_bytes_survive_export(tmp_path, dtype):
     for name, tensor in values.items():
         assert saved[name].dtype == dtype and torch.equal(saved[name].view(torch.uint8), tensor.view(torch.uint8))
         assert descriptor["tensors"][name] == {"dtype": str(dtype), "shape": list(tensor.shape)}
+
+
+@pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float16, torch.float32, torch.float64])
+def test_single_tensor_descriptor_preserves_actual_native_bytes(tmp_path, dtype):
+    activation = torch.tensor([1.003], dtype=dtype)
+    created, admitted = [], []
+    target = tmp_path / "observation.pt"
+    descriptor = write_native_tensor(target, "activation", activation,
+                                     root=tmp_path, created=created, reserve=admitted.append)
+    saved = torch.load(target, weights_only=True)
+    assert set(saved) == {"activation"}
+    assert saved["activation"].dtype == dtype
+    assert torch.equal(saved["activation"].view(torch.uint8), activation.view(torch.uint8))
+    assert created == [target] and len(admitted) == 1 and admitted[0] > 4 * 1024 * 1024
+    assert descriptor == {"file": target.name, "sha256": hashlib.sha256(target.read_bytes()).hexdigest(),
+                          "tensor": "activation", "dtype": str(dtype), "shape": [1]}
 
 
 def test_native_reserve_refuses_before_copy_and_file_creation(tmp_path):

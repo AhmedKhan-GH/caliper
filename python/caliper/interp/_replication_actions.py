@@ -432,10 +432,11 @@ class PublishedCases:
                     target.with_suffix('.pt'), {'logits': pair, 'probabilities': probabilities},
                     root=self.output_directory, created=evidence, reserve=self._reserve)
                 if cell == 29:
+                    from ._replication_native import write_native_tensor
                     node, = GROUPS['Say Victoria']
-                    observation = write_native(
+                    observation = write_native_tensor(
                         target.with_name(target.stem + '-say-victoria.pt'),
-                        {'activation': observations[node]}, root=self.output_directory,
+                        'activation', observations[node], root=self.output_directory,
                         created=evidence, reserve=self._reserve)
                     result['observations'] = {'Say Victoria': {
                         'node': dict(zip(('layer', 'feature', 'position'), node)),

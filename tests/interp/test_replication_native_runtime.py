@@ -8,6 +8,41 @@ import torch
 
 from caliper.interp import _replication_actions as actions
 from tests.interp.test_replication_coordinates import original_case, oracle
+from tests.interp.test_replication_groups import replicated_hosted
+
+
+def test_complete_hosted_status_fits_protocol_for_every_published_case(replicated_hosted):
+    from caliper import _interpret_protocol as protocol, _wire
+    from tests.interp.test_service import call
+
+    run, route = replicated_hosted
+    for sequence, cell in enumerate(actions.CASES, 1):
+        action = f"published_dallas_v1.cell{cell}"
+        queued = route.on_control(None, _wire.Control(sequence, "run", name=action).to_meta())
+        assert queued["status"] == "queued"
+        run.boundary()
+        replies = [reply for reply in route.transport.replies if reply.request_id == sequence]
+        assert len(replies) == 1 and replies[0].status == "ok"
+        status, result = run.service.submit({"version": 1, "method": "trace.status", "params": {}}, None)
+        assert status == "ok"
+        assert protocol.MAX_DEPTH == 8 and protocol.bounded(result), cell
+        reply = call(route, "trace.status", request_id=100 + sequence)
+        assert reply["status"] == "ok" and protocol.bounded(reply["result"])
+        inference = reply["result"]["inference"]
+        record = inference["replication"]["result"]
+        assert record == run.replication.last_result
+        assert record["case_id"] == inference["comparison"]["case_id"] == action
+        assert inference["replication"]["active_cell"] == cell
+        assert record["sequence"] == sequence
+        assert set(record["native_evidence"]["tensors"]) == {"logits", "probabilities"}
+        if cell == 29:
+            observation = record["observations"]["Say Victoria"]
+            assert observation["node"] == dict(zip(("layer", "feature", "position"), actions.GROUPS["Say Victoria"][0]))
+            native = observation["native_evidence"]
+            saved = torch.load(run.replication.output_directory / native["file"], weights_only=True)
+            assert set(saved) == {"activation"}
+            assert native["tensor"] == "activation" and native["shape"] == [1]
+            assert native["dtype"] == str(saved["activation"].dtype)
 
 
 def installed_case(runtime, model, tokenizer, service, monkeypatch, nonzero):
@@ -44,8 +79,11 @@ def test_case_retains_native_outputs_and_actual_observation(original_case, monke
             np.testing.assert_array_equal(value.float().numpy(), arrays[key])
     observed = result["observations"]["Say Victoria"]
     assert observed["node"] == dict(zip(("layer", "feature", "position"), node))
-    native_observation = torch.load(runtime.output_directory / observed["native_evidence"]["file"],
-                                    weights_only=True, map_location="cpu")
+    descriptor = observed["native_evidence"]
+    observation_path = runtime.output_directory / descriptor["file"]
+    assert descriptor == {"file": descriptor["file"], "sha256": hashlib.sha256(observation_path.read_bytes()).hexdigest(),
+                          "tensor": "activation", "dtype": "torch.bfloat16", "shape": [1]}
+    native_observation = torch.load(observation_path, weights_only=True, map_location="cpu")
     assert set(native_observation) == {"activation"}
     assert native_observation["activation"].dtype == torch.bfloat16
     torch.testing.assert_close(native_observation["activation"], activation, rtol=0, atol=0)
