@@ -134,10 +134,18 @@ def test_private_paths_cannot_leave_root(tmp_path, path_kind):
     inside.mkdir()
     outside = tmp_path / "record.json"
     outside.write_text("{}")
-    link = inside / "alias.json"
-    link.symlink_to(outside)
+    candidate = str(outside)
+    if path_kind == "symlink":
+        link = inside / "alias.json"
+        try:
+            link.symlink_to(outside)
+        except OSError as error:
+            if getattr(error, "winerror", None) == 1314:
+                pytest.skip("file symlinks require Windows privilege")
+            raise
+        candidate = link.name
     with pytest.raises(Failure):
-        published.private_path(inside, str(outside) if path_kind == "absolute" else link.name)
+        published.private_path(inside, candidate)
 
 
 class GraphMCP:
