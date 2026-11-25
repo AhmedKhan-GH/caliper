@@ -82,14 +82,14 @@ def specs_for(case, point, feature, width):
     add = {"kind": "add", "point": point, "positions": [1], "vector": [.03] * width, "coefficient": 2.}
     patch = {"kind": "patch", "point": point, "positions": [1], "source_prompt": "CD", "source_position": 2}
     ablate = {"kind": "ablate", "point": point}
-    # Expected feature coefficients and constants follow the live additive hook contract.
+    # Positioned edits retain the last delta at each group coordinate.
     return {
         "zero": ([dict(clamp, value=0)], 0., 0.),
         "constant": ([clamp], 0., -.4),
         "negative": ([scale], -2., 0.),
         "revived": ([ablate, add, clamp], -1., -.4),
         "reset": ([clamp, scale, add, ablate], 0., 0.),
-        "patch_first": ([patch, add, scale, clamp], -4., -.4),
+        "patch_first": ([patch, add, scale, clamp], -1., -.4),
         "patch_last": ([scale, clamp, add, patch], 0., 0.),
     }[case]
 

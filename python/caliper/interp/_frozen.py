@@ -557,6 +557,8 @@ class FrozenFeatures:
     """Compact affine feature writes within the recorded activation region."""
 
     def __init__(self, original, layer, specifications):
+        from ._intervene import _effective_feature_operations
+
         # Select every nonzero activation and every explicit edit. Each row has
         # unique indices, including inactive padding. JumpReLU has no fixed k.
         edited = sorted({s["feature"] for s in specifications if s["op"] in ("scale", "clamp")})
@@ -566,7 +568,7 @@ class FrozenFeatures:
         self.coefficients = self.region.to(original.dtype)
         self.constants = torch.zeros_like(self.original)
         self.scale = original.new_ones((1, original.shape[1], 1))
-        for spec in specifications:
+        for spec in _effective_feature_operations(specifications):
             positions = list(spec.get("positions", range(original.shape[1])))
             kind = spec["op"]
             if kind in ("ablate", "patch"):

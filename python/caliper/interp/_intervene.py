@@ -43,6 +43,29 @@ _REFERENCE_INPUTS = ContextVar("caliper_group_reference_inputs", default=())
 _REFERENCE_INPUT = {"coordinate": "gemma_scope_pre_gain", "encoder": "W_enc_original", "dtype": "bfloat16"}
 
 
+def _effective_feature_operations(specifications):
+    """Yield the last edit per group coordinate at the shared hook position."""
+    groups = {}
+    for spec in specifications:
+        if spec["op"] in ("scale", "clamp") and "positions" in spec:
+            groups.setdefault(spec["point"], []).append(spec)
+    emitted = set()
+    for spec in specifications:
+        point = spec["point"]
+        if spec["op"] not in ("scale", "clamp") or "positions" not in spec:
+            # Ungrouped hooks add independent deltas from the same live input.
+            yield spec
+        elif point not in emitted:
+            emitted.add(point)
+            seen, effective = set(), []
+            for member in reversed(groups[point]):
+                positions = [p for p in member["positions"] if (p, member["feature"]) not in seen]
+                seen.update((p, member["feature"]) for p in member["positions"])
+                if positions:
+                    effective.append(dict(member, positions=positions))
+            yield from reversed(effective)
+
+
 def _uses_reference_inputs(dictionary):
     declaration = dictionary.metadata.get("reference_input")
     if declaration is not None and declaration != _REFERENCE_INPUT:
@@ -1151,7 +1174,8 @@ class InterventionService:
         """Order group members at their shared hook, then in member order."""
         order = self._hook_order.get(hook, math.inf)
         group = getattr(hook, "group", None)
-        return self._hook_order.get(group, order) if group is not None else order, order
+        group_order = self._hook_order.get(group, order) if group is not None else order
+        return group_order, order
 
     def install(self, request, *, on_error=None):
         """Install a validated hook. The caller selects the step boundary."""

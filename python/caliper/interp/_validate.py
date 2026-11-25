@@ -9,7 +9,7 @@ from ._dictionary import _canonical_device
 from ._memory import BudgetMemory, MemoryGuard, autorelease_scope, family_memory_limit
 from ._output import forward_logits, prompt_inputs
 from ._points import _architecture, capture
-from ._intervene import InterventionError, InterventionService, selected_rows
+from ._intervene import InterventionError, InterventionService, selected_rows, _effective_feature_operations
 
 
 def _validation_guard(model, dictionary, interventions, guard, memory_limit_gb=None):
@@ -112,7 +112,7 @@ def validate_trace(model, tokenizer, dictionary, interventions, graph, *, prompt
     secondary = secondary[0] if secondary is not None else None
     architecture = _architecture(model)
     probes = {p.layer: p for p in architecture.values() if p.point.endswith(".mlp_out")}
-    specifications = interventions.specifications()
+    specifications = list(_effective_feature_operations(interventions.specifications()))
     if (any(s["op"] in ("scale", "clamp") for s in specifications)
             and interventions.dictionary is not dictionary):
         raise ValueError("feature interventions require the same dictionary instance as validation")
