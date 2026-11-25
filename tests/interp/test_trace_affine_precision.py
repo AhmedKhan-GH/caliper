@@ -85,7 +85,9 @@ def test_affine_effects_preserve_precision_forward_and_every_target(model_dtype,
                 if case in ("patch", "ordered"):
                     transformed[:, 1] = 0
                     output_scale[:, 1] = 0
-                if case in ("scale", "ordered"):
+                # The final clamp replaces the positioned scale delta.
+                # After a patch, only the clamp delta remains in features.
+                if case == "scale":
                     transformed[:, 1, feature] -= 3 * original[:, 1, feature]
                 if case in ("clamp", "revived", "ordered"):
                     transformed[:, 1, feature] += -.4 - original[:, 1, feature]

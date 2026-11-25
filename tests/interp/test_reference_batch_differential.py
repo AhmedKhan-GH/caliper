@@ -23,7 +23,9 @@ def pinned_context():
     source = os.environ.get("CALIPER_PINNED_ATTRIBUTION_SOURCE")
     if source is None:
         pytest.skip("the pinned attribution source is required for the external oracle")
-    einsum = pytest.importorskip("einops").einsum
+    # An explicit source opts into the oracle and requires its dependency.
+    from einops import einsum
+
     raw = Path(source).read_bytes()
     assert hashlib.sha256(raw).hexdigest() == "1a60242cc9b9acc94fa995b3ec8d90984675878c86712bb45f39a14f2717e9f6"
     tree = ast.parse(raw)
