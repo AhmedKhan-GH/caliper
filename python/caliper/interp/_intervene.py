@@ -1524,8 +1524,10 @@ class _PositionedFeatures(Intervention):
         # nonzero traverses batch, position, then feature in ascending order.
         rows_, positions, features = changes.nonzero(as_tuple=True)
         vectors = weights.W_dec[features].to(activations.dtype) * changes[rows_, positions, features, None]
-        delta = torch.zeros_like(value).reshape(-1, self.width)
-        delta.index_add_(0, (rows_ * value.shape[1] + positions).to(value.device), vectors.to(value))
+        # The reference sums in model dtype before addition to the float32 output.
+        dtype = activations.dtype if self.reference_input else value.dtype
+        delta = torch.zeros_like(value, dtype=dtype).reshape(-1, self.width)
+        delta.index_add_(0, (rows_ * value.shape[1] + positions).to(value.device), vectors.to(delta))
         result = value + delta.reshape_as(value)
         if not torch.isfinite(result).all().item():
             raise InterventionError("feature group produced a nonfinite tensor")
