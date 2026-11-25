@@ -17,6 +17,8 @@ from ._memory import BudgetMemory, CleanStop, allocation_bytes, autorelease_scop
 
 
 _PUBLIC_CHECK = ContextVar('caliper_published_identity_check', default=None)
+_PUBLIC_SERIALIZERS = tuple((field, getattr(torch.nn.Module, field), getattr(torch.nn.Module, field).__code__)
+                            for field in ('state_dict', '_save_to_state_dict', 'get_extra_state'))
 
 
 class _ProofChanged(Exception):
@@ -125,8 +127,7 @@ class _PublishedModelSnapshot(identity._DictionarySnapshot):
     def release(self):
         self.reject_public_identity()
         self._public_attempted = True
-        reference = _dictionary._PUBLISHED_MODELS.get(self.model)
-        if reference is not None and reference() is self:
+        if _dictionary._published_snapshot(self.model) is self:
             del _dictionary._PUBLISHED_MODELS[self.model]
         self._public_owner = self._public_service = None
         self._public_guard = self._public_resource_guard = None
@@ -186,11 +187,13 @@ class _PublishedModelSnapshot(identity._DictionarySnapshot):
     def _public_layout(self):
         # Public hashes include every persistent and transient registration.
         # Custom serializers and tensor subclasses retain the full hash path.
+        if any(entry[2] not in (torch.Tensor, torch.nn.Parameter) for entry in self.structure[0]):
+            return None
         names = {id(value): name for name, value in identity._model_state(self.model).items()}
         persistent, transient = [], []
         for prefix, module in self.model.named_modules(remove_duplicate=False):
-            if (any(getattr(getattr(module, field), '__func__', None) is not getattr(torch.nn.Module, field)
-                    for field in ('state_dict', '_save_to_state_dict', 'get_extra_state'))
+            if (any(getattr(getattr(module, field), '__func__', None) is not function
+                    or function.__code__ is not code for field, function, code in _PUBLIC_SERIALIZERS)
                     or module._state_dict_hooks or module._state_dict_pre_hooks):
                 return None
             for buffers, values in ((False, module._parameters), (True, module._buffers)):
@@ -204,6 +207,20 @@ class _PublishedModelSnapshot(identity._DictionarySnapshot):
                     group = transient if buffers and key in module._non_persistent_buffers_set else persistent
                     group.append(((prefix + '.' if prefix else '') + key, names[id(value)]))
         return tuple(sorted(persistent)), tuple(sorted(transient))
+
+    def _public_state(self, public, layout):
+        # Only unsupported state inspection can select fallback here. Exceptions
+        # from caller checks, resource guards, and byte comparisons propagate.
+        try:
+            state, parts = self._state()
+            if (parts == self.original and _structure(self.model, state) == self.structure
+                    and self._public_layout() == layout
+                    and (self._public_verification is None
+                         or _dictionary._hf_identity(self.model.config) == public)):
+                return state
+        except (ValueError, KeyError, TypeError):
+            pass
+        return None
 
     def _public_owned(self, *, preparing=False):
         owner = None if self._public_owner is None else self._public_owner()
@@ -237,6 +254,10 @@ class _PublishedModelSnapshot(identity._DictionarySnapshot):
         if self._public_attempted or not self.active:
             raise ValueError('published identity proof cannot be rebound')
         self._public_attempted = True
+        try:
+            hash(self.model)
+        except TypeError:
+            return
         self._public_owner, self._public_service = weakref.ref(owner), weakref.ref(owner.interventions)
         self._public_guard, self._public_resource_guard = owner.guard, self.executor.resource_guard
         self._public_verification = verified = _dictionary._VERIFIED_MODELS.get(self.model)
@@ -266,12 +287,11 @@ class _PublishedModelSnapshot(identity._DictionarySnapshot):
                 valid = (public == verified.identity == _dictionary._hf_identity(self.model.config)
                          and hashlib.sha256(''.join(hashes).encode('ascii')).hexdigest() == verified.digest
                          and settings == verified.settings)
-            if not valid or not self.matches(self.executor, self.model, self.tokenizer, memory, _memory=memory):
+            state = self._public_state(public, layout)
+            if not valid or state is None or not self._compare(state, memory):
                 raise ValueError('published public identity differs from its snapshot')
             check('model_identity')
-            state, parts = self._state()
-            if (parts != self.original or _structure(self.model, state) != self.structure
-                    or self._public_layout() != layout):
+            if self._public_state(public, layout) is None:
                 raise ValueError('published public identity changed during preparation')
             check('model_identity')
             self._public = public, layout
@@ -284,26 +304,20 @@ class _PublishedModelSnapshot(identity._DictionarySnapshot):
         if not self._public_owned():
             self.reject_public_identity()
             raise ValueError('published identity owner changed before registration')
-        previous = _dictionary._PUBLISHED_MODELS.get(self.model)
-        previous = None if previous is None else previous()
+        previous = _dictionary._published_snapshot(self.model)
         if previous is not None and previous is not self:
             previous.reject_public_identity()
         _dictionary._PUBLISHED_MODELS[self.model] = weakref.ref(self)
 
     def public_identity(self, model, memory, check):
         """Compare every current byte before reuse of the preparation proof."""
-        proof, accepted, caller_failed = self._public, False, False
+        proof, accepted = self._public, False
 
         def current(stage):
-            nonlocal caller_failed
             if model is not self.model or self._public is not proof or not self._public_owned():
                 raise _ProofChanged()
             if check is not None:
-                try:
-                    check('model_identity')
-                except BaseException:
-                    caller_failed = True
-                    raise
+                check('model_identity')
             if self._public is not proof or not self._public_owned():
                 raise _ProofChanged()
 
@@ -313,28 +327,16 @@ class _PublishedModelSnapshot(identity._DictionarySnapshot):
                 return None
             current('model_identity')
             public, layout = proof
-            if self._public_layout() != layout:
-                return None
-            if self._public_verification is not None and _dictionary._hf_identity(model.config) != public:
-                return None
             # Settings and registrations surround all comparison and guard callbacks.
-            if not self.matches(self.executor, model, self.tokenizer, memory, _memory=memory):
+            state = self._public_state(public, layout)
+            if state is None or not self._compare(state, memory):
                 return None
             current('model_identity')
-            state, parts = self._state()
-            if (parts != self.original or _structure(model, state) != self.structure
-                    or self._public_layout() != layout
-                    or (self._public_verification is not None and _dictionary._hf_identity(model.config) != public)
-                    or not self._public_owned()):
+            if self._public_state(public, layout) is None or not self._public_owned():
                 return None
             accepted = True
             return public
         except _ProofChanged:
-            return None
-        except (ValueError, KeyError, TypeError):
-            if caller_failed:
-                raise
-            # Unsupported state must retain the ordinary serializer and hash.
             return None
         finally:
             _PUBLIC_CHECK.reset(token)
@@ -436,16 +438,19 @@ class _PublishedModelSnapshot(identity._DictionarySnapshot):
             state = tensor = current = saved = memory = None
             copied_model = None
 
-    def matches(self, executor, model, tokenizer, guard, *, full_identity=None, _memory=None):
+    def matches(self, executor, model, tokenizer, guard, *, full_identity=None):
         if not self._owners_match(executor, model, tokenizer):
             return False
         state, parts = self._state()
         if parts != self.original or _structure(model, state) != self.structure:
             return False
-        memory = self.memory(state, guard) if _memory is None else _memory
+        memory = self.memory(state, guard)
         if not self.active:
             self._admit(memory, 4 * _dictionary._HASH_CHUNK_BYTES, force=True)
             return full_identity is not None and full_identity() == self.original
+        return self._compare(state, memory)
+
+    def _compare(self, state, memory):
         self._admit(memory, 0, force=True)
         # The device helper visits all batches even after a mismatch.
         equal = self._device_matches(state, memory)

@@ -41,6 +41,17 @@ _PUBLISHED_MODELS = weakref.WeakKeyDictionary()
 _VERIFICATION_GUARD = ContextVar("caliper_checkpoint_verification_guard", default=None)
 
 
+def _published_snapshot(model):
+    if not isinstance(model, nn.Module):
+        return None
+    try:
+        reference = _PUBLISHED_MODELS.get(model)
+    except TypeError:
+        # An ordinary CPU module can disable hashing without an HF identity.
+        return None
+    return None if reference is None else reference()
+
+
 @contextmanager
 def _verification_memory(memory):
     """Preserve loader guards through existing checkpoint-verifier adapters."""
@@ -205,8 +216,7 @@ def model_identity(model, *, memory_limit_gb=None, memory=None, check=None):
     in fixed-size chunks, including changes through ``.data`` aliases. A device or
     large external model requires ``verify_hf_model`` before it can use a pinned HF dictionary.
     """
-    reference = _PUBLISHED_MODELS.get(model) if isinstance(model, nn.Module) else None
-    snapshot = None if reference is None else reference()
+    snapshot = _published_snapshot(model)
     if snapshot is not None:
         try:
             memory = snapshot.public_memory(memory, memory_limit_gb)

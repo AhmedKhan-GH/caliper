@@ -52,19 +52,20 @@ def test_trace_dictionary_admission_reads_all_bytes_without_full_hash(published,
     expected = _dictionary._full_model_identity(model)
     trace_dictionary = deepcopy(service.dictionary)
     trace_dictionary.metadata.update(layers=len(model.layers), latents=256, k=8, activation='topk')
-    source = {name: raw(value) for name, value in _intervene._model_state(model).items()}
-    assert all(raw(snapshot.state[name]) == value for name, value in source.items())
-    calls, sizes, stages = hashes(monkeypatch), [], []
+    source = b''.join(raw(value) for value in model.state_dict().values())
+    calls, sizes, stages, observed = hashes(monkeypatch), [], [], []
     def compared(left, right):
         sizes.append(left.numel())
-        return raw(left) == raw(right)
+        observed.append(raw(left))
+        return observed[-1] == raw(right)
     monkeypatch.setattr(_intervene, '_cpu_byte_equal', compared)
     monkeypatch.setattr(torch.Tensor, 'clone', lambda *a, **k: pytest.fail('additional model copy'))
     monkeypatch.setattr(_intervene, '_SNAPSHOT_COMPARE_BYTES', 8192)
     for _ in range(2):
         _validate_dictionary(model, trace_dictionary, stages.append, memory=IdentityGuard())
     assert calls == []
-    assert sum(sizes) == 2 * sum(len(value) for value in source.values())
+    assert b''.join(observed) == source * 2
+    assert sum(sizes) == 2 * len(source)
     assert max(sizes) <= 8192 and stages.count('model_identity') >= 2 * len(sizes)
     assert _dictionary.model_identity(model) == expected
     # Finite validation still runs on each admission.
@@ -458,3 +459,232 @@ def test_proof_cost_remains_in_preparation(published, monkeypatch):
     result = runtime.prepare()
     assert result['seconds'] == 7.
     assert json.loads((runtime.directory / 'preparation.json').read_text())['seconds'] == 7.
+
+
+def test_inference_tensors_and_tied_registrations_use_all_source_bytes(grouped, monkeypatch):
+    model, _, _, service = grouped
+    with torch.inference_mode():
+        model.embed_tokens.weight = torch.nn.Parameter(model.embed_tokens.weight.clone())
+        model.register_parameter('tied_embedding', model.embed_tokens.weight)
+        model.register_buffer('transient', torch.zeros(3), persistent=False)
+        model.register_buffer('transient_alias', model.transient, persistent=False)
+        model.norm.frozen_scale = torch.ones(1, 3, 1, dtype=torch.float64)
+        source_size = sum(len(raw(value)) for value in
+                          [*model.parameters(), *model.buffers(), model.norm.frozen_scale])
+        snapshot = snapshot_for(service)
+        owner = bind(snapshot)
+        expected = _dictionary._full_model_identity(model)
+        with pytest.raises(RuntimeError, match='version counter'):
+            _ = model.embed_tokens.weight._version
+        calls, compared = hashes(monkeypatch), []
+        def compare(left, right):
+            compared.append(left.numel())
+            return raw(left) == raw(right)
+        monkeypatch.setattr(_intervene, '_cpu_byte_equal', compare)
+        assert _dictionary.model_identity(model) == expected and not calls
+        assert sum(compared) == source_size
+        model.tied_embedding.data[-1, -1] += .125
+        compared.clear()
+        assert _dictionary.model_identity(model) != expected and calls
+        assert sum(compared) == snapshot.nbytes
+        assert owner._model_snapshot._public is None
+
+
+def test_changed_first_block_still_compares_remaining_bytes(published, monkeypatch):
+    model, _, _, _, runtime = published
+    model.embed_tokens.weight.data[0, 0] += .125
+    sizes = []
+    def compare(left, right):
+        sizes.append(left.numel())
+        return raw(left) == raw(right)
+    monkeypatch.setattr(_intervene, '_cpu_byte_equal', compare)
+    _dictionary.model_identity(model)
+    assert sum(sizes) == runtime._model_snapshot.nbytes
+    assert runtime._model_snapshot._public is None
+
+
+@pytest.mark.parametrize('phase', ['hash', 'comparison'])
+def test_bind_rechecks_owners_after_callbacks(grouped, monkeypatch, phase):
+    _, _, _, service = grouped
+    snapshot = snapshot_for(service)
+    owner, proxy = Owner(), Owner()
+    proxy.executor = service.executor
+    owner.model, owner.tokenizer, owner.interventions = snapshot.model, snapshot.tokenizer, proxy
+    owner._model_snapshot, owner.guard, owner.preparation = snapshot, None, None
+    if phase == 'hash':
+        full = _dictionary._full_model_identity
+        def changed(*a, **k):
+            result = full(*a, **k)
+            owner._model_snapshot = None
+            return result
+        monkeypatch.setattr(_dictionary, '_full_model_identity', changed)
+    else:
+        def changed(left, right):
+            owner._model_snapshot = None
+            return raw(left) == raw(right)
+        monkeypatch.setattr(_intervene, '_cpu_byte_equal', changed)
+    with pytest.raises(ValueError, match='ownership changed'):
+        snapshot.bind_public_identity(owner)
+    assert snapshot._public is None
+    assert _dictionary._published_snapshot(snapshot.model) is None
+
+
+def test_real_trace_deadline_cancels_snapshot_comparison(published, monkeypatch):
+    from caliper.interp import _trace
+    model, _, _, _, runtime = published
+    clock, sizes = [10.], []
+    monkeypatch.setattr(_trace.time, 'monotonic', lambda: clock[0])
+    deadline = _trace._Deadline()
+    def compare(left, right):
+        sizes.append(left.numel())
+        clock[0] = deadline.expires
+        return raw(left) == raw(right)
+    monkeypatch.setattr(_intervene, '_cpu_byte_equal', compare)
+    monkeypatch.setattr(_intervene, '_SNAPSHOT_COMPARE_BYTES', 1024)
+    with pytest.raises(_trace.TraceTimeout, match='20 second request budget'):
+        _dictionary.model_identity(model, memory=IdentityGuard(), check=deadline)
+    assert sizes == [1024] and runtime._model_snapshot._public is None
+
+
+@pytest.mark.parametrize('change', ['owner', 'lower_limit'])
+def test_guard_callback_cannot_leave_stale_authority(published, monkeypatch, change):
+    model, _, _, _, runtime = published
+    snapshot = runtime._model_snapshot
+    guard, stages = IdentityGuard(), []
+    def check(stage):
+        stages.append(stage)
+        if change == 'owner':
+            runtime._model_snapshot = None
+        else:
+            guard.limit = 1
+    monkeypatch.setattr(guard, 'check', check)
+    monkeypatch.setattr(_intervene, '_cpu_byte_equal', lambda *a: pytest.fail('bytes after guard mutation'))
+    try:
+        if change == 'owner':
+            calls = hashes(monkeypatch)
+            _dictionary.model_identity(model, memory=guard)
+            assert calls
+        else:
+            with pytest.raises(CleanStop):
+                _dictionary.model_identity(model, memory=guard)
+        assert stages and snapshot._public is None
+    finally:
+        runtime._model_snapshot = snapshot
+
+
+def test_unverified_hf_snapshot_retains_full_hash(reference_snapshot, monkeypatch):
+    model, _, guard, snapshot = reference_snapshot
+    expected = _dictionary._full_model_identity(model, memory=guard)
+    owner = bind(snapshot, guard)
+    calls = hashes(monkeypatch)
+    assert _dictionary.model_identity(model, memory=guard) == expected and calls
+    assert owner._model_snapshot._public is None
+    assert model not in _dictionary._PUBLISHED_MODELS
+
+
+def test_missing_registry_entry_uses_full_hash(published, monkeypatch):
+    model, _, _, _, _ = published
+    monkeypatch.delitem(_dictionary._PUBLISHED_MODELS, model)
+    calls = hashes(monkeypatch)
+    _dictionary.model_identity(model)
+    assert calls
+
+
+def test_ordinary_unhashable_cpu_module_keeps_content_identity(monkeypatch):
+    class Unhashable(torch.nn.Linear):
+        __hash__ = None
+    model = Unhashable(3, 2)
+    expected = _dictionary._full_model_identity(model)
+    calls = hashes(monkeypatch)
+    assert _dictionary.model_identity(model) == expected and calls
+
+
+@pytest.mark.parametrize('mode', ['method', 'code'])
+def test_global_serializer_changes_cannot_authorize_reuse(published, monkeypatch, mode):
+    model, _, _, _, runtime = published
+    original = torch.nn.Module._save_to_state_dict
+    if mode == 'method':
+        def wrapped(*args):
+            return original(*args)
+        monkeypatch.setattr(torch.nn.Module, '_save_to_state_dict', wrapped)
+    else:
+        def changed(self, destination, prefix, keep_vars):
+            for name, value in self._parameters.items():
+                if value is not None:
+                    destination[prefix + name] = value if keep_vars else value.detach()
+            for name, value in self._buffers.items():
+                if value is not None and name not in self._non_persistent_buffers_set:
+                    destination[prefix + name] = value if keep_vars else value.detach()
+        monkeypatch.setattr(original, '__code__', changed.__code__)
+    calls = hashes(monkeypatch)
+    _dictionary.model_identity(model)
+    assert calls and runtime._model_snapshot._public is None
+
+
+@pytest.mark.parametrize('phase', ['binding', 'lookup'])
+def test_tensor_subclasses_keep_full_hash(grouped, monkeypatch, phase):
+    class TensorSubclass(torch.Tensor):
+        pass
+    model, _, _, service = grouped
+    if phase == 'binding':
+        model.register_buffer('custom', torch.ones(3).as_subclass(TensorSubclass))
+    snapshot = snapshot_for(service)
+    owner = bind(snapshot)
+    if phase == 'lookup':
+        model.register_buffer('custom', torch.ones(3).as_subclass(TensorSubclass))
+    calls = hashes(monkeypatch)
+    _dictionary.model_identity(model)
+    assert calls and owner._model_snapshot._public is None
+
+
+def test_rejected_proof_keeps_preparation_guard_on_full_hash(trusted, monkeypatch):
+    model, _, runtime, _, snapshot, _ = trusted
+    original = model.state_dict
+    with monkeypatch.context() as patch:
+        patch.setattr(model, 'state_dict', lambda **kwargs: original(**kwargs))
+        _dictionary.model_identity(model)
+    assert snapshot._public is None
+    runtime.limit = 1
+    with pytest.raises(CleanStop):
+        _dictionary.model_identity(model)
+
+
+def test_new_proof_replaces_old_authority_without_old_release_damage(grouped, monkeypatch):
+    model, _, _, service = grouped
+    first, second = snapshot_for(service), snapshot_for(service)
+    owner1, owner2 = bind(first), bind(second)
+    assert first._public is None and _dictionary._published_snapshot(model) is second
+    first.release()
+    assert owner1._model_snapshot is first and owner2._model_snapshot is second
+    calls = hashes(monkeypatch)
+    _dictionary.model_identity(model)
+    assert calls == []
+
+
+@pytest.mark.parametrize('exception', [ValueError, KeyError, TypeError])
+def test_guard_exceptions_never_select_fallback(published, monkeypatch, exception):
+    model, _, _, _, runtime = published
+    error = exception('guard refusal')
+    guard, stages = IdentityGuard(), []
+    def stopped(stage):
+        stages.append(stage)
+        if len(stages) == 1:
+            raise error
+    monkeypatch.setattr(guard, 'check', stopped)
+    calls = hashes(monkeypatch)
+    with pytest.raises(exception) as caught:
+        _dictionary.model_identity(model, memory=guard)
+    assert caught.value is error and len(stages) == 1
+    assert not calls and runtime._model_snapshot._public is None
+
+
+def test_tensor_setting_subclass_uses_full_hash(grouped, monkeypatch):
+    class TensorSubclass(torch.Tensor):
+        pass
+    model, _, _, service = grouped
+    model.norm.frozen_scale = torch.ones(1, 3, 1, dtype=torch.float64).as_subclass(TensorSubclass)
+    snapshot = snapshot_for(service)
+    owner = bind(snapshot)
+    calls = hashes(monkeypatch)
+    _dictionary.model_identity(model)
+    assert calls and owner._model_snapshot._public is None
