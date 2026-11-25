@@ -5,6 +5,7 @@ import hashlib
 import json
 import math
 from pathlib import Path
+import re
 
 import numpy as np
 
@@ -108,8 +109,8 @@ def preparation(root, replication):
             and record.get("decoder_accumulation") == "sorted_position_feature_index_add",
             "Preparation does not use the published execution settings.")
     require(finite(record.get("seconds")) and record.get("model_settings")
-            and isinstance(record.get("dictionary_identity"), str) and record["dictionary_identity"]
-            and isinstance(record.get("model_content_hash"), str) and len(record["model_content_hash"]) == 64,
+            and all(isinstance(record.get(key), str) and re.fullmatch(r"sha256:[0-9a-f]{64}", record[key])
+                    for key in ("dictionary_identity", "model_content_hash")),
             "Preparation lacks current resource identity.")
     require(set(record.get("prompts", {})) == set(SOURCE["prompts"]), "Preparation prompt coverage differs.")
     for source, prompt in SOURCE["prompts"].items():

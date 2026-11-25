@@ -42,7 +42,8 @@ def test_exact_published_manifest():
 @pytest.fixture
 def evidence_factory(tmp_path):
     prepared = {"protocol": published.PROFILE, "source_revision": published.SOURCE["source_revision"], "producer": "caliper",
-        "model_content_hash": "a" * 64, "model_settings": {"arithmetic": "source"}, "dictionary_identity": "b" * 64,
+        "model_content_hash": "sha256:" + "a" * 64, "model_settings": {"arithmetic": "source"},
+        "dictionary_identity": "sha256:" + "b" * 64,
         "dtype": "torch.bfloat16", "softmax_dtype": "torch.bfloat16", "freeze_attention": True, "freeze_norms": False,
         "freeze_mlps": False, "decoder_accumulation": "sorted_position_feature_index_add",
         "prompts": {key: {"text": prompt, "sha256": published.text_hash(prompt), "token_ids": list(range(11))}
@@ -90,6 +91,28 @@ def evidence_factory(tmp_path):
                           for c, v in published.CASES.items()],
                 "last_attempt": {"case_id": record["case_id"], "sequence": sequence, "status": "ok"}, "result": record}}}
     return tmp_path, prepared, make
+
+
+def test_preparation_accepts_producer_content_identity(evidence_factory):
+    import torch
+    from caliper.interp._intervene import _content_identity
+    root, prepared, _ = evidence_factory
+    prepared["model_content_hash"] = _content_identity({"weight": torch.tensor([1., 2.])}, None)
+    prepared["id"] = published.digest({k: v for k, v in prepared.items() if k not in ("id", "seconds")})
+    write_json(root / "preparation.json", prepared)
+    assert published.preparation(root, {"preparation_file": "preparation.json",
+                                       "preparation_id": prepared["id"]}) == prepared
+
+
+@pytest.mark.parametrize("key", ["model_content_hash", "dictionary_identity"])
+@pytest.mark.parametrize("invalid", [None, "a" * 64, "sha256:" + "g" * 64, "sha256:" + "a" * 63])
+def test_preparation_refuses_invalid_content_identity(evidence_factory, key, invalid):
+    root, prepared, _ = evidence_factory
+    prepared[key] = invalid
+    prepared["id"] = published.digest({k: v for k, v in prepared.items() if k not in ("id", "seconds")})
+    write_json(root / "preparation.json", prepared)
+    with pytest.raises(Failure, match="current resource identity"):
+        published.preparation(root, {"preparation_file": "preparation.json", "preparation_id": prepared["id"]})
 
 
 @pytest.mark.parametrize("cell", list(published.CASES))
