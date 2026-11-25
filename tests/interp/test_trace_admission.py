@@ -29,7 +29,7 @@ def test_finite_batches_bound_masks_and_readbacks_for_strided_views(monkeypatch)
         readbacks.append(result.numel())
         return item(result)
 
-    monkeypatch.setattr(_frozen, "_FINITE_BLOCK_ELEMENTS", 8)
+    monkeypatch.setattr(_frozen, "_FINITE_BLOCK_BYTES", 8 * 32)
     monkeypatch.setattr(_frozen, "_FINITE_BATCH_BLOCKS", 4)
     monkeypatch.setattr(torch, "isfinite", bounded)
     monkeypatch.setattr(torch.Tensor, "item", readback)
@@ -45,7 +45,7 @@ def test_finite_batches_bound_masks_and_readbacks_for_strided_views(monkeypatch)
 def test_finite_batches_reject_nonfinite_blocks_and_partial_tail(monkeypatch, bad, position):
     value = torch.ones(34, dtype=torch.float64)[::2]
     value[position] = bad
-    monkeypatch.setattr(_frozen, "_FINITE_BLOCK_ELEMENTS", 1)
+    monkeypatch.setattr(_frozen, "_FINITE_BLOCK_BYTES", 32)
     monkeypatch.setattr(_frozen, "_FINITE_BATCH_BLOCKS", 8)
     with pytest.raises(ValueError, match="fixture must be finite"):
         _frozen._require_finite(value, "fixture")
@@ -60,7 +60,7 @@ def test_finite_batches_keep_checks_inside_batch(monkeypatch, error):
         if seen.count("finite block") == 3:
             raise error("fixture stop")
 
-    monkeypatch.setattr(_frozen, "_FINITE_BLOCK_ELEMENTS", 1)
+    monkeypatch.setattr(_frozen, "_FINITE_BLOCK_BYTES", 24)
     monkeypatch.setattr(torch.Tensor, "item", lambda value: pytest.fail("stop followed a readback"))
     with pytest.raises(error, match="fixture stop"):
         _frozen._require_finite(torch.ones(8), "fixture", check)
@@ -89,7 +89,7 @@ def test_finite_batches_check_deadline_after_readback(monkeypatch):
 def test_finite_batches_preserve_exact_graph(monkeypatch):
     model, tokenizer, dictionary = resources()
     tracer = _trace.Tracer(model, tokenizer, dictionary)
-    monkeypatch.setattr(_frozen, "_FINITE_BLOCK_ELEMENTS", 8)
+    monkeypatch.setattr(_frozen, "_FINITE_BLOCK_BYTES", 8 * 32)
     with monkeypatch.context() as patch:
         patch.setattr(_frozen, "_FINITE_BATCH_BLOCKS", 1)
         reference = tracer.trace("AB", max_targets=4)
@@ -197,7 +197,7 @@ def test_tokenizer_alias_mutation_refuses_before_forward_or_publication(monkeypa
         tracer.trace("AB", max_targets=0)
     published = dict(_publish._TENSORS)
     tokenizer.armed = True
-    monkeypatch.setattr(_frozen, "_FINITE_BLOCK_ELEMENTS", 2)
+    monkeypatch.setattr(_frozen, "_FINITE_BLOCK_BYTES", 2 * 32)
     monkeypatch.setattr(model, "forward", lambda *a, **kw: pytest.fail("alias mutation reached the forward"))
     message = "model identity mismatch" if resource == "model" else "dictionary layer 1 W_dec must be finite"
     with pytest.raises(ValueError, match=message):

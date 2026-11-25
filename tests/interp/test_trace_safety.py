@@ -211,7 +211,7 @@ def test_finite_scan_bounds_strided_views_without_copies(monkeypatch):
         assert block.numel() <= 16
         assert block.untyped_storage().data_ptr() == value.untyped_storage().data_ptr()
         return finite(block)
-    monkeypatch.setattr(_frozen, "_FINITE_BLOCK_ELEMENTS", 16)
+    monkeypatch.setattr(_frozen, "_FINITE_BLOCK_BYTES", 16 * 32)
     monkeypatch.setattr(torch, "isfinite", bounded)
     _frozen._require_finite(value, "fixture")
     assert sum(sizes) == value.numel()

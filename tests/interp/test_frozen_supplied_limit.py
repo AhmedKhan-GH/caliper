@@ -207,12 +207,12 @@ def test_finite_checks_keep_lower_cap_after_identity(case, monkeypatch, phase):
     finite, isfinite = _frozen._require_finite, torch.isfinite
     triggered = []
 
-    def require(value, name, check):
+    def require(value, name, check, memory):
         if not triggered and (name.startswith("dictionary") if phase == "dictionary" else name == "layer 0 features"):
             assert case.identities == [1_000_000_000]
             triggered.append(name)
             case.readings.update(current=1_000_000_001, clock=20.)
-        return finite(value, name, check)
+        return finite(value, name, check, memory)
 
     def evaluate(value):
         if triggered:

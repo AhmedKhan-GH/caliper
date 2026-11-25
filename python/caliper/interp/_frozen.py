@@ -23,35 +23,56 @@ from ._memory import (MemoryGuard as ProcessMemoryGuard, BudgetMemory, CleanStop
 # Mixed storage precision needs at most this many converted encoder elements,
 # or one row when the residual width exceeds the block limit.
 _ENCODER_BLOCK_ELEMENTS = 1_048_576
-_FINITE_BLOCK_ELEMENTS = 65_536
-_FINITE_BATCH_BLOCKS = 64
+_FINITE_BLOCK_BYTES = 32 * 1024 * 1024
+_FINITE_BATCH_BLOCKS = 4
 
 
 def _no_check(stage):
     pass
 
 
-def _require_finite(value, name, check=_no_check):
-    """Check bounded views with one scalar readback per bounded batch."""
+def _require_finite(value, name, check=_no_check, memory=None):
+    """Check every value with bounded workspace and scalar readbacks."""
+    # Allow two input temporaries at float32 width or wider, plus four int32
+    # masks per element. This includes copies, promotion, abs, and reduction.
+    # Four blocks reserve at most 128 MiB of workspace, plus scalar results.
+    element_bytes = 2 * max(4, value.element_size()) + 4 * 4
+    block_elements = max(1, _FINITE_BLOCK_BYTES // element_bytes)
+    budget = None if memory is None else BudgetMemory(memory, memory.limit / 1e9)
+
+    def checked(stage, workspace):
+        check(stage)
+        if budget is not None:
+            from ._admission import _host_reserve
+            budget.check(stage)
+            if allocation_bytes(budget) + workspace > budget.limit:
+                raise CleanStop("finite validation allocation exceeds the process memory limit")
+            _host_reserve(workspace, stage, memory=budget)
+
     pending = [value.detach()]
     while pending:
         with autorelease_scope(value.device):
-            results = []
-            while pending and len(results) < _FINITE_BATCH_BLOCKS:
+            blocks = []
+            while pending and len(blocks) < _FINITE_BATCH_BLOCKS:
                 block = pending.pop()
-                if block.numel() > _FINITE_BLOCK_ELEMENTS:
+                if block.numel() > block_elements:
                     axis = max(range(block.ndim), key=lambda i: block.shape[i])
                     middle = block.shape[axis] // 2
                     pending.append(block.narrow(axis, middle, block.shape[axis] - middle))
                     pending.append(block.narrow(axis, 0, middle))
                     continue
-                check("finite block")
-                # Each mask covers one bounded view. Only scalar results persist.
+                blocks.append(block)
+            # Reserve the whole batch before its first mask. Device commands can
+            # retain temporaries until readback, even after Python releases them.
+            workspace = sum(block.numel() for block in blocks) * element_bytes + 2 * len(blocks) + 1
+            results = []
+            for block in blocks:
+                checked("finite block", workspace)
                 results.append(torch.isfinite(block).all())
-                check("finite block complete")
+                checked("finite block complete", workspace)
             finite = (results[0] if len(results) == 1 else torch.stack(results).all()).item()
             del results
-            check("finite block readback")
+            checked("finite block readback", 0)
             if not finite:
                 raise ValueError(f"{name} must be finite")
 
@@ -265,7 +286,7 @@ def _validate_dictionary(model, dictionary, check=_no_check, *, memory=None):
                 raise ValueError("dictionary and model must share one device")
             if name == "threshold" and (value <= 0).any().item():
                 raise ValueError("dictionary JumpReLU threshold must be positive")
-            _require_finite(value, f"dictionary layer {i} {name}", check)
+            _require_finite(value, f"dictionary layer {i} {name}", check, memory)
     return probes
 
 
@@ -875,8 +896,8 @@ class FrozenPath:
                     self.outputs.append(y)
                     self.features.append(transformed)
                     self.errors.append(error.detach())
-                    _require_finite(self.features[-1], f"layer {i} features", memory_check)
-                    _require_finite(self.errors[-1], f"layer {i} reconstruction residual", memory_check)
+                    _require_finite(self.features[-1], f"layer {i} features", memory_check, self.guard)
+                    _require_finite(self.errors[-1], f"layer {i} reconstruction residual", memory_check, self.guard)
                     self.decoder_biases.append(decoder_bias)
                     self.output_offsets.append(offset.detach())
                     self.norms.append(FrozenNorm(block.input_layernorm, recorded[f"{i}.input_norm"], qwen=self.family.unit_offset_norm, reference=self.reference_arithmetic))
