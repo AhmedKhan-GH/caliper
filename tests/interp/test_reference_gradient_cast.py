@@ -5,16 +5,17 @@ import weakref
 import numpy as np
 import pytest
 import torch
-from torch.utils._python_dispatch import TorchDispatchMode
 
 from caliper.interp import _trace
 from caliper.interp._memory import CleanStop
 from .test_direct_decoder_cache import fixture
 from .test_reference_batch_differential import pinned_context
+from .reference_source_oracle import (pinned_decoder, whole_layer_scores,
+                                      contraction_evidence, compare_source_products)
 
 
-def position_case(dtype=torch.bfloat16):
-    effects = fixture(dtype)
+def position_case(dtype=torch.bfloat16, counts=None):
+    effects = fixture(dtype, counts)
     path = effects.path
     path.errors = [value.float() for value in path.errors]
     factors = torch.tensor([1., -.375, 2.125]).reshape(1, path.tokens, 1)
@@ -31,69 +32,38 @@ def position_case(dtype=torch.bfloat16):
     return effects
 
 
-class Geometry(TorchDispatchMode):
-    """Record exact gather and product operands without device work."""
-
-    def __init__(self):
-        self.calls = []
-
-    def __torch_dispatch__(self, func, types, args=(), kwargs=None):
-        result = func(*args, **(kwargs or {}))
-        if (func == torch.ops.aten.bmm.default or
-                (func == torch.ops.aten.index.Tensor and args[0].ndim == 3)):
-            tensors = [args[0], args[1], result] if func == torch.ops.aten.bmm.default else [args[0], result]
-            self.calls.append((str(func), [(tuple(x.shape), x.stride(), x.dtype, x.clone()) for x in tensors]))
-        return result
-
-
-def compare_geometry(actual, expected):
-    assert len(actual) == len(expected)
-    for (name, operands), (ref_name, ref_operands) in zip(actual, expected):
-        assert name == ref_name
-        for (shape, stride, dtype, value), (ref_shape, ref_stride, ref_dtype, ref_value) in zip(operands, ref_operands):
-            assert (shape, stride, dtype) == (ref_shape, ref_stride, ref_dtype)
-            torch.testing.assert_close(value, ref_value, rtol=0, atol=0)
-
-
 @pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float32])
 @pytest.mark.parametrize("block_elements", [4, 8, 64])
-def test_layer_cast_matches_pinned_sources_and_accounts(pinned_context, monkeypatch, dtype, block_elements):
-    effects = position_case(dtype)
+@pytest.mark.parametrize("counts", [None, [2, 1, 1], [2, 1, 2], [4, 0, 1]])
+def test_layer_cast_matches_pinned_sources_and_accounts(
+        pinned_context, pinned_decoder, monkeypatch, dtype, block_elements, counts):
+    effects = position_case(dtype, counts)
     path = effects.path
     monkeypatch.setattr(_trace, "_ENCODER_BLOCK_ELEMENTS", block_elements)
     effects.prepare_decoders()
     nodes = [dict(node) for node in effects.nodes]
     targets = effects.logit_nodes + [effects.feature_nodes[0], effects.feature_nodes[-1]]
-    gradients = []
-    grad = torch.autograd.grad
-
-    def record(*args, **kwargs):
-        result = grad(*args, **kwargs)
-        gradients.extend(result)
-        return result
-
-    monkeypatch.setattr(torch.autograd, "grad", record)
-    with Geometry() as actual_geometry:
-        actual, accounts = effects.backward(targets)
-    reference = object.__new__(pinned_context)
-    reference._batch_buffer = torch.zeros_like(actual)
-
-    def score(vector, rows, gradient, read_index=np.s_[:]):
-        _, hook = reference._compute_score_hook("synthetic", vector, rows, read_index)
-        hook(gradient, None)
-
-    with Geometry() as expected_geometry:
-        score(path.embedding[0], slice(0, path.tokens), gradients[0])
-        for layer, blocks in enumerate(effects._decoder_blocks):
-            gradient = gradients[layer + 1]
-            assert not torch.equal(gradient[:, 0], gradient[:, 2])
-            for rows, position, decoder in blocks:
-                score(decoder, rows, gradient, np.s_[:, torch.full((len(decoder),), position, dtype=torch.long)])
-            score(path.errors[layer][0], effects.source_layers[layer][1], gradient)
-    expected = reference._batch_buffer
+    (actual, accounts), gradients, calls, geometry = contraction_evidence(effects, targets, monkeypatch)
+    expected, scopes = whole_layer_scores(effects, gradients, pinned_context, pinned_decoder)
     torch.testing.assert_close(actual, expected, rtol=0, atol=0)
-    # Bias accounts follow the source contractions and use separate products.
-    compare_geometry(actual_geometry.calls[:len(expected_geometry.calls)], expected_geometry.calls)
+    compare_source_products(effects, calls, scopes, len(targets))
+    gathers = [operands for name, operands in geometry if name == "aten.index.Tensor"]
+    blocks = [(layer, rows, position, decoder) for layer, cache in enumerate(effects._decoder_blocks)
+              for rows, position, decoder in cache]
+    assert len(gathers) == len(blocks)
+    for (layer, rows, position, decoder), (source, gathered) in zip(blocks, gathers):
+        gradient = gradients[layer + 1]
+        assert not torch.equal(gradient[:, 0], gradient[:, 2])
+        # Source coordinates come from nodes, independently of cache metadata.
+        positions = torch.tensor([effects.nodes[row]["position"] for row in range(rows.start, rows.stop)])
+        cached_positions = torch.full_like(positions, position) if isinstance(position, int) else position
+        assert torch.equal(positions, cached_positions)
+        cast = gradient.to(decoder.dtype)
+        assert source[:3] == (tuple(cast.shape), cast.stride(), cast.dtype)
+        torch.testing.assert_close(source[3], cast, rtol=0, atol=0)
+        reference = cast[:, positions]
+        assert gathered[:3] == (tuple(reference.shape), reference.stride(), reference.dtype)
+        torch.testing.assert_close(gathered[3], reference, rtol=0, atol=0)
     incoming = expected.sum(0, dtype=torch.float32)
     for index, account in enumerate(accounts):
         target = effects.target(targets[index])

@@ -64,8 +64,14 @@ class SumPath:
         return reads, sum(sources).sum(1, keepdim=True).expand(-1, self.tokens, -1)
 
 
-def fixture(dtype=torch.bfloat16):
+def fixture(dtype=torch.bfloat16, counts=None):
     path = SumPath(dtype)
+    if counts is not None:
+        for layer, output in enumerate(path.feature_outputs):
+            values = path.embedding.new_tensor([1.3046875, -.25, -2., .5, 3.]) * (layer + 1)
+            for position, count in enumerate(counts):
+                output.activations[position] = 0
+                output.activations[position, :count] = values[:count]
     layers = []
     for _ in range(path.layers):
         # A wider, strided dictionary exercises the gather and cast scratch.

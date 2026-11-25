@@ -15,6 +15,8 @@ from torch.utils._python_dispatch import TorchDispatchMode
 
 from caliper.interp._memory import CleanStop
 from .test_direct_decoder_cache import fixture
+from .reference_source_oracle import (pinned_decoder, whole_layer_scores, contraction_evidence,
+                                      compare_source_products)
 
 
 @pytest.fixture
@@ -50,8 +52,13 @@ class Products(TorchDispatchMode):
 
 
 @pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float32])
-def test_feature_contraction_uses_pinned_batched_dot_geometry(pinned_context, dtype):
-    effects = fixture(dtype)
+@pytest.mark.parametrize("counts", [None, [2, 1, 1], [2, 1, 2], [4, 0, 1]])
+@pytest.mark.parametrize("row_bound", [1, 2, 5])
+def test_feature_contraction_uses_pinned_batched_dot_geometry(
+        pinned_context, pinned_decoder, monkeypatch, dtype, counts, row_bound):
+    from caliper.interp import _trace
+
+    effects = fixture(dtype, counts)
     if dtype == torch.float32:
         generator = torch.Generator().manual_seed(1729)
         path = effects.path
@@ -65,28 +72,14 @@ def test_feature_contraction_uses_pinned_batched_dot_geometry(pinned_context, dt
         _, path.reference_final = path.run(path.embedding, path.errors)
         for layer in effects.dictionary.layers:
             layer.W_dec = torch.randn(5, path.width, generator=generator)
-    effects.prepare_decoders()
+    monkeypatch.setattr(_trace, "_ENCODER_BLOCK_ELEMENTS", row_bound * effects.path.width)
     targets = effects.logit_nodes * 3
-    # The independent path gives the same derivative at every source position.
-    directions = torch.stack([effects.target(i).direction for i in targets])
-    gradient = directions[:, None].expand(-1, effects.path.tokens, -1)
-    reference = object.__new__(pinned_context)
-    reference._batch_buffer = torch.zeros(len(effects.nodes), len(targets), dtype=dtype)
-    with Products() as pinned_products:
-        for blocks in effects._decoder_blocks:
-            for rows, position, decoder in blocks:
-                _, hook = reference._compute_score_hook(
-                    "synthetic", decoder, rows,
-                    np.s_[:, torch.full((len(decoder),), position, dtype=torch.long)])
-                hook(gradient, None)
     with Products() as actual_products:
-        actual, _ = effects.backward(targets)
-    torch.testing.assert_close(actual[effects.feature_nodes],
-                               reference._batch_buffer[effects.feature_nodes], rtol=0, atol=0)
-    # A GEMM can agree on these small values but use different device arithmetic.
-    # The pinned hook requires one dot per source and target, with reduction width D.
-    expected = set(pinned_products.calls)
-    assert expected <= set(actual_products.calls)
+        (actual, _), gradients, calls, _ = contraction_evidence(effects, targets, monkeypatch)
+    expected, scopes = whole_layer_scores(effects, gradients, pinned_context, pinned_decoder)
+    torch.testing.assert_close(actual, expected, rtol=0, atol=0)
+    compare_source_products(effects, calls, scopes, len(targets))
+    assert calls
     assert not any(name == "aten.mm.default" and left == (len(targets), effects.path.width)
                    and right[0] == effects.path.width
                    for name, left, right in actual_products.calls)

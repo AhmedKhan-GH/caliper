@@ -99,31 +99,22 @@ class _Target:
 
 
 def _decoder_groups(nodes, feature_slice, tokens, step, capacity, check):
-    """Combine whole adjacent chunks and preserve every singleton boundary."""
+    """Bound source rows within separate BOS and published layer scopes."""
     node = feature_slice.start
-    pending = None
+    bos_end = node
     for position in range(tokens):
         check("direct decoder cache position")
-        end = node
-        while end < feature_slice.stop and nodes[end]["position"] == position:
-            end += 1
-        for start in range(node, end, step):
+        while node < feature_slice.stop and nodes[node]["position"] == position:
+            node += 1
+        if position == 0:
+            bos_end = node
+    # BOS belongs to completeness only. It must not shift published blocks
+    # or turn a true single-source published layer into a multi-source layer.
+    limit = max(1, min(step, capacity))
+    for begin, end in ((feature_slice.start, bos_end), (bos_end, feature_slice.stop)):
+        for start in range(begin, end, limit):
             check("direct decoder cache block")
-            stop = min(start + step, end)
-            if stop - start == 1:
-                # A singleton changes which BMM operand holds the target axis.
-                if pending is not None:
-                    yield pending
-                    pending = None
-                yield slice(start, stop)
-            else:
-                if pending is not None and stop - pending.start > capacity:
-                    yield pending
-                    pending = None
-                pending = slice(start if pending is None else pending.start, stop)
-        node = end
-    if pending is not None:
-        yield pending
+            yield slice(start, min(start + limit, end))
 
 
 class _DirectEffects:
@@ -327,6 +318,9 @@ class _DirectEffects:
             if self.reference:
                 cast_gradient = None
                 decoder = position = positions = gathered = products = None
+                bos_count = sum(len(rows) for _, pos, rows in self._decoder_blocks[layer]
+                                if isinstance(pos, int) and pos == 0)
+                published_count = feature_slice.stop - feature_slice.start - bos_count
                 try:
                     for block, (node_slice, position, decoder) in enumerate(self._decoder_blocks[layer]):
                         with autorelease_scope(path.device):
@@ -349,7 +343,15 @@ class _DirectEffects:
                             gathered = cast_gradient[:, positions]
                             if block + 1 == len(self._decoder_blocks[layer]):
                                 cast_gradient = None
-                            products = torch.einsum("bpd,pd->pb", gathered, decoder)
+                            scope_count = bos_count if isinstance(position, int) and position == 0 else published_count
+                            if count == 1 and scope_count > 1 and batch > 1:
+                                # The whole-layer einsum puts targets on the left
+                                # for a multi-source scope, including its last row.
+                                # These views add no scratch or reduction steps.
+                                products = torch.bmm(gathered.transpose(0, 1),
+                                                     decoder.unsqueeze(-1)).squeeze(-1)
+                            else:
+                                products = torch.einsum("bpd,pd->pb", gathered, decoder)
                             weights[node_slice] = products
                             del products, gathered, positions
                 finally:
