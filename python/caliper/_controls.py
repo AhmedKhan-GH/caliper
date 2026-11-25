@@ -238,8 +238,7 @@ def _check_controls_budget(meta, *, ivs=None):
             if candidate["state"] != IV_ENDED:
                 # One UTF-8 byte can require six JSON bytes. Every live hook can fail.
                 candidate.update(state=IV_PENDING,
-                                 since_step=max(_INT_EXACT - 1, run.get("step", 0) + 1,
-                                                candidate.get("since_step") or 0),
+                                 since_step=_INT_EXACT - 1,
                                  error="\x01" * TEXT_MAX, error_code="\x01" * NAME_MAX)
             if size(candidate) > MAX_BYTES:
                 raise ValueError("intervention metadata exceeds the wire limit with lifecycle headroom")
@@ -1054,6 +1053,10 @@ class Interventions:
                 restored[key] = iv
         self._check_revision(revision)
         try:
+            self._ctl._check_intervention_step(restored, self._ctl._next_step())
+        except ValueError as error:
+            raise InterventionError(str(error), ERR_BAD_RANGE) from None
+        try:
             restored = self._ctl._admit_interventions(restored, evict_ended=evict_ended)
         except ValueError as error:
             raise InterventionError(str(error), _w().ERR_LIMIT) from None
@@ -1248,13 +1251,15 @@ class Controls:
             return  # A clean patch-source forward is internal to the current boundary.
         prospective = self.n + 1 if step is None else step
         if (isinstance(prospective, numbers.Integral) and not isinstance(prospective, bool)
-                and prospective >= _INT_EXACT):
-            # Ordinary counters fit the headroom reserved by every admission.
-            # Larger counters retain support, but must fit before any state changes.
+                and (prospective < -1 or prospective >= _INT_EXACT - 1)):
+            # Lifecycle timestamps have a fixed range. Run counters can exceed it
+            # when no new activation needs a timestamp and the metadata still fits.
             with self.lock:
-                meta = self._controls_meta()
-                meta["run"]["step"] = int(prospective)
-                _check_controls_budget(meta, ivs=self._ivs)
+                self._check_intervention_step(self._ivs, int(prospective) + 1)
+                if prospective >= _INT_EXACT:
+                    meta = self._controls_meta()
+                    meta["run"]["step"] = int(prospective)
+                    _check_controls_budget(meta, ivs=self._ivs)
                 self.n = prospective
         else:
             self.n = prospective
@@ -1265,6 +1270,7 @@ class Controls:
         """The slow path of step(): something waits for this checkpoint."""
         publish = False
         with self.lock:
+            self._check_intervention_step(self._ivs, self._next_step())
             if self.state == RUN_NONE:
                 self.state = RUN_RUNNING
                 publish = True
@@ -2054,6 +2060,10 @@ class Controls:
                 candidate.state, candidate.since_step = iv.state, iv.since_step
                 candidate.applied_spec = iv.applied_spec
             try:
+                self._check_intervention_step({key: candidate}, nxt)
+            except ValueError as error:
+                return ERR_BAD_RANGE, str(error)
+            try:
                 prospective = self._admit_interventions({**self._ivs, key: candidate}, evict_ended=True)
             except ValueError as error:
                 return _w().ERR_LIMIT, str(error)
@@ -2084,6 +2094,21 @@ class Controls:
         self._iv_revision += 1
         self.counters["interventions_in"] += 1
         return None
+
+    @staticmethod
+    def _check_intervention_step(records, step):
+        """Refuse a new lifecycle timestamp before counters or hooks change."""
+        if 0 <= step < _INT_EXACT:
+            return
+        for iv in records.values():
+            if (iv.clear or iv.state == IV_ENDED
+                    or (iv.until_step is not None and iv.until_step <= step)
+                    or (iv.from_step is not None and iv.from_step > step)):
+                continue
+            applied_until = (iv.applied_spec or {}).get("until_step")
+            # An expired applied effect resets its replacement to pending first.
+            if iv.state != IV_ACTIVE or (applied_until is not None and applied_until <= step):
+                raise ValueError("intervention since_step must be in 0 .. 2**53 - 1")
 
     def _next_step(self) -> int:
         """The step that the next forward pass belongs to: one past the latest checkpoint."""
@@ -2451,6 +2476,7 @@ class Controls:
         """Return the change flag, reports, and request that caused a failed hook set."""
         from .interp._memory import CleanStop
 
+        self._check_intervention_step(records, s)
         changed = any(iv.report for iv in records.values())
         reinstall = False
         causes = {}
