@@ -729,7 +729,8 @@ class Tracer:
             bounded_integer(self.target_batch_size, "target_batch_size", 1, 64)
             self.guard.check("tokenization admission")
             check("tokenization admission")
-            encoded = self.tokenizer(prompt, return_tensors="pt", truncation=False)
+            token_options = {"add_special_tokens": False} if reference else {}
+            encoded = self.tokenizer(prompt, return_tensors="pt", truncation=False, **token_options)
             check("tokenization")
             ids = encoded["input_ids"]
             if ids.ndim != 2 or ids.shape[0] != 1 or ids.dtype not in (torch.int32, torch.int64):
@@ -737,6 +738,13 @@ class Tracer:
             bounded_integer(ids.shape[1], "prompt tokens including special tokens", 1, 32)
             if ids.min() < 0 or ids.max() >= self.model.config.vocab_size:
                 raise ValueError("tokenizer returned an out-of-range token")
+            # The pinned reference preserves any existing special prefix at position zero.
+            if reference and ids[0, 0].item() not in getattr(self.tokenizer, "all_special_ids", ()):
+                bos = getattr(self.tokenizer, "bos_token_id", None)
+                if type(bos) is not int or not 0 <= bos < self.model.config.vocab_size:
+                    raise ValueError("reference tokenization requires a valid BOS token")
+                bounded_integer(ids.shape[1] + 1, "prompt tokens including special tokens", 1, 32)
+                ids = torch.cat((ids.new_full((1, 1), bos), ids), dim=1)
             _validate_intervention_positions(ids.shape[1], specifications)
             device = next(self.model.parameters()).device
             if device != self.guard.device:
