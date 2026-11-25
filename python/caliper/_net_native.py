@@ -519,7 +519,9 @@ class HubConnection:
 
         Returns:
             dict: `state`, `connected`, `session`, `error` (the last failure, or empty), `attempts`
-                and `connects`.
+                and `connects`. `last_close_code` is zero before the first close event.
+                `last_close_local` is true when the producer starts the WebSocket close handshake.
+                Both close fields retain their values after a reconnect.
         """
         d = self._state()
         d.pop("url", None)

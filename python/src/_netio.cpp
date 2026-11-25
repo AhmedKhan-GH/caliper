@@ -340,6 +340,8 @@ public:
             up_error_.clear();
             up_attempts_ = 0;
             up_replaced_ = false;
+            up_last_close_code_ = 0;
+            up_last_close_local_ = false;
         }
         std::lock_guard<std::mutex> j(up_join_mu_);
         up_stop_ = false;
@@ -362,6 +364,8 @@ public:
         std::string state, session, error, url;
         uint64_t attempts = 0, connects = 0;
         bool connected = false;
+        uint16_t last_close_code = 0;
+        bool last_close_local = false;
     };
     UpState upstream() {
         std::lock_guard<std::mutex> g(mu_);
@@ -373,6 +377,8 @@ public:
         u.connects = up_connects_;
         u.connected = up_state_ == "connected";
         u.url = up_url_;
+        u.last_close_code = up_last_close_code_;
+        u.last_close_local = up_last_close_local_;
         return u;
     }
     int attached() const { return attached_.load(std::memory_order_relaxed); }
@@ -1481,6 +1487,10 @@ private:
                         if (it != links_.end()) on_message(it->second, e);
                     } else if (e.type == T::Closed) {
                         closed = true;
+                        // Retain the code across reconnects. The reason alone cannot
+                        // distinguish an idle timeout from a normal peer close.
+                        up_last_close_code_ = e.code;
+                        up_last_close_local_ = e.initiated_here;
                         err = e.reason.empty() ? "closed with " + std::to_string(e.code) : e.reason;
                     }
                 }
@@ -1510,8 +1520,15 @@ private:
             if (up_stop_.load()) {                // let the close go out, briefly
                 const uint64_t end = caliper_net::monotonic_ms() + 1000;
                 while (client_->state() != caliper_net::Client::State::Closed &&
-                       caliper_net::monotonic_ms() < end)
-                    client_->poll(20);
+                       caliper_net::monotonic_ms() < end) {
+                    for (const auto& e : client_->poll(20)) {
+                        if (e.type == caliper_net::Event::Type::Closed) {
+                            std::lock_guard<std::mutex> g(mu_);
+                            up_last_close_code_ = e.code;
+                            up_last_close_local_ = e.initiated_here;
+                        }
+                    }
+                }
             }
             {
                 std::lock_guard<std::mutex> g(mu_);
@@ -1544,6 +1561,8 @@ private:
     std::string up_url_, up_state_ = "closed", up_error_, up_session_;
     Json up_identity_;
     uint64_t up_attempts_ = 0, up_connects_ = 0;
+    uint16_t up_last_close_code_ = 0;
+    bool up_last_close_local_ = false;
     ConnId next_up_id_ = ConnId(1) << 62;     // never a server connection id
     int listen_port_ = 0;
     std::promise<std::string>* listen_done_ = nullptr;
@@ -1621,6 +1640,8 @@ NB_MODULE(_netio, m) {
                  d["attempts"] = u.attempts;
                  d["connects"] = u.connects;
                  d["connected"] = u.connected;
+                 d["last_close_code"] = u.last_close_code;
+                 d["last_close_local"] = u.last_close_local;
                  d["url"] = u.url;
                  return d;
              })
