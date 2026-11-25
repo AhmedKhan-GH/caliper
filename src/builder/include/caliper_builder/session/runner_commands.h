@@ -102,6 +102,7 @@ std::string run_card_text(const CommandInvocation& invocation, const std::string
 struct RunStartRequest {
     std::string kind = "script";
     std::string model, dictionary, prompt;  // local inference resources and bounded text
+    std::string replication_profile, private_output_directory;  // paired inference options, empty when absent
     std::string script_path;     // absolute and canonical, a file in the workspace
     std::string script;          // the same path relative to the workspace, with '/'
     std::vector<std::string> args;

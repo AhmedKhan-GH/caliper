@@ -11070,10 +11070,23 @@
             "maxItems": 64,
             "type": "array"
           },
+          "private_output_directory": {
+            "description": "An existing local directory for private replication output, at most 1024 UTF-8 bytes. Create a unique private directory before run.start. It requires replication_profile. Script runs reject this field.",
+            "maxLength": 1024,
+            "minLength": 1,
+            "type": "string"
+          },
           "prompt": {
             "description": "The initial inference prompt, at most 4096 UTF-8 bytes.",
             "maxLength": 4096,
             "minLength": 1,
+            "type": "string"
+          },
+          "replication_profile": {
+            "description": "The optional inference replication profile. It requires private_output_directory. Script runs reject this field.",
+            "enum": [
+              "published_dallas_v1"
+            ],
             "type": "string"
           },
           "script": {
@@ -11233,7 +11246,7 @@
         ],
         "type": "object"
       },
-      "summary": "Starts a managed workspace script or local inference through the fixed Caliper module. Script runs take script, args, and params, with optional kind:script. Inference runs require kind:inference, model, dictionary, and prompt. The two forms cannot mix fields. Both forms wait for approval on a review card. The result has state starting when the process starts. A runner event through events.wait, or run.list, reports later state changes."
+      "summary": "Starts a managed workspace script or local inference through the fixed Caliper module. Script runs take script, args, and params, with optional kind:script. Inference runs require kind:inference, model, dictionary, and prompt. The two forms cannot mix fields. Replication requires both replication_profile and private_output_directory. Both forms wait for approval on a review card. The result has state starting when the process starts. A runner event through events.wait, or run.list, reports later state changes."
     },
     {
       "agents": true,

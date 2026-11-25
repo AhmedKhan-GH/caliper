@@ -281,7 +281,7 @@ Error script_arg(const json& args, const std::string& workspace, RunStartRequest
 // Inference uses a fixed installed module. Request strings remain data.
 Error start_source(const json& args, const std::string& workspace, RunStartRequest* out) {
     if (!args.contains("kind") || str_arg(args, "kind") == "script") {
-        for (const char* key : {"model", "dictionary", "prompt"})
+        for (const char* key : {"model", "dictionary", "prompt", "replication_profile", "private_output_directory"})
             if (args.contains(key))
                 return fail("command.invalid_args", "Script runs do not take inference resource fields.",
                             std::string("args.") + key);
@@ -292,7 +292,14 @@ Error start_source(const json& args, const std::string& workspace, RunStartReque
     for (const char* key : {"script", "args", "params"})
         if (args.contains(key))
             return fail("command.invalid_args", "Inference takes model, dictionary, and prompt.", std::string("args.") + key);
-    for (const char* key : {"model", "dictionary", "prompt"}) {
+    const bool replication = args.contains("replication_profile");
+    if (replication != args.contains("private_output_directory"))
+        return fail("command.invalid_args", "replication_profile and private_output_directory must appear together.",
+                    replication ? "args.private_output_directory" : "args.replication_profile");
+    if (replication && str_arg(args, "replication_profile") != "published_dallas_v1")
+        return fail("command.invalid_args", "replication_profile must be published_dallas_v1.", "args.replication_profile");
+    for (const char* key : {"model", "dictionary", "prompt", "private_output_directory"}) {
+        if (std::string(key) == "private_output_directory" && !replication) continue;
         const std::string value = str_arg(args, key);
         const std::size_t limit = std::string(key) == "prompt" ? 4096 : 1024;
         if (value.empty() || value.size() > limit || value.find('\0') != std::string::npos || !valid_utf8(value))
@@ -315,6 +322,10 @@ Error start_source(const json& args, const std::string& workspace, RunStartReque
         if (Error e = resource("model", &out->model)) return e;
     }
     if (Error e = resource("dictionary", &out->dictionary)) return e;
+    if (replication) {
+        if (Error e = resource("private_output_directory", &out->private_output_directory)) return e;
+        out->replication_profile = str_arg(args, "replication_profile");
+    }
     out->prompt = str_arg(args, "prompt");
     return {};
 }
@@ -514,10 +525,15 @@ std::string run_card_text(const CommandInvocation& inv, const std::string& scrip
         return it != a.end() && it->is_array() ? run_params_text(*it) : std::string();
     };
     if (inv.name == "run.start") {
-        if (str_arg(a, "kind") == "inference")
-            return "Start local inference with model " + shown(str_arg(a, "model")) + ", dictionary " +
+        if (str_arg(a, "kind") == "inference") {
+            std::string text = "Start local inference with model " + shown(str_arg(a, "model")) + ", dictionary " +
                    shown(str_arg(a, "dictionary")) + ", and prompt " + shown(str_arg(a, "prompt")) +
                    ". The built-in Caliper module loads local resources on this computer.";
+            if (a.contains("replication_profile"))
+                text += " Replication uses profile " + shown(str_arg(a, "replication_profile")) +
+                        " and private output directory " + shown(str_arg(a, "private_output_directory")) + ".";
+            return text;
+        }
         std::string args;
         if (const auto it = a.find("args"); it != a.end() && it->is_array())
             for (const json& x : *it)

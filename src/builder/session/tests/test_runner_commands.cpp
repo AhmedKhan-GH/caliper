@@ -598,6 +598,8 @@ TEST_CASE("runner inference uses local resources and a fixed module") {
     CHECK(request.dictionary == std::filesystem::canonical(f.ws + "/dictionary").u8string());
     CHECK(request.prompt == args["prompt"].get<std::string>());
     CHECK(request.args.empty());
+    CHECK(request.replication_profile.empty());
+    CHECK(request.private_output_directory.empty());
     CommandInvocation inv;
     inv.name = "run.start";
     inv.args = args;
@@ -624,6 +626,92 @@ TEST_CASE("runner inference refuses mixed or nonlocal start data") {
     CHECK(f.runner.starts.empty());
 }
 
+TEST_CASE("runner inference replication preserves approval and canonical local resources") {
+    Fixture f("runner_replication");
+    std::filesystem::create_directories(f.ws + "/dictionary");
+    std::filesystem::create_directories(f.root + u8"/private output \u03bb");
+    std::filesystem::create_directory_symlink(f.root + u8"/private output \u03bb", f.ws + "/output-link");
+    json args{{"kind", "inference"}, {"model", "tiny-lm"}, {"dictionary", "dictionary"}, {"prompt", "A"},
+              {"replication_profile", "published_dallas_v1"}, {"private_output_directory", "output-link"}};
+    CHECK(send(*f.s, "run.start", args, CommandOrigin::mcp, "").error.code == "command.needs_approval");
+    CHECK(f.runner.starts.empty());
+    approved(*f.s, "run.start", args);
+    REQUIRE(f.runner.starts.size() == 1);
+    const auto& request = f.runner.starts.back();
+    CHECK(request.replication_profile == "published_dallas_v1");
+    CHECK(request.private_output_directory == std::filesystem::canonical(f.root + u8"/private output \u03bb").u8string());
+    CHECK(request.script == "caliper.interp._hosted");
+    CHECK(request.script_path.empty());
+    CHECK(request.args.empty());
+    CHECK(request.params.empty());
+
+    // Absolute paths and links use the same directory rules as other resources.
+    args["private_output_directory"] = request.private_output_directory;
+    approved(*f.s, "run.start", args);
+    REQUIRE(f.runner.starts.size() == 2);
+    CHECK(f.runner.starts.back().private_output_directory == args["private_output_directory"]);
+    CommandInvocation inv;
+    inv.name = "run.start";
+    inv.args = args;
+    const auto card = run_card_text(inv, "");
+    CHECK(card.find("published_dallas_v1") != std::string::npos);
+    CHECK(card.find(u8"private output \u03bb\"") != std::string::npos);
+    inv.args["private_output_directory"] = "output\n\"--module=untrusted";
+    CHECK(run_card_text(inv, "").find("output\\n\\\"--module=untrusted") != std::string::npos);
+}
+
+TEST_CASE("runner inference replication refuses unpaired or invalid options before approval") {
+    Fixture f("runner_replication_refusal");
+    std::filesystem::create_directories(f.ws + "/dictionary");
+    std::filesystem::create_directories(f.ws + "/output");
+    const json valid{{"kind", "inference"}, {"model", "tiny-lm"}, {"dictionary", "dictionary"}, {"prompt", "A"},
+                     {"replication_profile", "published_dallas_v1"}, {"private_output_directory", "output"}};
+    const auto refused = [&](const json& args, const char* field, const char* code = "command.invalid_args") {
+        CommandInvocation inv;
+        inv.name = "run.start";
+        inv.args = args;
+        const auto error = runner_precheck(inv, &f.runner, f.ws);
+        CHECK(error.code == code);
+        CHECK(error.where == std::string("args.") + field);
+    };
+    for (const char* field : {"replication_profile", "private_output_directory"}) {
+        auto args = valid;
+        args.erase(field);
+        refused(args, field);
+        CHECK(err(*f.s, "run.start", args) == "command.invalid_args");
+        for (const auto& value : std::vector<json>{nullptr, true, 12, json::array(), json::object(), "",
+                 std::string("A\0B", 3), std::string("\xc0\xaf", 2), std::string(1025, 'a')}) {
+            args = valid;
+            args[field] = value;
+            refused(args, field);
+        }
+    }
+    for (const auto* profile : {"caliper", "circuit_tracer_82996f14", "other.module", "--executable=python"}) {
+        auto args = valid;
+        args["replication_profile"] = profile;
+        refused(args, "replication_profile");
+        CHECK(err(*f.s, "run.start", args) == "command.invalid_args");
+    }
+    for (const auto* directory : {"missing", "scripts/train.py", "https://example.invalid/output"}) {
+        auto args = valid;
+        args["private_output_directory"] = directory;
+        refused(args, "private_output_directory", kRunScriptRefused);
+        CHECK(err(*f.s, "run.start", args) == kRunScriptRefused);
+    }
+    auto multibyte = valid;
+    std::string too_long;
+    for (int i = 0; i < 513; ++i) too_long += u8"\u03bb";
+    multibyte["private_output_directory"] = too_long;
+    refused(multibyte, "private_output_directory");
+    // These are not command options, even with a valid replication profile.
+    for (const auto* field : {"module", "executable", "python"}) {
+        auto args = valid;
+        args[field] = "untrusted";
+        CHECK(err(*f.s, "run.start", args) == "command.invalid_args");
+    }
+    CHECK(f.runner.starts.empty());
+}
+
 TEST_CASE("runner commands: explicit script kind preserves script arguments and refuses mixed fields") {
     Fixture f("runner_explicit_script");
     const json args{{"kind", "script"}, {"script", "scripts/train.py"}, {"args", {"--epochs", "3"}},
@@ -639,10 +727,10 @@ TEST_CASE("runner commands: explicit script kind preserves script arguments and 
     CHECK(request.args == std::vector<std::string>{"--epochs", "3"});
     CHECK(request.params == json{{"prompt", "A café"}});
     for (const bool explicit_kind : {false, true}) {
-        for (const char* field : {"model", "dictionary", "prompt"}) {
+        for (const char* field : {"model", "dictionary", "prompt", "replication_profile", "private_output_directory"}) {
             auto mixed = args;
             if (!explicit_kind) mixed.erase("kind");
-            mixed[field] = "fixture";
+            mixed[field] = std::string(field) == "replication_profile" ? "published_dallas_v1" : "fixture";
             CHECK(err(*f.s, "run.start", mixed) == "command.invalid_args");
         }
     }
