@@ -753,7 +753,10 @@ def main(argv=None):
             if session.cleanup_error:
                 raise Failure(session.cleanup_error)
             session = None
-            result["checks"].extend(run_parity(out / "parity"))
+            parity_checks = run_parity(out / "parity")
+            result["checks"].extend(parity_checks)
+            if not {"fixture_parity", "parity_process_memory"} <= {gate["name"] for gate in parity_checks}:
+                raise Failure("The fixture parity checks did not complete.")
             result["parity_evidence_collected"] = True
         elif args.model == "tiny-lm":
             result["parity_evidence_collected"] = False

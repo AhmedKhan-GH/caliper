@@ -24,7 +24,9 @@ def completion_case(tmp_path, monkeypatch, steering_case):
                               for row in steering_case["examples"]["examples"]]}
     state = SimpleNamespace(out=tmp_path / "result", sessions=[], calls=[], publications=[],
                             family="gemma", show=False, fault=None, stage=None,
-                            cleanup_fault=None, cleanup_report=None, result=None)
+                            cleanup_fault=None, cleanup_report=None, result=None,
+                            parity_checks=[check(name, True, True, True)
+                                           for name in ("fixture_parity", "parity_process_memory")])
     real_close, real_acceptance, real_save = driver.Session.close, driver.acceptance, driver.save
 
     def checkpoint(stage):
@@ -145,7 +147,7 @@ def completion_case(tmp_path, monkeypatch, steering_case):
         assert state.result["acceptance_complete"] and not state.result["completed"]
         assert all(s.app_log.closed and s.mcp_closed for s in state.sessions)
         checkpoint("parity")
-        return [check("synthetic_parity", True, True, True)]
+        return state.parity_checks
 
     def keep_alive(bridge):
         assert not bridge.session.app_log.closed
@@ -213,8 +215,10 @@ def test_complete_driver_publishes_success_after_cleanup(completion_case, family
     assert "error" not in result
 
 
-@pytest.mark.parametrize("fault", [KeyboardInterrupt(), SystemExit(), SystemExit(7)])
-def test_capture_interruption_preserves_error_and_cleanup(completion_case, fault):
+@pytest.mark.parametrize("fault,detail", [(KeyboardInterrupt(), "KeyboardInterrupt"),
+                                         (KeyboardInterrupt("capture stopped"), "KeyboardInterrupt: capture stopped"),
+                                         (SystemExit(), "SystemExit"), (SystemExit(7), "SystemExit: 7")])
+def test_capture_interruption_preserves_error_and_cleanup(completion_case, fault, detail):
     case = completion_case
     case.stage, case.fault = "capture", fault
     with pytest.raises(type(fault)) as raised:
@@ -224,7 +228,7 @@ def test_capture_interruption_preserves_error_and_cleanup(completion_case, fault
     assert result["pixel_evidence_collected"] and result["dictionary_qualification"]["qualified"]
     assert not result["completed"] and not result["acceptance_complete"] and not result["passed"]
     assert not result["gemma_acceptance"] and not result["qwen_acceptance"]
-    assert result["error"] == driver.error_detail(fault)
+    assert result["error"] == detail
     assert "validation" not in case.calls and "generate" not in case.calls and "reset" not in case.calls
     assert all(s.app_log.closed and s.mcp_closed for s in case.sessions)
     assert all(not report["passed"] for report in case.publications)
@@ -243,8 +247,9 @@ def test_late_failure_prevents_completion(completion_case, stage):
     assert all(s.app_log.closed and s.mcp_closed for s in case.sessions)
 
 
-@pytest.mark.parametrize("fault", [RuntimeError("cleanup failed"), KeyboardInterrupt(), SystemExit()])
-def test_cleanup_exception_prevents_success(completion_case, fault):
+@pytest.mark.parametrize("fault,detail", [(RuntimeError("cleanup failed"), "RuntimeError: cleanup failed"),
+                                         (KeyboardInterrupt(), "KeyboardInterrupt"), (SystemExit(), "SystemExit")])
+def test_cleanup_exception_prevents_success(completion_case, fault, detail):
     case = completion_case
     case.cleanup_fault = fault
     if isinstance(fault, Exception):
@@ -256,7 +261,7 @@ def test_cleanup_exception_prevents_success(completion_case, fault):
     result = case.read()
     assert result["acceptance_complete"] and not result["completed"]
     assert not result["passed"] and not result["gemma_acceptance"]
-    assert result["cleanup_error"] == result["error"] == driver.error_detail(fault)
+    assert result["cleanup_error"] == result["error"] == detail
     assert not case.sessions[-1].app_log.closed
 
 
@@ -270,6 +275,61 @@ def test_cleanup_report_preserves_original_interruption(completion_case):
     assert result["error"] == "KeyboardInterrupt"
     assert result["cleanup_error"] == "Failure: owned cleanup failed"
     assert not result["completed"] and not result["passed"] and not result["gemma_acceptance"]
+
+
+def test_cleanup_report_blocks_an_otherwise_complete_driver(completion_case):
+    case = completion_case
+    case.cleanup_report = "owned cleanup failed"
+    assert case.run() == 1
+    result = case.read()
+    assert result["acceptance_complete"] and not result["completed"]
+    assert not result["passed"] and not result["gemma_acceptance"]
+    assert result["cleanup_error"] == result["error"] == "Failure: owned cleanup failed"
+
+
+def test_preflight_interruption_closes_owned_session(completion_case):
+    case = completion_case
+    case.stage, case.fault = "bounded.trace", KeyboardInterrupt()
+    with pytest.raises(KeyboardInterrupt):
+        case.run()
+    result = case.read()
+    assert result["error"] == "KeyboardInterrupt"
+    assert not result["completed"] and not result["passed"] and not result["gemma_acceptance"]
+    assert len(case.sessions) == 1 and case.sessions[0].app_log.closed and case.sessions[0].mcp_closed
+
+
+@pytest.mark.parametrize("missing", ["all", "fixture_parity", "parity_process_memory"])
+def test_early_parity_return_cannot_claim_completion(completion_case, missing):
+    case = completion_case
+    case.family = "fixture"
+    case.parity_checks = [gate for gate in case.parity_checks if missing != "all" and gate["name"] != missing]
+    assert case.run() == 1
+    result = case.read()
+    assert result["acceptance_complete"] and not result["completed"] and not result["passed"]
+    assert result["error"] == "Failure: The fixture parity checks did not complete."
+    assert not result.get("parity_evidence_collected")
+
+
+def test_failed_parity_gate_still_blocks_completed_driver(completion_case):
+    case = completion_case
+    case.family = "fixture"
+    case.parity_checks[0]["passed"] = False
+    assert case.run() == 1
+    result = case.read()
+    assert result["completed"] and not result["passed"]
+    assert result["failed_checks"] == ["fixture_parity"]
+
+
+def test_parity_interruption_preserves_error_after_session_cleanup(completion_case):
+    case = completion_case
+    case.family = "fixture"
+    case.stage, case.fault = "parity", KeyboardInterrupt()
+    with pytest.raises(KeyboardInterrupt):
+        case.run()
+    result = case.read()
+    assert result["error"] == "KeyboardInterrupt"
+    assert result["acceptance_complete"] and not result["completed"] and not result["passed"]
+    assert all(s.app_log.closed and s.mcp_closed for s in case.sessions)
 
 
 def test_early_acceptance_return_cannot_claim_completion(completion_case, monkeypatch):
@@ -297,3 +357,18 @@ def test_visible_lifetime_waits_for_owned_app(completion_case, failed):
     assert result["completed"] is (not failed) and result["passed"] is (not failed)
     assert not result["gemma_acceptance"]
     assert all(s.app_log.closed for s in case.sessions)
+
+
+def test_visible_recovery_interruption_preserves_both_errors(completion_case, monkeypatch):
+    case = completion_case
+    case.show = True
+    case.stage, case.fault = "generate", Failure("generation failed")
+    def interrupted(bridge):
+        raise KeyboardInterrupt()
+    monkeypatch.setattr(driver.Bridge, "keep_alive", interrupted)
+    with pytest.raises(KeyboardInterrupt):
+        case.run()
+    result = case.read()
+    assert result["error"] == "Failure: generation failed" and result["bridge_error"] == "KeyboardInterrupt"
+    assert not result["completed"] and not result["passed"] and not result["gemma_acceptance"]
+    assert all(s.app_log.closed and s.mcp_closed for s in case.sessions)
