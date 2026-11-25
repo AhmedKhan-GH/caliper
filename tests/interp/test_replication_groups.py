@@ -215,7 +215,7 @@ def test_published_actions_export_all_probabilities_and_repeat_real_forward(publ
         handle.remove()
 
 
-@pytest.mark.parametrize('phase', ['forward', 'export', 'publication', 'metadata', 'identity'])
+@pytest.mark.parametrize('phase', ['forward', 'export', 'publication', 'metadata', 'written_metadata', 'identity'])
 def test_published_failure_has_no_success_or_partial_case(published, monkeypatch, phase):
     from caliper.interp import _replication_actions as actions
     model, _, ctl, service, runtime = published
@@ -228,6 +228,12 @@ def test_published_failure_has_no_success_or_partial_case(published, monkeypatch
         monkeypatch.setattr('numpy.savez', lambda *a, **k: (_ for _ in ()).throw(RuntimeError('export refusal')))
     if phase == 'metadata':
         monkeypatch.setattr(runtime, '_write_json', lambda *a, **k: (_ for _ in ()).throw(RuntimeError('metadata refusal')))
+    if phase == 'written_metadata':
+        write_json = runtime._write_json
+        def fail_after_write(*args):
+            write_json(*args)
+            raise RuntimeError('metadata completion refusal')
+        monkeypatch.setattr(runtime, '_write_json', fail_after_write)
     if phase == 'identity':
         model.layers[0].mlp.W_enc.data[0, 0] += .1
     def prepare(logits):

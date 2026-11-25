@@ -247,10 +247,15 @@ class _FixtureDisplay:
 
     def prepare(self, values):
         """Validate and transfer private display tensors before publication."""
+        from .. import _programs
+        from . import _publish
         from ._memory import autorelease_scope
+        with _programs._LOCK:
+            retained = {name: _publish._TENSORS[name] for name in self.TENSORS
+                        if name not in values and name in _publish._TENSORS}
         pending, total = [], 0
         for name, (shape, dtype) in self.TENSORS.items():
-            tensor = values.get(name)
+            tensor = values.get(name, retained.get(name))
             if tensor is None:
                 continue
             if (tensor.dtype != dtype or tensor.ndim != len(shape)
@@ -259,7 +264,8 @@ class _FixtureDisplay:
                 raise ValueError(f"fixture display tensor {name} has an invalid shape or dtype")
             total += tensor.numel() * tensor.element_size()
             if tensor.device.type == "cpu":
-                pending.append((name, tensor))
+                if name in values:
+                    pending.append((name, tensor))
             elif tensor.device != self.device:
                 raise ValueError(f"fixture display tensor {name} has an invalid device")
         if total > self.MAX_BYTES:

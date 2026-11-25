@@ -393,8 +393,9 @@ class PublishedCases:
                                       'storage_dtype': 'float32',
                                       'native_values_preserved': pair.dtype in (torch.bfloat16, torch.float16, torch.float32)}
                 result['compute_export_seconds'] = time.perf_counter() - started
-                metadata = self._write_json(f'cell{cell}-{sequence}.json', result)
+                metadata = self.directory / f'cell{cell}-{sequence}.json'
                 evidence.append(metadata)
+                self._write_json(metadata.name, result)
                 result['metadata_file'] = str(metadata.relative_to(self.output_directory))
                 return result, pair
             from ._publish import _publication_scope

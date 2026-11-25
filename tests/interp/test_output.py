@@ -284,3 +284,21 @@ def test_output_preparation_keeps_complete_prior_bindings(output_case, monkeypat
         assert _publish._resolve(name) is tensor
         assert _publish._VERSIONS[name] == version
         torch.testing.assert_close(tensor, value, rtol=0, atol=0)
+
+
+def test_prepared_display_keeps_aggregate_reserve(output_case, monkeypatch):
+    from types import SimpleNamespace
+    from caliper.interp import _publish
+    from caliper.interp._hosted import _FixtureDisplay
+    model, tokenizer, _, _, output = output_case
+    output.compare('AB')
+    _publish.publish('trace.counts', torch.zeros(4, dtype=torch.int32))
+    before = dict(_publish._TENSORS)
+    display = _FixtureDisplay(SimpleNamespace(check=lambda *a: None), device='cpu')
+    output_bytes = sum(t.numel() * t.element_size() for name, t in before.items() if name.startswith('output.'))
+    monkeypatch.setattr(display, 'MAX_BYTES', output_bytes)
+    monkeypatch.setattr(display, '_transfer', lambda t: pytest.fail('transfer before aggregate admission'))
+    logits = forward_logits(model, tokenizer('CD'))[:, -1].repeat(2, 1)
+    with pytest.raises(ValueError, match='aggregate byte limit'):
+        output.prepare_logits(logits, transform=lambda values: display.prepare(values)[0])
+    assert all(_publish._resolve(name) is tensor for name, tensor in before.items())
