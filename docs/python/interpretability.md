@@ -5,9 +5,10 @@ The model and its dictionary stay in the Python process.
 Library pieces draw the graph, example tokens, and next-token probabilities in the app and browser.
 The [interpretation tools](../agents/interpretation.md) expose the same data through Caliper MCP.
 
-Supported decoder families are the seeded fixture, Qwen3.5 text, and Gemma 2.
+Supported decoder families are the seeded fixture, Gemma 2, and experimental Qwen3.5 text.
 Generic Llama support remains deferred.
-Gemma 2 2B is the M8 acceptance target, and M8 remains held pending its quality and acceptance results.
+Gemma 2 2B is the only M8 acceptance model.
+M8 remains held until Gemma passes every required acceptance check and platform CI passes.
 
 ## Model Probes
 
@@ -182,15 +183,19 @@ It preserves decoder rows, both biases, and thresholds.
 The decoder writes after the post-feedforward norm without another normalization.
 A Qwen dictionary cannot serve Gemma.
 
-Gemma retains the original quality gates on exactly 200,000 tokens.
-Mean FVU must be at most 0.30, dead fraction at most 0.15, and cross-entropy rise at most 0.5 nats.
+Gemma research evaluation uses 200,000 source tokens, 1,024 model positions, and explicit special-token masks.
+It reports per-layer splice loss beside all-layer loss.
+Historical comparisons retain 0.30 mean FVU, 0.15 dead fraction, and 0.5 nats all-layer loss rise.
+These quality comparisons do not block the index or hidden acceptance after the complete research result exists.
+The founder sets final quality bars from the published comparison.
 The example index requires exactly 2,000,000 tokens from the unchanged index partition.
 The explicit Gemma process limit is 40 decimal GB.
 The Qwen quality override does not apply to Gemma.
 
 CPU tests with random Gemma configurations verify the implemented paths without gated weights.
-Actual model-bound conversion, quality, the full index, and hidden acceptance remain unrun in the recorded evidence.
-Gemma memory and speed remain unverified.
+Model-bound conversion and the legacy context evaluation are complete.
+The revised research evaluation, full index, and hidden acceptance require separate evidence.
+Acceptance memory and speed remain unverified.
 Evaluation and index tools select Gemma with `--model google/gemma-2-2b` and require the pinned `evaluation_source` record.
 
 ## Example Index
@@ -420,11 +425,11 @@ Run the hidden fixture after exclusive graphics access becomes available:
   --dictionary "$FIXTURE_DICTIONARY" --hidden --out "$DEMO_OUT"
 ```
 
-For Qwen or Gemma, set `MODEL` to the pinned snapshot folder and `DICTIONARY` to its prepared dictionary folder.
-Use a separate output folder and a `GPU MODEL` wrapper description:
+For Gemma acceptance, set `MODEL` to its pinned snapshot folder and `DICTIONARY` to its prepared dictionary folder.
+Use a separate output folder and a `GEMMA GPU MODEL` wrapper description:
 
 ```sh
-"$HEAVY_WRAPPER" 'GPU MODEL circuit trace' "${DEMO_OUT}.log" \
+"$HEAVY_WRAPPER" 'GEMMA GPU MODEL circuit trace' "${DEMO_OUT}.log" \
   env CALIPER_AGENT_OFFLINE=1 PYTHONPATH=python:. \
   .venv/bin/python demos/circuit_trace/run.py --model "$MODEL" \
   --dictionary "$DICTIONARY" --hidden --out "$DEMO_OUT"
@@ -522,7 +527,8 @@ Fixture parity requires exact interior IDs, at most two color levels of interior
 App/browser parity applies to the fixture graph.
 Qwen and Gemma require both the semantic steering check and the bar direction check.
 
-M8 remains open and held until Gemma passes all quality and acceptance checks and platform CI passes.
+M8 remains open and held until Gemma passes every required acceptance check and platform CI passes.
+Quality measurements remain visible, but they do not decide M8 acceptance.
 Graph validation requires at least eight of ten signs and Spearman correlation of at least 0.6.
 
 The macOS and Windows fixture workflows also run isolated inference entry checks.
@@ -544,7 +550,11 @@ That test runs only outside CI, with explicit local paths and no downloads.
 The separate `test_local_gemma_hidden` case uses `CALIPER_GEMMA_MODEL` and `CALIPER_GEMMA_DICTIONARY` under the same restrictions.
 That entry point remains unrun against real Gemma resources in the recorded evidence.
 
-## Historical Qwen Evidence
+## Experimental Qwen Limits
+
+Qwen3.5-0.8B remains experimental and does not decide M8 acceptance.
+Its CPU and fixture tests remain in CI.
+Its recorded dictionary and index retain their measured limitations.
 
 The Qwen dictionary completed 40 million training tokens with 8,192 features per layer across 24 layers.
 Its held-out FVU is 0.329109, dead fraction is 0.261149, and cross-entropy rise is 1.180439 nats.
@@ -553,7 +563,7 @@ Dead fraction and cross-entropy fail their unchanged limits of 0.15 and 0.5 nats
 The founder override admits only this exact Qwen dictionary and retains those failed measurements.
 Its two-million-token index is complete.
 
-Qwen attempts 15 and 19 both fail graph validation at 6/10 signs and Spearman correlation 0.539394.
+The recorded Qwen graph result fails at 6/10 signs and Spearman correlation 0.539394.
 The requirements remain 8/10 signs and 0.6.
 The quality override does not change those requirements.
 These Qwen results supply no Gemma quality or acceptance evidence.

@@ -4,8 +4,10 @@
 
 M7 adds model probes, transcoder dictionaries, feature examples, and attribution graphs.
 M8 adds interventions and a hosted inference run.
-The acceptance model is Gemma 2 2B with the selected Gemma Scope transcoders.
-Qwen3.5 remains supported, and generic Llama support remains deferred.
+The only acceptance model is Gemma 2 2B with the selected Gemma Scope transcoders.
+Qwen3.5-0.8B remains experimental, and generic Llama support remains deferred.
+Qwen CPU and fixture checks remain required, but further Qwen GPU runs, regrading, and acceptance attempts are outside this run.
+Its dictionary and index remain unchanged.
 The instrument shows one graph, its feature examples, and next-token probabilities.
 A feature clamp tests the effect that the graph predicts.
 
@@ -43,7 +45,7 @@ This verifies the artifact format, not a complete fallback model run.
 
 The source reads the RMS-normalized input before the learned pre-feedforward gain and predicts the output after the post-feedforward norm.
 The implemented converter transposes the encoder and divides its input columns by that learned gain.
-Model-bound conversion and real Gemma acceptance remain unrun in the recorded evidence.
+Model-bound conversion is complete, but real Gemma acceptance remains pending.
 
 The founder accepted the existing Qwen dictionary for its recorded visual results and prohibited further dictionary training.
 The M8 acceptance target is Gemma 2 2B with the public Gemma Scope transcoders.
