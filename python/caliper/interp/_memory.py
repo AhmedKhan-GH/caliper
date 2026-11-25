@@ -113,12 +113,18 @@ def allocation_bytes(memory, *, floor=0):
 class BudgetMemory:
     """Retain supplied guard checks and enforce the lowest process budget."""
 
-    def __init__(self, memory, limit_gb, *, extra=None):
+    def __init__(self, memory, limit_gb, *, extra=None, host_reserve_bytes=0):
         self.memory = memory
         self.guards = (memory,) if extra is None else (memory, extra)
         self.cap = int(limit_gb * 1e9)
         self.readings = {}
         self.observed_peak = 0
+        self._host_reserve_bytes = host_reserve_bytes
+
+    @property
+    def host_reserve_bytes(self):
+        return max(self._host_reserve_bytes, *(getattr(guard, "host_reserve_bytes", 0)
+                                               for guard in self.guards))
 
     def __getattr__(self, name):
         return getattr(self.memory, name)
@@ -163,6 +169,14 @@ class BudgetMemory:
 
     def _check_interval(self, stage):
         return self.check(stage, force=False)
+
+
+def host_reserve_for_model(model):
+    """Retain the full Gemma job reserve without imposing it on CPU fixtures."""
+    config = getattr(model, "config", None)
+    return 8_000_000_000 if (getattr(config, "model_type", None),
+                           getattr(config, "num_hidden_layers", None),
+                           getattr(config, "hidden_size", None)) == ("gemma2", 26, 2304) else 0
 
 
 def family_memory_limit(model, requested=None, memory=None):

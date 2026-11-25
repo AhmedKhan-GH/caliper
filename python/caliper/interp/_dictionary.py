@@ -294,6 +294,9 @@ def verify_hf_model(model, snapshot, *, key_mapping=None, checkpoint_subset=None
         raise ValueError("checkpoint verification requires one model device")
     memory = _VERIFICATION_GUARD.get() if memory is None else memory
     local_memory = MemoryGuard(memory_limit_gb, next(iter(devices)))
+    from ._memory import host_reserve_for_model
+    local_memory = BudgetMemory(local_memory, memory_limit_gb,
+                                host_reserve_bytes=host_reserve_for_model(model))
     memory = (local_memory if memory is None else BudgetMemory(local_memory, memory_limit_gb, extra=memory))
     _hash_admission(memory)
     config_data, _ = _read_metadata(snapshot / "config.json", memory)
@@ -709,7 +712,7 @@ def _admit(memory, required, stage, *, floor=0):
     if current + required > memory.limit:
         raise CleanStop("dictionary allocation exceeds the process memory limit")
     from ._admission import _host_reserve
-    _host_reserve(required, stage)
+    _host_reserve(required, stage, memory=memory)
     return current
 
 
@@ -749,6 +752,10 @@ def load_dictionary(path, *, model=None, model_hash=None, device=None, dtype=Non
     metadata_memory = supplied if supplied is not None else MemoryGuard(memory_limit_gb, "cpu")
     data, metadata_bytes = _read_metadata(folder / "dictionary.json", metadata_memory)
     data = _manifest(data)
+    host_reserve = (8_000_000_000 if actual == _GEMMA_IDENTITY and
+                    (data["layers"], data["width"]) == (26, 2304) else 0)
+    if host_reserve:
+        metadata_memory = BudgetMemory(metadata_memory, memory_limit_gb, host_reserve_bytes=host_reserve)
     fallback = fallback_metadata(data)
     zero_layers = set(fallback["zero_layers"]) if fallback else set()
     if actual != data["model_hash"]:
@@ -799,6 +806,8 @@ def load_dictionary(path, *, model=None, model_hash=None, device=None, dtype=Non
     temporary = max(budget[1] for budget in budgets)
     _admit(metadata_memory, metadata_bytes + remaining + temporary, "dictionary_headers")
     memory = supplied if supplied is not None else MemoryGuard(memory_limit_gb, device)
+    if host_reserve:
+        memory = BudgetMemory(memory, memory_limit_gb, host_reserve_bytes=host_reserve)
     initial = _admit(memory, metadata_bytes + remaining + temporary, "dictionary_admission")
     total = remaining
     layers = []

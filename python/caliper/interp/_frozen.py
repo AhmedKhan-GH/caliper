@@ -16,7 +16,8 @@ from ._families import model_family
 from . import _qwen_family
 from ._points import _architecture, capture
 from ._memory import (MemoryGuard as ProcessMemoryGuard, BudgetMemory, CleanStop,
-                      allocation_bytes, free_percent, autorelease_scope, family_memory_limit)
+                      allocation_bytes, free_percent, autorelease_scope, family_memory_limit,
+                      host_reserve_for_model)
 
 
 # Mixed storage precision needs at most this many converted encoder elements,
@@ -271,17 +272,22 @@ class MemoryGuard:
     _limit = 12_000_000_000
     record_limit = 128
 
-    def __init__(self, device, *, memory_limit_gb=12):
+    def __init__(self, device, *, memory_limit_gb=12, host_reserve_bytes=0):
         if (isinstance(memory_limit_gb, bool) or not isinstance(memory_limit_gb, (int, float))
                 or not math.isfinite(memory_limit_gb) or not 0 < memory_limit_gb <= 40):
             raise ValueError("trace memory limit must be positive and at most 40 GB")
         self.limit = int(memory_limit_gb * 1_000_000_000)
         self.device = torch.device(device)
+        self._host_reserve_bytes = host_reserve_bytes
         self.records = deque(maxlen=self.record_limit)
         self._pressure_time = -float("inf")
         self._pressure_value = 100.
         self._guard = ProcessMemoryGuard(memory_limit_gb, self.device, pressure=self._pressure)
         self.check("trace start")
+
+    @property
+    def host_reserve_bytes(self):
+        return max(self._host_reserve_bytes, getattr(getattr(self, "_guard", None), "host_reserve_bytes", 0))
 
     @property
     def limit(self):
@@ -322,7 +328,7 @@ class MemoryGuard:
         if current + size > self.limit:
             raise CleanStop(f"{stage} allocation exceeds the trace memory limit")
         from ._admission import _host_reserve
-        _host_reserve(size, stage)
+        _host_reserve(size, stage, memory=self)
 
     def _check_interval(self, stage):
         """Check bounded encoder work without another forced process read."""
@@ -338,7 +344,8 @@ class MemoryGuard:
         per_target = max(4, itemsize) * tokens * (width * (layers + 1) * 12 + mixer_width * layers * 8)
         available = self.limit - current - 512_000_000
         import psutil
-        available = min(available, psutil.virtual_memory().available - 8_000_000_000 - 512_000_000)
+        if self.host_reserve_bytes:
+            available = min(available, psutil.virtual_memory().available - self.host_reserve_bytes - 512_000_000)
         admitted = min(requested, int(available // max(1, per_target)))
         if admitted < 1:
             raise CleanStop("no target batch fits the process memory limit")
@@ -348,9 +355,9 @@ class MemoryGuard:
 class _CappedMemoryGuard(MemoryGuard):
     """Keep a private path cap and all supplied guard checks and history."""
 
-    def __init__(self, device, *, memory_limit_gb, memory):
+    def __init__(self, device, *, memory_limit_gb, memory, host_reserve_bytes=0):
         memory.check("frozen supplied guard")
-        super().__init__(device, memory_limit_gb=memory_limit_gb)
+        super().__init__(device, memory_limit_gb=memory_limit_gb, host_reserve_bytes=host_reserve_bytes)
         self._guard = BudgetMemory(self._guard, memory_limit_gb, extra=memory)
         self.check("frozen supplied budget")
 
@@ -635,9 +642,13 @@ class FrozenPath:
         if self.raw_reference_input and _reference_coordinates(dictionary.metadata) is None:
             raise ValueError("Gemma reference tracing requires the original pre-gain encoder artifact")
         memory_limit_gb = family_memory_limit(model, memory_limit_gb, guard)
-        self.guard = guard if guard is not None else MemoryGuard(self.device, memory_limit_gb=memory_limit_gb)
-        if guard is not None and int(memory_limit_gb * 1e9) < guard.limit:
-            self.guard = _CappedMemoryGuard(self.device, memory_limit_gb=memory_limit_gb, memory=guard)
+        host_reserve = host_reserve_for_model(model)
+        self.guard = guard if guard is not None else MemoryGuard(
+            self.device, memory_limit_gb=memory_limit_gb, host_reserve_bytes=host_reserve)
+        if guard is not None and (int(memory_limit_gb * 1e9) < guard.limit or
+                                  host_reserve > getattr(guard, "host_reserve_bytes", 0)):
+            self.guard = _CappedMemoryGuard(self.device, memory_limit_gb=memory_limit_gb, memory=guard,
+                                          host_reserve_bytes=host_reserve)
 
         def memory_check(stage):
             check(stage)

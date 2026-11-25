@@ -16,14 +16,15 @@ def _admit_load(memory, required, stage, *, staged=False):
     used = getattr(memory, "current", memory.peak) if staged else memory.peak
     if used + required > memory.limit:
         raise CleanStop("model allocation exceeds the process memory limit")
-    _host_reserve(required, stage)
+    _host_reserve(required, stage, memory=None if staged else memory)
 
 
-def _host_reserve(required, stage):
-    """Leave eight decimal GB available after a prospective allocation."""
+def _host_reserve(required, stage, *, memory=None):
+    """Apply the explicit job reserve before a prospective allocation."""
     import psutil
     from ._memory import CleanStop
-    if psutil.virtual_memory().available - required < 8_000_000_000:
+    reserve = 8_000_000_000 if memory is None else getattr(memory, "host_reserve_bytes", 0)
+    if reserve and psutil.virtual_memory().available - required < reserve:
         raise CleanStop(f"{stage} allocation would consume the 8 GB host reserve")
 
 

@@ -442,6 +442,22 @@ def test_invalid_trace_bounds(options):
         Tracer(model, TinyTokenizer(), exact_dictionary(model)).trace("A", **options)
 
 
+@pytest.mark.parametrize("profile,option,value", [
+    ("caliper", "batch_size", 65), ("circuit_tracer_82996f14", "batch_size", 513),
+    ("caliper", "max_n_logits", 11), ("circuit_tracer_82996f14", "max_n_logits", 11),
+    ("caliper", "update_interval", 129), ("circuit_tracer_82996f14", "update_interval", 129),
+])
+def test_trace_request_limits_precede_tokenization(profile, option, value):
+    from caliper.interp import Tracer
+    from .fixture import TinyLM
+    model = TinyLM(layers=1)
+    def unexpected(*args, **kwargs):
+        pytest.fail("invalid request reached tokenization")
+    tracer = Tracer(model, unexpected, exact_dictionary(model))
+    with pytest.raises(ValueError, match=option):
+        tracer.trace("A", profile=profile, **{option: value})
+
+
 def test_trace_cache_identity_full_state_and_lru(monkeypatch):
     from caliper.interp import Tracer
     from .fixture import TinyLM, TinyTokenizer

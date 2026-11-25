@@ -130,7 +130,7 @@ def test_trace_allocations_keep_prospective_host_reserve(monkeypatch):
     host = SimpleNamespace(available=8 * GB + required)
     monkeypatch.setattr("psutil.virtual_memory", lambda: host)
     monkeypatch.setattr(TraceMemory, "check", lambda self, stage: 0)
-    memory = TraceMemory("cpu", memory_limit_gb=40)
+    memory = TraceMemory("cpu", memory_limit_gb=40, host_reserve_bytes=8 * GB)
     memory.reserve("at reserve", required)
     host.available -= 1
     with pytest.raises(CleanStop, match="8 GB host reserve"):
@@ -161,8 +161,37 @@ def test_resource_load_leaves_prospective_host_reserve(monkeypatch, admit):
     required = 4096
     host = SimpleNamespace(available=8 * GB + required)
     monkeypatch.setattr("psutil.virtual_memory", lambda: host)
-    memory = guard(40, {"current": 0})
+    memory = BudgetMemory(guard(40, {"current": 0}), 40, host_reserve_bytes=8 * GB)
     admit(memory, required, "exact reserve")
     host.available -= 1
     with pytest.raises(CleanStop, match="8 GB host reserve"):
         admit(memory, required, "reserve breach")
+
+
+def test_small_cpu_admission_does_not_require_a_gemma_host(monkeypatch):
+    from caliper.interp._frozen import MemoryGuard as TraceMemory
+    monkeypatch.setattr("psutil.virtual_memory", lambda: SimpleNamespace(available=2 * GB))
+    memory = guard(12, {"current": 0})
+    _admission._admit_load(memory, 4096, "small model")
+    _dictionary._admit(memory, 4096, "small dictionary")
+    monkeypatch.setattr(TraceMemory, "check", lambda self, stage: 0)
+    trace = TraceMemory("cpu")
+    trace.reserve("small trace", 4096)
+    assert trace.batch_size(2, layers=2, tokens=3, width=8, mixer_width=8) == 2
+    # Staged Gemma construction retains its reserve even with a lower process cap.
+    with pytest.raises(CleanStop, match="8 GB host reserve"):
+        _admission._admit_load(memory, 4096, "Gemma model", staged=True)
+
+
+def test_full_gemma_reserve_survives_lower_and_nested_budgets(monkeypatch):
+    from caliper.interp._memory import host_reserve_for_model
+    full = SimpleNamespace(config=SimpleNamespace(model_type="gemma2", num_hidden_layers=26, hidden_size=2304))
+    tiny = SimpleNamespace(config=SimpleNamespace(model_type="gemma2", num_hidden_layers=2, hidden_size=8))
+    assert host_reserve_for_model(full) == 8 * GB
+    assert host_reserve_for_model(tiny) == 0
+    memory = BudgetMemory(guard(40, {}), 40, host_reserve_bytes=host_reserve_for_model(full))
+    lower = BudgetMemory(guard(12, {}), 12, extra=memory)
+    assert lower.host_reserve_bytes == 8 * GB and lower.limit == 12 * GB
+    monkeypatch.setattr("psutil.virtual_memory", lambda: SimpleNamespace(available=8 * GB + 4095))
+    with pytest.raises(CleanStop, match="8 GB host reserve"):
+        _dictionary._admit(lower, 4096, "nested reserve")

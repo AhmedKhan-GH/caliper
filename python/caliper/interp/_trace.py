@@ -59,11 +59,11 @@ class _DeadlineMemory:
 class _SuppliedTraceGuard(MemoryGuard):
     """Apply supplied lower limits to trace reserves and full identity checks."""
 
-    def __init__(self, device, *, memory_limit_gb, memory):
+    def __init__(self, device, *, memory_limit_gb, memory, host_reserve_bytes=0):
         if _canonical_device(memory.device) != _canonical_device(device):
             raise ValueError("trace requires a memory guard for its model device")
         memory.check("trace supplied guard")
-        super().__init__(device, memory_limit_gb=memory_limit_gb)
+        super().__init__(device, memory_limit_gb=memory_limit_gb, host_reserve_bytes=host_reserve_bytes)
         self._guard = BudgetMemory(self._guard, memory_limit_gb, extra=memory)
         self.check("trace supplied budget")
 
@@ -467,6 +467,8 @@ class Tracer:
         if dictionary is None:
             raise ValueError("trace requires a dictionary")
         self.memory_limit_gb = family_memory_limit(model, memory_limit_gb, memory)
+        from ._memory import host_reserve_for_model
+        self._host_reserve_bytes = host_reserve_for_model(model)
         self._memory = memory
         self.guard = self._new_guard(next(model.parameters()).device)
         if eager_admission:
@@ -485,8 +487,10 @@ class Tracer:
 
     def _new_guard(self, device):
         if self._memory is None:
-            return MemoryGuard(device, memory_limit_gb=self.memory_limit_gb)
-        return _SuppliedTraceGuard(device, memory_limit_gb=self.memory_limit_gb, memory=self._memory)
+            return MemoryGuard(device, memory_limit_gb=self.memory_limit_gb,
+                               host_reserve_bytes=self._host_reserve_bytes)
+        return _SuppliedTraceGuard(device, memory_limit_gb=self.memory_limit_gb, memory=self._memory,
+                                   host_reserve_bytes=self._host_reserve_bytes)
 
     def _dictionary_check(self, stage):
         if stage == "dictionary admission":
@@ -613,9 +617,9 @@ class Tracer:
             raise ValueError("unsupported trace profile")
         reference = profile == _reference_graph.PROFILE
         logical_batch = (512 if reference else self.target_batch_size) if batch_size is None else batch_size
-        bounded_integer(logical_batch, "batch_size", 1, 2**31 - 1)
-        bounded_integer(max_n_logits, "max_n_logits", 1, 2**31 - 1)
-        bounded_integer(update_interval, "update_interval", 1, 2**31 - 1)
+        bounded_integer(logical_batch, "batch_size", 1, 512 if reference else 64)
+        bounded_integer(max_n_logits, "max_n_logits", 1, 10)
+        bounded_integer(update_interval, "update_interval", 1, 128)
         desired_logit_prob = _reference_graph.fraction(desired_logit_prob, "desired_logit_prob")
         node_threshold = _reference_graph.fraction(node_threshold, "node_threshold")
         edge_threshold = _reference_graph.fraction(edge_threshold, "edge_threshold")
