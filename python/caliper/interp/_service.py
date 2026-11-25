@@ -297,7 +297,7 @@ class InterpretationService:
                 raise Refused("interpret.baseline_required", "Clear active ablations before a baseline feature query.")
         return nullcontext()
 
-    def _execute(self, method, params, step):
+    def _execute(self, method, params, step, *, complete=None):
         from ._publish import _publication_scope
         scope = _publication_scope(self.model) if method in ("trace.run", "feature.examples") else nullcontext()
         with scope, ExitStack() as stack:
@@ -306,6 +306,8 @@ class InterpretationService:
                 self._guard_resources("service request admission")
                 result = self._execute_request(method, params, step)
                 self._guard_resources("service request complete")
+                if complete is not None:
+                    complete(result)
                 return result
             finally:
                 # Restore borrowed owners before replies and close completion.

@@ -575,6 +575,13 @@ class HostedService(InterpretationService):
         return error
 
     def _execute(self, method, params, step):
+        if method != "trace.run":
+            return super()._execute(method, params, step)
+        published = getattr(self.owner, "replication_profile", None) == "published_dallas_v1"
+        if published:
+            from ._replication_export import export_graph, trace_transaction
+            from ._trace import _Deadline
+            check = _Deadline()
         if method == "trace.run":
             prompt = self.owner.prompt
             with self.owner.controls.lock:
@@ -586,13 +593,15 @@ class HostedService(InterpretationService):
                 entry["value"] = params["prompt"]
                 self.owner.controls._check_param_budget(prompt, entry)
             traced_specifications = self.owner.interventions.specifications()
-        result = super()._execute(method, params, step)
-        if method == "trace.run":
-            if getattr(self.owner, "replication_profile", None) == "published_dallas_v1":
-                from ._replication_export import export_graph
-                export_graph(self.graph, self.owner.replication.directory)
+
+        def complete(result, transaction=None):
+            if transaction is not None:
+                export_graph(self.graph, self.owner.replication.directory, memory=self.tracer.guard,
+                             check=check, evidence=transaction.evidence)
             publish_prompt = False
             with self.owner.controls.lock:
+                if transaction is not None:
+                    transaction.controls()
                 # Commit only after success. A script edit or pending viewer edit
                 # keeps ownership even when its text equals the previous value.
                 if (self.owner.controls.params.get(prompt.name) is prompt
@@ -610,6 +619,12 @@ class HostedService(InterpretationService):
             self.owner._reconcile_selection(self.graph)
             if publish_prompt:
                 self.owner.controls._publish()
+        if published:
+            with trace_transaction(self) as transaction:
+                return super()._execute(method, params, step,
+                                        complete=lambda result: complete(result, transaction))
+        result = super()._execute(method, params, step)
+        complete(result)
         return result
 
     def step(self, step=None):
