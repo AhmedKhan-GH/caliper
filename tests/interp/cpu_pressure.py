@@ -36,4 +36,4 @@ if __name__ == "__main__":
     if "--fixture-dir" not in sys.argv and "--model=tiny-lm" not in sys.argv:
         raise ValueError("pressure isolation requires the tiny CPU fixture")
     with cpu_fixture_pressure():
-        runpy.run_module("caliper.interp._hosted", run_name="__main__")
+        runpy.run_module("caliper.interp._hosted", run_name="__main__", alter_sys=True)
