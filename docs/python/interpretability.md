@@ -424,6 +424,8 @@ The driver is `demos/circuit_trace/run.py` in the source checkout.
 It requires the built app, `caliper-mcp`, and the native Python sender and producer modules.
 The fixture comparison also requires `caliper_circuit_parity`, the browser WebAssembly files, and the local Chromium headless shell from the web test setup.
 `CALIPER_APP_EXE`, `CALIPER_MCP_EXE`, `CALIPER_CIRCUIT_PARITY_EXE`, and `CALIPER_WASM_DIR` can override the corresponding resource paths.
+`CALIPER_WEB_DIR` selects the WebAssembly files that the app serves to browsers.
+The driver uses `CALIPER_WASM_DIR` when `CALIPER_WEB_DIR` is absent.
 
 The selected interpreter needs an installed or editable Caliper package because inference launch ignores `PYTHONPATH`.
 After the native module build, install the editable package without another native build:
@@ -482,7 +484,12 @@ Ordinary CPU fixture runs leave this option disabled.
 The driver removes this option for Qwen and Gemma.
 
 Only the founder uses `--show` in place of `--hidden`.
+This form prepares the baseline instrument without the acceptance batch.
+`--hidden --demo` uses the same interactive path without a visible window.
+The interactive path checks the browser asset routes before it creates the graph.
+It records `demo_ready` and makes no acceptance claim.
 The visible form retains its MCP event bridge until its own app closes.
+A setup error stays visible while the app remains open, including errors before the bridge exists.
 A graph pick updates `selected_node`, requests the feature examples, and fills the example strip.
 After a trace changes the selected node, the bridge updates the graph state and examples through MCP.
 When the run clears selection, the bridge clears the strip.
