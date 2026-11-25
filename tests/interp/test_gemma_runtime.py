@@ -480,7 +480,8 @@ def test_hosted_gemma_tracer_receives_explicit_budget(monkeypatch):
     service = _hosted.HostedService(owner)
     calls = []
     sentinel = object()
-    monkeypatch.setattr(interp, "Tracer", lambda *a, **kw: calls.append((a, kw)) or sentinel)
+    monkeypatch.setattr(interp, "Tracer", SimpleNamespace(
+        _for_service=lambda *a, **kw: calls.append((a, kw)) or sentinel))
     assert service._gemma_tracer() is sentinel
     assert calls[0][1]["memory_limit_gb"] == 40
     assert calls[0][1]["memory"] is owner.guard

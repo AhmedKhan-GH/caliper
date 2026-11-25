@@ -119,7 +119,7 @@ def test_hosted_gemma_factory_retains_owner_guard(monkeypatch):
     def tracer(*args, **kwargs):
         assert kwargs["memory"] is guard and kwargs["memory_limit_gb"] == 40
         return "tracer"
-    monkeypatch.setattr(caliper.interp, "Tracer", tracer)
+    monkeypatch.setattr(caliper.interp, "Tracer", SimpleNamespace(_for_service=tracer))
     assert service._gemma_tracer() == "tracer"
 
 

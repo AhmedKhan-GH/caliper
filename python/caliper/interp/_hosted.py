@@ -454,8 +454,9 @@ class HostedService(InterpretationService):
 
     def _gemma_tracer(self):
         from . import Tracer
-        return Tracer(self.model, self.tokenizer, self._resource("dictionary"),
-                      controls=getattr(self, "controls", None), memory_limit_gb=40, memory=self.owner.guard)
+        return Tracer._for_service(
+            self.model, self.tokenizer, self._resource("dictionary"),
+            controls=getattr(self, "controls", None), memory_limit_gb=40, memory=self.owner.guard)
 
     def submit(self, metadata, reply, *, acknowledge=None):
         status, result = super().submit(metadata, reply, acknowledge=acknowledge)
