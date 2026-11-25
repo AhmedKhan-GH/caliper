@@ -11,6 +11,7 @@ import torch
 
 from caliper.interp import _frozen
 from caliper.interp._memory import CleanStop
+from .test_gemma_frozen_reference import reference_case
 
 
 @pytest.fixture
@@ -159,17 +160,14 @@ def test_exact_workspace_refuses_before_decoder_allocation(monkeypatch, bound, p
 
 def test_zero_delta_workspace_includes_retained_rows_and_adjoint(monkeypatch):
     layer, _, indices, values = synthetic_case()
-    reservations = []
-    guard = SimpleNamespace(reserve=lambda stage, size: reservations.append((stage, size)))
+    guard = scalar_guard(monkeypatch, current=40_000_000_000 - 600)
     deltas = torch.zeros(2, *values.shape, dtype=values.dtype, requires_grad=True)
-    _frozen._decode_reference(layer, indices, deltas, include_zeros=True, guard=guard)
-    count, batches, width, itemsize = indices.numel(), 2, 3, 2
-    row_bytes = count * width * (layer.W_dec.element_size() + itemsize)
-    value_bytes = batches * count * itemsize
-    output_bytes = batches * indices.shape[0] * width * itemsize
-    expected = count * 8 + row_bytes + 2 * value_bytes * (width + 1) + 2 * output_bytes
-    assert reservations == [("reference decoder selection", count * (batches + 1 + 32)),
-                            ("reference decoder joint workspace", expected)]
+    with torch.no_grad():
+        result = _frozen._decode_reference(layer, indices, deltas, include_zeros=True, guard=guard)
+    assert result.count_nonzero() == 0
+    # Forward work fits, but the retained support and adjoint do not fit.
+    with pytest.raises(CleanStop, match="joint workspace allocation exceeds"):
+        _frozen._decode_reference(layer, indices, deltas, include_zeros=True, guard=guard)
 
 
 @pytest.mark.parametrize("stage", ["selection", "workspace", "rows", "scaling", "accumulation", "complete"])
@@ -194,3 +192,37 @@ def test_decoder_stop_preserves_autorelease_cleanup(monkeypatch, stage, reason):
     with pytest.raises(CleanStop, match=reason):
         _frozen._decode_reference(layer, indices, values, check=check)
     assert scopes == ["enter", "exit"]
+
+
+def test_reference_path_passes_its_guard_to_every_decoder_call(reference_case, monkeypatch):
+    case = reference_case
+    calls = []
+    decode = _frozen._decode_reference
+
+    def record(*args, **kwargs):
+        calls.append(kwargs)
+        return decode(*args, **kwargs)
+
+    monkeypatch.setattr(_frozen, "_decode_reference", record)
+    path = _frozen.FrozenPath(case.model, case.ids, case.dictionary, profile="circuit_tracer_82996f14")
+    assert len([call for call in calls if not call.get("include_zeros")]) == 2 * path.layers
+    assert all(call["guard"] is path.guard for call in calls)
+    calls.clear()
+    path.replacement(path.embedding, case.dictionary)
+    assert len(calls) == path.layers
+    assert all(call["guard"] is path.guard and call["include_zeros"] for call in calls)
+
+
+def test_signed_batched_values_preserve_all_batch_sources():
+    layer, _, indices, values = synthetic_case(torch.float64)
+    values = torch.stack((values, -values))
+    values[0, 0] = 0
+    values[1, 2] = 0
+    values.requires_grad_()
+    actual = _frozen._decode_reference(layer, indices, values)
+    expected = (values[..., None] * layer.W_dec[indices]).sum(-2)
+    torch.testing.assert_close(actual, expected, atol=0, rtol=0)
+    actual.sum().backward()
+    expected_grad = layer.W_dec[indices].sum(-1).expand_as(values).clone()
+    expected_grad *= (values.detach() != 0).any(0)
+    torch.testing.assert_close(values.grad, expected_grad, atol=0, rtol=0)
