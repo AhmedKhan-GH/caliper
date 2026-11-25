@@ -36,7 +36,8 @@ def addition(**fields):
 
 
 @pytest.mark.parametrize("scheduled", [False, True])
-def test_refusal_warning_observes_restored_hooks_sources_and_request(case, monkeypatch, scheduled):
+@pytest.mark.parametrize("callback", ["submit", "raise"])
+def test_refusal_warning_observes_restored_hooks_sources_and_request(case, monkeypatch, scheduled, callback):
     from caliper.interp import _intervene
 
     model, tokenizer, controls, service, route, _ = case
@@ -59,6 +60,8 @@ def test_refusal_warning_observes_restored_hooks_sources_and_request(case, monke
         controls.lock.release()
         observed.append((str(message), hook_objects(model), dict(cache), service.executor._cache_identity,
                          model(**tokenizer("c")).logits, record.spec, record.hook, survivor.error))
+        if callback == "raise":
+            raise RuntimeError("warning callback failure")
         # A warning callback can submit a new request after rollback.
         service.set(addition())
 
@@ -67,7 +70,11 @@ def test_refusal_warning_observes_restored_hooks_sources_and_request(case, monke
     with warnings.catch_warnings():
         warnings.simplefilter("always")
         monkeypatch.setattr(warnings, "showwarning", notice)
-        controls.step(2)
+        if callback == "raise":
+            with pytest.raises(RuntimeError, match="warning callback failure"):
+                controls.step(2)
+        else:
+            controls.step(2)
     assert len(observed) == 1
     message, seen_hooks, seen_cache, seen_identity, output, seen_request, seen_hook, error = observed[0]
     assert seen_hooks == hooks
@@ -79,7 +86,11 @@ def test_refusal_warning_observes_restored_hooks_sources_and_request(case, monke
     assert f"at {record.point!r}" in message
     assert not ran and not route.transport.replies
     controls.step()
-    assert ran == [service.specifications()] and ran[0][-1]["kind"] == "add"
+    assert ran == [service.specifications()]
+    if callback == "submit":
+        assert ran[0][-1]["kind"] == "add"
+    else:
+        assert all(spec["kind"] == "patch" for spec in ran[0])
     assert [(reply.request_id, reply.status) for reply in route.transport.replies] == [(1, "ok")]
 
 
@@ -207,6 +218,56 @@ def test_normal_expiration_clears_active_replacement_refusal(case, monkeypatch):
     assert saved["error"] is None and saved["error_code"] is None
     entry, = controls.controls_meta()["interventions"]["active"]
     assert "error" not in entry and "error_code" not in entry
+
+
+@pytest.mark.parametrize("restore_active", [False, True])
+def test_saved_applied_metadata_is_not_an_implicit_restore_fallback(case, monkeypatch, restore_active):
+    model, tokenizer, controls, service, route, _ = case
+    baseline = model(**tokenizer("c")).logits
+    service.set(addition())
+    controls.step()
+    applied_output = model(**tokenizer("c")).logits
+    service.set(dict(addition(), coefficient=2))
+    saved = service.state_dict()
+    assert saved["interventions"][0]["specification"] != saved["interventions"][0]["applied_specification"]
+    installs = []
+    install = service.executor.install
+
+    def installed(spec, **kwargs):
+        installs.append(spec["coefficient"])
+        if spec["coefficient"] == 2:
+            raise RuntimeError("saved request refusal")
+        return install(spec, **kwargs)
+
+    monkeypatch.setattr(service.executor, "install", installed)
+    service.load_state_dict(saved, restore_active=restore_active)
+    record = next(iter(controls._ivs.values()))
+    hook, request = record.hook, record.spec
+    assert (hook is not None) == restore_active
+    assert installs == ([1] if restore_active else [])
+    assert service.specifications() == ([record.applied_spec] if restore_active else [])
+    observed = []
+    controls.action("inspect", lambda: observed.append(model(**tokenizer("c")).logits))
+    route.on_control(None, _wire.Control(1, "run", name="inspect").to_meta())
+    with pytest.warns(RuntimeWarning, match="saved request refusal"):
+        controls.step()
+    assert installs == ([1, 2] if restore_active else [2])
+    assert record.spec is request and not record.replace and record.error_code == "intervene.hook_failed"
+    assert record.state == ("active" if restore_active else "ended")
+    if restore_active:
+        assert record.hook is hook and not hook.removed
+        assert record.applied_spec == saved["interventions"][0]["applied_specification"]
+        assert record.spec == record.applied_spec and not observed
+    else:
+        assert record.hook is None and record.applied_spec is None
+        assert record.spec == saved["interventions"][0]["specification"]
+        assert len(observed) == 1
+    resolved = service.state_dict()
+    controls.step()
+    assert service.state_dict() == resolved and len(observed) == 1
+    assert installs == ([1, 2] if restore_active else [2])
+    torch.testing.assert_close(observed[0], applied_output if restore_active else baseline, rtol=0, atol=0)
+    assert [(reply.request_id, reply.status) for reply in route.transport.replies] == [(1, "ok")]
 
 
 @pytest.mark.parametrize("conflict", [False, True])
