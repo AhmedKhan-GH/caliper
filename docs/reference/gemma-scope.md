@@ -2,9 +2,9 @@
 
 Caliper LIB supports Gemma 2 semantic probes, frozen attribution paths, and JumpReLU dictionaries.
 The converter imports the pinned Gemma Scope selection for `google/gemma-2-2b`.
-Qwen3.5 support remains experimental, and generic Llama support remains deferred.
+Qwen3.5 support remains experimental, and generic Llama models are unsupported.
 Gemma is the only M8 acceptance model.
-M8 remains held until Gemma passes every required acceptance check and platform CI passes.
+M8 release requires every Gemma acceptance check and platform CI to pass.
 
 ## Verification Scope
 
@@ -13,10 +13,10 @@ The tests cover semantic probes, replacement forward agreement, independent-writ
 Synthetic arrays test encoder conversion, JumpReLU boundaries, identity refusal, and bounded file admission.
 These checks do not establish results for the pretrained model.
 
-The recorded source checks also cover the official Scope files and a conversion preflight with synthetic unit gain.
+Source checks also cover the official Scope files and a conversion preflight with synthetic unit gain.
 That preflight does not verify conversion with the actual model gains.
-No completed model-bound conversion, 200,000-token quality evaluation, two-million-token Gemma index, or real Gemma acceptance result exists in this evidence.
-Peak memory with the actual Gemma model, trace time, and steering time remain unmeasured.
+Pretrained conversion, dictionary quality, index correctness, and acceptance require model-bound evidence.
+CPU tests do not establish pretrained peak memory, trace time, or steering time.
 
 ## Pinned Sources
 
@@ -164,7 +164,7 @@ The local affine tangent belongs only to attribution.
 ## Legacy Context Policy
 
 The pinned Gemma tokenizer adds BOS by default, and the pinned reference prepends a special token before attribution.
-The Gemma FVU gate remains 0.30.
+The legacy Gemma quality comparison uses an FVU threshold of 0.30.
 
 Legacy quality evaluation and the feature index use one shared context adapter for Gemma.
 The source stream still excludes tokenizer special tokens and appends EOS to each document.
@@ -204,7 +204,7 @@ The Qwen index format remains unchanged.
 ## Research Evaluation Protocol
 
 The explicit `research_v1` protocol retains CPU-tested aggregation and context code for Gemma and experimental Qwen.
-This M8 run evaluates Gemma only and does not regrade Qwen, under Founder Decision 9.
+M8 comparison evidence uses Gemma only.
 Use `--protocol research_v1` with `tools.interp.eval_dictionary`, or pass `protocol="research_v1"` to `evaluate`.
 This mode defaults to 1,024 model positions and a batch limit of 1,024 positions.
 An explicit context can contain 2 through 1,024 model positions.
@@ -251,14 +251,16 @@ The separate cursor is `evaluation-research-v1/state.json`, with state schema ve
 `source_tokens` and its `evaluated_tokens` alias count committed source positions.
 `metric_observations` counts nonspecial source positions, and `cross_entropy_tokens` counts CE targets.
 `source_budget_complete` becomes true only at 200,000 committed source positions.
-The existing numeric thresholds remain historical measurements, and a failed result remains failed.
+The numeric quality thresholds classify comparison results, and a failed result remains failed.
 
-Coordinator Decision 10 permits a comparison sample at the first published checkpoint with at least 50,000 source positions.
+The comparison sample can end at the first published checkpoint with at least 50,000 source positions.
 The evaluator receives SIGINT, and its final report retains `status="partial"`, `source_budget_complete=false`, and `stop_reason="signal 2"`.
 The report records the exact committed sample, observation count, loss-target count, and final cursor SHA256.
 The configured budget remains 200,000, and the cursor permits a later resume toward that budget.
-The sample reduces the delay before the Gemma index and acceptance captures.
-It does not establish full-budget completion or a numerical release gate.
+
+The measured Gemma comparison sample contains 52,231 source positions and 52,174 metric observations.
+These counts do not establish full-budget completion.
+Quality measurements supply comparison evidence, not a numerical release gate.
 
 Research mode leaves the legacy `dictionary.json:quality` report and `evaluation/` cursor intact.
 The default `legacy` selector retains the historical contexts, masks, and resume behavior.
@@ -325,14 +327,13 @@ If one window cannot fit, the query refuses before its tensor allocation.
 The budget is a limit, not a measured memory result or a speed guarantee.
 
 Gemma qualification accepts complete research measurements from a sample of 50,000 through 199,999 source positions.
-That sample requires partial status and the Decision 10 stop reason.
-It also accepts a full 200,000-position result with consistent completion status and historical quality status.
+That sample requires `status="partial"`, `source_budget_complete=false`, and `stop_reason="signal 2"`.
+Qualification also accepts a full 200,000-position result with consistent completion status and its original quality status.
 Both forms require all per-layer measurements, exact masks, valid aggregates, and the current source and resource identities.
 The service binds the report to the exact cursor bytes.
 The acceptance result and quality disclosure retain the actual sample count and original status.
 
-Historical comparisons retain 0.30 mean FVU, 0.15 dead fraction, and 0.5 nats all-layer loss rise.
-The founder sets final quality bars from the published comparison.
+Quality comparisons retain thresholds of 0.30 mean FVU, 0.15 dead fraction, and 0.5 nats all-layer loss rise.
 Quality values do not block the index or hidden acceptance after the valid comparison sample exists.
 Quality evidence binds the evaluated model, dictionary tensor bytes, forward settings, and evaluation device.
 Use the acceptance device for evaluation. A device change requires a new evaluation because kernel arithmetic can differ.

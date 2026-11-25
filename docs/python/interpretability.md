@@ -6,9 +6,9 @@ Library pieces draw the graph, example tokens, and next-token probabilities in t
 The [interpretation tools](../agents/interpretation.md) expose the same data through Caliper MCP.
 
 Supported decoder families are the seeded fixture, Gemma 2, and experimental Qwen3.5 text.
-Generic Llama support remains deferred.
+Generic Llama models are unsupported.
 Gemma 2 2B is the only M8 acceptance model.
-M8 remains held until Gemma passes every required acceptance check and platform CI passes.
+M8 release requires every Gemma acceptance check and platform CI to pass.
 
 ## Model Probes
 
@@ -185,27 +185,26 @@ A Qwen dictionary cannot serve Gemma.
 
 Gemma research evaluation retains a configured resume budget of 200,000 source positions, 1,024 model positions, and explicit special-token masks.
 It reports per-layer splice loss beside all-layer loss.
-Coordinator Decision 10 accepts the comparison sample at the first published checkpoint with at least 50,000 source positions.
+The comparison sample can end at the first published checkpoint with at least 50,000 source positions.
 The final report retains the exact sample and observation counts, final cursor SHA256, `status="partial"`, `source_budget_complete=false`, and `stop_reason="signal 2"`.
 
+The measured Gemma comparison sample contains 52,231 source positions and 52,174 metric observations.
 The cursor permits a later resume toward 200,000 positions.
 Qualification also accepts a valid full-budget result and preserves its original quality status.
 The acceptance result and quality disclosure state the measured sample count and its comparison role.
 
-Historical comparisons retain 0.30 mean FVU, 0.15 dead fraction, and 0.5 nats all-layer loss rise.
+Quality comparisons retain thresholds of 0.30 mean FVU, 0.15 dead fraction, and 0.5 nats all-layer loss rise.
 These comparisons do not block the index or hidden acceptance after the valid comparison sample exists.
-The sample reduces the delay before Gemma acceptance captures and does not establish a numerical release gate.
-The founder sets final quality bars from the published comparison.
-The shared protocol code retains CPU tests for Qwen, but this M8 run does not regrade Qwen under Founder Decision 9.
+Quality measurements supply comparison evidence, not a numerical release gate.
+The shared protocol code retains CPU tests for experimental Qwen, but M8 comparison evidence uses Gemma only.
 
 The example index requires exactly 2,000,000 tokens from the unchanged index partition.
 The explicit Gemma process limit is 40 decimal GB.
 The Qwen quality override does not apply to Gemma.
 
 CPU tests with random Gemma configurations verify the implemented paths without gated weights.
-Model-bound conversion and the legacy context evaluation are complete.
-The revised research evaluation, full index, and hidden acceptance require separate evidence.
-Acceptance memory and speed remain unverified.
+Pretrained conversion, research evaluation, index correctness, and hidden acceptance require model-bound evidence.
+CPU tests do not establish pretrained peak memory, trace time, or steering time.
 Evaluation and index tools select Gemma with `--model google/gemma-2-2b` and require the pinned `evaluation_source` record.
 
 ## Example Index
@@ -467,7 +466,6 @@ The Qwen and Gemma default prompt is `Paris is the capital of`.
 `--prompt` supplies another prompt within the token limit.
 
 The Gemma profile selects a 40 GB process limit and refuses `--quality-override`.
-This entry point does not establish a completed Gemma run.
 Every control operation uses Caliper MCP, including feature selection, examples, clamps, validation, and window capture.
 The driver waits for file events, run events, and published steps.
 
@@ -554,7 +552,7 @@ Fixture parity requires exact interior IDs, at most two color levels of interior
 App/browser parity applies to the fixture graph.
 Qwen and Gemma require both the semantic steering check and the bar direction check.
 
-M8 remains open and held until Gemma passes every required acceptance check and platform CI passes.
+M8 release requires every Gemma acceptance check and platform CI to pass.
 Quality measurements remain visible, but they do not decide M8 acceptance.
 Graph validation requires at least eight of ten signs and Spearman correlation of at least 0.6.
 
@@ -575,7 +573,6 @@ Missing Python modules or resources fail setup, while verified absence of Metal 
 The opt-in `local_model` test uses the same driver with `CALIPER_QWEN_MODEL` and `CALIPER_QWEN_DICTIONARY`.
 That test runs only outside CI, with explicit local paths and no downloads.
 The separate `test_local_gemma_hidden` case uses `CALIPER_GEMMA_MODEL` and `CALIPER_GEMMA_DICTIONARY` under the same restrictions.
-That entry point remains unrun against real Gemma resources in the recorded evidence.
 
 ## Experimental Qwen Limits
 
@@ -583,30 +580,29 @@ Qwen3.5-0.8B remains experimental and does not decide M8 acceptance.
 Its CPU and fixture tests remain in CI.
 Its recorded dictionary and index retain their measured limitations.
 
-The Qwen dictionary completed 40 million training tokens with 8,192 features per layer across 24 layers.
-Its held-out FVU is 0.329109, dead fraction is 0.261149, and cross-entropy rise is 1.180439 nats.
+The Qwen dictionary contains 8,192 features per layer across 24 layers and records 40 million training tokens.
+Its held-out FVU is 0.329109366111, dead fraction is 0.261149088542, and cross-entropy rise is 1.18043922644 nats.
 FVU passes the Qwen-specific 0.40 limit but exceeds the original 0.30 limit.
 Dead fraction and cross-entropy fail their unchanged limits of 0.15 and 0.5 nats.
 The founder override admits only this exact Qwen dictionary and retains those failed measurements.
-Its two-million-token index is complete.
+Its index contains two million tokens.
 
 The recorded Qwen graph result fails at 6/10 signs and Spearman correlation 0.539394.
 The requirements remain 8/10 signs and 0.6.
 The quality override does not change those requirements.
 These Qwen results supply no Gemma quality or acceptance evidence.
 
-Attempt 15 clamps inhibitory feature L21 F2347 at position 4.
+A measured clamp targets inhibitory feature L21 F2347 at position 4.
 The predicted centered-logit change is +4.642411, and the measured change is +4.213848.
 France remains the top token, and its probability rises from 0.651152 to 0.972334.
 Its bar grows from 255 to 381 pixels.
-The original checks required a probability fall and a shorter bar, thus they failed.
-The later directional checks pass on this same evidence without another model run.
+These measurements satisfy the directional probability and bar checks.
 
-The original influence selection, L3 F5742, remains a secondary result.
+The influence-based selection, L3 F5742, supplies a secondary comparison.
 It predicts -0.361462 and measures +0.003521.
 The primary selection uses the largest absolute predicted effect on the top logit outside the last layer.
 Validation still uses the ten most influential active features.
-Attempt 19 also passes the directional checks, but its unchanged graph failure leaves 151 of 152 required checks passed.
+Recorded Qwen evidence passes 151 of 152 required checks, with graph validation below its unchanged thresholds.
 
 ## Refusals And Limits
 

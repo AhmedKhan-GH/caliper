@@ -81,7 +81,7 @@ The official model requires gated access under the Gemma license.
 
 CPU tests with random configurations cover these verification paths and refusals.
 They do not establish verification of the actual gated checkpoint or its memory use.
-The [Gemma Scope reference](gemma-scope.md) records conversion coordinates, source pins, and the remaining acceptance work.
+The [Gemma Scope reference](gemma-scope.md) defines conversion coordinates, source pins, evaluation requirements, and acceptance limits.
 
 ## Identity And Resource Limits
 
