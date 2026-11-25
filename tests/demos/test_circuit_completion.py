@@ -25,6 +25,8 @@ def completion_case(tmp_path, monkeypatch, steering_case):
     state = SimpleNamespace(out=tmp_path / "result", sessions=[], calls=[], publications=[],
                             family="gemma", prompt=prompt, show=False, fault=None, stage=None,
                             cleanup_fault=None, cleanup_report=None, result=None,
+                            preflight_edit=lambda status: None, bounded_cleanup_report=None,
+                            baseline_top_text=" Austin", baseline_top_probability=.409498900175,
                             parity_checks=[check(name, True, True, True)
                                            for name in ("fixture_parity", "parity_process_memory")])
     real_close, real_acceptance, real_save = driver.Session.close, driver.acceptance, driver.save
@@ -57,9 +59,16 @@ def completion_case(tmp_path, monkeypatch, steering_case):
                 return {"step": 1, "seconds": 0}
             if method == "trace.status":
                 inference = deepcopy(status["inference"] if self.generated else prior)
+                inference["state"] = "ready"
                 inference["comparison"] = {key: inference[key] for key in ("prompt_hash", "interventions_hash")}
-                inference["comparison"].update(argmax_token_ids=[1, 1], completed_step=14 if self.steered else 9)
-                return {"state": "done", "counts": {"nodes": len(graph["nodes"])}, "inference": inference}
+                inference["comparison"].update(argmax_token_ids=[1, 1], completed_step=14 if self.steered else 9,
+                                               baseline_top_text=state.baseline_top_text,
+                                               baseline_top_probability=state.baseline_top_probability)
+                response = {"state": "done", "counts": {"nodes": len(graph["nodes"])}, "inference": inference}
+                if self.out.name == "bounded":
+                    checkpoint("bounded.status")
+                    state.preflight_edit(response)
+                return response
             if method == "feature.dictionary":
                 return self.dictionary
             if method == "feature.examples":
@@ -124,6 +133,8 @@ def completion_case(tmp_path, monkeypatch, steering_case):
             real_close(self)
             if self.out.name == "acceptance":
                 self.cleanup_error = state.cleanup_report
+            else:
+                self.cleanup_error = state.bounded_cleanup_report
 
     def acceptance(session, args, result):
         state.result = result
@@ -386,3 +397,145 @@ def test_complete_gemma_custom_prompt_retains_confidence_failure(completion_case
     gate = next(gate for gate in result["checks"] if gate["name"] == "prompt_confidence")
     assert gate["required"] and not gate["passed"]
     assert gate["measured"]["baseline_probability"] == .5
+
+
+def assert_preflight_stopped(case):
+    result = case.read()
+    assert len(case.sessions) == 1
+    assert case.sessions[0].out.name == "bounded"
+    assert case.sessions[0].app_log.closed and case.sessions[0].mcp_closed
+    assert case.calls.count("bounded.trace") == 1
+    assert "acceptance.trace" not in case.calls
+    assert not result["completed"] and not result["acceptance_complete"]
+    assert not result["passed"] and not result["gemma_acceptance"]
+    assert all(not report["passed"] for report in case.publications)
+    return result
+
+
+@pytest.mark.parametrize("answer", [" Dallas", "Austin", " Austin ", "austin", "ĠAustin"])
+@pytest.mark.parametrize("probability", [.409498900175, .95])
+def test_dallas_mismatch_stops_before_full_session(completion_case, answer, probability):
+    case = completion_case
+    case.baseline_top_text = answer
+    case.baseline_top_probability = probability
+    assert case.run() == 1
+    result = assert_preflight_stopped(case)
+    gate = next(g for g in result["checks"] if g["name"] == "dallas_preflight")
+    assert gate["required"] and not gate["passed"]
+    assert gate["measured"]["mismatch"] is True
+    assert gate["measured"]["baseline_top_text"] == answer
+    assert gate["measured"]["baseline_top_probability"] == probability
+    assert "not ' Austin'" in result["error"]
+
+
+@pytest.mark.parametrize("top,probability", [(1, .409498900175), (73, .123456789)])
+def test_dallas_preflight_records_bound_probability_below_confidence_threshold(completion_case, top, probability):
+    from _inference_evidence import text_hash
+    case = completion_case
+    case.baseline_top_probability = probability
+    case.preflight_edit = lambda status: status["inference"]["comparison"].update(argmax_token_ids=[top, top])
+    assert case.run() == 0
+    result = case.read()
+    gate = next(g for g in result["checks"] if g["name"] == "dallas_preflight")
+    assert gate["required"] and gate["passed"]
+    measured = gate["measured"]
+    assert measured["mismatch"] is False
+    assert measured["baseline_top_text"] == " Austin"
+    assert measured["baseline_top_probability"] == probability
+    assert measured["argmax_token_ids"] == [top, top]
+    assert measured["completed_step"] == 9
+    assert measured["prompt_hash"] == text_hash(MODEL_PROMPT)
+    assert measured["interventions_hash"] == text_hash("[]")
+    assert len(case.sessions) == 2
+    assert case.calls.count("bounded.trace") == case.calls.count("acceptance.trace") == 1
+    assert case.calls.index("bounded.status") < case.calls.index("bounded.close") < case.calls.index("acceptance.trace")
+    assert result["completed"] and result["passed"] and result["gemma_acceptance"]
+
+
+@pytest.mark.parametrize("probability", [None, True, "0.409", float("nan"), float("inf"),
+                                       -float("inf"), -.01, 1.01])
+def test_invalid_dallas_probability_stops_before_full_session(completion_case, probability):
+    case = completion_case
+    case.baseline_top_probability = probability
+    assert case.run() == 1
+    result = assert_preflight_stopped(case)
+    assert "finite probability" in result["error"]
+
+
+@pytest.mark.parametrize("fault", ["missing_state", "missing_comparison", "missing_text", "invalid_text", "empty_text",
+                                   "missing_probability", "wrong_prompt", "stale_prompt", "stale_interventions",
+                                   "invalid_hash", "missing_step", "boolean_step", "negative_step", "float_step",
+                                   "missing_argmax", "boolean_argmax", "negative_argmax", "short_argmax",
+                                   "trace_pending", "inference_starting"])
+def test_stale_or_incomplete_dallas_evidence_stops_before_full_session(completion_case, fault):
+    case = completion_case
+    def corrupt(status):
+        state = status["inference"]
+        record = state["comparison"]
+        if fault == "missing_state":
+            status.pop("inference")
+        elif fault == "missing_comparison":
+            state.pop("comparison")
+        elif fault in ("missing_text", "missing_probability", "missing_step", "missing_argmax"):
+            record.pop({"missing_text": "baseline_top_text", "missing_probability": "baseline_top_probability",
+                        "missing_step": "completed_step", "missing_argmax": "argmax_token_ids"}[fault])
+        elif fault in ("invalid_text", "empty_text"):
+            record["baseline_top_text"] = None if fault == "invalid_text" else ""
+        elif fault == "wrong_prompt":
+            state["prompt_hash"] = record["prompt_hash"] = "0" * 64
+        elif fault in ("stale_prompt", "stale_interventions"):
+            record["prompt_hash" if fault == "stale_prompt" else "interventions_hash"] = "0" * 64
+        elif fault == "invalid_hash":
+            state["interventions_hash"] = record["interventions_hash"] = "invalid"
+        elif fault.endswith("_step"):
+            record["completed_step"] = {"boolean_step": True, "negative_step": -1, "float_step": 9.}[fault]
+        elif fault.endswith("_argmax"):
+            record["argmax_token_ids"] = {"boolean_argmax": [True, 1], "negative_argmax": [-1, 1],
+                                          "short_argmax": [1]}[fault]
+        elif fault == "trace_pending":
+            status["state"] = "pending"
+        else:
+            state["state"] = "starting"
+    case.preflight_edit = corrupt
+    assert case.run() == 1
+    result = assert_preflight_stopped(case)
+    assert result["error"].startswith("Failure:")
+
+
+@pytest.mark.parametrize("family,prompt", [("fixture", MODEL_PROMPT), ("qwen", MODEL_PROMPT),
+                                          ("gemma", "Custom fact"), ("gemma", MODEL_PROMPT + " ")])
+def test_dallas_preflight_scope_preserves_existing_prompt_behavior(completion_case, family, prompt):
+    case = completion_case
+    case.family, case.prompt = family, prompt
+    case.baseline_top_text = " Dallas"
+    expected = 1 if family == "gemma" else 0
+    assert case.run() == expected
+    result = case.read()
+    assert len(case.sessions) == 2 and "bounded.status" not in case.calls
+    assert not any(g["name"] == "dallas_preflight" for g in result["checks"])
+    assert result["completed"]
+    if family == "gemma":
+        assert result["failed_checks"] == ["prompt_confidence"]
+    else:
+        assert result["passed"]
+
+
+@pytest.mark.parametrize("answer", [" Austin", " Dallas"])
+def test_bounded_cleanup_failure_cannot_start_full_session(completion_case, answer):
+    case = completion_case
+    case.baseline_top_text = answer
+    case.bounded_cleanup_report = "owned bounded cleanup failed"
+    assert case.run() == 1
+    result = assert_preflight_stopped(case)
+    assert result["cleanup_error"] == "Failure: owned bounded cleanup failed"
+    if answer == " Dallas":
+        assert "not ' Austin'" in result["error"]
+
+
+def test_preflight_status_interruption_preserves_cleanup(completion_case):
+    case = completion_case
+    case.stage, case.fault = "bounded.status", KeyboardInterrupt()
+    with pytest.raises(KeyboardInterrupt):
+        case.run()
+    result = assert_preflight_stopped(case)
+    assert result["error"] == "KeyboardInterrupt"

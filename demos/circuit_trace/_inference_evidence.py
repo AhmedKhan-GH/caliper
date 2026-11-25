@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hashlib
+import math
 import re
 
 from _mcp import Failure
@@ -29,7 +30,7 @@ def bound_completion(record, state):
             and type(record.get("completed_step")) is int and record["completed_step"] >= 0)
 
 
-def comparison_evidence(status, prompt, bars):
+def _completed_comparison(status, prompt):
     state = inference_state(status, prompt)
     record = state.get("comparison")
     if not bound_completion(record, state):
@@ -38,8 +39,27 @@ def comparison_evidence(status, prompt, bars):
     if (not isinstance(ids, list) or len(ids) != 2
             or any(type(token) is not int or token < 0 for token in ids)):
         raise Failure("Output comparison lacks two actual argmax token IDs.")
-    if not set(ids) <= {row["token"] for row in bars}:
+    return record
+
+
+def comparison_evidence(status, prompt, bars):
+    record = _completed_comparison(status, prompt)
+    if not set(record["argmax_token_ids"]) <= {row["token"] for row in bars}:
         raise Failure("The displayed bars omit an actual argmax token.")
+    return record
+
+
+def baseline_evidence(status, prompt):
+    """Read the actual baseline winner from a completed hosted comparison."""
+    record = _completed_comparison(status, prompt)
+    if status.get("state") != "done" or status["inference"].get("state") != "ready":
+        raise Failure("Baseline preflight requires completed trace and inference evidence.")
+    text = record.get("baseline_top_text")
+    probability = record.get("baseline_top_probability")
+    if not isinstance(text, str) or not text:
+        raise Failure("Baseline preflight lacks the decoded top token.")
+    if type(probability) not in (int, float) or not math.isfinite(probability) or not 0 <= probability <= 1:
+        raise Failure("Baseline preflight requires a finite probability in [0, 1].")
     return record
 
 

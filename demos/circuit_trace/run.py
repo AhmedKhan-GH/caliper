@@ -16,7 +16,8 @@ import time
 
 from _mcp import Events, Failure, MCP, attempt, stop, wait_file
 from _checks import (FIXTURE_HASH, FIXTURE_PROMPT, MODEL_PROMPT, bar_direction_check, bar_rows, capture_checks,
-                     check, finish, math_checks, program_budget_checks, secondary_selection, selected_feature)
+                     check, dallas_preflight_check, finish, math_checks, program_budget_checks,
+                     secondary_selection, selected_feature)
 from _inference_evidence import (bound_completion, comparison_evidence, generation_baseline,
                                  generation_evidence, inference_state)
 from _qualification import (GEMMA_REVISION, MODEL_REVISION, dictionary_qualification,
@@ -739,6 +740,11 @@ def main(argv=None):
         session = Session(args, out / "bounded")
         measured = session.events.complete("trace.run", prompt=args.prompt, max_targets=32, max_nodes=64, max_edges=256)
         save(out / "bounded-trace.json", measured)
+        if family == "gemma" and args.prompt == MODEL_PROMPT:
+            preflight = dallas_preflight_check(session.events.complete("trace.status"), args.prompt)
+            result["checks"].append(preflight)
+            if not preflight["passed"]:
+                raise Failure("The default Dallas prompt baseline top token is not ' Austin'.")
         session.close()
         if session.cleanup_error:
             raise Failure(session.cleanup_error)

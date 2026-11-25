@@ -131,6 +131,17 @@ def program_budget_checks(snapshot):
     return checks
 
 
+def dallas_preflight_check(status, prompt):
+    """Require the exact Dallas answer without an additional confidence threshold."""
+    from _inference_evidence import baseline_evidence
+    if prompt != MODEL_PROMPT:
+        raise Failure("Dallas preflight requires the exact default prompt.")
+    comparison = baseline_evidence(status, prompt)
+    mismatch = comparison["baseline_top_text"] != " Austin"
+    return check("dallas_preflight", not mismatch, {**comparison, "mismatch": mismatch},
+                 "exact decoded baseline top token ' Austin'")
+
+
 def prompt_confidence_check(prompt, before, baseline_top_token):
     """Apply the default-prompt exception to the actual baseline argmax."""
     rows = [row for row in before if row["token"] == baseline_top_token]
