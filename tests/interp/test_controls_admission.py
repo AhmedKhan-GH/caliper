@@ -195,49 +195,59 @@ def test_deferred_restore_refusal_ends_saved_effect_without_a_hook(monkeypatch, 
 
 
 @pytest.mark.parametrize("request_kind", ["replacement", "activation", "scheduled"])
-def test_reinstallation_refusal_resolves_the_request_that_changes_the_final_set(monkeypatch, request_kind):
+@pytest.mark.parametrize("request_index", [0, 1])
+def test_reinstallation_refusal_resolves_the_request_that_changes_the_final_set(monkeypatch, request_kind, request_index):
     from caliper.interp import _intervene
     from .test_source_admission import patch_capacity
 
     with patch_capacity(2) as (model, tokenizer, controls, service, specs):
+        monkeypatch.setattr(controls._timers, "at", lambda *args: None)
         cache = service.executor._cache
         sources, identity = list(cache.items()), service.executor._cache_identity
         monkeypatch.setattr(_intervene, "MAX_SOURCE_BYTES",
                             sum(t.numel() * t.element_size() for _, t in sources))
         hooks = hook_objects(model)
         before = model(**tokenizer("c")).logits
-        first = controls._ivs[(specs[0]["point"], "patch")]
+        first = controls._ivs[(specs[request_index]["point"], "patch")]
         if request_kind != "replacement":
             saved = service.state_dict()
-            pending = saved["interventions"][0]
+            pending = saved["interventions"][request_index]
             pending.update(state="pending", applied_specification=None, since_step=None)
             pending["specification"]["source_prompt"] = "bb"
             if request_kind == "scheduled":
                 pending["specification"]["from_step"] = controls.n + 2
             service.load_state_dict(saved, restore_active=True)
-            first = controls._ivs[(specs[0]["point"], "patch")]
+            first = controls._ivs[(specs[request_index]["point"], "patch")]
             sources, identity = list(cache.items()), service.executor._cache_identity
             hooks = hook_objects(model)
             before = model(**tokenizer("c")).logits
         else:
-            service.set(dict(specs[0], source_prompt="bb"))
+            service.set(dict(specs[request_index], source_prompt="bb"))
         old_hook, applied = first.hook, first.applied_spec
         transport, observed = Transport(), []
         route = controls.attach(transport)
         controls.action("inspect", lambda: observed.append(model(**tokenizer("c")).logits))
         route.on_control(None, _wire.Control(1, "run", name="inspect").to_meta())
         try:
-            with pytest.warns(RuntimeWarning, match="bounded source cache"):
+            with pytest.warns(RuntimeWarning, match="bounded source cache") as reports:
                 controls.step()
+            assert len(reports) == 1 and f"at {first.point!r}" in str(reports[0].message)
             assert first.error_code == "intervene.hook_failed"
             assert not first.replace
             assert first.state == ("active" if request_kind == "replacement" else "ended")
             assert first.hook is old_hook and first.applied_spec is applied
             assert hook_objects(model) == hooks
-            assert service.executor._cache is cache and service.executor._cache_identity is identity
+            deferred = request_index == 0 or request_kind == "replacement"
+            assert service.executor._cache is cache
+            if deferred:
+                assert service.executor._cache_identity is identity
+            else:
+                # Commit cleanup can rebuild the immutable source identity tuple.
+                assert service.executor._cache_identity == identity
             assert list(cache) == [key for key, _ in sources]
             assert all(cache[key] is tensor for key, tensor in sources)
-            assert not transport.replies and not observed
+            # A failed new tail hook needs no rollback of earlier live effects.
+            assert len(transport.replies) == len(observed) == (0 if deferred else 1)
             controls.step()
             assert [(reply.request_id, reply.status) for reply in transport.replies] == [(1, "ok")]
             torch.testing.assert_close(observed[0], before, rtol=0, atol=0)

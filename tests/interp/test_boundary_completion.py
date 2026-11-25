@@ -313,26 +313,50 @@ def test_scheduled_source_stop_rolls_back_before_script_resumes(controlled):
 
 
 def test_scheduled_reorder_failure_retains_old_hooks_without_retry(controlled, monkeypatch):
-    from caliper.interp._intervene import InterventionError
+    from caliper import _wire
     from tests.interp.test_intervention_replay import hook_objects
+    from tests.interp.test_service import Transport
 
-    model, _, ctl, service = controlled
+    model, tokenizer, ctl, service = controlled
+    monkeypatch.setattr(ctl._timers, "at", lambda *args: None)
+    route = ctl.attach(Transport())
     service.set({"kind": "ablate", "point": "layers.0.mlp_out", "from_step": 3})
     service.set(add_spec())
     ctl.step(1)
     state, hooks = service.state_dict(), hook_objects(model)
-    calls = []
+    expected = model(**tokenizer("abc")).logits
+    scheduled, retained = ctl._ivs.values()
+    old = retained.hook
+    calls, observed = [], []
+    ctl.action("inspect", lambda: observed.append(model(**tokenizer("abc")).logits))
+    route.on_control(None, _wire.Control(1, "run", name="inspect").to_meta())
 
     def fail(*args, **kwargs):
         calls.append(True)
         raise RuntimeError("reorder installation refused")
 
-    monkeypatch.setattr(service.executor, "install", fail)
-    with pytest.raises(InterventionError, match="scheduled intervention preparation failed"):
-        ctl.step(2)
-    assert calls == [True]
-    assert service.state_dict() == state and hook_objects(model) == hooks
-    assert service._operation_owner is None and not service.executor._retiring_sources
+    try:
+        monkeypatch.setattr(service.executor, "install", fail)
+        with pytest.warns(RuntimeWarning, match="reorder installation refused"):
+            ctl.step(2)
+        assert calls == [True] and not observed and not route.transport.replies
+        assert scheduled.state == "ended" and scheduled.hook is None
+        assert scheduled.applied_spec is None and not scheduled.replace
+        assert scheduled.error_code == "intervene.hook_failed"
+        assert scheduled.error == "RuntimeError: reorder installation refused"
+        assert service.state_dict()["interventions"][1] == state["interventions"][1]
+        assert retained.hook is old and not old.removed and hook_objects(model) == hooks
+        assert service._operation_owner is None and not service.executor._retiring_sources
+        resolved = service.state_dict()
+        ctl.step()
+        assert calls == [True] and service.state_dict() == resolved
+        assert len(observed) == 1
+        torch.testing.assert_close(observed[0], expected, rtol=0, atol=0)
+        assert [(reply.request_id, reply.status) for reply in route.transport.replies] == [(1, "ok")]
+        ctl.step()
+        assert len(route.transport.replies) == 1 and not ctl.queue
+    finally:
+        route.detach()
 
 
 @pytest.mark.parametrize("point", ["layers.0.resid_pre", "layers.0.mlp_out"])

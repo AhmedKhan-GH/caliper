@@ -329,7 +329,24 @@ The original module and head ablation operations remain available.
 An absent `positions` field selects every token, and an empty list selects none.
 Optional `from_step` and `until_step` fields bound the active interval, with an exclusive end.
 The runtime refuses incompatible dimensions, unknown features, invalid positions, and nonfinite values.
-Hook failures remove the failed hook and expose an error in intervention metadata.
+Runtime hook failures remove the failed hook and expose an error in intervention metadata.
+
+A refused replacement retains its previous live hook and applied specification.
+The record stays `active`, and `error` and `error_code` describe the refused request.
+Normal expiration clears these refusal fields. A terminal runtime failure retains its error.
+Failure notices run after hook and source-cache cleanup, and each runtime failure produces one notice.
+
+Lifecycle snapshots distinguish `specification`, the requested effect, from `applied_specification`, the saved applied effect.
+`load_state_dict()` restores metadata by default. The next boundary admits the requested effect.
+A saved applied specification without a live hook does not provide a fallback when that request fails.
+`load_state_dict(..., restore_active=True)` performs bounded admission and installs saved applied effects before return.
+It preserves queued replacements for a later boundary.
+
+A conflicting scheduled preparation rolls back its new hooks and preserves current requests.
+Queued actions defer after rollback and keep their original deadlines.
+A failed new hook can end without action deferral when earlier live effects need no rollback.
+Interpretation work can read committed effects after cleanup, even when actions defer.
+Its snapshot describes applied effects, which can differ from queued requests.
 
 Feature requests cannot target layers excluded by an upper-half dictionary.
 The default dictionary identifier binds tensor content, activation type, optional TopK values, and metadata except the quality report.

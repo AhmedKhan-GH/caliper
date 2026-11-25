@@ -742,11 +742,11 @@ class _Intervention:
         self.state = IV_PENDING
         self.hook = None                  # the adapter's remover while the hook is on the model
         self.clear = False                # intervene.clear asked for it; gone at the next step
-        self.error = None                 # why the script ended it, or None
+        self.error = None                 # terminal failure or refusal of a replacement
         self.error_code = None
         self.spec = spec or {"point": point, "op": op, "kind": op,
                              "from_step": from_step, "until_step": until_step}
-        self.applied_spec = None
+        self.applied_spec = None          # saved effect metadata; only hook proves installation
         self.replace = False
         self.report = False
 
@@ -983,8 +983,10 @@ class Interventions:
     def load_state_dict(self, state, *, restore_active=False):
         """Restore queued records, with optional applied hooks before a script forward.
 
-        The default resumes hooks at a boundary. restore_active installs only the saved
-        applied effects and leaves queued requests and the public step counter unchanged.
+        The default restores metadata and admits requested effects at a boundary.
+        A saved applied specification without a live hook is not a fallback effect.
+        restore_active admits and installs saved applied effects before return. It
+        leaves queued requests and the public step counter unchanged.
         """
         from .interp._intervene import InterventionError
         if (not isinstance(state, dict) or type(state.get("version")) is not int
@@ -1369,6 +1371,8 @@ class Controls:
             self._publish()
         self._raise_resource_stop()
         if self.interpretation_service is not None:
+            # Boundary cleanup precedes this work, even when actions must defer.
+            # Interpretation reads committed effects, which can differ from requests.
             self.interpretation_service.step(self.n)
         while True:
             self._raise_resource_stop()
@@ -2172,6 +2176,7 @@ class Controls:
 
         Due lifecycle work completes first. Concurrent requests cancel speculative
         additions and remain queued. A failed preparation removes only its new hooks.
+        Failure notices run after cleanup and identify the resolved request.
         Return the metadata change flag and the action admission flag separately.
         """
         from copy import copy
@@ -2197,6 +2202,7 @@ class Controls:
             step = self._next_step()
             cache, identity = m.executor._cache.copy(), m.executor._cache_identity
             committed = False
+            resolved = False
             reports = []
             points_changed = False
             try:
@@ -2227,9 +2233,10 @@ class Controls:
                     # Resolve the failed request against its unchanged revision.
                     # Keep the valid effect and publish the refusal through existing fields.
                     self._resolve_intervention_refusal(originals[refused], previous[refused], records[refused])
-                    with self._outside_lock():
-                        for message in reports:
-                            warnings.warn(message, RuntimeWarning, stacklevel=2)
+                    # Earlier preparation failures did not commit. Runtime failures
+                    # remain on their live records until notice delivery below.
+                    reports = reports[-1:]
+                    resolved = True
                     # Roll back speculative hooks and cache, then admit actions next pass.
                     return True, False
                 changed = prepared or changed
@@ -2258,10 +2265,6 @@ class Controls:
                                 self._unhook(iv, retain_source=True)
                         if changed or effects_changed:
                             m.executor._discard_unused_sources()
-                        if lingered:
-                            self._report_linger(lingered)
-                        for message in reports:
-                            warnings.warn(message, RuntimeWarning, stacklevel=2)
                     else:
                         for key, iv in records.items():
                             if iv.hook is not previous[key].hook:
@@ -2269,6 +2272,21 @@ class Controls:
                         m.executor._cache.clear()
                         m.executor._cache.update(cache)
                         m.executor._cache_identity = identity
+                if committed or resolved:
+                    self._report_intervention_failures(reports, lingered if committed else ())
+
+    def _report_intervention_failures(self, reports, lingered=()):
+        """Consume runtime notices once, after the complete hook and cache cleanup."""
+        reports = list(reports)
+        for iv in self._ivs.values():
+            if iv.report:
+                iv.report = False
+                reports.append(f"caliper: the intervention at {iv.point!r} failed and ended: {iv.error}")
+        with self._outside_lock():
+            if lingered:
+                self._report_linger(lingered)
+            for message in reports:
+                warnings.warn(message, RuntimeWarning, stacklevel=2)
 
     def _resolve_intervention_refusal(self, original, previous, failed):
         """End one unchanged request and retain its applied effect and owner."""
@@ -2300,9 +2318,9 @@ class Controls:
 
         Source callbacks may queue requests. Only lifecycle fields from this pass
         commit, so later requests retain their specification and clear flag.
+        A hook ownership conflict rolls back preparation and defers actions.
         """
         from copy import copy
-        from .interp._intervene import InterventionError
 
         removed = []
         changed = False
@@ -2318,6 +2336,7 @@ class Controls:
             else:
                 iv.hook, iv.applied_spec, iv.replace = None, None, False
                 iv.state = IV_ENDED if expired else IV_PENDING
+                iv.error, iv.error_code = None, None
                 if not expired:
                     iv.since_step = None
             changed = True
@@ -2348,6 +2367,7 @@ class Controls:
                 iv.replace, iv.clear = False, False
         cache, identity = m.executor._cache.copy(), m.executor._cache_identity
         committed = False
+        resolved = False
         reports = []
         try:
             with (self._outside_lock(), m.executor._retire_sources(
@@ -2358,9 +2378,8 @@ class Controls:
             if prepared is None:
                 if self._iv_revision == revision:
                     self._resolve_intervention_refusal(originals[refused], previous[refused], records[refused])
-                    with self._outside_lock():
-                        for message in reports:
-                            warnings.warn(message, RuntimeWarning, stacklevel=2)
+                    reports = reports[-1:]
+                    resolved = True
                     changed = True
                 return changed, True
             prospective = {key: copy(iv) for key, iv in self._ivs.items()}
@@ -2368,7 +2387,9 @@ class Controls:
                 current = prospective.get(key)
                 if (self._ivs.get(key) is not originals[key]
                         or current.hook is not previous[key].hook):
-                    raise InterventionError("scheduled intervention ownership changed", ERR_NOT_SUPPORTED)
+                    # A runtime hook failure owns its terminal state. Its newer
+                    # request, if any, must survive this obsolete preparation.
+                    return changed, True
                 current.hook, current.applied_spec = prepared.hook, prepared.applied_spec
                 if key in scheduled or prepared.state != previous[key].state:
                     current.state, current.since_step = prepared.state, prepared.since_step
@@ -2401,8 +2422,6 @@ class Controls:
                         if iv.hook is not records[key].hook:
                             self._unhook(iv, retain_source=True)
                     m.executor._discard_unused_sources()
-                    for message in reports:
-                        warnings.warn(message, RuntimeWarning, stacklevel=2)
                 else:
                     for key, iv in records.items():
                         if iv.hook is not previous[key].hook:
@@ -2410,6 +2429,8 @@ class Controls:
                     m.executor._cache.clear()
                     m.executor._cache.update(cache)
                     m.executor._cache_identity = identity
+            if committed or resolved:
+                self._report_intervention_failures(reports)
 
     @staticmethod
     def _boundary_retirements(records, step):
@@ -2430,7 +2451,7 @@ class Controls:
         """Return the change flag, reports, and request that caused a failed hook set."""
         from .interp._memory import CleanStop
 
-        changed = False
+        changed = any(iv.report for iv in records.values())
         reinstall = False
         causes = {}
         # Attribute a cache refusal only to a request that increases its resource.
@@ -2448,10 +2469,6 @@ class Controls:
         for key in list(records):
             iv = records[key]
             requested = iv.hook is None or iv.replace
-            if iv.report:
-                iv.report = False
-                changed = True
-                reports.append(f"caliper: the intervention at {iv.point!r} failed and ended: {iv.error}")
             if iv.replace:
                 iv.hook, iv.applied_spec = None, None
                 iv.replace = False
@@ -2467,6 +2484,8 @@ class Controls:
                 iv.error = self._stop_message(getattr(iv.hook, "error", None) or "the hook failed")
                 iv.error_code = "intervene.hook_failed"
             ended = failed or (iv.until_step is not None and iv.until_step <= s)
+            if ended and not failed:
+                iv.error, iv.error_code = None, None
             on = not ended and (iv.from_step is None or iv.from_step <= s)
             if on and (iv.hook is None or reinstall):
                 # Keep registration order equal to record order, including a late
@@ -2491,13 +2510,14 @@ class Controls:
                     iv.error = self._stop_message(f"{type(e).__name__}: {e}")
                     iv.error_code = "intervene.hook_failed"
                     ended, on = True, False
-                    reports.append(f"caliper: the intervention at {iv.point!r} failed: {iv.error}")
                     if originals[key].hook is not None:
                         # An unchanged hook can fail after a prior request consumes capacity.
                         # Resolve that request, then roll back the complete hook sequence.
                         refused = key if requested else causes.get(getattr(e, "resource", None), key)
                         records[refused].error, records[refused].error_code = iv.error, iv.error_code
+                        reports.append(f"caliper: the intervention at {records[refused].point!r} failed: {iv.error}")
                         return None, reports, refused
+                    reports.append(f"caliper: the intervention at {iv.point!r} failed: {iv.error}")
             if not on:
                 iv.hook, iv.applied_spec = None, None
             state = IV_ACTIVE if on else IV_ENDED if ended else IV_PENDING

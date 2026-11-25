@@ -62,6 +62,11 @@ An intervention changes a module of the model at a step boundary while the run t
 | `intervene.clear` | `point`, or `all: true` | `cleared` (the points) and `pending: true` |
 | `intervene.list` | None | `interventions`, each with `point`, `op`, `from_step`, `until_step`, `since_step` and `state` (`pending`, `active` or `ended`) |
 
+A record can stay `active` after a replacement refusal because its previous hook still applies.
+Its optional `error` and `error_code` fields describe that refusal. Normal expiration clears those fields.
+A runtime hook failure ends the effect and retains its error.
+The [intervention lifecycle](../python/interpretability.md) distinguishes requested effects from applied effects and saved metadata.
+
 Each module of `model.named_modules()` is a point, with its dotted name, such as `blocks.0.attn`. A module gives heads when it has an integer attribute `num_heads`, `n_heads` or `n_head`, and one child `nn.Linear` named `out_proj`, `o_proj`, `c_proj` or `proj` whose `in_features` divides by the head count. Each head is then a point `<module>#<h>`, such as `blocks.0.attn#3`. A module of the class `nn.MultiheadAttention` gives no heads, because it never calls its `out_proj`. A point holds at most one intervention of each op.
 
 `intervene.set` answers at once, and the script applies the intervention at its next step. A `run` event of change `intervene` then reports each applied change, with the `point`, the `op` and the `step`. The `op` is null when the interventions of the point were cleared. The commands have the effect class `run`, thus they follow the Approval Rules above. The cards read "Ablate `<point>` in `<script>` from the next step.", "Clear the interventions on `<point>` in `<script>` at the next step." and "Clear every intervention in `<script>` at the next step.". A rule allows one point, with the key `intervene.set:<point>` or `intervene.clear:<point>`, and clearing all interventions always asks.

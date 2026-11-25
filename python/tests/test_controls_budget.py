@@ -38,6 +38,8 @@ class Hook:
 @pytest.fixture
 def case(monkeypatch):
     ctl, model = controls.Controls(), Model()
+    # Explicit timer callbacks keep budget checks independent of wall time.
+    monkeypatch.setattr(ctl._timers, "at", lambda *args: None)
     service = ctl.interventions_on(model, adapter=Adapter())
 
     def target(point):
