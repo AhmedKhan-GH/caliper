@@ -5,6 +5,7 @@ import hashlib
 import io
 import json
 import math
+import os
 from pathlib import Path
 import pickle
 import pickletools
@@ -55,6 +56,11 @@ TRACE_REQUEST = {"profile": "circuit_tracer_82996f14", "max_targets": SOURCE["gr
                  **{key: SOURCE["graph"]["generation"][key] for key in ("max_n_logits", "desired_logit_prob")},
                  **SOURCE["graph"]["pruning"],
                  **{key: SOURCE["graph"][key] for key in ("batch_size", "update_interval")}}
+JSON_EVIDENCE_LIMIT = 16 * 1024 * 1024
+# Allow 128 bytes per edge, 4 KiB per node, and 4 KiB per target with its schedule.
+# At 262144 edges, 8192 nodes, and 5010 targets, these allowances total under 84 MiB.
+# Another 16 MiB covers other fields. A 128 MiB ceiling leaves finite headroom.
+FULL_GRAPH_JSON_LIMIT = 128 * 1024 * 1024
 
 
 def action_name(cell):
@@ -74,10 +80,29 @@ def private_path(root, relative):
     return path
 
 
+def _json_float(value):
+    number = float(value)
+    require(math.isfinite(number), "Nonfinite JSON evidence.")
+    return number
+
+
+def _read_json(path, limit, message):
+    require(path.stat().st_size <= limit, message)
+    with path.open("rb") as stream:
+        require(os.fstat(stream.fileno()).st_size <= limit, message)
+        raw = stream.read(limit + 1)
+    require(len(raw) <= limit, message)
+    return json.loads(raw.decode("utf-8"), parse_float=_json_float,
+                      parse_constant=lambda value: (_ for _ in ()).throw(Failure("Nonfinite JSON evidence.")))
+
+
 def read_json(path):
-    require(path.stat().st_size <= 16 * 1024 * 1024, "Private JSON exceeds the evidence limit.")
-    return json.loads(path.read_text(encoding="utf-8"), parse_constant=lambda value: (_ for _ in ()).throw(
-        Failure("Nonfinite JSON evidence.")))
+    return _read_json(path, JSON_EVIDENCE_LIMIT, "Private JSON exceeds the evidence limit.")
+
+
+def read_full_graph(path):
+    """Read complete graph evidence within the separate graph byte limit."""
+    return _read_json(path, FULL_GRAPH_JSON_LIMIT, "Full graph JSON exceeds the evidence limit.")
 
 
 def descriptor(root, path):

@@ -8,7 +8,8 @@ from pathlib import Path
 from _mcp import Failure
 from _published import PROBABILITY_ABSOLUTE_TOLERANCE, PROBABILITY_POLICY
 from _published import (CASES, MANIFEST_SHA256, PROFILE, PROMPT, SOURCE, TRACE_REQUEST, action_name,
-                        descriptor, digest, file_hash, finite, private_path, read_json, require, validate_case, verify_descriptor)
+                        descriptor, digest, file_hash, finite, private_path, read_full_graph, read_json,
+                        require, validate_case, verify_descriptor)
 
 
 def _case_files(evidence, *, complete):
@@ -34,7 +35,7 @@ def _graph_path(root, evidence, trace):
 
 def _full_graph(path, evidence, trace):
     """Bind the complete export to the paginated trace and prepared prompt."""
-    graph = read_json(path)
+    graph = read_full_graph(path)
     require(isinstance(graph, dict) and graph.get("trace_id") == trace["trace_id"] and graph.get("status") == "done"
             and digest(graph.get("counts")) == digest(trace.get("counts")), "Full graph identity or counts differ.")
     settings = graph["settings"]
@@ -97,7 +98,7 @@ def write_collection(out, root, result):
                 if graph.exists():
                     graph = verify_descriptor(root, descriptor(root, graph))
                     if required and graph not in graphs:
-                        exported = read_json(graph)
+                        exported = read_full_graph(graph)
                         require(isinstance(exported, dict) and exported.get("trace_id") == result["trace"]["trace_id"],
                                 "Full graph identity differs.")
                         graphs.add(graph)
