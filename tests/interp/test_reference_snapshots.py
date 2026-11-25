@@ -56,7 +56,8 @@ def test_local_lookup_uses_only_pinned_scope_and_loader_source(local_snapshots, 
     assert arguments == {"profile": PROFILE, "source": local_snapshots.scope,
                          "model_snapshot": local_snapshots.model}
     assert local_snapshots.calls == [{"repo_id": snapshots._SOURCE["repo"],
-        "revision": snapshots._SOURCE["revision"], "local_files_only": True}]
+        "revision": snapshots._SOURCE["revision"], "allow_patterns": snapshots._SCOPE_FILES,
+        "local_files_only": True}]
     assert all(not list(folder.iterdir()) for folder in (local_snapshots.model, local_snapshots.scope))
 
 

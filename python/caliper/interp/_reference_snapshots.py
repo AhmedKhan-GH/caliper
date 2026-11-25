@@ -7,11 +7,12 @@ import torch
 
 from ._dictionary import _GEMMA_IDENTITY, _VERIFIED_MODELS
 from ._forward_identity import _reference_profile
-from ._gemma_import_identity import _REFERENCE_PROFILE, _SOURCE
+from ._gemma_import_identity import _L0, _REFERENCE_PROFILE, _SOURCE
 
 
 _MODEL_REPO, _MODEL_REVISION = _GEMMA_IDENTITY.removeprefix("hf:").split("@")
 _MODEL_SNAPSHOTS = WeakKeyDictionary()
+_SCOPE_FILES = [f"layer_{layer}/width_16k/average_l0_{l0}/params.npz" for layer, l0 in enumerate(_L0)]
 
 
 def _pinned_snapshot(path, repo, revision):
@@ -33,7 +34,8 @@ def scope_snapshot():
     from huggingface_hub import snapshot_download
     from huggingface_hub.errors import LocalEntryNotFoundError
     try:
-        path = snapshot_download(repo_id=_SOURCE["repo"], revision=_SOURCE["revision"], local_files_only=True)
+        path = snapshot_download(repo_id=_SOURCE["repo"], revision=_SOURCE["revision"],
+                                 allow_patterns=_SCOPE_FILES, local_files_only=True)
     except LocalEntryNotFoundError as exc:
         raise ValueError("reference qualification requires the pinned Scope snapshot in the local HF cache") from exc
     return _pinned_snapshot(path, _SOURCE["repo"], _SOURCE["revision"])
