@@ -402,9 +402,14 @@ class PublishedCases:
                     raise ValueError('published preparation no longer matches the tokenizer')
                 inputs = sources['dallas']
                 self._reserve(self.model.config.vocab_size * 64)
+                from ._replication_native import observe_features, write_native
+                observations = {}
                 hooks = forward_hooks(self.model)
-                with attention_patterns(self.model, self.patterns):
-                    logits = forward_logits(self.model, inputs, guard=self.guard)[0, -1]
+                with (observe_features(self.model, executor.dictionary, GROUPS['Say Victoria'],
+                                       input_shape=inputs['input_ids'].shape, guard=self.guard,
+                                       reserve=self._reserve) if cell == 29 else nullcontext(observations)) as observations:
+                    with attention_patterns(self.model, self.patterns):
+                        logits = forward_logits(self.model, inputs, guard=self.guard)[0, -1]
                 if not self._model_matches() or forward_hooks(self.model) != hooks:
                     raise ValueError('published model changed during the case forward')
                 pair = torch.stack((self.baseline_logits, logits))
@@ -423,9 +428,21 @@ class PublishedCases:
                 import numpy as np
                 filename = f'cell{cell}-{sequence}-{uuid.uuid4().hex}.npz'
                 target = self.directory / filename
-                evidence.append(target)
+                result['native_evidence'] = write_native(
+                    target.with_suffix('.pt'), {'logits': pair, 'probabilities': probabilities},
+                    root=self.output_directory, created=evidence, reserve=self._reserve)
+                if cell == 29:
+                    node, = GROUPS['Say Victoria']
+                    observation = write_native(
+                        target.with_name(target.stem + '-say-victoria.pt'),
+                        {'activation': observations[node]}, root=self.output_directory,
+                        created=evidence, reserve=self._reserve)
+                    result['observations'] = {'Say Victoria': {
+                        'node': dict(zip(('layer', 'feature', 'position'), node)),
+                        'native_evidence': observation}}
                 # The archive stores every vocabulary entry. Replies contain only its descriptor.
                 with target.open('xb') as stream:
+                    evidence.append(target)
                     np.savez(stream, logits=pair.float().cpu().numpy(), probabilities=probabilities.float().cpu().numpy())
                 result['evidence'] = {'file': str(target.relative_to(self.output_directory)),
                                       'sha256': hashlib.sha256(target.read_bytes()).hexdigest(),
