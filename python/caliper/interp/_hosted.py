@@ -1395,7 +1395,8 @@ class HostedInference:
 
     def boundary(self):
         import caliper
-        with self._stop_boundary():
+        from .. import _programs
+        with self._stop_boundary(), _programs.inference_boundary():
             self.controls.busy = True
             caliper.step()
             if self.guard is not None:

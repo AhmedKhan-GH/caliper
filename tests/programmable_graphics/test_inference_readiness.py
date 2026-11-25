@@ -306,6 +306,47 @@ def test_resource_delivery_retry_retains_pending_work(producer, monkeypatch, del
     assert P._PROGS["readiness"].skipped == 1
 
 
+@pytest.mark.parametrize("every", [1, 21])
+def test_hosted_clock_keeps_budget_stop_and_declared_period(producer, monkeypatch, every):
+    clock = SimpleNamespace(now=0.)
+
+    def advance(seconds):
+        clock.now += seconds
+
+    monkeypatch.setattr(P, "_clock", lambda: clock.now)
+    monkeypatch.setattr(P, "_pump", lambda: advance(1.))
+    show = caliper.show
+
+    def costly_publication(*args, **kwargs):
+        advance(.8)
+        return show(*args, **kwargs)
+
+    monkeypatch.setattr(caliper, "show", costly_publication)
+    install_program(every=every)
+    producer.model.main(torch.ones(1))
+    program = P._PROGS["activation"]
+    # Finite clock events reach the real ten-second ceiling without elapsed waits.
+    for number in range(1, 131):
+        advance(.55)
+        with P.inference_boundary():
+            P.at_step(number)
+        if program.state == "stopped":
+            break
+    assert producer.runtime.runs[0] == P.WARMUP_STEPS + 1
+    assert P._CAD.step_s() == pytest.approx(1.)
+    assert P._CAD.cost_s() == pytest.approx(.8)
+    assert P._CAD.over >= P.OVER_UPDATES
+    assert program.every_min == every
+    if every == 1:
+        assert program.state == "stopped"
+        assert program.error["code"] == "program.over_budget"
+        assert not P.inference_pending()
+    else:
+        assert program.state == "running"
+        steps = producer.runtime.runs
+        assert all(b - a >= every for a, b in zip(steps, steps[1:]))
+
+
 @pytest.mark.parametrize("action", ["remove", "detach", "replacement", "refusal", "stop"])
 def test_activation_evidence_ends_with_its_program_or_watch(producer, monkeypatch, action):
     install_program()
