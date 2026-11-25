@@ -212,9 +212,8 @@ def test_reference_encoder_refuses_missing_or_wrong_precision(original_case):
 
 
 def test_actual_arithmetic_capture_dependency():
-    """Qualify the real capture only when its owner supplies the module."""
-    arithmetic = pytest.importorskip('caliper.interp._gemma_reference',
-                                   reason='The independent arithmetic patch is not integrated')
+    """Qualify the real capture from the integrated reference module."""
+    from caliper.interp import _gemma_reference as arithmetic
     from tests.interp.test_gemma_runtime import gemma_model
     model = gemma_model().bfloat16()
     arithmetic.install_reference_profile(model, 'circuit_tracer_82996f14')
