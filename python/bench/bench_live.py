@@ -607,6 +607,7 @@ def run_noviewer(size: int, n: int = 100_000):
     lines += ["", f"attached() = {tr.attached()}; ring counters after all rows: {dict(ring)}; "
               f"views created in the session: {list(tr.stats()['views'])} (none: no snapshot, no slot, no GPU work)"]
     close_session(tr)
+    RESULTS.mkdir(exist_ok=True)
     (RESULTS / "S-noviewer.txt").write_text("\n".join(lines) + "\n")
     print("\n".join(lines))
 
@@ -775,6 +776,7 @@ def run_clock():
         b = _live.now_ns()
         c = _t.monotonic_ns()
         lines.append(f"monotonic_ns {a}  uptime_raw {b}  (uptime_raw - monotonic) {b - a} ns  next monotonic {c - b:+d} ns")
+    RESULTS.mkdir(exist_ok=True)
     (RESULTS / "S-clock.txt").write_text("\n".join(lines) + "\n")
     print("\n".join(lines))
 
