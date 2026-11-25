@@ -7,9 +7,9 @@ The [interpretation tools](../agents/interpretation.md) expose the same data thr
 
 Supported decoder families are the seeded fixture, Gemma 2, and experimental Qwen3.5 text.
 Generic Llama models are unsupported.
-Gemma 2 2B is the only M8 acceptance model, and M8 remains held.
-Its target is: reproduces the published circuit-tracer Gemma 2 2B Dallas example.
-Release requires the published comparison, all product checks, and platform CI to pass.
+The `published_dallas_v1` profile targets replication of the published circuit-tracer Gemma 2 2B Dallas example.
+Gemma 2 2B is the only supported model for this profile.
+The [milestone roadmap](../roadmap/milestones.md) records acceptance status.
 
 ## Model Probes
 
@@ -198,10 +198,8 @@ Format version 2 requires `encoder_policy="gemma_scope_pre_gain_v1"`.
 Changes to source bytes, arithmetic, dtype, device, or execution settings require a new index.
 Ordinary indexes retain their compatible policies and limits.
 
-The historical F32 research comparison contains 52,231 source positions and 52,174 metric observations.
-It retains `status="partial"`, `source_budget_complete=false`, and stop reason `signal 2` against a 200,000-position resume budget.
-This F32 result remains separate comparison evidence.
-It cannot qualify the new BF16 artifact or index, and the published profile adds no quality gate.
+F32 research results provide comparison evidence.
+They cannot qualify BF16 artifacts or indexes, and the published profile adds no quality gate.
 The generic `research_v1` protocol retains its sample, identity, context, and per-layer loss checks.
 Qwen CPU protocol paths remain supported, but further Qwen GPU runs, regrading, and acceptance attempts remain shelved.
 
@@ -540,13 +538,15 @@ The model, dictionary, attribution math, and reference hash stay on the unchange
 Ordinary CPU fixture runs leave this option disabled.
 The driver removes this option for Qwen and Gemma.
 
-Only the founder uses `--show` in place of `--hidden`.
+Use `--show` in place of `--hidden` for a visible interactive instrument.
 This form prepares the baseline instrument without the acceptance batch.
 `--hidden --demo` uses the same interactive path without a visible window.
 The interactive path checks the browser asset routes before it creates the graph.
-Hidden startup proof verifies the served assets, program views, retained attachment, and visible error retention.
-These results establish launch and display reliability, not published replication or product acceptance.
-It records `demo_ready` and makes no acceptance claim.
+
+Startup evidence covers served assets, program views, attachment, and error retention.
+These checks do not establish published replication or product acceptance.
+The interactive result records `demo_ready` and makes no acceptance claim.
+
 The visible form retains its MCP event bridge until its own app closes.
 A setup error stays visible while the app remains open, including errors before the bridge exists.
 A graph pick updates `selected_node`, requests the feature examples, and fills the example strip.
@@ -560,16 +560,15 @@ The visible result records that hidden pixel evidence was not collected and make
 
 Published evidence collection and independent acceptance review are separate steps.
 The hidden collection first measures a bounded preparation and baseline, then collects the complete graph and all seven actions.
-Live `--demo` and founder `--show` modes prepare the interactive instrument without that acceptance batch.
+The `--demo` and `--show` modes prepare the interactive instrument without that acceptance batch.
 A live `demo_ready` result establishes no acceptance claim.
 
 ### Published Comparison
 
-The actual pinned circuit-tracer run completed all seven cases and canonical CPU pruning.
-All seven top tokens match the published outcomes, but most rounded probability lists differ.
-Cell 26 matches its rounded list.
-The [reference results](../reference/gemma-scope.md#reference-results) state the graph counts and distinguish source-library scores from Caliper completeness.
-The comparison must use these actual full reference outputs and graph, not rounded publication labels alone.
+The comparison requires the actual pinned circuit-tracer outputs for the baseline and all seven interventions, plus its graph after canonical CPU pruning.
+Use the full reference outputs and graph for comparison.
+Rounded publication labels alone cannot establish replication.
+The [reference results contract](../reference/gemma-scope.md#reference-results) distinguishes source-library scores from Caliper completeness.
 
 Feature-node Jaccard overlap must reach 0.9.
 Every union edge must satisfy `abs(caliper - reference) <= 1e-6 + 1e-3 * abs(reference)`.
@@ -598,7 +597,7 @@ Collection checks fresh output sequences and hashes every required file.
 An exit of zero means collection completed, while `accepted_replication` remains false.
 Measured failures remain in the collection and cannot become optional checks.
 
-After independent comparison and capture inspection, the lead supplies a review file beneath the same private root.
+After independent comparison and capture inspection, save a review file beneath the same private root.
 The review binds the collection hash to the numerical, browser, capture, parity, and memory evidence.
 Use a new output file for final verification:
 
@@ -612,7 +611,6 @@ Use a new output file for final verification:
 The verifier rechecks every file hash, case identity, required check, and external review metric.
 Only a successful review sets `accepted_replication=true` and `acceptance_complete=true`.
 Resource qualification and synthetic review fixtures cannot establish real acceptance.
-M8 remains held until all checks, independent reviews, and platform CI pass.
 
 ### Visual Evidence
 
@@ -632,7 +630,7 @@ Each capture records actual `program.status` values and declared piece limits af
 Derive limits remain 50 ms and 64 MiB, while draw limits remain 4 ms and 64 MiB.
 Missing GPU times leave required checks unverified.
 Browser proof requires available asset routes, visible program views, and attachment before and after the capture.
-The verified startup repair does not replace these checks for the published collection.
+Startup evidence does not replace these checks for the published collection.
 
 macOS process checks use peak memory footprint from `/usr/bin/time`, with unified memory.
 Linux checks use maximum resident set size.

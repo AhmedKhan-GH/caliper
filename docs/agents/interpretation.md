@@ -16,8 +16,8 @@ A read-only stream accepts interpretation reads. It refuses trace changes.
 |---|---|---|
 | `feature.dictionary` | None | Registered dictionary metadata |
 | `feature.show` | `layer`, `feature`, or `node` | Label, count, maximum, promoted tokens, example tokens |
-| `feature.examples` | `layer`, `feature`, or `node`; optional `limit` | Real example windows and tensor bindings |
-| `trace.run` | `prompt`; optional `max_targets`, `max_nodes`, `max_edges`, `profile`, `max_n_logits`, `desired_logit_prob`, `node_threshold`, `edge_threshold`, `batch_size`, `update_interval` | Trace state, step, duration, counts, diagnostics |
+| `feature.examples` | Either `layer` and `feature`, or `node`. Optional: `limit` | Real example windows and tensor bindings |
+| `trace.run` | `prompt`. Optional: `max_targets`, `max_nodes`, `max_edges`, `profile`, `max_n_logits`, `desired_logit_prob`, `node_threshold`, `edge_threshold`, `batch_size`, `update_interval` | Trace state, step, duration, counts, diagnostics |
 | `trace.status` | None | Last trace state and diagnostics |
 | `trace.read` | Optional node and edge offsets and limits | Graph records, counts, diagnostics, next offsets |
 | `patch.sweep` | `clean_prompt`, `corrupted_prompt`, `metric` | Clean and corrupted metrics, recovery grid, tensor binding |

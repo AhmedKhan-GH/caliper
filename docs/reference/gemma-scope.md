@@ -3,9 +3,9 @@
 Caliper LIB supports Gemma 2 semantic probes, frozen attribution paths, and JumpReLU dictionaries.
 The converter imports the pinned Gemma Scope selection for `google/gemma-2-2b`.
 Qwen3.5 support remains experimental, and generic Llama models are unsupported.
-Gemma is the only M8 acceptance model, and M8 remains held.
-Its target is: reproduces the published circuit-tracer Gemma 2 2B Dallas example.
-Release requires the published comparison, all product checks, and platform CI to pass.
+The `published_dallas_v1` profile targets replication of the published circuit-tracer Gemma 2 2B Dallas example.
+Gemma 2 2B is the only supported model for this profile.
+The [milestone roadmap](../roadmap/milestones.md) records acceptance status.
 
 ## Verification Scope
 
@@ -17,7 +17,7 @@ These checks do not establish results for the pretrained model.
 Independent CPU comparisons use actual TransformerLens conversion with nontrivial gains.
 They cover F32 and BF16 at 33, 256, and 1,024 positions, plus batches with right padding at 256 positions.
 These small models do not prove full model parity, device parity, index correctness, or product acceptance.
-The actual reference run supplies separate Dallas evidence, as described below.
+The published comparison requires separate evidence from the actual pinned circuit-tracer run.
 No local timing or model memory result establishes public product performance before acceptance.
 
 ## Pinned Sources
@@ -105,15 +105,13 @@ The ordinary `caliper` profile retains its original objective, 512 feature targe
 
 ## Reference Results
 
-The actual pinned reference completed the baseline and all seven interventions, followed by canonical CPU pruning.
-All seven intervention top tokens match the published outcomes.
-Most rounded probability lists differ from the publication, while cell 26 matches.
-These differences remain visible in the comparison and do not establish Caliper acceptance.
+Reference evidence must include the baseline, all seven interventions, and the graph after canonical CPU pruning.
+Record each top token and full vocabulary distribution.
+Compare actual reference outputs with the published outcomes, and record any difference.
+Use the actual reference graph for node and edge comparisons.
 
-The canonical reference graph has 847 nodes, 689 feature nodes, and 33,999 nonzero edges.
-Its replacement score is 0.703288138, and its completeness score is 0.918979049.
-These are source-library scores, not Caliper completeness residuals.
-Caliper must still pass the full reference comparison and every product check.
+Reference replacement and completeness scores are source-library metrics.
+They do not replace Caliper completeness residuals or the required product checks.
 
 ## Layer Selection
 
@@ -321,7 +319,7 @@ The Qwen index format remains unchanged.
 The published profile requires a new index over exactly 2,000,000 source positions from the pinned index partition.
 Use `--profile circuit_tracer_82996f14` with `tools.interp.build_index` and `--model google/gemma-2-2b`.
 Construction uses BF16 reference arithmetic and captures original coordinates through the reference hooks.
-The lead must qualify the artifact against both pinned snapshots before index construction.
+Qualify the artifact against both pinned snapshots before index construction.
 Index compatibility checks do not replace source qualification.
 
 Each index context has 256 model positions: one BOS prefix and at most 255 source positions.
@@ -399,14 +397,9 @@ Its partial report retains `status="partial"`, `source_budget_complete=false`, a
 The report records the exact committed sample, observation count, loss-target count, and final cursor SHA256.
 The configured budget remains 200,000, and the cursor permits a later resume toward that budget.
 
-The historical F32 Gemma comparison sample contains 52,231 source positions and 52,174 metric observations.
-Its stop reason is `signal 2`.
-These counts do not establish full-budget completion.
 Quality measurements supply comparison evidence, not a numerical release gate.
-
-This F32 result remains separate comparison evidence.
-It cannot qualify new BF16 artifact bytes, arithmetic, or an original-coordinate index.
-Published qualification discloses absent or supplied historical quality evidence without a new quality gate.
+F32 results cannot qualify BF16 artifact bytes, reference arithmetic, or an original-coordinate index.
+Published qualification records whether quality evidence exists without a new quality gate.
 
 Research mode leaves the legacy `dictionary.json:quality` report and `evaluation/` cursor intact.
 The default `legacy` selector retains the historical contexts, masks, and resume behavior.
@@ -508,7 +501,6 @@ Visual, pixel, app/browser parity, the 40 decimal GB process cap, and the 8 deci
 The five-point clamp, 8/10 signs, Spearman 0.6, and largest-effect selection do not define published Gemma acceptance.
 The Qwen quality override and upper-half fallback do not apply to Gemma.
 
-Hidden startup proof verifies browser assets, program views, and error retention for the repaired live path.
-That proof does not establish published Dallas replication or product acceptance.
+Startup evidence covers browser assets, program views, and error retention.
+These checks do not establish published Dallas replication or product acceptance.
 The [demo procedure](../python/interpretability.md#hidden-demo) separates live use, evidence collection, and independent review.
-M8 remains held until the complete comparison, product checks, reviews, and platform CI pass.
