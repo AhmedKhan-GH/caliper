@@ -117,7 +117,7 @@ def test_hosted_owner_checkpoints_once_and_exits_on_independent_stop(hosted_run,
     if origin == "tracer":
         # Exercise the real admission formula without an MPS tensor or API call.
         guard = SimpleNamespace(device=SimpleNamespace(type="mps"), limit=12_000_000_000,
-                                check=lambda stage: 11_800_000_000)
+                                host_reserve_bytes=0, check=lambda stage: 11_800_000_000)
         def admit(**kwargs):
             calls.append(origin)
             TraceGuard.batch_size(guard, 64, layers=24, tokens=32, width=1024, mixer_width=2048)
@@ -148,6 +148,8 @@ def test_hosted_owner_checkpoints_once_and_exits_on_independent_stop(hosted_run,
         assert run.service.failure is caught.value and run._failure is caught.value
         if origin != "tracer":
             assert caught.value is failure
+        else:
+            assert str(caught.value) == "no target batch fits the process memory limit"
         assert json.loads(Path(checkpoints[0]).read_text())["bindings"] == run._verified_bindings
         with pytest.raises(CleanStop) as repeated:
             run.boundary()

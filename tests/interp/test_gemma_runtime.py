@@ -534,13 +534,26 @@ def test_published_attention_replay_uses_live_values_and_reports_frozen_patterns
 
 
 def test_published_hosted_loader_selects_bfloat16_without_a_model_load(tmp_path, monkeypatch):
-    snapshot = tmp_path / GEMMA_REVISION
-    snapshot.mkdir()
-    monkeypatch.setattr('caliper.interp._memory.MemoryGuard', lambda *args: memory(40))
-    def refused(snapshot, *, device, memory, dtype):
+    import json
+    from caliper.interp import _reference_snapshots
+    from caliper.interp._gemma_import_identity import _REFERENCE_INPUT
+
+    snapshot = tmp_path / "models--google--gemma-2-2b" / "snapshots" / GEMMA_REVISION
+    snapshot.mkdir(parents=True)
+    (tmp_path / "dictionary.json").write_text(json.dumps({"reference_input": _REFERENCE_INPUT}))
+    guard, calls = memory(40), []
+    monkeypatch.setattr('caliper.interp._memory.MemoryGuard', lambda *args: guard)
+    monkeypatch.setattr(_reference_snapshots, 'scope_snapshot', lambda: calls.append("scope"))
+
+    def refused(source, *, device, memory, dtype, reference_profile):
+        assert source == snapshot and memory is guard
         assert dtype == torch.bfloat16 and device == 'cpu'
+        assert reference_profile == 'circuit_tracer_82996f14'
+        calls.append("model")
         raise RuntimeError('bounded loader sentinel')
+
     monkeypatch.setattr(_hosted, '_load_gemma_model', refused)
     monkeypatch.setattr(torch.backends.mps, 'is_available', lambda: False)
     with pytest.raises(RuntimeError, match='bounded loader sentinel'):
         _hosted.load_resources(str(snapshot), tmp_path, replication_profile='published_dallas_v1')
+    assert calls == ["scope", "model"]
