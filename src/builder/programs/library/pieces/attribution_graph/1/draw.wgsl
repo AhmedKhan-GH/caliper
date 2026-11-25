@@ -32,7 +32,7 @@ fn edge_vs(@builtin(instance_index) i: u32, @builtin(vertex_index) v: u32) -> Ed
     if (params.selected_node >= 0 && u32(params.selected_node) < counts.nodes &&
         c.source_node != u32(params.selected_node) && c.target_node != u32(params.selected_node)) { alpha *= 0.12; }
     if (c.weight == 0.0) { alpha = 0.0; }
-    out.color = vec4<f32>(color,alpha);
+    out.color = vec4<f32>(color*alpha,alpha);
     out.segment = i*12u+segment+1u;
     return out;
 }

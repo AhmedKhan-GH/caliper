@@ -417,6 +417,90 @@ TEST_CASE("graph layout has disjoint cells, stable bytes, labels, and sixteen ce
     }
 }
 
+TEST_CASE("opposite-sign crossing edges retain additive pixels when draw order reverses") {
+    @autoreleasepool {
+        mr::Metal metal;
+        if (!metal.backend) CALIPER_SKIP_NO_GPU(metal.why);
+        const auto piece = ip::load("attribution_graph");
+        std::vector<std::int32_t> ni(512*4), ei(8192*2);
+        std::vector<float> nf(512*4), ef(8192*2);
+        for (unsigned i=0; i<4; ++i) {
+            ni[4*i] = i<2 ? 0 : 3;
+            ni[4*i+1] = i<2 ? -1 : 1;
+            ni[4*i+2] = i%2;
+            ni[4*i+3] = 100+i;
+            nf[4*i+1] = 1;
+        }
+        ei[0]=0; ei[1]=3; ei[2]=1; ei[3]=2;
+        ef[0]=1; ef[1]=1; ef[2]=-1; ef[3]=-1;
+        const std::vector<HostTensor> tensors{
+            HostTensor::of("graph_counts","i32",{4},std::vector<std::int32_t>{4,2,2,1}),
+            HostTensor::of("node_i","i32",{512,4},ni), HostTensor::of("node_f","f32",{512,4},nf),
+            HostTensor::of("edge_i","i32",{8192,2},ei), HostTensor::of("edge_f","f32",{8192,2},ef),
+            text_tensor(544,"cross ")};
+        const auto data = mr::run_derive(metal.device,piece,tensors,{});
+        const auto& nodes = resource(data,"nodes");
+        const auto& curves = resource(data,"curves");
+        REQUIRE(nodes.count==4); REQUIRE(curves.count==2);
+        mr::PieceDraw draw(*metal.backend,size);
+        set_resources(draw,piece,data);
+        // Background, positive edge, negative edge, both edges, then reverse order.
+        std::array<std::vector<std::uint8_t>,5> colors;
+        std::vector<std::uint64_t> node_ids;
+        for (unsigned pass=0; pass<colors.size(); ++pass) {
+            @autoreleasepool {
+                CAPTURE(pass);
+                auto subset = curves;
+                subset.count = pass==0 ? 0 : pass<3 ? 1 : 2;
+                if (pass==2) subset.bytes.erase(subset.bytes.begin(),subset.bytes.begin()+48);
+                subset.bytes.resize(subset.count*48);
+                if (pass==4) std::rotate(subset.bytes.begin(),subset.bytes.begin()+48,subset.bytes.end());
+                draw.set("curves",subset.bytes,subset.count,&subset);
+                REQUIRE(draw.draw(frame(piece)));
+                colors[pass] = draw.color;
+                std::vector<std::uint64_t> ids;
+                ids.reserve(size*size);
+                for (unsigned y=0; y<size; ++y) for (unsigned x=0; x<size; ++x)
+                    ids.push_back(mr::identity_of(draw.ids,size,x,y));
+                // Edge segment metadata has program ID zero and is not a node identity.
+                if (pass==0) node_ids=ids;
+                else CHECK(ids==node_ids);
+                for (unsigned i=0; i<nodes.count; ++i)
+                    check_pick(draw,scalar<float>(nodes,i,0,48),scalar<float>(nodes,i,4,48),i);
+            }
+        }
+        int order_gap=0;
+        for (std::size_t p=0; p<colors[3].size(); p+=4) for (unsigned c=0; c<3; ++c)
+            order_gap=std::max(order_gap,std::abs(int(colors[3][p+c])-int(colors[4][p+c])));
+        // RGBA8 conversion can differ by one level when the two additions reverse.
+        CHECK(order_gap<=1);
+        unsigned crossing_pixels=0;
+        const std::array<float,3> positive{0.15f,0.55f,0.95f}, negative{0.95f,0.25f,0.12f};
+        // The four samples around the origin lie inside both four-pixel strokes.
+        for (unsigned y=size/2-1; y<size/2+1; ++y) for (unsigned x=size/2-1; x<size/2+1; ++x) {
+            const auto p=(y*size+x)*4;
+            REQUIRE(colors[1][p+2]>colors[0][p+2]+100);
+            REQUIRE(colors[2][p]>colors[0][p]+100);
+            ++crossing_pixels;
+            CAPTURE(x); CAPTURE(y);
+            CHECK(node_ids[y*size+x]==0);
+            for (unsigned c=0; c<3; ++c) {
+                const int background=colors[0][p+c];
+                // Unit normalized weights give opacity 0.70. RGB must carry that factor once.
+                CHECK(std::abs(int(colors[1][p+c])-background-255*0.70f*positive[c])<=1);
+                CHECK(std::abs(int(colors[2][p+c])-background-255*0.70f*negative[c])<=1);
+                const int sum=int(colors[1][p+c])+int(colors[2][p+c])-background;
+                REQUIRE(sum<255); // Saturation must not conceal the blend equation.
+                // Two levels cover quantization in the separate frames and the combined frame.
+                CHECK(std::abs(int(colors[3][p+c])-sum)<=2);
+                CHECK(std::abs(int(colors[4][p+c])-sum)<=2);
+            }
+        }
+        CHECK(crossing_pixels>0);
+        MESSAGE("Crossing interior pixels: " << crossing_pixels << ", maximum order gap: " << order_gap);
+    }
+}
+
 TEST_CASE("graph count and shape guards bound the layout and dense cells remain separate") {
     @autoreleasepool {
         mr::Metal metal;
