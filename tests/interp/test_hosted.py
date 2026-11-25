@@ -145,7 +145,8 @@ def test_trace_snapshot_uses_applied_effects_during_a_queued_replacement(resourc
     interventions.set(original)
     controls.step(7)
     run.interventions = interventions
-    run.prompt = SimpleNamespace(set=lambda value: None)
+    run.controls = controls
+    run.prompt = controls.param("prompt", "AB")
     run.selected = controls.param("selected_node", -1, min=-1, max=511)
     service = HostedService(run)
 

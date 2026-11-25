@@ -49,7 +49,7 @@ def case(monkeypatch):
         model=model, tokenizer=tokenizer, dictionary=dictionary, index=index,
         guard=RequestGuard(40_000_000_000), controls=controls, interventions=interventions,
         sweep=lambda **kw: None, validate=lambda **kw: None,
-        prompt=SimpleNamespace(set=lambda value: None), status=SimpleNamespace(set=lambda value: None),
+        prompt=controls.param("prompt", "AB"), status=SimpleNamespace(set=lambda value: None),
         _check_stop=lambda: None, _latch_failure=failures.append,
         update_controls=controls.step, update_output=lambda: None, _reconcile_selection=lambda graph: None)
     service = _hosted.HostedService(owner)

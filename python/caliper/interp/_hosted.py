@@ -473,17 +473,37 @@ class HostedService(InterpretationService):
 
     def _execute(self, method, params, step):
         if method == "trace.run":
+            prompt = self.owner.prompt
+            with self.owner.controls.lock:
+                prompt_version = prompt._version
             prompt_inputs(self.model, self.tokenizer, params["prompt"])
-            self.owner.prompt.set(params["prompt"])
-            self.owner.checkpoint_prompt = params["prompt"]
+            # Check the control limits before trace admission without an edit.
+            with self.owner.controls.lock:
+                entry = prompt.entry()
+                entry["value"] = params["prompt"]
+                self.owner.controls._check_param_budget(prompt, entry)
             traced_specifications = self.owner.interventions.specifications()
         result = super()._execute(method, params, step)
         if method == "trace.run":
+            publish_prompt = False
+            with self.owner.controls.lock:
+                # Commit only after success. A script edit or pending viewer edit
+                # keeps ownership even when its text equals the previous value.
+                if (self.owner.controls.params.get(prompt.name) is prompt
+                        and prompt._version == prompt_version and prompt.pending is None):
+                    self.owner.controls._check_param_budget(prompt, entry)
+                    prompt._value = params["prompt"]
+                    prompt._version += 1
+                    self.owner.checkpoint_prompt = params["prompt"]
+                    self.owner.controls._update_busy()
+                    publish_prompt = True
             self.owner.traced_prompt = params["prompt"]
             self.owner.traced_specifications = traced_specifications
             # Queued replacements may differ from the hooks that produced this graph.
             self.owner.traced_state = deepcopy(traced_specifications)
             self.owner._reconcile_selection(self.graph)
+            if publish_prompt:
+                self.owner.controls._publish()
         return result
 
     def step(self, step=None):
