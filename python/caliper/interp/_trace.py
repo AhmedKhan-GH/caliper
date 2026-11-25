@@ -42,7 +42,7 @@ class _Deadline:
 
 
 class _DeadlineMemory:
-    """Check the deadline at each bounded identity hash chunk."""
+    """Check the deadline at each bounded identity hash or comparison."""
 
     def __init__(self, memory, check):
         self.memory, self.deadline = memory, check
@@ -52,8 +52,15 @@ class _DeadlineMemory:
 
     def check(self, stage, **kwargs):
         self.deadline(stage)
-        self.memory.check(stage, **kwargs)
+        current = self.memory.check(stage, **kwargs)
         self.deadline(stage)
+        return current
+
+    def _check_interval(self, stage):
+        self.deadline(stage)
+        current = getattr(self.memory, "_check_interval", self.memory.check)(stage)
+        self.deadline(stage)
+        return current
 
 
 class _SuppliedTraceGuard(MemoryGuard):
@@ -706,6 +713,30 @@ class Tracer:
                 service.executor.invalidate_cache()
             self._prompt = prompt
 
+    def _dictionary_content(self, check):
+        from ._intervene import InterventionService, _DictionarySnapshot
+        memory = _DeadlineMemory(self.guard._guard, lambda stage: check("dictionary content " + stage))
+        service = self._service()
+        executor = getattr(service, "executor", None)
+        snapshot = getattr(executor, "_dictionary_snapshot", None)
+        if (isinstance(executor, InterventionService) and executor.model is self.model
+                and executor.dictionary is self.dictionary and executor._default_dictionary_id
+                and type(snapshot) is _DictionarySnapshot):
+            identifier = executor.dictionary_id
+            comparison = _DeadlineMemory(BudgetMemory(
+                self.guard._guard, self.guard.limit / 1e9, extra=executor.resource_guard), memory.deadline)
+            # Admission and earlier transactions cannot prove current bytes. The
+            # private snapshot checks names, dense storage, dtypes, and metadata.
+            matches = snapshot.matches(self.dictionary, identifier, comparison)
+            comparison.check("dictionary snapshot complete")
+            if (matches and self._service() is service and service.executor is executor
+                    and executor.model is self.model and executor.dictionary is self.dictionary
+                    and executor._default_dictionary_id and executor.dictionary_id == identifier
+                    and executor._dictionary_snapshot is snapshot):
+                return snapshot.content
+        # A changed dictionary remains eligible for the tracer's existing path.
+        return weights_hash(self.dictionary, memory=memory)
+
     @torch.inference_mode(False)
     def trace(self, prompt, max_targets=512, max_nodes=512, max_edges=8192, *, profile="caliper",
               max_n_logits=10, desired_logit_prob=.95, node_threshold=.8, edge_threshold=.98,
@@ -791,8 +822,7 @@ class Tracer:
                 self._forward_cache = None
                 raise
             self._new_prompt(prompt)
-            content = weights_hash(self.dictionary, memory=_DeadlineMemory(
-                self.guard._guard, lambda stage: check("dictionary content " + stage)))
+            content = self._dictionary_content(check)
             check("dictionary content complete")
             identity = {"model": id(self.model), "model_weights": _versions(self.model),
                         "dictionary": id(self.dictionary), "dictionary_weights": _versions(self.dictionary),
