@@ -176,7 +176,7 @@ vertex = "edge_vs"
 fragment = "edge_fs"
 instances = "curves"
 vertices = 72
-blend = "additive"
+blend = "alpha"
 depth = "none"
 pick = true
 
