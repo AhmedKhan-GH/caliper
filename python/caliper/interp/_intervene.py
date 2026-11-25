@@ -462,7 +462,7 @@ class _DictionarySnapshot:
                     block = current[start:stop]
                     if tensor.device != saved.device:
                         block = block.to(device="cpu")
-                        equal = _cpu_byte_equal(block, original[start:stop])
+                        equal = _cpu_byte_equal(block, original[start:stop]) and equal
                     else:
                         equal = torch.equal(block, original[start:stop]) and equal
                     del block

@@ -365,6 +365,30 @@ def test_snapshot_selects_device_reductions_only_for_gemma_mps(device_snapshot, 
     assert not case.scopes
 
 
+def test_direct_snapshot_retains_earlier_cross_device_mismatch(device_snapshot, monkeypatch):
+    # Production snapshots keep same-device copies. This direct construction
+    # checks the fallback contract with CPU storage and a synthetic device label.
+    case = device_snapshot(device="cuda")
+    state = case.dictionary.state_dict()
+    saved = {name: value.as_subclass(torch.Tensor).clone() for name, value in state.items()}
+    content = _intervene._content_identity(saved, None)
+    identifier = _intervene._dictionary_digest(case.dictionary, content)
+    snapshot = _intervene._DictionarySnapshot(saved, content,
+        {name: value.device for name, value in state.items()}, device_compare=True)
+    first = next(iter(state.values()))
+    first.reshape(-1)[0] += .125
+    equal, sizes = _intervene._cpu_byte_equal, []
+
+    def compared(left, right):
+        sizes.append(left.numel())
+        return equal(left, right)
+
+    monkeypatch.setattr(_intervene, "_cpu_byte_equal", compared)
+    assert not snapshot.matches(case.dictionary, identifier, case.guard)
+    assert sum(sizes) == sum(value.numel() * value.element_size() for value in state.values())
+    assert len(sizes) > 1 and not case.scopes
+
+
 def test_device_snapshot_bounds_copy_and_reads_every_live_block(device_snapshot, monkeypatch):
     case = device_snapshot()
     case.executor._prepare_dictionary_identity()
