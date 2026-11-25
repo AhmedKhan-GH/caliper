@@ -20,8 +20,8 @@ def collection(tmp_path):
         (runtime / name).write_bytes(name.encode())
     trace_id = "a" * 64
     graph = runtime / f"trace-{trace_id}.json"
-    graph.write_text('{"schedule": []}')
-    record = {"evidence": descriptor(tmp_path, runtime / "arrays.npz"),
+    graph.write_text(json.dumps({"trace_id": trace_id, "schedule": []}))
+    record = {"cell": 29, "evidence": descriptor(tmp_path, runtime / "arrays.npz"),
               "native_evidence": descriptor(tmp_path, runtime / "native.pt"),
               "observations": {"Say Victoria": {
                   "native_evidence": descriptor(tmp_path, runtime / "observation.pt")}}}
@@ -59,10 +59,12 @@ def test_outside_native_file_is_refused(collection):
         write_collection(out, root, result)
 
 
-def test_ordinary_legacy_collection_retains_existing_contract(collection):
+def test_partial_baseline_collection_retains_existing_contract(collection):
     root, out, _, result = collection
     record = result["published_actions"][0]["evidence"]["result"]
     del record["native_evidence"], record["observations"]
     del result["trace"]
+    record["cell"] = 10
+    result["evidence_collection_complete"] = False
     manifest = write_collection(out, root, result)
-    assert len(manifest["files"]) == 4
+    assert len(manifest["files"]) == 4 and not manifest["evidence_collection_complete"]

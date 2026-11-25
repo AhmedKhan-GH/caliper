@@ -299,18 +299,18 @@ def test_historical_causal_pass_never_approves_published_acceptance():
     assert {"published_profile", "external_replication_review"} <= set(result["failed_checks"])
 
 
-def test_collection_completion_is_not_acceptance(tmp_path):
+def test_partial_collection_is_not_acceptance(tmp_path):
     out = tmp_path / "driver"
     out.mkdir()
-    result = {"mode": "gemma", "replication_profile": published.PROFILE, "evidence_collection_complete": True,
+    result = {"mode": "gemma", "replication_profile": published.PROFILE, "evidence_collection_complete": False,
               "completed": False, "checks": [], "published_actions": []}
     write_json(out / "result.json", result)
     collection = write_collection(out, tmp_path, result)
-    assert collection["evidence_collection_complete"] and not collection["accepted_replication"]
+    assert not collection["evidence_collection_complete"] and not collection["accepted_replication"]
     assert finish(result) == 1 and not result["accepted_replication"]
     write_json(tmp_path / "review.json", {"schema": "caliper.published-dallas.review.v1", "protocol": published.PROFILE,
                "source_manifest_sha256": published.MANIFEST_SHA256, "collection_sha256": "0" * 64})
-    with pytest.raises(Failure, match="another collection"):
+    with pytest.raises(Failure, match="incomplete"):
         verify_review(tmp_path, "driver/collection.json", "review.json")
 
 
@@ -386,8 +386,22 @@ def reviewed_collection(callback_boundary):
     result = {"mode": "gemma", "replication_profile": published.PROFILE, "evidence_collection_complete": True,
               "pixel_evidence_collected": True, "preparation_id": prepared["id"], "published_actions": actions,
               "checks": [check(name, True, 0, "Synthetic external process receipt") for name in sorted(names)],
-              "trace": {"trace_id": "a" * 64, "counts": {"edges": 3}}, "dictionary_evidence": published_reply(),
+              "dictionary_evidence": published_reply(),
               "browser_assets": {name: {"status": 200} for name in ("caliper-views-loader.js", "caliper-views.js", "caliper-views.wasm")}}
+    transport = GraphMCP()
+    transport.nodes = transport.nodes[:3]
+    transport.edges = [{"source": i, "target": (i + 1) % 3, "weight": .1} for i in range(3)]
+    transport.trace["counts"].update(nodes=3, edges=3)
+    result["trace"] = deepcopy(transport.trace)
+    graph, _ = published.read_graph(SimpleNamespace(events=transport), transport.trace)
+    graph["settings"].update(physical_batches=[3], logical_queues=[[0, 1, 2]])
+    result["trace"]["settings"].update(physical_batch_count=1, logical_queue_count=1, schedule_in_full_export=True)
+    graph["completeness"]["targets"] = [{"target": 1, "absolute_residual": .001}]
+    graph["completeness"]["target_count"] = result["trace"]["completeness"]["target_count"] = 1
+    write_json(root / f"trace-{graph['trace_id']}.json", graph)
+    for gate in result["checks"]:
+        if gate["name"] in ("process_memory", "bounded_memory"):
+            gate["measured"] = 20_000_000_000
     out = root / "driver"
     out.mkdir()
     write_json(out / "result.json", result)
