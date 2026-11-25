@@ -26,7 +26,7 @@ uv run --no-project --with-requirements requirements-docs.txt mkdocs build --str
 
 ## Submodules
 
-Caliper keeps third-party code as git submodules in `third_party/`. Run `./init-submodules.sh`, not `git submodule update`, because some submodule pins need the script fallbacks. On Windows without Git Bash, run `init-submodules.bat` in Command Prompt. Do not commit changed submodule pointers unless that update is the purpose of the commit.
+Caliper keeps third-party code as git submodules in `third_party/`. Run `./init-submodules.sh`, not `git submodule update`, because some submodule pins need the script fallbacks. On Windows without Git Bash, run `init-submodules.bat` in Command Prompt. Both scripts delete `third_party/` and local build folders (`cmake-build-*`, `build/`) before they initialize submodules. Do not commit changed submodule pointers unless that update is the purpose of the commit.
 
 ## Commits
 

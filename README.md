@@ -216,7 +216,7 @@ Git submodules and CMake manage all dependencies. Run `./init-submodules.sh` onc
 | Issue | Solution |
 |-------|----------|
 | **CUDA not available** | Check the configure output for the `CUDA support` line. `USE_CUDA` turns itself OFF when CMake finds no CUDA toolkit. Check that the CUDA DLLs sit next to the executable in `cmake-build-release/`. |
-| **Submodules missing** | Run `./init-submodules.sh`, or run `init-submodules.bat` in Windows Command Prompt. |
+| **Submodules missing** | For a clean setup, run `./init-submodules.sh`, or run `init-submodules.bat` in Windows Command Prompt. Both scripts delete `third_party/` (including any downloaded `libtorch` folder) and `cmake-build-*` before they reinitialize submodules. To fetch one submodule without deleting local folders, run `git submodule update --init --recursive <submodule-path>`. |
 | **The Metal renderer could not start** or **the Vulkan renderer could not start** | The message gives the reason. Caliper needs a working Metal device on macOS or a Vulkan driver on Windows, and has no fallback renderer until the WebGPU fallback through Dawn lands. On Windows, update the graphics driver; a remote desktop session may have no Vulkan |
 | **LibTorch download fails** | Check internet; manually download the archive from the PyTorch website and extract it to the folder named in the LibTorch section |
 | **Wrong LibTorch variant** | Delete the LibTorch folder and configure again; see the LibTorch section |
