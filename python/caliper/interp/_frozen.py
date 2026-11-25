@@ -13,6 +13,7 @@ from torch.nn import functional as F
 
 from ._dictionary import model_identity
 from ._families import model_family
+from . import _qwen_family
 from ._points import _architecture, capture
 from ._memory import (MemoryGuard as ProcessMemoryGuard, BudgetMemory, CleanStop,
                       allocation_bytes, free_percent, autorelease_scope)
@@ -407,7 +408,7 @@ def _validate_ablation_points(model, interventions):
 
 
 class FrozenAttention:
-    """Linear values with fixed softmax and optional Qwen output gate."""
+    """Linear values with fixed softmax and an optional output gate."""
 
     def __init__(self, module, x, pattern, *, gate_projection=None, output=None):
         self.pattern = pattern.detach()
@@ -418,8 +419,7 @@ class FrozenAttention:
         self.output = output if output is not None else FrozenAttentionOutput(module.o_proj)
         self.gate = None
         if gate_projection is not None:
-            projected = gate_projection.reshape(1, x.shape[1], self.heads, self.head_dim * 2)
-            self.gate = projected.chunk(2, dim=-1)[1].reshape(1, x.shape[1], -1).sigmoid().detach()
+            self.gate = _qwen_family.attention_gate(gate_projection, x, self.heads, self.head_dim)
         with torch.no_grad():
             self.offset = self._apply(torch.zeros_like(x), True).detach()
             self.intervention_offset = self._apply(torch.zeros_like(x), False, True).detach()
@@ -438,58 +438,12 @@ class FrozenAttention:
         return self._apply(x, False) + bias * self.offset + intervention * self.intervention_offset
 
 
-class FrozenDeltaNet:
-    """Linear value projection, causal convolution, and signed recurrence.
-
-    The captured operator fixes queries, keys, decay, and beta. Value SiLU
-    retains its linear input with a fixed sigmoid. Output RMS and SiLU gates
-    use their recorded factors. No routing gradient enters this path.
-    """
+class FrozenDeltaNet(_qwen_family.FrozenDeltaNet):
+    """Retain the internal constructor with shared bias and output primitives."""
 
     def __init__(self, module, x, pattern, qkv, norm_input, output_gate, *, output=None):
-        if module.activation not in ("silu", "swish"):
-            raise NotImplementedError("DeltaNet tracing requires the SiLU value gate")
-        start = 2 * module.key_dim
-        self.value_dim = module.value_dim
-        self.head_dim = module.head_v_dim
-        self.heads = module.num_v_heads
-        self.kernel = module.conv_kernel_size
-        self.v_weight = module.in_proj_qkv.weight.detach()[start:]
-        projection_bias = _bias(module.in_proj_qkv)
-        self.v_bias = projection_bias[start:] if projection_bias is not None else None
-        self.conv_weight = module.conv1d.weight.detach()[start:]
-        conv_bias = _bias(module.conv1d)
-        self.conv_bias = conv_bias[start:] if conv_bias is not None else None
-        self.output = output if output is not None else FrozenAttentionOutput(module.out_proj)
-        self.pattern = pattern.detach()
-        length = x.shape[1]
-        with torch.no_grad():
-            projected = qkv[..., start:].transpose(1, 2).to(self.conv_weight.dtype)
-            convolved = F.conv1d(projected, self.conv_weight, self.conv_bias,
-                                 padding=self.kernel - 1, groups=self.value_dim)[..., :length]
-            self.value_gate = convolved.sigmoid().transpose(1, 2).detach()
-            core = norm_input.reshape(1, length, self.heads, self.head_dim).float()
-            self.norm_scale = torch.rsqrt(core.square().mean(-1, keepdim=True) + module.norm.variance_epsilon)
-            self.norm_weight = module.norm.weight.detach()
-            self.output_gate = F.silu(output_gate.float()).reshape(1, length, self.heads, self.head_dim).detach()
-            self.offset = self._apply(torch.zeros_like(x), True).detach()
-            self.intervention_offset = self._apply(torch.zeros_like(x), False, True).detach()
-
-    def _apply(self, x, biases, intervention=False):
-        batch, length, _ = x.shape
-        values = F.linear(x, self.v_weight, self.v_bias if biases else None).transpose(1, 2)
-        values = F.conv1d(values.to(self.conv_weight.dtype), self.conv_weight,
-                          self.conv_bias if biases else None, padding=self.kernel - 1,
-                          groups=self.value_dim)[..., :length].transpose(1, 2)
-        values = (values * self.value_gate).to(x.dtype)
-        values = values.reshape(batch, length, self.heads, self.head_dim).transpose(1, 2)
-        core = (self.pattern @ values.float()).transpose(1, 2).to(x.dtype)
-        normalized = (core.float() * self.norm_scale).to(x.dtype) * self.norm_weight
-        result = (normalized * self.output_gate).to(x.dtype).reshape(batch, length, self.value_dim)
-        return self.output(result, biases, intervention)
-
-    def __call__(self, x, bias=1., intervention=1.):
-        return self._apply(x, False) + bias * self.offset + intervention * self.intervention_offset
+        super().__init__(module, x, pattern, qkv, norm_input, output_gate,
+                         output=output, output_factory=FrozenAttentionOutput, bias=_bias)
 
 
 class FrozenInput:
@@ -636,8 +590,6 @@ class FrozenPath:
             def pre(name):
                 def hook(mod, args, kwargs):
                     recorded[name] = _tensor_input(args, kwargs).detach()
-                    if name.endswith(".delta_norm"):
-                        recorded[name + ".gate"] = (args[1] if len(args) > 1 else kwargs["gate"]).detach()
                 return hook
             def out(name):
                 def hook(mod, args, result):
@@ -684,11 +636,8 @@ class FrozenPath:
                     install(modules[name].register_forward_hook(out(name + ".after")))
                 install(block.input_layernorm.register_forward_pre_hook(pre(f"{i}.input_norm"), with_kwargs=True))
                 install(getattr(block, self.family.mlp_read_norm).register_forward_pre_hook(pre(f"{i}.post_norm"), with_kwargs=True))
-                if self.qwen and block.block_type == "linear_attention":
-                    install(block.linear_attn.in_proj_qkv.register_forward_hook(out(f"{i}.qkv")))
-                    install(block.linear_attn.norm.register_forward_pre_hook(pre(f"{i}.delta_norm"), with_kwargs=True))
-                elif self.qwen:
-                    install(block.self_attn.q_proj.register_forward_hook(out(f"{i}.q_gate")))
+                if self.qwen:
+                    _qwen_family.capture_frozen_inputs(block, i, recorded, install, pre, out)
                 def stage_hook(*_, i=i):
                     self.guard.check(f"record layer {i}")
                     check(f"record layer {i}")
@@ -748,14 +697,15 @@ class FrozenPath:
                     self.mlp_inputs.append(FrozenInput(recorded[f"{i}.mlp_source"], x,
                         [s for s in interventions if s["point"] == f"{base}.mlp_in"]))
                     pattern = values[f"{base}.attn_pattern"]
-                    if self.qwen and block.block_type == "linear_attention":
-                        mixer = FrozenDeltaNet(block.linear_attn, recorded[f"{i}.input_norm"], pattern,
-                                               recorded[f"{i}.qkv"], recorded[f"{i}.delta_norm"],
-                                               recorded[f"{i}.delta_norm.gate"], output=_attention_output(
-                                                   model, f"{base}.linear_attn", "out_proj", interventions, recorded))
+                    if self.qwen:
+                        mixer_name, pattern_kind = self.family.mixer(block)
+                        projection = "out_proj" if pattern_kind == "delta" else "o_proj"
+                        mixer = _qwen_family.frozen_mixer(block, i, recorded, pattern,
+                            _attention_output(model, f"{base}.{mixer_name}", projection, interventions, recorded),
+                            attention=FrozenAttention, delta=FrozenDeltaNet)
                     else:
                         mixer = FrozenAttention(block.self_attn, recorded[f"{i}.input_norm"], pattern,
-                                                gate_projection=recorded.get(f"{i}.q_gate"), output=_attention_output(
+                                                output=_attention_output(
                                                     model, f"{base}.self_attn", "o_proj", interventions, recorded))
                     self.mixers.append(mixer)
                     self.guard.check(f"freeze layer {i}")

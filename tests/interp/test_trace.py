@@ -238,13 +238,20 @@ def test_fixture_frozen_forward_linearity_and_zero_errors():
         torch.testing.assert_close(z, x - .7 * y, atol=1e-10, rtol=0)
 
 
-def test_real_qwen_modules_forward_and_linearity():
+@pytest.mark.parametrize("delta_biases", [False, True])
+def test_real_qwen_modules_forward_and_linearity(delta_biases):
     from caliper.interp._frozen import FrozenPath
     model = qwen_for_trace()
     # Cover nonzero full-attention biases with actual primary module code.
     full = model.model.layers[3].self_attn
     for projection in (full.v_proj, full.o_proj):
         projection.bias = torch.nn.Parameter(torch.linspace(-.02, .02, projection.out_features))
+    if delta_biases:
+        for block in model.model.layers[:3]:
+            delta = block.linear_attn
+            for projection in (delta.in_proj_qkv, delta.out_proj):
+                projection.bias = torch.nn.Parameter(torch.linspace(-.02, .02, projection.out_features))
+            delta.conv1d.bias = torch.nn.Parameter(torch.linspace(-.01, .01, delta.conv_dim))
     observed = {}
     handles = []
     for i, block in enumerate(model.model.layers):
