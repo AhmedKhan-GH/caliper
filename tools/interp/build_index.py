@@ -29,6 +29,7 @@ from .text_stream import (DATASET_CONFIG, DATASET_ID, DATASET_REVISION, TextStre
                           evaluation_source_metadata, fineweb_documents, partition_metadata)
 
 MEMORY_LIMIT_GB = 12
+REFERENCE_PROFILE = "circuit_tracer_82996f14"
 
 
 def validate_partitions(metadata):
@@ -149,6 +150,8 @@ def _memory_gb(value):
 class _IndexParser(argparse.ArgumentParser):
     def parse_args(self, args=None, namespace=None):
         result = super().parse_args(args, namespace)
+        if result.profile != "caliper" and result.model != GEMMA_ID:
+            self.error("the reference profile requires the Gemma text model")
         if result.model == GEMMA_ID and result.context < 2:
             self.error("Gemma context must reserve one BOS position and one source position")
         ceiling = 40 if result.model == GEMMA_ID else MEMORY_LIMIT_GB
@@ -162,6 +165,7 @@ def parser():
     result = _IndexParser(description=__doc__)
     result.add_argument("--dictionary", type=Path, required=True)
     result.add_argument("--model", choices=(MODEL_ID, GEMMA_ID), default=MODEL_ID)
+    result.add_argument("--profile", choices=("caliper", REFERENCE_PROFILE), default="caliper")
     result.add_argument("--device", choices=("cpu", "mps"), default="mps")
     result.add_argument("--tokens", type=_bounded_int(MAX_TOKENS), default=MAX_TOKENS)
     result.add_argument("--context", type=_bounded_int(256), default=256)
@@ -205,6 +209,8 @@ def main(argv=None):
                 check("source")
                 stop.check()
             selection = {"model_id": args.model} if args.model != MODEL_ID else {}
+            if args.profile != "caliper":
+                selection["reference_profile"] = args.profile
             model, tokenizer = load_text_model(device=args.device, memory=memory, **selection)
             stop.check()
             dictionary = load_dictionary(args.dictionary, model=model, memory_limit_gb=args.memory_gb, memory=memory)

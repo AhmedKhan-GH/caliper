@@ -13,13 +13,15 @@ from caliper.interp._admission import (GEMMA_ID, GEMMA_REVISION, _admit_model_lo
                                        _admit_model_transfer, _load_gemma_model)
 
 
-def load_text_model(*, device="mps", memory=None, model_id=MODEL_ID, mode="inference"):
+def load_text_model(*, device="mps", memory=None, model_id=MODEL_ID, mode="inference",
+                    reference_profile=None):
     """Load only the text class from the complete cached snapshot.
 
     Transformers resolves the shard index. It applies the same prefix mapping
     as the lead preflight. Missing, unexpected, and mismatched keys are errors.
     Qwen inference has a 12 GB ceiling. Explicit Qwen training uses 24 GB.
     Gemma inference uses 40 GB. Supplied lower limits remain active.
+    The explicit Gemma reference profile selects bfloat16 inference.
     """
     if model_id not in (MODEL_ID, GEMMA_ID):
         raise ValueError("unsupported text model selection")
@@ -27,6 +29,11 @@ def load_text_model(*, device="mps", memory=None, model_id=MODEL_ID, mode="infer
         raise ValueError("unsupported text model load mode")
     if mode == "training" and model_id != MODEL_ID:
         raise ValueError("training mode requires the Qwen text model")
+    if reference_profile is not None:
+        if model_id != GEMMA_ID or mode != "inference":
+            raise ValueError("reference profile requires Gemma inference")
+        from caliper.interp._gemma_reference import validate_profile
+        validate_profile(reference_profile)
     ceiling = (_qwen_family.TRAINING_MEMORY_MAX_GB if mode == "training" else
                40 if model_id == GEMMA_ID else _qwen_family.INFERENCE_MEMORY_MAX_GB)
     memory = MemoryGuard(ceiling, device) if memory is None else BudgetMemory(memory, ceiling)
@@ -38,7 +45,11 @@ def load_text_model(*, device="mps", memory=None, model_id=MODEL_ID, mode="infer
 
     if model_id == GEMMA_ID:
         snapshot = Path(snapshot_download(GEMMA_ID, revision=GEMMA_REVISION, local_files_only=True))
-        model = _load_gemma_model(snapshot, device=device, memory=memory)
+        selection = {}
+        if reference_profile is not None:
+            import torch
+            selection = {"dtype": torch.bfloat16, "reference_profile": reference_profile}
+        model = _load_gemma_model(snapshot, device=device, memory=memory, **selection)
         tokenizer = AutoTokenizer.from_pretrained(snapshot, local_files_only=True, trust_remote_code=False)
         print(json.dumps({"stage": "text_model_ready", "model_id": GEMMA_ID, "revision": GEMMA_REVISION,
                           "fallback_enabled": os.environ.get("PYTORCH_ENABLE_MPS_FALLBACK", "0")}), flush=True)
