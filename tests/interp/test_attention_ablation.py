@@ -215,8 +215,6 @@ def test_attention_projection_bias_obeys_ablation_scope(whole_module):
 
 
 def test_attention_ablation_trace_respects_suspension_and_selected_rows():
-    if not hasattr(_controls.Controls, "intervention_service"):
-        pytest.skip("Scoped rows require the M8 intervention service")
     model, tokenizer = TinyLM(), TinyTokenizer()
     dictionary = exact_dictionary(model)
     with active_ablation(model, ["layers.0.self_attn#1"]) as owner:

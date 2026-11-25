@@ -628,8 +628,6 @@ def test_nested_source_forward_preserves_outer_frozen_capture():
 
 def test_m8_live_service_cache_clamp_and_nested_patch(monkeypatch):
     from caliper import _controls
-    if not hasattr(_controls.Controls, "intervention_service"):
-        pytest.skip("M8 service integration requires the M8 controls dependency")
     from caliper.interp import Tracer
     from .fixture import TinyLM, TinyTokenizer
     model, tokenizer = TinyLM(layers=2), TinyTokenizer()
