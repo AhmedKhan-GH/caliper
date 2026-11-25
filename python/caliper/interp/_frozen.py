@@ -852,20 +852,28 @@ class FrozenPath:
                 self.reference_final = self.final_norm(recorded["final_norm"]).detach()
                 self._freeze_logits(model, self.final_norm(recorded["final_norm"])[:, -1], memory_check)
                 # Compare every read and all next-token logits, before any edge calculation.
-                self.forward_residual = _finite_max([float((a - b).abs().max()) for a, b in zip(reads, self.inputs)] +
-                                            [float((self.logits_from_final(final[:, -1]) - self.logits).abs().max())],
-                                                   "direct forward residual")
+                self.forward_residuals = {
+                    "direct_reads": [float((a - b).abs().max()) for a, b in zip(reads, self.inputs)],
+                    "direct_logits": float((self.logits_from_final(final[:, -1]) - self.logits).abs().max()),
+                }
+                self.forward_residual = _finite_max(
+                    self.forward_residuals["direct_reads"] + [self.forward_residuals["direct_logits"]],
+                    "direct forward residual")
                 self.direct_forward_residual = self.forward_residual
                 check("direct forward agreement")
                 replacement_reads, replacement_final = self.replacement(self.embedding, dictionary, check=check)
+                self.forward_residuals.update(
+                    replacement_reads=[float((a - b).abs().max()) for a, b in zip(replacement_reads, self.inputs)],
+                    replacement_logits=float((self.logits_from_final(replacement_final[:, -1]) - self.logits).abs().max()))
                 self.replacement_forward_residual = _finite_max(
-                    [float((a - b).abs().max()) for a, b in zip(replacement_reads, self.inputs)] +
-                    [float((self.logits_from_final(replacement_final[:, -1]) - self.logits).abs().max())],
+                    self.forward_residuals["replacement_reads"] + [self.forward_residuals["replacement_logits"]],
                     "replacement forward residual")
                 self.forward_residual = max(self.direct_forward_residual, self.replacement_forward_residual)
                 tolerance = 1e-9 if self.dtype == torch.float64 else 2e-2
                 if not self.forward_residual <= tolerance:
-                    raise ValueError(f"frozen replacement forward mismatch: {self.forward_residual:.6g}")
+                    details = ", ".join(f"{name}={max(value) if isinstance(value, list) else value:.6g}"
+                                        for name, value in self.forward_residuals.items())
+                    raise ValueError(f"frozen replacement forward mismatch: {self.forward_residual:.6g} ({details})")
                 self.guard.check("forward agreement")
                 check("forward agreement")
                 # Encoder and unembedding biases are target-local. Input edits have their own constant term.
