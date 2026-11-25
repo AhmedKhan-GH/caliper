@@ -85,8 +85,8 @@ def _load_gemma_model(snapshot, *, device, memory):
     if (snapshot.name != GEMMA_REVISION or snapshot.parent.name != "snapshots"
             or snapshot.parent.parent.name != "models--google--gemma-2-2b"):
         raise ValueError("model must name the pinned local Gemma snapshot")
-    if not 0 < memory.limit <= 28_000_000_000:
-        raise ValueError("Gemma memory limit is at most 28 GB")
+    if not 0 < memory.limit <= 40_000_000_000:
+        raise ValueError("Gemma memory limit is at most 40 GB")
     config = Gemma2Config(**json.loads((snapshot / "config.json").read_text()))
     if (config.model_type, config.num_hidden_layers, config.hidden_size, config.vocab_size) != (
             "gemma2", 26, 2304, 256000):

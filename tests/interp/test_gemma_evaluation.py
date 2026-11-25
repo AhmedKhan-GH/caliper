@@ -195,9 +195,9 @@ def test_index_cli_model_selection_keeps_old_defaults_and_gemma_ceiling():
     parsed = build_index.parser().parse_args(["--dictionary", "unused"])
     assert parsed.model == MODEL_ID and parsed.memory_gb == 12
     parsed = build_index.parser().parse_args(["--dictionary", "unused", "--model", GEMMA_ID])
-    assert parsed.memory_gb == 28 and parsed.tokens == 2_000_000
+    assert parsed.memory_gb == 40 and parsed.tokens == 2_000_000
     with pytest.raises(SystemExit):
-        build_index.parser().parse_args(["--dictionary", "unused", "--model", GEMMA_ID, "--memory-gb", "29"])
+        build_index.parser().parse_args(["--dictionary", "unused", "--model", GEMMA_ID, "--memory-gb", "41"])
 
 
 @pytest.mark.parametrize("field", ["import_source", "evaluation_source"])

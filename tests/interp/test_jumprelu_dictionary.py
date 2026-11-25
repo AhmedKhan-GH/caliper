@@ -154,12 +154,12 @@ def test_binding_compares_threshold_to_checkpoint(tmp_path):
 
 
 def test_expanded_budget_is_only_for_pinned_gemma(tmp_path):
-    _dictionary._memory_limit(28, _dictionary._GEMMA_IDENTITY, "verification")
+    _dictionary._memory_limit(40, _dictionary._GEMMA_IDENTITY, "verification")
     with pytest.raises(ValueError, match="pinned Gemma"):
-        _dictionary._memory_limit(28, "hf:google/gemma-2-2b@" + "0" * 40, "verification")
+        _dictionary._memory_limit(40, "hf:google/gemma-2-2b@" + "0" * 40, "verification")
     model, _ = jump_fixture(tmp_path)
     with pytest.raises(ValueError, match="pinned Gemma"):
-        load_dictionary(tmp_path, model=model, memory_limit_gb=28)
-    for limit in (0, 29, float("nan"), True):
+        load_dictionary(tmp_path, model=model, memory_limit_gb=40)
+    for limit in (0, 41, float("nan"), True):
         with pytest.raises(ValueError, match="memory limit"):
             load_dictionary(tmp_path, model=model, memory_limit_gb=limit)

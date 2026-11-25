@@ -23,6 +23,7 @@ DATASET_CONFIG = "sample-10BT"
 DATASET_REVISION = "87f09149ef4734204d70ed1d046ddc9ca3f2b8f9"
 _CHECKSUM_CHUNK_BYTES = 8 * 1024 * 1024
 _PARQUET_RESERVE_BYTES = 32 * 1024 * 1024
+_HOST_RESERVE_BYTES = 8_000_000_000
 PARTITIONS = {
     "algorithm": "sha256-utf8-text-mod10000-v1",
     "train": [0, 9400], "quality": [9400, 9500], "index": [9500, 10000],
@@ -121,7 +122,7 @@ def _parquet_units(source, file_bytes):
 
 
 def _admit_parquet_decode(memory, required):
-    """Require fresh process headroom and host memory above a 20 percent reserve."""
+    """Require fresh process headroom and an 8 decimal GB host reserve after decode."""
     if memory is None:
         raise CleanStop("Parquet decode requires a process memory guard")
     import psutil
@@ -135,7 +136,7 @@ def _admit_parquet_decode(memory, required):
     if memory.peak > memory.limit:
         raise CleanStop("process or MPS allocation exceeds the memory limit")
     host = psutil.virtual_memory()
-    headroom = min(memory.limit - process, host.available - host.total // 5)
+    headroom = min(memory.limit - process, host.available - _HOST_RESERVE_BYTES)
     if required > headroom:
         raise CleanStop("Parquet decode exceeds available memory headroom")
 

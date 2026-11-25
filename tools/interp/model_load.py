@@ -23,7 +23,7 @@ def load_text_model(*, device="mps", memory=None, model_id=MODEL_ID, mode="infer
     Transformers resolves the shard index. It applies the same prefix mapping
     as the lead preflight. Missing, unexpected, and mismatched keys are errors.
     Qwen inference has a 12 GB ceiling. Explicit Qwen training uses 24 GB.
-    Gemma inference uses 28 GB. Supplied lower limits remain active.
+    Gemma inference uses 40 GB. Supplied lower limits remain active.
     """
     if model_id not in (MODEL_ID, GEMMA_ID):
         raise ValueError("unsupported text model selection")
@@ -31,7 +31,7 @@ def load_text_model(*, device="mps", memory=None, model_id=MODEL_ID, mode="infer
         raise ValueError("unsupported text model load mode")
     if mode == "training" and model_id != MODEL_ID:
         raise ValueError("training mode requires the Qwen text model")
-    ceiling = 24 if mode == "training" else 28 if model_id == GEMMA_ID else 12
+    ceiling = 24 if mode == "training" else 40 if model_id == GEMMA_ID else 12
     memory = MemoryGuard(ceiling, device) if memory is None else BudgetMemory(memory, ceiling)
     if _canonical_device(memory.device) != _canonical_device(device):
         raise ValueError("text model requires a memory guard for its device")

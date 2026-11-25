@@ -424,7 +424,7 @@ def load_resources(model_name, dictionary_path):
         from transformers import AutoTokenizer
         snapshot = Path(model_name).resolve(strict=True)
         device = "mps" if torch.backends.mps.is_available() else "cpu"
-        guard = MemoryGuard(28, device)
+        guard = MemoryGuard(40, device)
         model = _load_gemma_model(snapshot, device=device, memory=guard)
         tokenizer = AutoTokenizer.from_pretrained(snapshot, local_files_only=True, trust_remote_code=False)
     else:
@@ -454,7 +454,7 @@ def load_resources(model_name, dictionary_path):
         model.to(device)
         guard.check("inference model load")
         tokenizer = AutoTokenizer.from_pretrained(snapshot, local_files_only=True, trust_remote_code=False)
-    options = {"memory_limit_gb": 28} if getattr(model.config, "model_type", None) == "gemma2" else {}
+    options = {"memory_limit_gb": 40} if getattr(model.config, "model_type", None) == "gemma2" else {}
     dictionary = load_dictionary(folder, model=model, device=next(model.parameters()).device,
                                  dtype=next(model.parameters()).dtype, memory=guard, **options)
     if guard is not None:
@@ -478,7 +478,7 @@ class HostedService(InterpretationService):
     def _gemma_tracer(self):
         from . import Tracer
         return Tracer(self.model, self.tokenizer, self._resource("dictionary"),
-                      controls=getattr(self, "controls", None), memory_limit_gb=28, memory=self.owner.guard)
+                      controls=getattr(self, "controls", None), memory_limit_gb=40, memory=self.owner.guard)
 
     def submit(self, metadata, reply, *, acknowledge=None):
         status, result = super().submit(metadata, reply, acknowledge=acknowledge)

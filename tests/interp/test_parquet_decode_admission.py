@@ -29,7 +29,7 @@ def metadata(*, rows=16, compressed=16, uncompressed=64, **overrides):
 
 @pytest.fixture
 def resources(monkeypatch):
-    state = SimpleNamespace(rss=0, footprint=0, driver=0, available=8_000_000_000, total=10_000_000_000)
+    state = SimpleNamespace(rss=0, footprint=0, driver=0, available=16_000_000_000, total=64_000_000_000)
     guard = MemoryGuard(1, "cpu", resident=lambda: state.rss, footprint=lambda: state.footprint,
                         driver=lambda: state.driver, peak=lambda: 0, pressure=lambda: 80, clock=lambda: 0)
     monkeypatch.setattr("psutil.virtual_memory", lambda: state)
@@ -72,7 +72,7 @@ def test_fresh_headroom_refuses_despite_cached_health(resources, reader):
         state.footprint = None
         state.rss, state.driver = guard.limit // 2, guard.limit // 2 - 99
     elif reader == "host":
-        state.available = state.total // 5 + 99
+        state.available = 8_000_000_000 + 99
     else:
         setattr(state, reader, guard.limit - 99)
     with pytest.raises(CleanStop, match="headroom"):
@@ -125,7 +125,7 @@ def test_refusal_precedes_decode_and_closes_file(tmp_path, monkeypatch, resource
     if failure == "process":
         state.rss = guard.limit - 1
     elif failure == "host":
-        state.available = state.total // 5
+        state.available = 8_000_000_000
     elif failure == "unsupported":
         monkeypatch.setattr(text_stream, "_parquet_units", lambda *a: (_ for _ in ()).throw(ValueError("unsupported")))
     with pytest.raises((CleanStop, ValueError)):
@@ -157,7 +157,7 @@ def test_compressed_oversize_metadata_refuses_without_data_allocation(tmp_path, 
     assert events == ["close"]
 
 
-@pytest.mark.parametrize("limit", [12_000_000_000, 24_000_000_000])
+@pytest.mark.parametrize("limit", [12_000_000_000, 24_000_000_000, 40_000_000_000])
 def test_approved_layout_fits_caps_with_sufficient_live_headroom(resources, limit):
     guard, state = resources
     # These are footer counts only. No text or Arrow data buffer is allocated.

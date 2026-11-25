@@ -681,7 +681,7 @@ def acceptance_profile(model):
     snapshot = Path(model).resolve()
     for revision, repository, family, limit in (
         (MODEL_REVISION, "models--Qwen--Qwen3.5-0.8B", "qwen", 12_000_000_000),
-        (GEMMA_REVISION, "models--google--gemma-2-2b", "gemma", 28_000_000_000),
+        (GEMMA_REVISION, "models--google--gemma-2-2b", "gemma", 40_000_000_000),
     ):
         if (snapshot.name == revision and snapshot.parent.name == "snapshots"
                 and snapshot.parent.parent.name == repository):

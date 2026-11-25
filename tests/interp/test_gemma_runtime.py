@@ -40,14 +40,14 @@ def local_gemma(tmp_path, model):
 
 
 def test_gemma_memory_ceiling_and_staged_admission():
-    guard = memory(28)
-    guard.peak = 20_000_000_000
+    guard = memory(40)
+    guard.peak = 30_000_000_000
     _admission._admit_load(guard, 12_000_000_000, "transfer", staged=True)
     with pytest.raises(CleanStop, match="model allocation"):
         _admission._admit_load(guard, 12_000_000_000, "legacy")
-    with pytest.raises(ValueError, match="28 GB"):
-        memory(28.01)
-    over = MemoryGuard(28, "cpu", resident=lambda: 28_000_000_001, footprint=lambda: None,
+    with pytest.raises(ValueError, match="40 GB"):
+        memory(40.01)
+    over = MemoryGuard(40, "cpu", resident=lambda: 40_000_000_001, footprint=lambda: None,
                        peak=lambda: 0, driver=lambda: 0, pressure=lambda: 80)
     with pytest.raises(CleanStop, match="memory limit"):
         over.check("over budget")
@@ -168,19 +168,18 @@ def test_gemma_incomplete_load_never_records_identity(tmp_path, monkeypatch):
 
 def test_gemma_hosted_load_passes_budget_to_dictionary_and_index(tmp_path, monkeypatch):
     model, snapshot, calls = mock_gemma_load(tmp_path, monkeypatch)
-    guard = memory(28)
+    guard = memory(40)
     from caliper.interp import _memory
     monkeypatch.setattr(_memory, "MemoryGuard", lambda *a: guard)
     monkeypatch.setattr(torch.backends.mps, "is_available", lambda: False)
     verify = _dictionary.verify_hf_model
 
     def verify_cpu(model, folder, *, memory_limit_gb):
-        assert memory_limit_gb == 28
-        # The dictionary worker supplies the wider verifier cap at integration.
-        return verify(model, folder, memory_limit_gb=12)
+        assert memory_limit_gb == 40
+        return verify(model, folder, memory_limit_gb=40)
 
     def dictionary(*a, **kwargs):
-        assert kwargs["memory_limit_gb"] == 28 and kwargs["model"] is model and kwargs["memory"] is guard
+        assert kwargs["memory_limit_gb"] == 40 and kwargs["model"] is model and kwargs["memory"] is guard
         calls.append("dictionary")
         return object()
 
@@ -433,7 +432,7 @@ def test_gemma_small_index_build_and_examples_use_decoder_only(tmp_path, gemma_s
     from safetensors.torch import save_file
     from caliper.interp._points import capture
     model = gemma_semantics
-    _dictionary.verify_hf_model(model, local_gemma(tmp_path, model), memory_limit_gb=28)
+    _dictionary.verify_hf_model(model, local_gemma(tmp_path, model), memory_limit_gb=40)
     dictionary = runtime_dictionary(model)
     (tmp_path / "dictionary.json").write_text(json.dumps(dictionary.metadata))
     for i, layer in enumerate(dictionary.layers):
@@ -453,10 +452,10 @@ def test_gemma_small_index_build_and_examples_use_decoder_only(tmp_path, gemma_s
     manifest = _index.build_index(tmp_path, documents, model=model, tokenizer=tokenizer,
                                   dictionary=dictionary, provenance={"partition": "index",
                                   "publisher_training_overlap": "unknown"}, max_tokens=8,
-                                  context_length=8, memory=memory(28))
+                                  context_length=8, memory=memory(40))
     assert manifest["tokens"] == 8
     with _index.FeatureIndex(tmp_path, model=model, tokenizer=tokenizer, dictionary=dictionary,
-                             memory=memory(28)) as index:
+                             memory=memory(40)) as index:
         actual = index.examples(0, feature)
         expected_values = sorted((float(v) for v in all_features[:, feature] if v > 0), reverse=True)
         assert [row["activation"] for row in actual] == pytest.approx(expected_values)
@@ -476,11 +475,11 @@ def test_gemma_transfer_cannot_rebaseline_changed_weights(tmp_path, monkeypatch)
 def test_hosted_gemma_tracer_receives_explicit_budget(monkeypatch):
     import caliper.interp as interp
     owner = SimpleNamespace(model=gemma_model(), tokenizer=object(), dictionary=object(), index=None,
-                            guard=memory(28), sweep=lambda **kw: None, validate=lambda **kw: None)
+                            guard=memory(40), sweep=lambda **kw: None, validate=lambda **kw: None)
     service = _hosted.HostedService(owner)
     calls = []
     sentinel = object()
     monkeypatch.setattr(interp, "Tracer", lambda *a, **kw: calls.append((a, kw)) or sentinel)
     assert service._gemma_tracer() is sentinel
-    assert calls[0][1]["memory_limit_gb"] == 28
+    assert calls[0][1]["memory_limit_gb"] == 40
     assert calls[0][1]["memory"] is owner.guard

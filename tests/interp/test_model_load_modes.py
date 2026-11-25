@@ -15,7 +15,7 @@ ROUTES = [
     pytest.param({}, 12, id="qwen-default"),
     pytest.param({"mode": "inference"}, 12, id="qwen-inference"),
     pytest.param({"mode": "training"}, 24, id="qwen-training"),
-    pytest.param({"model_id": model_load.GEMMA_ID}, 28, id="gemma-inference"),
+    pytest.param({"model_id": model_load.GEMMA_ID}, 40, id="gemma-inference"),
 ]
 
 
@@ -55,7 +55,7 @@ def test_loader_enforces_mode_ceiling_before_source(monkeypatch, source_boundary
         return logical_guard(limit, readings)
 
     monkeypatch.setattr(model_load, "MemoryGuard", factory)
-    guard = logical_guard(28, readings) if supplied else None
+    guard = logical_guard(40, readings) if supplied else None
     with pytest.raises(SourceBoundary):
         model_load.load_text_model(device="cpu", memory=guard, **selection)
     model_id = selection.get("model_id", model_load.MODEL_ID)
@@ -67,7 +67,7 @@ def test_loader_enforces_mode_ceiling_before_source(monkeypatch, source_boundary
         model_load.load_text_model(device="cpu", memory=guard, **selection)
     assert len(source_boundary) == 1
     if supplied:
-        assert guard.limit == 28_000_000_000
+        assert guard.limit == 40_000_000_000
 
 
 @pytest.mark.parametrize("selection,ceiling", ROUTES)
@@ -109,7 +109,7 @@ def test_loader_preserves_supplied_stops(monkeypatch, source_boundary, selection
 
 @pytest.mark.parametrize("selection,ceiling", ROUTES)
 def test_loader_refuses_wrong_guard_device(source_boundary, selection, ceiling):
-    guard = logical_guard(28, {"current": 0, "peak": 0})
+    guard = logical_guard(40, {"current": 0, "peak": 0})
     guard.device = torch.device("mps")
     with pytest.raises(ValueError, match="guard for its device"):
         model_load.load_text_model(device="cpu", memory=guard, **selection)
@@ -132,8 +132,8 @@ def test_loader_refuses_gemma_training_before_guard(monkeypatch, source_boundary
 
 
 @pytest.mark.parametrize("mode,limit,current,expected", [
-    ("inference", 28, 10, 12), ("training", 24, 18, 24),
-    ("training", 28, 18, 24), ("training", 8, 6, 8),
+    ("inference", 40, 10, 12), ("training", 24, 18, 24),
+    ("training", 40, 18, 24), ("training", 8, 6, 8),
 ])
 def test_qwen_fixture_retains_mode_budget_and_prior_stops(tmp_path, monkeypatch, mode, limit, current, expected):
     model = hf_model()
@@ -170,7 +170,7 @@ def test_qwen_training_fixture_retains_dynamic_lower_limit(tmp_path, monkeypatch
 def test_qwen_fixture_refuses_prospective_load_before_weights(tmp_path, monkeypatch, mode, current):
     model = hf_model()
     calls = mocked_loader(tmp_path, monkeypatch, model, {})
-    guard = logical_guard(28, {"current": int(current * 1e9), "peak": 0})
+    guard = logical_guard(40, {"current": int(current * 1e9), "peak": 0})
     with pytest.raises(CleanStop, match="model allocation exceeds"):
         model_load.load_text_model(device="cpu", memory=guard, mode=mode)
     assert calls == ["snapshot"] and model not in dictionary._VERIFIED_MODELS

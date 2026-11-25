@@ -141,15 +141,15 @@ def _bounded_int(maximum):
 
 def _memory_gb(value):
     number = float(value)
-    if not math.isfinite(number) or not 0 < number <= 28:
-        raise argparse.ArgumentTypeError("memory limit must be positive and at most 28 GB")
+    if not math.isfinite(number) or not 0 < number <= 40:
+        raise argparse.ArgumentTypeError("memory limit must be positive and at most 40 GB")
     return number
 
 
 class _IndexParser(argparse.ArgumentParser):
     def parse_args(self, args=None, namespace=None):
         result = super().parse_args(args, namespace)
-        ceiling = 28 if result.model == GEMMA_ID else MEMORY_LIMIT_GB
+        ceiling = 40 if result.model == GEMMA_ID else MEMORY_LIMIT_GB
         result.memory_gb = ceiling if result.memory_gb is None else result.memory_gb
         if result.memory_gb > ceiling:
             self.error(f"memory limit must be at most {ceiling} GB for this model")

@@ -289,7 +289,7 @@ def _metadata(rows, evaluation_source=None):
     return metadata
 
 
-def convert_gemma_scope(source, output, *, model, memory_limit_gb=28, evaluation_source=None):
+def convert_gemma_scope(source, output, *, model, memory_limit_gb=40, evaluation_source=None):
     """Publish a complete dictionary from the selected local snapshot atomically.
 
     The model must pass the established HF verification before this call. Source
@@ -356,7 +356,7 @@ def main(argv=None):
     parser.add_argument("--source", required=True, type=Path)
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--model-snapshot", required=True, type=Path)
-    parser.add_argument("--memory-limit-gb", type=float, default=28)
+    parser.add_argument("--memory-limit-gb", type=float, default=40)
     parser.add_argument("--evaluation-source", type=Path,
                         help="Pinned local evaluation and index source JSON, separate from publisher training")
     args = parser.parse_args(argv)

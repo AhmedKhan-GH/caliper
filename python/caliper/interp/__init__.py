@@ -28,7 +28,7 @@ def load_dictionary(path, *, model=None, model_hash=None, device=None, dtype=Non
                     memory_limit_gb=12, memory=None):
     """Load a matching dictionary with a default process limit of 12 GB.
 
-    The pinned Gemma model permits an explicit limit of at most 28 GB.
+    The pinned Gemma model permits an explicit limit of at most 40 GB.
     """
     from ._dictionary import load_dictionary as implementation
     return implementation(path, model=model, model_hash=model_hash, device=device, dtype=dtype,

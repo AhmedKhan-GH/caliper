@@ -254,18 +254,15 @@ def test_explicit_gemma_memory_budget_retains_other_family_defaults(monkeypatch)
     original = frozen.ProcessMemoryGuard
     def process(limit, device, **kwargs):
         observed.append(limit)
-        # The runtime worker owns the shared guard's upper limit.
-        guard = original(min(limit, 24), device, **kwargs)
-        guard.limit = int(limit * 1e9)
-        return guard
+        return original(limit, device, **kwargs)
     monkeypatch.setattr(frozen, "ProcessMemoryGuard", process)
-    tracer = Tracer(model, Tokenizer(), dictionary, memory_limit_gb=28)
-    assert observed == [28]
-    assert tracer.guard.limit == tracer.guard._guard.limit == 28_000_000_000
-    with pytest.raises(ValueError, match="at most 28"):
-        Tracer(model, Tokenizer(), dictionary, memory_limit_gb=29)
+    tracer = Tracer(model, Tokenizer(), dictionary, memory_limit_gb=40)
+    assert observed == [40]
+    assert tracer.guard.limit == tracer.guard._guard.limit == 40_000_000_000
+    with pytest.raises(ValueError, match="at most 40"):
+        Tracer(model, Tokenizer(), dictionary, memory_limit_gb=41)
     with pytest.raises(ValueError, match="at most 12"):
-        model_family(TinyLM(layers=1)).memory_limit(28)
+        model_family(TinyLM(layers=1)).memory_limit(40)
 
 
 @pytest.mark.parametrize("kind,point", [("ablate", "mlp_out"), ("ablate", "resid_pre"),

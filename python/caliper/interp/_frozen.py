@@ -198,8 +198,8 @@ class MemoryGuard:
 
     def __init__(self, device, *, memory_limit_gb=12):
         if (isinstance(memory_limit_gb, bool) or not isinstance(memory_limit_gb, (int, float))
-                or not math.isfinite(memory_limit_gb) or not 0 < memory_limit_gb <= 28):
-            raise ValueError("trace memory limit must be positive and at most 28 GB")
+                or not math.isfinite(memory_limit_gb) or not 0 < memory_limit_gb <= 40):
+            raise ValueError("trace memory limit must be positive and at most 40 GB")
         self.limit = int(memory_limit_gb * 1_000_000_000)
         self.device = torch.device(device)
         self.records = deque(maxlen=self.record_limit)

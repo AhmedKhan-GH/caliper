@@ -63,7 +63,7 @@ _FAMILIES = {
                           "transformers.models.gemma2.modeling_gemma2", unit_offset_norm=True,
                           mlp_read_norm="pre_feedforward_layernorm",
                           mlp_write_module="post_feedforward_layernorm",
-                          attention_write_norm="post_attention_layernorm", memory_max_gb=28),
+                          attention_write_norm="post_attention_layernorm", memory_max_gb=40),
 }
 
 

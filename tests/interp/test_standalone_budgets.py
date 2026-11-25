@@ -35,7 +35,7 @@ class Tokenizer:
 def gemma_resources(tmp_path, monkeypatch):
     # Scalars model a released transfer peak and a live model plus dictionary.
     # All actual tensors use the small random CPU configuration.
-    readings = {"current": 18_312_752_128, "peak": 24_000_000_000}
+    readings = {"current": 30_312_752_128, "peak": 36_000_000_000}
     guards = []
     def guard(limit, device, **kwargs):
         assert torch.device(device).type == "cpu"
@@ -46,7 +46,7 @@ def gemma_resources(tmp_path, monkeypatch):
         monkeypatch.setattr(module, "MemoryGuard", guard)
     monkeypatch.setattr(_frozen, "ProcessMemoryGuard", guard)
     model = gemma_model()
-    _dictionary.verify_hf_model(model, local_gemma(tmp_path, model), memory_limit_gb=28)
+    _dictionary.verify_hf_model(model, local_gemma(tmp_path, model), memory_limit_gb=40)
     dictionary = random_dictionary(model, latents=8, k=2)
     for layer in dictionary.layers:
         layer.b_enc.data.fill_(1)
@@ -61,25 +61,25 @@ def gemma_resources(tmp_path, monkeypatch):
 
 def test_standalone_gemma_index_load_build_hash_and_examples(gemma_resources):
     case = gemma_resources
-    options = {"model": case.model, "tokenizer": case.tokenizer, "memory_limit_gb": 28}
+    options = {"model": case.model, "tokenizer": case.tokenizer, "memory_limit_gb": 40}
     _index.build_index(case.folder, [("first", [1, 3, 5, 7])], provenance={"partition": "fixture"}, **options)
     with _index.FeatureIndex(case.folder, **options) as index:
-        assert index.memory.limit == 28_000_000_000
+        assert index.memory.limit == 40_000_000_000
         assert index.dictionary is not case.dictionary
         assert index.dictionary.metadata == case.dictionary.metadata
-        assert _index._dictionary_hash(index.dictionary, memory_limit_gb=28) == index.metadata["dictionary_hash"]
+        assert _index._dictionary_hash(index.dictionary, memory_limit_gb=40) == index.metadata["dictionary_hash"]
         assert index.examples(0, int(index.counts[0].argmax()))
-    assert case.guards and all(guard.limit == 28_000_000_000 for guard in case.guards)
+    assert case.guards and all(guard.limit == 40_000_000_000 for guard in case.guards)
 
 
 def test_standalone_gemma_service_and_validation_budget(gemma_resources):
     case = gemma_resources
     controls = Controls()
     service = register_service(controls=controls, model=case.model, tokenizer=case.tokenizer,
-                               dictionary=case.dictionary, memory_limit_gb=28)
+                               dictionary=case.dictionary, memory_limit_gb=40)
     try:
         tracer = service._resource("tracer")
-        assert tracer.guard.limit == 28_000_000_000 and tracer.controls is controls
+        assert tracer.guard.limit == 40_000_000_000 and tracer.controls is controls
         graph = tracer.trace("fixture", max_targets=0, max_nodes=32)
         # Use actual last-layer activations for this resource-route check.
         # This synthetic graph supplies no evidence about attribution quality.
@@ -96,7 +96,7 @@ def test_standalone_gemma_service_and_validation_budget(gemma_resources):
         try:
             interventions.configure(dictionary=case.dictionary, tokenizer=case.tokenizer)
             result = _validate.validate_trace(case.model, case.tokenizer, case.dictionary,
-                                              interventions, validation_graph, prompt="fixture", memory_limit_gb=28)
+                                              interventions, validation_graph, prompt="fixture", memory_limit_gb=40)
             assert result["count"] == 2 and not result["passed"]
         finally:
             interventions.remove()
@@ -118,21 +118,21 @@ def test_standalone_routes_preserve_supplied_lower_guard_before_work(gemma_resou
     with pytest.raises(CleanStop, match="memory limit"):
         if route == "index":
             _index.FeatureIndex(case.folder, model=case.model, tokenizer=case.tokenizer,
-                                memory=lower, memory_limit_gb=28)
+                                memory=lower, memory_limit_gb=40)
         elif route == "build":
             _index.build_index(case.folder, [], model=case.model, tokenizer=case.tokenizer,
-                               provenance={"partition": "fixture"}, memory=lower, memory_limit_gb=28)
+                               provenance={"partition": "fixture"}, memory=lower, memory_limit_gb=40)
         elif route == "service":
             controls = Controls()
             service = register_service(controls=controls, model=case.model, tokenizer=case.tokenizer,
-                                       dictionary=case.dictionary, memory=lower, memory_limit_gb=28)
+                                       dictionary=case.dictionary, memory=lower, memory_limit_gb=40)
             try:
                 service._resource("tracer")
             finally:
                 unregister_service(service, controls=controls)
         else:
             _validate.validate_trace(case.model, case.tokenizer, case.dictionary, SimpleNamespace(),
-                                      None, prompt="fixture", guard=lower, memory_limit_gb=28)
+                                      None, prompt="fixture", guard=lower, memory_limit_gb=40)
 
 
 def test_trace_reserves_and_identity_keep_dynamic_inner_lower_guard(monkeypatch):
@@ -160,15 +160,15 @@ def test_explicit_gemma_budget_cannot_raise_other_family_limits(tmp_path, family
     model = SimpleNamespace(config=SimpleNamespace(model_type=family))
     with pytest.raises(ValueError, match="at most 12 GB"):
         if route == "index":
-            _index.FeatureIndex(tmp_path, model=model, tokenizer=None, memory_limit_gb=28)
+            _index.FeatureIndex(tmp_path, model=model, tokenizer=None, memory_limit_gb=40)
         elif route == "build":
             _index.build_index(tmp_path, [], model=model, tokenizer=None, provenance={"partition": "fixture"},
-                               memory_limit_gb=28)
+                               memory_limit_gb=40)
         elif route == "tracer":
-            _trace.Tracer(model, None, object(), memory_limit_gb=28)
+            _trace.Tracer(model, None, object(), memory_limit_gb=40)
         else:
             _validate._validation_guard(model, None, SimpleNamespace(),
-                                         process_guard(28_000_000_000, {"current": 0, "peak": 0}), 28)
+                                         process_guard(40_000_000_000, {"current": 0, "peak": 0}), 40)
     assert family_memory_limit(model) == 12
 
 

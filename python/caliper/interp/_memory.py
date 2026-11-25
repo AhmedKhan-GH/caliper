@@ -130,8 +130,8 @@ class BudgetMemory:
 
     @limit.setter
     def limit(self, value):
-        if type(value) not in (int, float) or not 0 < value <= 28_000_000_000:
-            raise ValueError("memory limit must be positive and at most 28 GB")
+        if type(value) not in (int, float) or not 0 < value <= 40_000_000_000:
+            raise ValueError("memory limit must be positive and at most 40 GB")
         self.cap = int(value)
 
     @property
@@ -185,8 +185,8 @@ class MemoryGuard:
     def __init__(self, limit_gb, device, *, interval=15, pressure=free_percent,
                  resident=resident_bytes, footprint=physical_footprint, peak=peak_resident_bytes,
                  driver=None, clock=time.monotonic):
-        if not 0 < limit_gb <= 28:
-            raise ValueError("memory limit must be positive and at most 28 GB")
+        if type(limit_gb) not in (int, float) or not 0 < limit_gb <= 40:
+            raise ValueError("memory limit must be positive and at most 40 GB")
         self.limit = int(limit_gb * 1_000_000_000)
         self.device = torch.device(device)
         self.interval, self.pressure, self.resident, self.clock = interval, pressure, resident, clock

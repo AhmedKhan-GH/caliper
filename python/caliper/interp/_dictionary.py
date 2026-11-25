@@ -47,8 +47,8 @@ def weight_names(layer_or_metadata):
 
 
 def _memory_limit(limit, identity, operation):
-    if type(limit) not in (int, float) or not 0 < limit <= 28:
-        raise ValueError(f"{operation} memory limit must be positive and at most 28 GB")
+    if type(limit) not in (int, float) or not 0 < limit <= 40:
+        raise ValueError(f"{operation} memory limit must be positive and at most 40 GB")
     if limit > 12 and identity != _GEMMA_IDENTITY:
         raise ValueError(f"{operation} memory limit above 12 GB requires the pinned Gemma model")
 
@@ -676,7 +676,7 @@ def load_dictionary(path, *, model=None, model_hash=None, device=None, dtype=Non
                     memory_limit_gb=12, memory=None):
     """Load a matching dictionary within a default process limit of 12 GB.
 
-    The pinned Gemma model permits an explicit limit of at most 28 GB.
+    The pinned Gemma model permits an explicit limit of at most 40 GB.
 
     ``memory_limit_gb`` uses decimal GB and includes current process/model memory,
     destination weights, metadata, and temporary conversion storage. Metadata has
@@ -688,8 +688,8 @@ def load_dictionary(path, *, model=None, model_hash=None, device=None, dtype=Non
     """
     from safetensors import safe_open
 
-    if type(memory_limit_gb) not in (int, float) or not 0 < memory_limit_gb <= 28:
-        raise ValueError("dictionary memory limit must be positive and at most 28 GB")
+    if type(memory_limit_gb) not in (int, float) or not 0 < memory_limit_gb <= 40:
+        raise ValueError("dictionary memory limit must be positive and at most 40 GB")
     supplied = BudgetMemory(memory, memory_limit_gb) if memory is not None else None
     if supplied is not None:
         supplied.check("dictionary supplied guard")

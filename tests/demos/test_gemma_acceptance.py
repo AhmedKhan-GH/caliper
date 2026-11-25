@@ -206,7 +206,7 @@ def test_gemma_finish_keeps_causal_failure_and_separate_model_result():
 def test_memory_budget_requires_the_exact_gemma_snapshot(tmp_path):
     gemma = tmp_path / "models--google--gemma-2-2b" / "snapshots" / GEMMA_REVISION
     qwen = tmp_path / "models--Qwen--Qwen3.5-0.8B" / "snapshots" / MODEL_REVISION
-    assert acceptance_profile(str(gemma)) == ("gemma", 28_000_000_000)
+    assert acceptance_profile(str(gemma)) == ("gemma", 40_000_000_000)
     assert acceptance_profile(str(qwen)) == ("qwen", 12_000_000_000)
     assert acceptance_profile("tiny-lm") == ("fixture", 12_000_000_000)
     with pytest.raises(Failure, match="exact supported"):

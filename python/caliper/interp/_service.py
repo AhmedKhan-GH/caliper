@@ -180,10 +180,10 @@ class InterpretationService:
         else:
             limit = self.memory_limit_gb
             if limit is None:
-                limit = min(28, getattr(self.memory, "limit", 12e9) / 1e9)
+                limit = min(40, getattr(self.memory, "limit", 12e9) / 1e9)
             if (isinstance(limit, bool) or not isinstance(limit, (int, float))
-                    or not math.isfinite(limit) or not 0 < limit <= 28):
-                raise ValueError("service memory limit must be positive and at most 28 GB")
+                    or not math.isfinite(limit) or not 0 < limit <= 40):
+                raise ValueError("service memory limit must be positive and at most 40 GB")
         if self.memory is None:
             if self._process_memory is None or _canonical_device(self._process_memory.device) != _canonical_device(device):
                 # A lazy factory can reveal the model device after CPU admission.

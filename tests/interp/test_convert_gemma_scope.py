@@ -278,7 +278,7 @@ def test_atomic_publication_and_layer_release(tmp_path, monkeypatch, fail):
         assert not output.exists()
     else:
         result = conversion.convert_gemma_scope(source, output, model=model)
-        assert admissions == [28, 28]
+        assert admissions == [40, 40]
         assert calls == list(conversion.SOURCE_PATHS)
         assert json.loads((output / "dictionary.json").read_text()) == result
         for row in result["import_source"]["layers"]:
@@ -291,7 +291,7 @@ def test_atomic_publication_and_layer_release(tmp_path, monkeypatch, fail):
     assert not output.with_name("." + output.name + ".conversion-lock").exists()
 
 
-@pytest.mark.parametrize("requested", [None, 12, 28, 28.1])
+@pytest.mark.parametrize("requested", [None, 12, 28, 40, 40.1])
 def test_cli_budget_admits_exact_gemma_load_reserve_and_preserves_lower_cap(tmp_path, monkeypatch, requested):
     from caliper.interp import _admission
     from .test_memory_phases import process_guard
@@ -318,11 +318,12 @@ def test_cli_budget_admits_exact_gemma_load_reserve_and_preserves_lower_cap(tmp_
 
     monkeypatch.setattr(_admission, "_load_gemma_model", load)
     monkeypatch.setattr(conversion, "convert_gemma_scope", convert)
-    if requested in (12, 28.1):
+    if requested in (12, 40.1):
         with pytest.raises(CleanStop if requested == 12 else ValueError, match="memory limit"):
             conversion.main(arguments)
         assert not converted
         assert calls == ([12_000_000_000] if requested == 12 else [])
     else:
         conversion.main(arguments)
-        assert calls == [28_000_000_000] and converted == [28]
+        expected = 40 if requested is None else requested
+        assert calls == [expected * 1_000_000_000] and converted == [expected]
