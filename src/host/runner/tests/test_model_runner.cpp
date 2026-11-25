@@ -1361,6 +1361,9 @@ TEST_CASE("runner: native inference keeps prompts out of arguments and excludes 
     environment.set("CALIPER_RUN_PYTHON", "");
     cr::ModelRunner::Options options;
     options.workspace = w.ws;   // Exercise normal workspace interpreter selection.
+    // A published run and its fork must survive the ordinary link deadline.
+    // The held producer prints its launch evidence before it writes any link.
+    if (replication) options.start_limit_s = 0;
     cr::ModelRunner runner(options);
     struct Guard { cr::ModelRunner& runner; ~Guard() { runner.shutdown(); } } guard{runner};
     cb::RunStartRequest request;
@@ -1448,6 +1451,8 @@ TEST_CASE("runner: native inference keeps prompts out of arguments and excludes 
     REQUIRE(runner.wait_for(state_is(entry.id, "exited"), 15000));
     CHECK(runner.running_pids().empty());
 
+    // Ordinary script launch uses the normal deadline in the other two subcases.
+    if (replication) return;
     auto script = w.start({"ordinary script argument"}, json::object(), "script-probe");
     script.script = "script_probe.py";
     script.script_path = w.ws + "/script_probe.py";

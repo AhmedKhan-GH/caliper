@@ -1207,6 +1207,12 @@ void ModelRunner::loop() {
             }
             // 3. A starting run waits for its link file.
             if (r.proc && !r.conn) {
+                // The published profile verifies the complete pinned source before attachment.
+                // Its link allowance matches the demo's readiness limit, separate from inference.
+                const double link_limit_s = r.kind == "inference" && r.replication_profile == "published_dallas_v1"
+                    ? std::max(s.options.start_limit_s, 300.0) : s.options.start_limit_s;
+                const auto link_limit = std::chrono::duration_cast<Clock::duration>(
+                    std::chrono::duration<double>(link_limit_s));
                 std::error_code ec;
                 if (fs::exists(fs::u8path(r.link_file), ec)) {
                     std::ifstream f(fs::u8path(r.link_file));
@@ -1220,9 +1226,9 @@ void ModelRunner::loop() {
                         if (!r.conn->open(link, &err)) fail_run(r, err);
                         changed = true;
                     }
-                } else if (now - r.started > limit) {
+                } else if (now - r.started > link_limit) {
                     fail_run(r, "The script wrote no stream link within " +
-                                    std::to_string(static_cast<int>(s.options.start_limit_s)) +
+                                    std::to_string(static_cast<int>(link_limit_s)) +
                                     " seconds; its caliper.watch() line writes it.");
                 }
             }
