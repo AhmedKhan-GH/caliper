@@ -629,17 +629,22 @@ TEST_CASE("runner inference refuses mixed or nonlocal start data") {
 TEST_CASE("runner inference replication preserves approval and canonical local resources") {
     Fixture f("runner_replication");
     std::filesystem::create_directories(f.ws + "/dictionary");
-    std::filesystem::create_directories(f.root + u8"/private output \u03bb");
-    std::filesystem::create_directory_symlink(f.root + u8"/private output \u03bb", f.ws + "/output-link");
+    const std::string output = f.ws + u8"/private output \u03bb";
+    std::filesystem::create_directories(output);
+    std::string directory = u8"private output \u03bb";
+#ifndef _WIN32
+    std::filesystem::create_directory_symlink(output, f.ws + "/output-link");
+    directory = "output-link";
+#endif
     json args{{"kind", "inference"}, {"model", "tiny-lm"}, {"dictionary", "dictionary"}, {"prompt", "A"},
-              {"replication_profile", "published_dallas_v1"}, {"private_output_directory", "output-link"}};
+              {"replication_profile", "published_dallas_v1"}, {"private_output_directory", directory}};
     CHECK(send(*f.s, "run.start", args, CommandOrigin::mcp, "").error.code == "command.needs_approval");
     CHECK(f.runner.starts.empty());
     approved(*f.s, "run.start", args);
     REQUIRE(f.runner.starts.size() == 1);
     const auto& request = f.runner.starts.back();
     CHECK(request.replication_profile == "published_dallas_v1");
-    CHECK(request.private_output_directory == std::filesystem::canonical(f.root + u8"/private output \u03bb").u8string());
+    CHECK(request.private_output_directory == std::filesystem::canonical(output).u8string());
     CHECK(request.script == "caliper.interp._hosted");
     CHECK(request.script_path.empty());
     CHECK(request.args.empty());
