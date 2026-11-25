@@ -11,11 +11,12 @@ from pathlib import Path
 import numpy as np
 import torch
 
+from ._admission import _host_reserve
 from ._context import context_policy, prepare_contexts
 from ._dictionary import (_canonical_device, _encoder_matches_dtype, _memory_limit,
                           _reference_coordinates, dictionary_fingerprint, load_dictionary,
                           model_identity, weights_hash)
-from ._memory import (BudgetMemory, CleanStop, MemoryGuard, allocation_bytes, family_memory_limit,
+from ._memory import (BudgetMemory, CleanStop, MemoryGuard, allocation_bytes, family_memory_limit, host_reserve_for_model,
                       autorelease_scope as _device_scope)
 from ._points import capture
 from ._frozen import _trace_features
@@ -87,6 +88,7 @@ def _capture_inputs(model, dictionary, points, ids, memory):
     memory.check("reference capture admission", force=False)
     if allocation_bytes(memory) + retained > memory.limit:
         raise CleanStop("reference capture allocation exceeds the process memory limit")
+    _host_reserve(retained, "reference capture", memory=memory)
     with capture_reference_inputs(model) as values:
         try:
             yield values
@@ -108,6 +110,7 @@ def _index_features(dictionary, layer, x, *, memory, check=lambda stage: None, r
     workspace = (x.numel() // x.shape[-1]) * weights.W_enc_original.shape[0] * (4 * x.element_size() + 1)
     if allocation_bytes(memory) + workspace > memory.limit:
         raise CleanStop("dictionary encoder allocation exceeds the process memory limit")
+    _host_reserve(workspace, "reference encoder", memory=memory)
     values = torch.nn.functional.linear(x, weights.W_enc_original, weights.b_enc)
     return weights.activate(values)
 
@@ -332,6 +335,36 @@ def _forward(model, input_ids, attention_mask):
     return result
 
 
+def _forward_bytes(model, dictionary, rows, context):
+    """Bound decoder work, retained probes, and encoder work before allocation."""
+    config = model.config
+    width = dictionary.metadata["width"]
+    latents = dictionary.metadata["latents"]
+    heads = getattr(config, "num_attention_heads", 1)
+    head_dim = getattr(config, "head_dim", None) or width // heads
+    intermediate = getattr(config, "intermediate_size", latents)
+    key_dim = getattr(config, "linear_key_head_dim", head_dim)
+    value_dim = getattr(config, "linear_value_head_dim", head_dim)
+    value_heads = getattr(config, "linear_num_value_heads", heads)
+    key_heads = getattr(config, "linear_num_key_heads", heads)
+    dimensions = (width, latents, heads, head_dim, intermediate, key_dim, value_dim, value_heads, key_heads)
+    if any(type(value) is not int or not 1 <= value <= 2**20 for value in dimensions):
+        raise ValueError("example admission requires bounded model dimensions")
+    size = max(4, *(p.element_size() for p in model.parameters()),
+               *(layer.W_enc.element_size() for layer in dictionary.layers))
+    tokens = rows * context
+    mixer = max(width, heads * head_dim, key_heads * key_dim, value_heads * value_dim)
+    workspace = tokens * (32 * width + 8 * intermediate + 8 * mixer + 4 * latents)
+    if _reference_coordinates(dictionary.metadata) is not None:
+        workspace += tokens * width * len(dictionary.layers)
+    # Attention patterns can remain on fixture modules after each layer.
+    patterns = 4 * rows * heads * context**2 * len(dictionary.layers)
+    recurrent = 4 * rows * value_heads * key_dim * value_dim
+    logits = 0 if config.model_type in ("qwen3_5_text", "gemma2") else tokens * config.vocab_size
+    # Include token tensors, output lists, temporary copies, and allocator reserve.
+    return size * (workspace + patterns + recurrent + logits) + tokens * 32 + 512_000_000
+
+
 def build_index(dictionary_path, documents, *, model, tokenizer, provenance,
                 dictionary=None, max_tokens=MAX_TOKENS, context_length=256, memory_guard=None,
                 memory=None, memory_limit_gb=None):
@@ -352,6 +385,7 @@ def build_index(dictionary_path, documents, *, model, tokenizer, provenance,
     limit = family_memory_limit(model, memory_limit_gb, memory)
     device = next(model.parameters()).device
     memory = MemoryGuard(limit, device) if memory is None else BudgetMemory(memory, limit)
+    memory = BudgetMemory(memory, limit, host_reserve_bytes=host_reserve_for_model(model))
     if _canonical_device(memory.device) != _canonical_device(device):
         raise ValueError("index requires a memory guard for its model device")
 
@@ -403,6 +437,11 @@ def build_index(dictionary_path, documents, *, model, tokenizer, provenance,
             doc_file.write(np.array([(document_id.encode(), total, length, truncated)], dtype=_DOCUMENT).tobytes())
             for begin in range(0, length, content_context):
                 check("before batch")
+                if _reference_coordinates(data) is not None:
+                    required = _forward_bytes(model, dictionary, 1, context_length)
+                    if allocation_bytes(memory) + required > memory.limit:
+                        raise CleanStop("index forward allocation exceeds the process memory limit")
+                    _host_reserve(required, "index forward", memory=memory)
                 content = tokens[begin:begin + content_context].astype(np.int64)
                 prepared = None if policy is None else prepare_contexts([content], policy, device=device)
                 ids = torch.tensor(content, device=device).unsqueeze(0) if prepared is None else prepared.input_ids
@@ -483,6 +522,7 @@ class FeatureIndex:
         limit = family_memory_limit(model, memory_limit_gb, memory)
         device = next(model.parameters()).device
         self.memory = MemoryGuard(limit, device) if memory is None else BudgetMemory(memory, limit)
+        self.memory = BudgetMemory(self.memory, limit, host_reserve_bytes=host_reserve_for_model(model))
         if _canonical_device(self.memory.device) != _canonical_device(device):
             raise ValueError("index requires a memory guard for its model device")
         self.memory.check("index admission")
@@ -744,38 +784,16 @@ class FeatureIndex:
         return deepcopy(self._label_summaries([(layer, feature)])[layer, feature])
 
     def _example_bytes(self, rows):
-        """Bound one no-gradient layer, retained probes, and dictionary encode work."""
-        config = self.model.config
-        width = self.dictionary.metadata["width"]
-        latents = self.dictionary.metadata["latents"]
-        heads = getattr(config, "num_attention_heads", 1)
-        head_dim = getattr(config, "head_dim", None) or width // heads
-        intermediate = getattr(config, "intermediate_size", latents)
-        key_dim = getattr(config, "linear_key_head_dim", head_dim)
-        value_dim = getattr(config, "linear_value_head_dim", head_dim)
-        value_heads = getattr(config, "linear_num_value_heads", heads)
-        key_heads = getattr(config, "linear_num_key_heads", heads)
-        dimensions = (width, latents, heads, head_dim, intermediate, key_dim, value_dim, value_heads, key_heads)
-        if any(type(value) is not int or not 1 <= value <= 2**20 for value in dimensions):
-            raise ValueError("example admission requires bounded model dimensions")
-        size = max(4, *(p.element_size() for p in self.model.parameters()),
-                   *(layer.W_enc.element_size() for layer in self.dictionary.layers))
         context = WINDOW_TOKENS + (self.context_policy is not None)
-        tokens = rows * context
-        mixer = max(width, heads * head_dim, key_heads * key_dim, value_heads * value_dim)
-        workspace = tokens * (32 * width + 8 * intermediate + 8 * mixer + 4 * latents)
-        if _reference_coordinates(self.dictionary.metadata) is not None:
-            workspace += tokens * width * len(self.dictionary.layers)
-        # Attention patterns can remain on fixture modules after each layer.
-        patterns = 4 * rows * heads * context**2 * len(self.dictionary.layers)
-        recurrent = 4 * rows * value_heads * key_dim * value_dim
-        logits = 0 if config.model_type in ("qwen3_5_text", "gemma2") else tokens * config.vocab_size
-        # Include token tensors, output lists, temporary copies, and allocator reserve.
-        return size * (workspace + patterns + recurrent + logits) + tokens * 32 + 512_000_000
+        return _forward_bytes(self.model, self.dictionary, rows, context)
 
     def _admit_examples(self, rows):
         self.memory.check("example windows admission")
         available = self.memory.limit - allocation_bytes(self.memory)
+        reserve = max(getattr(self.memory, "host_reserve_bytes", 0), host_reserve_for_model(self.model))
+        if reserve:
+            import psutil
+            available = min(available, psutil.virtual_memory().available - reserve)
         for count in range(min(rows, TOP_EXAMPLES), 0, -1):
             if self._example_bytes(count) <= available:
                 return count

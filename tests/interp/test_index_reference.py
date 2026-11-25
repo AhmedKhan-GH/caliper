@@ -311,3 +311,27 @@ def test_reference_capture_and_encoder_admit_before_allocation(original_index, m
     monkeypatch.setattr(F, "linear", lambda *args: pytest.fail("encoder allocated before admission"))
     with pytest.raises(CleanStop, match="encoder allocation"):
         _index._index_features(case.dictionary, 0, x, memory=guard)
+
+
+def test_reference_index_preserves_prospective_host_reserve(original_index, monkeypatch):
+    import psutil
+    case = original_index
+    monkeypatch.setattr(_index, "host_reserve_for_model", lambda model: 8_000_000_000)
+    monkeypatch.setattr(psutil, "virtual_memory", lambda: SimpleNamespace(available=8_001_000_000))
+    monkeypatch.setattr(_index, "_forward", lambda *args: pytest.fail("forward ran before host admission"))
+    with pytest.raises(CleanStop, match="8 GB host reserve"):
+        build(case)
+    assert not (case.root / "index/index.json").exists()
+
+
+def test_reference_query_preserves_host_reserve_before_forward(original_index, monkeypatch):
+    import psutil
+    case = original_index
+    build(case)
+    with open_index(case) as index:
+        index.memory._host_reserve_bytes = 8_000_000_000
+        monkeypatch.setattr(psutil, "virtual_memory", lambda: SimpleNamespace(available=8_001_000_000))
+        monkeypatch.setattr(_index, "_forward", lambda *args: pytest.fail("query ran before host admission"))
+        feature = int(np.argmax(index.counts[0]))
+        with pytest.raises(CleanStop, match="example allocation"):
+            index.examples(0, feature)
