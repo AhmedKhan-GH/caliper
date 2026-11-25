@@ -72,6 +72,24 @@ def test_standalone_gemma_index_load_build_hash_and_examples(gemma_resources):
     assert case.guards and all(guard.limit == 40_000_000_000 for guard in case.guards)
 
 
+def test_gemma_qualification_retains_live_index_budget(gemma_resources, monkeypatch):
+    from caliper.interp import _qualification
+    from caliper.interp._qualification import dictionary_response
+    # This random fixture has no publisher import record. Identity and index
+    # verification remain real, including their memory admission.
+    monkeypatch.setattr(_qualification, "verified_import_binding", lambda *args, **kwargs: None)
+    case = gemma_resources
+    options = {"model": case.model, "tokenizer": case.tokenizer, "memory_limit_gb": 40}
+    _index.build_index(case.folder, [("first", [1, 3, 5, 7])], provenance={"partition": "fixture"}, **options)
+    with _index.FeatureIndex(case.folder, **options) as index:
+        response = dictionary_response(index.dictionary, index, model=case.model, tokenizer=case.tokenizer)
+        assert response["identity"]["model_hash"] == index.metadata["model_hash"]
+        assert index.memory.current > 28_000_000_000
+        index.memory.limit = 29_000_000_000
+        with pytest.raises(CleanStop, match="memory limit"):
+            dictionary_response(index.dictionary, index, model=case.model, tokenizer=case.tokenizer)
+
+
 def test_standalone_gemma_service_and_validation_budget(gemma_resources):
     case = gemma_resources
     controls = Controls()
