@@ -33,7 +33,7 @@ def test_lower_mlps_stay_original_and_upper_replacements_restore(tmp_path, monke
     with pytest.raises(RuntimeError, match="synthetic failure"):
         with evaluation.replace_all_mlps(model, dictionary):
             assert [block.mlp for block in model.layers[:2]] == original[:2]
-            assert [block.mlp for block in model.layers[2:]] == list(dictionary.layers[2:])
+            assert [block.mlp.layer for block in model.layers[2:]] == list(dictionary.layers[2:])
             raise RuntimeError("synthetic failure")
     assert [block.mlp for block in model.layers] == original
     forward = evaluation.hidden_forward
