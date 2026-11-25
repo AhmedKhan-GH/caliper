@@ -159,3 +159,73 @@ def test_path_reservation_is_deterministic_and_reports_public_caps():
     capped = tracer.trace("A", max_targets=4, max_nodes=1, max_edges=0)
     assert capped.read()["completeness"]["token_path"] == {
         "status": "capped", "minimum_nodes": 2, "minimum_edges": 1}
+
+
+def reference_fixture(kinds, matrix):
+    from caliper.interp import _reference_graph
+    nodes = [{"id": str(i), "kind": kind} for i, kind in enumerate(kinds)]
+    weights = torch.tensor(matrix, dtype=torch.float32)
+    seeds = torch.zeros(len(nodes))
+    seeds[-1] = 1
+    guard = SimpleNamespace(reserve=lambda *args: None)
+    def run(**kwargs):
+        return _reference_graph.prune(nodes, weights, torch.arange(len(nodes)), seeds,
+            node_threshold=kwargs.pop("node_threshold", 1.), edge_threshold=kwargs.pop("edge_threshold", 1.),
+            max_nodes=kwargs.pop("max_nodes", len(nodes)), max_edges=kwargs.pop("max_edges", 100),
+            guard=guard, check=lambda stage: None, **kwargs)
+    return run
+
+
+def test_reference_reduced_normalization_and_raw_weights():
+    # Source rows: two features, an error, a token, and a logit.
+    # Initial influences are (1/2, 1/4, 3/8, 5/8, 0).
+    # Node pruning removes feature 1. Reduced edge scores are 2/3, 1/2,
+    # 1/3, and 1/6. The first two exceed 60 percent of their total.
+    run = reference_fixture(["feature", "feature", "error", "token", "logit"], [
+        [0, 0, 0, 0, 2], [0, 0, 0, 0, 1], [1, 0, 0, 0, 1],
+        [3, 1, 0, 0, 0], [0, 0, 0, 0, 0]])
+    nodes, edges, *_ = run(node_threshold=.7, edge_threshold=.6)
+    assert [n["id"] for n in nodes] == ["0", "3", "4"]
+    assert [n["influence"] for n in nodes] == pytest.approx([.5, .625, 0])
+    assert edges == [{"source": 1, "target": 0, "weight": 3.},
+                     {"source": 0, "target": 2, "weight": 2.}]
+    with pytest.raises(ValueError, match="complete reference graph"):
+        run(node_threshold=.7, edge_threshold=.6, max_edges=1)
+    with pytest.raises(ValueError, match="complete reference graph"):
+        run(node_threshold=.7, edge_threshold=.6, max_nodes=2)
+
+
+def test_reference_threshold_ties_keep_every_equal_edge_and_node():
+    run = reference_fixture(["feature", "feature", "token", "logit"], [
+        [0, 0, 0, -1], [0, 0, 0, 1], [1, 1, 0, 0], [0, 0, 0, 0]])
+    nodes, edges, *_ = run(node_threshold=.6, edge_threshold=.25)
+    assert len(nodes) == len(edges) == 4
+    assert sorted(edge["weight"] for edge in edges) == [-1, 1, 1, 1]
+    assert [node["influence"] for node in nodes] == [.5, .5, 1., 0.]
+
+
+def test_reference_support_removal_repeats_until_stable():
+    run = reference_fixture(["feature", "feature", "token", "logit"], [
+        [0, 1, 0, 0], [0, 0, 0, 1], [0, 0, 0, 0], [0, 0, 0, 0]])
+    nodes, edges, *_ = run()
+    assert [node["kind"] for node in nodes] == ["token", "logit"]
+    assert edges == []
+
+
+def test_reference_partial_floor_and_seed_exclusion():
+    from caliper.interp._reference_graph import propagate
+    weights = torch.tensor([[1e-9], [0.]], dtype=torch.float32)
+    seeds = torch.tensor([0., 1.])
+    targets = torch.tensor([1])
+    partial, _ = propagate(weights, targets, seeds, partial=True)
+    final, _ = propagate(weights, targets, seeds)
+    torch.testing.assert_close(partial, torch.tensor([.1, 0.]))
+    torch.testing.assert_close(final, torch.tensor([1., 0.]))
+
+
+def test_reference_zero_cutoff_preserves_pinned_serializer_edges():
+    run = reference_fixture(["error", "token", "logit"], [[0.] * 3] * 3)
+    nodes, edges, *_ = run()
+    # The pinned inclusive zero cutoff marks every square entry as an edge.
+    assert len(nodes) == 3 and len(edges) == 9
+    assert all(edge["weight"] == 0 for edge in edges)

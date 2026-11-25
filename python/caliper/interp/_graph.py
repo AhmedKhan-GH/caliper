@@ -13,6 +13,8 @@ from ._labels import pack_labels
 NODE_CAP = 512
 EDGE_CAP = 8192
 TOKEN_CAP = 32
+REFERENCE_NODE_CAP = 8192
+REFERENCE_EDGE_CAP = 262144
 KINDS = {"token": 0, "feature": 1, "error": 2, "logit": 3}
 
 
@@ -43,18 +45,23 @@ class Graph:
     tensors: dict = field(repr=False)
     status: str = "done"
     logits: list[dict] | None = field(default=None, repr=False)
+    settings: dict = field(default_factory=dict)
 
     @classmethod
     def build(cls, *, nodes, edges, tokens, layers, completeness, omitted_influence,
-              error_share, feature_share, trace_id, device, logits=None):
-        bounded_integer(len(nodes), "nodes", 0, NODE_CAP)
-        bounded_integer(len(edges), "edges", 0, EDGE_CAP)
+              error_share, feature_share, trace_id, device, logits=None, settings=None):
+        settings = {} if settings is None else dict(settings)
+        reference = settings.get("profile") == "circuit_tracer_82996f14"
+        node_cap = REFERENCE_NODE_CAP if reference else NODE_CAP
+        edge_cap = REFERENCE_EDGE_CAP if reference else EDGE_CAP
+        bounded_integer(len(nodes), "nodes", 0, node_cap)
+        bounded_integer(len(edges), "edges", 0, edge_cap)
         bounded_integer(len(tokens), "tokens", 1, TOKEN_CAP)
         counts = torch.tensor([len(nodes), len(edges), len(tokens), layers], dtype=torch.int32, device=device)
-        node_i = torch.zeros((NODE_CAP, 4), dtype=torch.int32, device=device)
-        node_f = torch.zeros((NODE_CAP, 4), dtype=torch.float32, device=device)
-        edge_i = torch.zeros((EDGE_CAP, 2), dtype=torch.int32, device=device)
-        edge_f = torch.zeros((EDGE_CAP, 2), dtype=torch.float32, device=device)
+        node_i = torch.zeros((node_cap, 4), dtype=torch.int32, device=device)
+        node_f = torch.zeros((node_cap, 4), dtype=torch.float32, device=device)
+        edge_i = torch.zeros((edge_cap, 2), dtype=torch.int32, device=device)
+        edge_f = torch.zeros((edge_cap, 2), dtype=torch.float32, device=device)
         if nodes:
             node_i[:len(nodes)] = torch.tensor([
                 [KINDS[n["kind"]], n["layer"], n["position"], n["feature"] if n["kind"] == "feature"
@@ -70,7 +77,7 @@ class Graph:
         tensors = dict(zip(("trace.counts", "trace.node_i", "trace.node_f", "trace.edge_i", "trace.edge_f"),
                            (counts, node_i, node_f, edge_i, edge_f)))
         return cls(nodes, edges, tokens, layers, completeness, omitted_influence, error_share,
-                   feature_share, trace_id, tensors, logits=logits)
+                   feature_share, trace_id, tensors, logits=logits, settings=settings)
 
     def _panel_tensors(self):
         """Prepare labels and traced probabilities on the structural tensors' device."""
@@ -89,7 +96,7 @@ class Graph:
         if logits:
             probs[:, :len(logits)] = torch.tensor(probabilities, dtype=torch.float32)
             tokens[:len(logits)] = torch.tensor([node["token_id"] for node in logits], dtype=torch.int32)
-        values = {"trace.label_text": pack_labels(labels, TOKEN_CAP + NODE_CAP), "trace.probs": probs,
+        values = {"trace.label_text": pack_labels(labels, TOKEN_CAP + self.tensors["trace.node_i"].shape[0]), "trace.probs": probs,
                   "trace.logit_tokens": tokens,
                   "trace.logit_label_text": pack_labels([node["label"] for node in logits], 10)}
         return {name: value.to(device) for name, value in values.items()}
@@ -104,8 +111,8 @@ class Graph:
 
     def read(self, *, node_offset=0, node_limit=128, edge_offset=0, edge_limit=256):
         """Return bounded JSON records, totals, and completeness summary."""
-        bounded_integer(node_offset, "node_offset", 0, NODE_CAP)
-        bounded_integer(edge_offset, "edge_offset", 0, EDGE_CAP)
+        bounded_integer(node_offset, "node_offset", 0, self.tensors["trace.node_i"].shape[0])
+        bounded_integer(edge_offset, "edge_offset", 0, self.tensors["trace.edge_i"].shape[0])
         bounded_integer(node_limit, "node_limit", 0, 256)
         bounded_integer(edge_limit, "edge_limit", 0, 256)
         end_n = min(node_offset + node_limit, len(self.nodes))
@@ -115,7 +122,7 @@ class Graph:
                 "counts": {"nodes": len(self.nodes), "edges": len(self.edges),
                            "tokens": len(self.tokens), "layers": self.layers},
                 "nodes": self.nodes[node_offset:end_n], "edges": self.edges[edge_offset:end_e],
-                "tokens": self.tokens, "completeness": summary,
+                "tokens": self.tokens, "completeness": summary, "settings": self.settings,
                 "omitted_influence": self.omitted_influence,
                 "error_share": self.error_share, "feature_share": self.feature_share,
                 "next_node_offset": end_n if node_limit and end_n < len(self.nodes) else None,
@@ -125,4 +132,9 @@ class Graph:
         return self.read(**paging)
 
     def to_json(self, **paging):
-        return json.dumps(self.read(**paging), allow_nan=False, separators=(",", ":"))
+        """Export the complete graph unless explicit page arguments are supplied."""
+        result = self.read(**paging)
+        if not paging:
+            result.update(nodes=self.nodes, edges=self.edges, completeness=self.completeness,
+                          logits=self.logits, next_node_offset=None, next_edge_offset=None)
+        return json.dumps(result, allow_nan=False, separators=(",", ":"))

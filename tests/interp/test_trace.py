@@ -713,3 +713,26 @@ def test_trace_uses_separate_controls_owner_for_ablation(monkeypatch, legacy_own
     finally:
         handle.remove()
         watched.remove()
+
+
+def test_full_json_export_keeps_all_records_and_diagnostics():
+    nodes = [{"id": f"token:0:{i}", "kind": "token", "layer": -1,
+              "position": 0, "token_id": i, "activation": 1.,
+              "influence": 0., "effect": 0.} for i in range(300)]
+    edges = [{"source": 0, "target": i, "weight": -float(i)} for i in range(300)]
+    graph = Graph.build(nodes=nodes, edges=edges, tokens=[{"text": "x"}], layers=1,
+                        completeness={"targets": [{"id": "all-source-accounting"}]},
+                        omitted_influence=0., error_share=0., feature_share=0.,
+                        trace_id="full", device="cpu", settings={"profile": "circuit_tracer_82996f14"})
+    exported = json.loads(graph.to_json())
+    assert len(exported["nodes"]) == len(exported["edges"]) == 300
+    assert exported["completeness"]["targets"] == [{"id": "all-source-accounting"}]
+    assert exported["settings"]["profile"] == "circuit_tracer_82996f14"
+    assert exported["edges"][-1]["weight"] == -299
+    assert graph.tensors["trace.edge_f"][299, 0] == -299
+    assert graph.tensors["trace.node_i"].shape == (8192, 4)
+    assert graph.tensors["trace.edge_i"].shape == (262144, 2)
+    assert len(graph.read()["nodes"]) == 128
+    assert len(graph.read()["edges"]) == 256
+    assert graph.read(node_offset=299, edge_offset=299)["nodes"] == nodes[299:]
+    assert len(json.loads(graph.to_json(node_limit=1))["nodes"]) == 1
