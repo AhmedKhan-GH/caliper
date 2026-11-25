@@ -927,14 +927,15 @@ class InterventionService:
             raise InterventionError("source position is outside the clean prompt")
         return inputs
 
-    def _identity(self):
+    def _identity(self, *, memory=None):
         """Check exact state at each lookup, including writes between point hooks."""
         from ._forward_identity import source_settings
         # Include nonpersistent buffers and alias writes. Inference tensors have
         # no version counter, but their materialized bytes obey the same contract.
         state = _model_state(self.model)
-        settings = source_settings(self.model, tensor_hash=lambda values: _content_identity(values, self.resource_guard))
-        content = _content_identity(state, self.resource_guard)
+        guard = self.resource_guard if memory is None else memory
+        settings = source_settings(self.model, tensor_hash=lambda values: _content_identity(values, guard))
+        content = _content_identity(state, guard)
         return _model_identity_parts(self.model, self.tokenizer, state, content, settings)
 
     def _source_keys(self):

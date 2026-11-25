@@ -8,17 +8,19 @@ import json
 from pathlib import Path
 import tempfile
 import time
+import traceback
 import uuid
 
 import torch
 
 from ._frozen import _trace_features
-from ._intervene import (InterventionError, _DictionarySnapshot, _group_memory,
+from ._intervene import (InterventionError, _DictionarySnapshot, _model_state,
                          _ACTIVE_REPLAYS, _hook_muted, _uses_reference_inputs,
                          _reference_input_scope, _reference_features)
 from ._memory import autorelease_scope
 from ._output import bounded_text, forward_logits, prompt_inputs
 from ._points import _architecture, capture
+from ._published_identity import _PublishedModelSnapshot, forward_hooks, published_memory
 
 PROTOCOL = 'published_dallas_v1'
 
@@ -137,17 +139,31 @@ class PublishedCases:
         self.sequence = 0
         self.directory = None
         self._identity = None
+        self._model_snapshot = None
         self._handles = []
         self._forward_scopes = []
 
     def _reserve(self, amount):
-        if self.guard is not None:
-            _DictionarySnapshot._admit(_group_memory(self.model, self.guard), amount, force=True)
+        memory = self._identity_memory()
+        _DictionarySnapshot._admit(memory, amount, force=True)
+
+    def _identity_memory(self):
+        snapshot = self._model_snapshot
+        if snapshot is not None and snapshot.active:
+            return snapshot.memory(snapshot.state, self.guard)
+        return published_memory(self.model, self.interventions.executor, _model_state(self.model), self.guard)
 
     def _model_identity(self):
         from ._dictionary import _HASH_CHUNK_BYTES
-        self._reserve(4 * _HASH_CHUNK_BYTES)
-        return self.interventions.executor._identity()
+        memory = self._identity_memory()
+        _DictionarySnapshot._admit(memory, 4 * _HASH_CHUNK_BYTES, force=True)
+        return self.interventions.executor._identity(memory=memory)
+
+    def _model_matches(self):
+        snapshot = self._model_snapshot
+        return snapshot is not None and snapshot.matches(
+            self.interventions.executor, self.model, self.tokenizer, self.guard,
+            full_identity=self._model_identity)
 
     def _write_json(self, name, value):
         target = self.directory / name
@@ -163,6 +179,21 @@ class PublishedCases:
 
     def prepare(self):
         """Capture clean source values before any named action timer starts."""
+        previous_directory = self.directory
+        try:
+            return self._prepare()
+        except BaseException as error:
+            try:
+                self.close()
+                if self.directory is not None and self.directory != previous_directory:
+                    (self.directory / 'preparation.json').unlink(missing_ok=True)
+                    self.directory.rmdir()
+                    self.directory = previous_directory
+            finally:
+                traceback.clear_frames(error.__traceback__)
+            raise
+
+    def _prepare(self):
         if self.preparation is not None:
             return deepcopy(self.preparation)
         service, started = self.interventions, time.perf_counter()
@@ -187,6 +218,7 @@ class PublishedCases:
             revision = service._ctl._iv_revision
             with service._ctl._outside_lock(), executor.dictionary_admission(), service.suspend(), torch.no_grad():
                 identity = self._model_identity()
+                self._model_snapshot = _PublishedModelSnapshot.create(executor, identity, self.guard)
                 tokens, values, saved_patterns = {}, {}, {}
                 baseline = None
                 nodes = sorted({node for group in GROUPS.values() for node in group})
@@ -225,7 +257,7 @@ class PublishedCases:
                             baseline = logits.detach().clone()
                             saved_patterns = {name: captured[name].detach().clone() for name in patterns}
                         captured.clear()
-                if self._model_identity() != identity:
+                if self._model_identity() != identity or not self._model_matches():
                     raise ValueError('published source model changed during preparation')
             service._check_revision(revision)
         binding = {'protocol': PROTOCOL, 'source_revision': SOURCE_REVISION, 'producer': 'caliper',
@@ -292,14 +324,21 @@ class PublishedCases:
                 scope.__exit__(None, None, None)
 
     def close(self):
-        while self._handles:
-            self._handles.pop().remove()
-        while self._forward_scopes:
-            scope = self._forward_scopes.pop()
-            if scope is not None:
-                scope.__exit__(None, None, None)
-        self.patterns.clear()
-        self.baseline_logits = None
+        try:
+            while self._handles:
+                self._handles.pop().remove()
+            while self._forward_scopes:
+                scope = self._forward_scopes.pop()
+                if scope is not None:
+                    scope.__exit__(None, None, None)
+        finally:
+            self.patterns.clear()
+            self.values.clear()
+            self.baseline_logits = None
+            if self._model_snapshot is not None:
+                self._model_snapshot.release()
+                self._model_snapshot = None
+            self._identity = self.preparation = None
 
     def case(self, cell):
         """Return exact specifications and Caliper source values for one case."""
@@ -354,7 +393,7 @@ class PublishedCases:
             def evaluate():
                 executor = self.interventions.executor
                 if (executor.dictionary_id != self.preparation['dictionary_identity']
-                        or not executor._default_dictionary_id or self._model_identity() != self._identity):
+                        or not executor._default_dictionary_id or not self._model_matches()):
                     raise ValueError('published preparation no longer matches the model')
                 sources = {source: prompt_inputs(self.model, self.tokenizer, prompt)
                            for source, prompt in PROMPTS.items()}
@@ -363,9 +402,10 @@ class PublishedCases:
                     raise ValueError('published preparation no longer matches the tokenizer')
                 inputs = sources['dallas']
                 self._reserve(self.model.config.vocab_size * 64)
+                hooks = forward_hooks(self.model)
                 with attention_patterns(self.model, self.patterns):
                     logits = forward_logits(self.model, inputs, guard=self.guard)[0, -1]
-                if self._model_identity() != self._identity:
+                if not self._model_matches() or forward_hooks(self.model) != hooks:
                     raise ValueError('published model changed during the case forward')
                 pair = torch.stack((self.baseline_logits, logits))
                 probabilities = pair.softmax(-1)
@@ -408,14 +448,24 @@ class PublishedCases:
             self.last_result = result
             self.last_attempt = {'case_id': case_id, 'sequence': sequence, 'status': 'ok'}
             return deepcopy(result)
-        except BaseException:
-            for target in evidence:
-                target.unlink(missing_ok=True)
-            self.last_attempt = {'case_id': case_id, 'sequence': sequence, 'status': 'error'}
+        except BaseException as error:
+            try:
+                if self._model_snapshot is not None:
+                    self._model_snapshot.release()
+                for target in evidence:
+                    target.unlink(missing_ok=True)
+                self.last_attempt = {'case_id': case_id, 'sequence': sequence, 'status': 'error'}
+            finally:
+                traceback.clear_frames(error.__traceback__)
             raise
 
     def status(self, prompt, specifications):
+        snapshot = self._model_snapshot
         return {'protocol': PROTOCOL, 'prepared': self.preparation is not None,
+                'model_identity': {'mode': 'unprepared' if snapshot is None else
+                                   'snapshot' if snapshot.active else 'hash',
+                                   'snapshot_bytes': 0 if snapshot is None else snapshot.nbytes,
+                                   'byte_checks': 0 if snapshot is None else snapshot.checks},
                 'preparation_id': None if self.preparation is None else self.preparation['id'],
                 'preparation_seconds': None if self.preparation is None else self.preparation['seconds'],
                 'preparation_file': None if self.directory is None else str((self.directory / 'preparation.json').relative_to(self.output_directory)),
