@@ -237,28 +237,8 @@ def _checkpoint_subset(model, identity, subset, key_mapping):
     """Declare exact non-text keys from the pinned Qwen3.5 checkpoint header."""
     if subset is None:
         return ({} if key_mapping is None else key_mapping), frozenset()
-    pinned = "hf:Qwen/Qwen3.5-0.8B@2fc06364715b967f1860aea9cf38778875588b17"
-    if (subset != "qwen3.5-0.8b-text" or identity != pinned
-            or getattr(model.config, "model_type", None) != "qwen3_5_text"):
-        raise ValueError("unsupported checkpoint subset or revision")
-    if key_mapping is not None:
-        raise ValueError("the declared text subset supplies its own key mapping")
-    visual = {f"model.visual.blocks.{i}.{module}.{field}"
-              for i in range(12)
-              for module in ("attn.proj", "attn.qkv", "mlp.linear_fc1", "mlp.linear_fc2", "norm1", "norm2")
-              for field in ("weight", "bias")}
-    visual.update(f"model.visual.{module}.{field}"
-                  for module in ("merger.linear_fc1", "merger.linear_fc2", "merger.norm", "patch_embed.proj")
-                  for field in ("weight", "bias"))
-    visual.add("model.visual.pos_embed.weight")
-    mtp = {f"mtp.{name}.weight" for name in (
-        "fc", "norm", "pre_fc_norm_embedding", "pre_fc_norm_hidden",
-        "layers.0.input_layernorm", "layers.0.post_attention_layernorm",
-        "layers.0.mlp.down_proj", "layers.0.mlp.gate_proj", "layers.0.mlp.up_proj",
-        "layers.0.self_attn.k_norm", "layers.0.self_attn.k_proj", "layers.0.self_attn.o_proj",
-        "layers.0.self_attn.q_norm", "layers.0.self_attn.q_proj", "layers.0.self_attn.v_proj",
-    )}
-    return {"model.language_model.": "model."}, frozenset(visual | mtp)
+    from ._qwen_family import checkpoint_subset
+    return checkpoint_subset(model, identity, subset, key_mapping)
 
 
 def verify_hf_model(model, snapshot, *, key_mapping=None, checkpoint_subset=None, memory_limit_gb=12):
