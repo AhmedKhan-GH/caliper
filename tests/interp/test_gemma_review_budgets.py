@@ -9,6 +9,7 @@ from caliper.interp._memory import CleanStop
 from tools.interp import model_load
 from .fixture import TinyLM, TinyTokenizer
 from .test_dictionary import write_fixture
+from .test_gemma_context_index import tokenizer as gemma_tokenizer
 from .test_gemma_runtime import gemma_model, local_gemma
 from .test_memory_phases import process_guard
 from .test_trace import qwen_for_trace, random_dictionary
@@ -60,7 +61,7 @@ def test_unverified_gemma_dictionary_cannot_admit_wider_index_budget(tmp_path, r
     model = gemma_model()
     dictionary = random_dictionary(model, latents=8, k=2)
     guard = process_guard(28_000_000_000, {"current": 1_000, "peak": 2_000})
-    options = dict(model=model, tokenizer=TinyTokenizer(), dictionary=dictionary, memory=guard)
+    options = dict(model=model, tokenizer=gemma_tokenizer(), dictionary=dictionary, memory=guard)
     with pytest.raises(ValueError, match="requires the pinned Gemma model"):
         if route == "build":
             _index.build_index(tmp_path, [], provenance={"partition": "fixture"}, **options)

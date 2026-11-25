@@ -505,18 +505,28 @@ def test_close_leaves_the_controls_to_a_pump_thread_that_still_runs(monkeypatch)
     thread that did not end within PUMP_END_S flushes them itself, and two flushes at once
     would hand over the same stored messages twice."""
     import types
+    import weakref
     from caliper import _net, _net_native
     monkeypatch.setattr(_net, "_unroute", lambda server: None)
+    monkeypatch.setattr(_net_native, "_SERVERS", weakref.WeakSet())
     flushes = []
+
+    class Server:
+        def __init__(self, **attributes):
+            self.__dict__.update(attributes)
 
     def closed(alive):
         ns = types.SimpleNamespace
         ctl = ns(flush=lambda final=False: flushes.append((alive, final)))
-        srv = ns(closed=False, _stream_file=None, transport=ns(n_attached=1),
-                 ring=ns(flush=lambda timeout: 0, close=lambda: None),
-                 producer=ns(busy=lambda: False, controls=ctl, _event_q=None),
-                 nio=ns(wake=lambda: None, close=lambda: None),
-                 _thread=ns(join=lambda timeout=None: None, is_alive=lambda: alive))
+        srv = Server(closed=False, _stream_file=None, transport=ns(n_attached=1),
+                     ring=ns(flush=lambda timeout: 0, close=lambda: None),
+                     producer=ns(busy=lambda: False, controls=ctl, _event_q=None),
+                     nio=ns(wake=lambda: None, close=lambda: None),
+                     _thread=ns(join=lambda timeout=None: None, is_alive=lambda: alive))
+        _net_native._SERVERS.add(srv)
+        assert srv in _net_native._SERVERS
+        _net_native.NativeServer.close(srv)
+        assert srv not in _net_native._SERVERS
         _net_native.NativeServer.close(srv)
         return srv
 
