@@ -143,6 +143,11 @@ class PublishedCases:
         if self.guard is not None:
             _DictionarySnapshot._admit(_DeviceSnapshotMemory(self.guard), amount, force=True)
 
+    def _model_identity(self):
+        from ._dictionary import _HASH_CHUNK_BYTES
+        self._reserve(4 * _HASH_CHUNK_BYTES)
+        return self.interventions.executor._identity()
+
     def _write_json(self, name, value):
         target = self.directory / name
         temporary = self.directory / ('.' + uuid.uuid4().hex + '.json')
@@ -177,7 +182,7 @@ class PublishedCases:
         with service._ctl.lock, service._operation('preparation'):
             revision = service._ctl._iv_revision
             with service._ctl._outside_lock(), executor.dictionary_admission(), service.suspend(), torch.no_grad():
-                identity = executor._identity()
+                identity = self._model_identity()
                 tokens, values, saved_patterns = {}, {}, {}
                 baseline = None
                 nodes = sorted({node for group in GROUPS.values() for node in group})
@@ -210,7 +215,7 @@ class PublishedCases:
                             baseline = logits.detach().clone()
                             saved_patterns = {name: captured[name].detach().clone() for name in patterns}
                         captured.clear()
-                if executor._identity() != identity:
+                if self._model_identity() != identity:
                     raise ValueError('published source model changed during preparation')
             service._check_revision(revision)
         binding = {'protocol': PROTOCOL, 'source_revision': SOURCE_REVISION, 'producer': 'caliper',
@@ -332,7 +337,7 @@ class PublishedCases:
             def evaluate():
                 executor = self.interventions.executor
                 if (executor.dictionary_id != self.preparation['dictionary_identity']
-                        or not executor._default_dictionary_id or executor._identity() != self._identity):
+                        or not executor._default_dictionary_id or self._model_identity() != self._identity):
                     raise ValueError('published preparation no longer matches the model')
                 sources = {source: prompt_inputs(self.model, self.tokenizer, prompt)
                            for source, prompt in PROMPTS.items()}
@@ -343,7 +348,7 @@ class PublishedCases:
                 self._reserve(self.model.config.vocab_size * 64)
                 with attention_patterns(self.model, self.patterns):
                     logits = forward_logits(self.model, inputs, guard=self.guard)[0, -1]
-                if executor._identity() != self._identity:
+                if self._model_identity() != self._identity:
                     raise ValueError('published model changed during the case forward')
                 pair = torch.stack((self.baseline_logits, logits))
                 probabilities = pair.softmax(-1)

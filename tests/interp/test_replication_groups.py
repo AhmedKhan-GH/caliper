@@ -336,3 +336,16 @@ def test_atomic_schedules_refuse_before_any_effect(grouped):
     with pytest.raises(InterventionError, match='unscheduled'):
         service.replace_atomic([dict(clamp(1, 1), from_step=99)], lambda: pytest.fail('scheduled candidate ran'))
     assert not service.specifications()
+
+
+def test_published_model_scan_reserves_host_memory_before_readback(published, monkeypatch):
+    from types import SimpleNamespace
+    from caliper.interp._memory import CleanStop
+    _, _, _, service, runtime = published
+    runtime.guard = SimpleNamespace(limit=40_000_000_000, current=0, peak=0, device=torch.device('cpu'),
+                                    check=lambda *a, **k: 0)
+    monkeypatch.setattr('psutil.virtual_memory', lambda: SimpleNamespace(available=8_000_000_100))
+    monkeypatch.setattr(service.executor, '_identity', lambda: pytest.fail('model scan before host admission'))
+    with pytest.raises(CleanStop, match='host reserve'):
+        runtime.run(26)
+    assert not service.specifications() and runtime.last_attempt['status'] == 'error'
