@@ -329,15 +329,23 @@ class _DictionarySnapshot:
         largest = max(left.numel() for left, _ in blocks)
         reserve = _snapshot_workspace(largest, len(blocks))
         initial = allocation_bytes(memory)
+        views = []
         mask = flags = host = left = right = template = None
         try:
             with _snapshot_device_batch(blocks[0][0].device) as completed:
                 self._admit(memory, reserve, floor=initial)
-                template = max((left for left, _ in blocks), key=lambda value: value.numel())
+                for left, right in blocks:
+                    # These contiguous byte views can share an exact word view
+                    # only with complete words and aligned offsets on both sides.
+                    if (left.numel() % 4 == 0 and left.storage_offset() % 4 == 0
+                            and right.storage_offset() % 4 == 0):
+                        left, right = left.view(torch.int32), right.view(torch.int32)
+                    views.append((left, right))
+                template = max((left for left, _ in views), key=lambda value: value.numel())
                 mask = torch.empty_like(template, dtype=torch.bool)
                 self._admit(memory, reserve, floor=initial)
                 flags = torch.empty_like(template[:1].expand(len(blocks)), dtype=torch.bool)
-                for index, (left, right) in enumerate(blocks):
+                for index, (left, right) in enumerate(views):
                     self._admit(memory, reserve, floor=initial)
                     torch.eq(left, right, out=mask[:left.numel()])
                     self._admit(memory, reserve, floor=initial)
@@ -353,6 +361,7 @@ class _DictionarySnapshot:
             traceback.clear_frames(error.__traceback__)
             raise
         finally:
+            views.clear()
             mask = flags = host = left = right = template = None
 
     def _device_matches(self, state, memory):

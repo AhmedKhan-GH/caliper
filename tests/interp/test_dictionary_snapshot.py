@@ -252,7 +252,7 @@ def device_snapshot(controlled, monkeypatch):
         service.configure(dictionary=dictionary, tokenizer=tokenizer, resource_guard=guard)
         case = SimpleNamespace(dictionary=dictionary, service=service, executor=service.executor,
                                guard=guard, transfers=[], scopes=[], readback=None, copies=[],
-                               comparisons=[], reductions=[], allocations=[], drains=[])
+                               comparisons=[], reductions=[], allocations=[], drains=[], operands=[], word_views=[])
 
         @contextmanager
         def scope(device):
@@ -307,10 +307,13 @@ def device_snapshot(controlled, monkeypatch):
         def compare(left, right, **kwargs):
             with outer("compare") as first:
                 if first and left.device.type == "mps":
-                    assert left.dtype == right.dtype == torch.uint8
+                    assert left.dtype == right.dtype and left.dtype in (torch.uint8, torch.int32)
                     assert left.data_ptr() != right.data_ptr()
                     assert case.scopes
-                    case.comparisons.append((left.numel(), len(guard.stages)))
+                    case.comparisons.append((left.numel() * left.element_size(), len(guard.stages)))
+                    case.operands.append((left.dtype, left.numel()))
+                    if left.dtype == torch.int32:
+                        case.word_views.extend((weakref.ref(left), weakref.ref(right)))
                 return eq(left, right, **kwargs)
 
         def reduced(tensor, **kwargs):
@@ -388,7 +391,7 @@ def test_device_snapshot_bounds_copy_and_reads_every_live_block(device_snapshot,
     assert max(size for size, _ in case.transfers) <= _intervene._SNAPSHOT_BATCH_BLOCKS
     assert len(case.transfers) == (blocks + _intervene._SNAPSHOT_BATCH_BLOCKS - 1) // _intervene._SNAPSHOT_BATCH_BLOCKS
     assert not case.drains  # The flag readback already drains each batch.
-    assert [size for size, _ in case.reductions] == [size for size, _ in case.comparisons]
+    assert [size for size, _ in case.reductions] == [size // 4 for size, _ in case.comparisons]
     checks = [count for _, count in case.comparisons]
     assert all(right > left for left, right in zip(checks, checks[1:]))
     assert all(reduce_check > compare_check for (_, reduce_check), (_, compare_check)
