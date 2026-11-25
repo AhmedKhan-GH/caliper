@@ -695,8 +695,8 @@ def evaluate_research_batch(model, dictionary, prepared, source_count, *, chunk_
                         selected = positions[start:start + chunk_tokens]
                         features = dictionary.layers[i].encode(x[selected])
                         decoded = dictionary.layers[i].decode(features)
-                        target = y[selected].to(device="cpu", dtype=torch.float64)
-                        reconstructed = decoded.to(device="cpu", dtype=torch.float64)
+                        target = y[selected].cpu().double()
+                        reconstructed = decoded.cpu().double()
                         if not all(torch.isfinite(t).all() for t in (features, target, reconstructed)):
                             raise ValueError("research observations contain nonfinite values")
                         n = len(selected)
