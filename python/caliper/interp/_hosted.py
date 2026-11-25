@@ -11,6 +11,7 @@ import os
 from pathlib import Path
 import threading
 import time
+import traceback
 from types import SimpleNamespace
 
 import torch
@@ -536,39 +537,62 @@ class HostedInference:
         self.dictionary_path = str(Path(dictionary_path).resolve())
         self.model, self.tokenizer, self.dictionary, self.index, self.guard = (
             load_resources(model_name, dictionary_path) if resources is None else resources)
-        if display_guard is not None and self.guard is None:
-            from ._memory import MemoryGuard
-            self.guard = MemoryGuard(12, next(self.model.parameters()).device)
-        self.guard = (_RunGuard(self.guard, extra=display_guard, on_stop=self._latch_failure)
-                      if self.guard is not None or display_guard is not None else None)
-        self.fixture_display = _FixtureDisplay(self.guard) if display_guard is not None else None
-        prompt_inputs(self.model, self.tokenizer, prompt)
-        self.initial_prompt = prompt
-        # Rejected editor text stays visible, but checkpoints retain an accepted prompt.
-        self.checkpoint_prompt = prompt
-        self.restored = None
-        self.handle = self.service = self.managed = None
-        self._failure = None
-        self._stop_checkpointed = False
-        self._verified_bindings = None
-        self._inference_lock = threading.Lock()
-        self._inference_ready = False
-        self._comparison = None
-        self._restore_generation(0)
-        self.selection = None
-        self._owned_clamp = None
-        self._owned_applied_spec = None
-        self._clamp_selection = None
-        self._selection_graph = None
-        self.traced_prompt = None
-        self.traced_specifications = None
-        self.traced_state = None
-        self._output_key = None
-        self._output_action_id = None
-        self._clamp_version = None
-        self._selected_version = None
-        self._retrace = False
-        self.parameters, self.actions = [], []
+        try:
+            if display_guard is not None and self.guard is None:
+                from ._memory import MemoryGuard
+                self.guard = MemoryGuard(12, next(self.model.parameters()).device)
+            self.guard = (_RunGuard(self.guard, extra=display_guard, on_stop=self._latch_failure)
+                          if self.guard is not None or display_guard is not None else None)
+            self.fixture_display = _FixtureDisplay(self.guard) if display_guard is not None else None
+            prompt_inputs(self.model, self.tokenizer, prompt)
+            self.initial_prompt = prompt
+            # Rejected editor text stays visible, but checkpoints retain an accepted prompt.
+            self.checkpoint_prompt = prompt
+            self.restored = None
+            self.handle = self.service = self.managed = None
+            self._failure = None
+            self._stop_checkpointed = False
+            self._verified_bindings = None
+            self._inference_lock = threading.Lock()
+            self._inference_ready = False
+            self._comparison = None
+            self._restore_generation(0)
+            self.selection = None
+            self._owned_clamp = None
+            self._owned_applied_spec = None
+            self._clamp_selection = None
+            self._selection_graph = None
+            self.traced_prompt = None
+            self.traced_specifications = None
+            self.traced_state = None
+            self._output_key = None
+            self._output_action_id = None
+            self._clamp_version = None
+            self._selected_version = None
+            self._retrace = False
+            self.parameters, self.actions = [], []
+        except BaseException as error:
+            if resources is None:
+                pending = [error]
+                try:
+                    self.index.close()
+                except BaseException as cleanup_error:
+                    # Cleanup must not replace the constructor refusal.
+                    pending.append(cleanup_error)
+                finally:
+                    self.model = self.tokenizer = self.dictionary = self.index = self.guard = None
+                    self.fixture_display = display_guard = None
+                    # Retained helper frames must not keep owned resources alive.
+                    seen = set()
+                    while pending:
+                        failure = pending.pop()
+                        if id(failure) not in seen:
+                            seen.add(id(failure))
+                            traceback.clear_frames(failure.__traceback__)
+                            pending.extend(link for link in (failure.__cause__, failure.__context__)
+                                           if link is not None)
+                    del failure
+            raise
 
     def _latch_failure(self, failure):
         """Latch a stop without callbacks, including while the Controls lock is held."""
