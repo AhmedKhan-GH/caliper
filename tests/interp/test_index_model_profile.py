@@ -8,17 +8,19 @@ import torch
 
 from tools.interp import build_index as command, model_load
 from caliper.interp._gemma_reference import PROFILE
+from caliper.interp import _reference_snapshots as snapshots
 from .test_model_load_modes import logical_guard
+from .test_reference_snapshots import local_snapshots, qualified_model
 
 
 @pytest.mark.parametrize("profile", [None, PROFILE])
-def test_gemma_loader_selects_explicit_reference_only(tmp_path, monkeypatch, profile):
+def test_gemma_loader_selects_explicit_reference_only(local_snapshots, qualified_model, monkeypatch, profile):
     calls = []
-    model, tokenizer = object(), object()
+    model, tokenizer = qualified_model, object()
 
     def snapshot(model_id, **kwargs):
         calls.append(("snapshot", model_id, kwargs))
-        return str(tmp_path)
+        return str(local_snapshots.model)
 
     def load(folder, **kwargs):
         calls.append(("model", folder, kwargs))
@@ -43,7 +45,19 @@ def test_gemma_loader_selects_explicit_reference_only(tmp_path, monkeypatch, pro
     assert options["memory"].memory is guard
     assert {key: value for key, value in options.items() if key not in ("device", "memory")} == (
         {} if profile is None else {"dtype": torch.bfloat16, "reference_profile": PROFILE})
-    assert calls[2] == ("tokenizer", tmp_path, {"local_files_only": True, "trust_remote_code": False})
+    assert calls[1][1] == local_snapshots.model
+    assert calls[2] == ("tokenizer", local_snapshots.model,
+                        {"local_files_only": True, "trust_remote_code": False})
+    if profile is None:
+        assert model not in snapshots._MODEL_SNAPSHOTS
+    else:
+        assert snapshots._MODEL_SNAPSHOTS[model] == local_snapshots.model
+        # The loader registry, rather than mutable config text, supplies the path.
+        model.config._name_or_path = "untrusted-location"
+        monkeypatch.setattr(snapshots, "scope_snapshot", lambda: local_snapshots.scope)
+        assert snapshots.reference_import_arguments(model) == {
+            "profile": PROFILE, "source": local_snapshots.scope,
+            "model_snapshot": local_snapshots.model}
 
 
 @pytest.mark.parametrize("model_id,mode,profile", [

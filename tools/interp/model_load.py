@@ -50,6 +50,9 @@ def load_text_model(*, device="mps", memory=None, model_id=MODEL_ID, mode="infer
             import torch
             selection = {"dtype": torch.bfloat16, "reference_profile": reference_profile}
         model = _load_gemma_model(snapshot, device=device, memory=memory, **selection)
+        if reference_profile is not None:
+            from caliper.interp._reference_snapshots import remember_model_snapshot
+            remember_model_snapshot(model, snapshot)
         tokenizer = AutoTokenizer.from_pretrained(snapshot, local_files_only=True, trust_remote_code=False)
         print(json.dumps({"stage": "text_model_ready", "model_id": GEMMA_ID, "revision": GEMMA_REVISION,
                           "fallback_enabled": os.environ.get("PYTORCH_ENABLE_MPS_FALLBACK", "0")}), flush=True)
