@@ -289,24 +289,31 @@ class _DirectEffects:
             if gradient is None:
                 continue
             if self.reference:
-                for node_slice, position, decoder in self._decoder_blocks[layer]:
-                    with autorelease_scope(path.device):
-                        self.check("direct decoder block")
-                        # The pinned hook gathers one gradient per source, then
-                        # contracts with bmm. GEMM can round differently.
-                        count = len(decoder)
-                        itemsize = decoder.element_size()
-                        # Live scratch: the full cast, gathered gradients,
-                        # source positions, and contraction output. The cast
-                        # can die before the product, but reserve both here.
-                        scratch = batch * path.tokens * path.width * itemsize
-                        scratch += batch * count * (path.width + 1) * itemsize + count * 8
-                        path.guard.reserve("direct decoder contraction", scratch)
-                        positions = torch.full((count,), position, dtype=torch.long, device=path.device)
-                        gathered = gradient.to(decoder.dtype)[:, positions]
-                        products = torch.einsum("bpd,pd->pb", gathered, decoder)
-                        weights[node_slice] = products
-                        del products, gathered, positions
+                cast_gradient = None
+                try:
+                    for node_slice, position, decoder in self._decoder_blocks[layer]:
+                        with autorelease_scope(path.device):
+                            self.check("direct decoder block")
+                            # The pinned hook gathers one gradient per source, then
+                            # contracts with bmm. GEMM can round differently.
+                            count = len(decoder)
+                            itemsize = decoder.element_size()
+                            # Reserve the full cast at every block, including its
+                            # first allocation and its live bytes at later blocks.
+                            scratch = batch * path.tokens * path.width * itemsize
+                            scratch += batch * count * (path.width + 1) * itemsize + count * 8
+                            path.guard.reserve("direct decoder contraction", scratch)
+                            positions = torch.full((count,), position, dtype=torch.long, device=path.device)
+                            if cast_gradient is None:
+                                # Every decoder in this layer has path.dtype. The
+                                # gradient stays immutable throughout these blocks.
+                                cast_gradient = gradient.to(decoder.dtype)
+                            gathered = cast_gradient[:, positions]
+                            products = torch.einsum("bpd,pd->pb", gathered, decoder)
+                            weights[node_slice] = products
+                            del products, gathered, positions
+                finally:
+                    del cast_gradient
             else:
                 # JumpReLU can activate every column. Copy bounded decoder
                 # blocks for the ordinary path, which does not retain rows.
