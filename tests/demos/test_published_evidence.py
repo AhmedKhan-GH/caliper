@@ -173,7 +173,9 @@ def test_complete_inventory_cannot_omit_bound_files(reviewed_collection, kind):
         verify_review(root, "driver/collection.json", "review.json")
 
 
-@pytest.mark.parametrize("fault", ["trace_id", "counts", "settings", "tokens", "nodes", "edges", "schedule", "diagnostics"])
+@pytest.mark.parametrize("fault", ["trace_id", "counts", "settings", "tokens", "nodes", "edges", "schedule", "diagnostics",
+                                  "logical_schedule", "duplicate_index", "duplicate_edge", "endpoint", "boolean_endpoint",
+                                  "next_node", "next_edge"])
 def test_full_graph_must_match_collection_identity(reviewed_collection, fault):
     root, review, result = reviewed_collection
     target = root / f"trace-{result['trace']['trace_id']}.json"
@@ -192,6 +194,20 @@ def test_full_graph_must_match_collection_identity(reviewed_collection, fault):
         graph["edges"].pop()
     elif fault == "schedule":
         graph["settings"].pop("physical_batches")
+    elif fault == "logical_schedule":
+        graph["settings"].pop("logical_queues")
+    elif fault == "duplicate_index":
+        graph["nodes"][1]["index"] = graph["nodes"][0]["index"]
+    elif fault == "duplicate_edge":
+        graph["edges"][1] = dict(graph["edges"][0])
+    elif fault == "endpoint":
+        graph["edges"][0]["target"] = len(graph["nodes"])
+    elif fault == "boolean_endpoint":
+        graph["edges"][0]["source"] = False
+    elif fault == "next_node":
+        graph["next_node_offset"] = 1
+    elif fault == "next_edge":
+        graph["next_edge_offset"] = 1
     else:
         graph["completeness"]["targets"].clear()
     write_json(target, graph)
