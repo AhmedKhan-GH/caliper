@@ -3,8 +3,9 @@
 Caliper LIB supports Gemma 2 semantic probes, frozen attribution paths, and JumpReLU dictionaries.
 The converter imports the pinned Gemma Scope selection for `google/gemma-2-2b`.
 Qwen3.5 support remains experimental, and generic Llama models are unsupported.
-Gemma is the only M8 acceptance model.
-M8 release requires every Gemma acceptance check and platform CI to pass.
+Gemma is the only M8 acceptance model, and M8 remains held.
+Its target is: reproduces the published circuit-tracer Gemma 2 2B Dallas example.
+Release requires the published comparison, all product checks, and platform CI to pass.
 
 ## Verification Scope
 
@@ -13,10 +14,11 @@ The tests cover semantic probes, replacement forward agreement, independent-writ
 Synthetic arrays test encoder conversion, JumpReLU boundaries, identity refusal, and bounded file admission.
 These checks do not establish results for the pretrained model.
 
-Source checks also cover the official Scope files and a conversion preflight with synthetic unit gain.
-That preflight does not verify conversion with the actual model gains.
-Pretrained conversion, dictionary quality, index correctness, and acceptance require model-bound evidence.
-CPU tests do not establish pretrained peak memory, trace time, or steering time.
+Independent CPU comparisons use actual TransformerLens conversion with nontrivial gains.
+They cover F32 and BF16 at 33, 256, and 1,024 positions, plus batches with right padding at 256 positions.
+These small models do not prove full model parity, device parity, index correctness, or product acceptance.
+The actual reference run supplies separate Dallas evidence, as described below.
+No local timing or model memory result establishes public product performance before acceptance.
 
 ## Pinned Sources
 
@@ -32,6 +34,84 @@ Each selected layer has 16,384 features.
 The selection comes from `config.yaml` in [mntss/gemma-scope-transcoders](https://huggingface.co/mntss/gemma-scope-transcoders/tree/9250a2d4860ce5ed5c96c14d5882b7d8162809a3), revision `9250a2d4860ce5ed5c96c14d5882b7d8162809a3`.
 The reference is [decoderesearch/circuit-tracer](https://github.com/decoderesearch/circuit-tracer/tree/82996f144b3371ae858ea5713590d004c218f0c2), revision `82996f144b3371ae858ea5713590d004c218f0c2`, under MIT.
 The former `safety-research/circuit-tracer` repository resolves to that repository.
+
+The tutorial's `gemma` alias uses the [historical alias config](https://huggingface.co/mwhanna/gemma-scope-transcoders/resolve/721fe56903edd07c42f71a87427faee6611d53ce/config.yaml).
+Revision `721fe56903edd07c42f71a87427faee6611d53ce` matches the selected 26 original Google NPZ URIs.
+The notebook omits model, transcoder, and alias revisions.
+These fixed snapshots and historical alias resolution are explicit reconstruction choices, not published notebook pins.
+
+## Published Dallas Profile
+
+The hosted profile `published_dallas_v1` explicitly selects BF16 and the arithmetic profile `circuit_tracer_82996f14`.
+The [pinned tutorial](https://github.com/decoderesearch/circuit-tracer/blob/82996f144b3371ae858ea5713590d004c218f0c2/demos/circuit_tracing_tutorial.ipynb), cell 8, uses exactly `Fact: the capital of the state containing Dallas is`.
+Its baseline top token is ` Austin`.
+The lowercase `the` is part of the input bytes.
+The [published graph JSON](https://neuronpedia-attrib.s3.us-east-1.amazonaws.com/user-graphs/cmao6p1xd0000ypedw0qhlhob/gemma-fact-dallas-austin.json) uses uppercase `The` and cannot substitute for this executable example.
+
+The seven interventions use exact published feature groups and positions, including BOS.
+The runtime catalog retains each source label and every layer, feature, and position ID.
+Cell numbers below are zero-based notebook cells.
+Each `run.action` name is `published_dallas_v1.cellN`, where `N` is the cell number.
+Cell 10 restores the baseline.
+
+| Source Cell | Group Clamp | Published Top Token |
+|---|---|---|
+| [14][dallas-tutorial] | `capital cities / say a capital city`: -2 × Dallas activation | ` Texas` |
+| [16][dallas-tutorial] | `capital`: -2 × Dallas activation | ` Texas` |
+| [18][dallas-tutorial] | `Texas`: -2 × Dallas activation | ` the` |
+| [20][dallas-tutorial] | `state`: -2 × Dallas activation | ` Austin` |
+| [24][dallas-tutorial] | `Texas`: -2 × Dallas activation, `California`: 2 × Oakland activation | ` Sacramento` |
+| [26][dallas-tutorial] | `Texas`: -2 × Dallas activation, `China`: 2 × Shanghai activation | ` Beijing` |
+| [29][dallas-tutorial] | `Texas`: -2 × Dallas activation, `British Columbia`: 2 × Vancouver activation | ` the` |
+
+[dallas-tutorial]: https://github.com/decoderesearch/circuit-tracer/blob/82996f144b3371ae858ea5713590d004c218f0c2/demos/circuit_tracing_tutorial.ipynb
+
+Donor prompts are `Fact: the capital of the state containing Oakland is` and `Fact: the capital of the country containing Shanghai is`.
+The third donor prompt is `Fact: the capital of the territory containing Vancouver is`.
+Preparation reads activations from independent, unchanged prompts in the current Caliper model.
+Each clamp sets an absolute value from that source activation, without multiplication of a previous intervention result.
+Every complete action replaces the previous case atomically, with rollback on failure.
+
+The source labels also include `preposition followed by place name`, `Say Austin`, `Say Sacramento`, and `Say Victoria`.
+The published actions do not directly clamp those observed nodes.
+The British Columbia intervention must retain the published ineffective outcome, with no `Say Victoria` activation.
+Actions freeze baseline attention patterns but recompute norms and MLP outputs, as the [pinned implementation](https://github.com/decoderesearch/circuit-tracer/blob/82996f144b3371ae858ea5713590d004c218f0c2/circuit_tracer/replacement_model/replacement_model_transformerlens.py#L737) specifies.
+Preparation binds prompt bytes, token IDs, source resources, arithmetic, and dtype before action timing.
+
+## Reference Graph
+
+Graph reconstruction uses ten logits, cumulative probability 0.95, and at most 5,000 feature targets.
+The cited graph JSON supplies node threshold 0.7 and edge threshold 0.9.
+Its display thresholds and feature-density filter do not replace these generation parameters.
+Reconstruction applies these settings to the lowercase prompt and compares the actual resulting reference graph.
+
+The Dallas materials omit batch size, update interval, and offload settings.
+Reconstruction uses the [pinned API defaults](https://github.com/decoderesearch/circuit-tracer/blob/82996f144b3371ae858ea5713590d004c218f0c2/circuit_tracer/attribution/attribute_transformerlens.py#L42): batch size 512, update interval 4, and `offload=None`.
+These defaults are reconstruction choices, not verified original Dallas settings.
+Caliper records logical batches and physical chunks when memory admission requires smaller chunks.
+
+The explicit trace request uses `profile="circuit_tracer_82996f14"`, `max_targets=5000`, `max_nodes=8192`, and `max_edges=262144`.
+It also supplies `max_n_logits=10`, `desired_logit_prob=0.95`, `node_threshold=0.7`, `edge_threshold=0.9`, `batch_size=512`, and `update_interval=4`.
+Node and edge limits are resource ceilings.
+An excess causes refusal without silent truncation of the pruned graph.
+Every setting enters cache identity and result metadata, and `trace.read` exposes the complete result in bounded pages.
+
+The reference objective centers unembedding directions before the final softcap derivative.
+The reference projection excludes BOS feature and error sources before influence normalization.
+Caliper retains separate diagnostics for completeness over all sources.
+The ordinary `caliper` profile retains its existing objective, 512 feature targets, 512 nodes, and 8,192 edges.
+
+## Reference Results
+
+The actual pinned reference completed the baseline and all seven interventions, followed by canonical CPU pruning.
+All seven intervention top tokens match the published outcomes.
+Most rounded probability lists differ from the publication, while cell 26 matches.
+These differences remain visible in the comparison and do not establish Caliper acceptance.
+
+The canonical reference graph has 847 nodes, 689 feature nodes, and 33,999 nonzero edges.
+Its replacement score is 0.703288138, and its completeness score is 0.918979049.
+These are source-library scores, not Caliper completeness residuals.
+Caliper must still pass the full reference comparison and every product check.
 
 ## Layer Selection
 
@@ -78,7 +158,7 @@ The raw `.mlp` output precedes that norm and is a different point.
 The source encoder reads the RMS-normalized input before the learned gain.
 Let `u` denote that input and let `g = 1 + pre_feedforward_layernorm.weight`.
 Caliper reads `x = u * g`.
-The converter transposes the source encoder and divides each input column by `g`:
+The ordinary `caliper` converter transposes the source encoder and divides each input column by `g`:
 
 ```text
 W_enc_caliper = W_enc_source.T / g[None, :]
@@ -95,9 +175,31 @@ JumpReLU uses `activation="jumprelu"` and `k=None`.
 
 The decoder already predicts the residual write after the post-feedforward norm.
 Reconstruction and feature deltas enter there without another application of that norm.
-Scale and clamp read the actual MLP input after input interventions, then add their decoder delta at this semantic output.
+Ordinary scale and clamp read the actual MLP input after input interventions, then add their decoder delta at this semantic output.
 Nested clean-source forwards preserve the outer read, and block exit releases it after success or failure.
 The tracer refuses raw `.mlp` edits for Gemma.
+
+### Original Coordinates
+
+The explicit reference artifact stores `W_enc_original` as the direct source encoder transpose cast to BF16.
+Reference hooks capture the normalized BF16 input before the learned gain.
+They never divide rounded inputs after the gain to recover this coordinate.
+The reference encoder applies `W_enc_original` and the encoder bias to that captured input, then applies JumpReLU.
+
+The runtime first casts each source F32 norm weight to BF16.
+It then promotes that runtime norm to F32, adds one, and casts the gain to BF16:
+
+```text
+runtime_norm = source_norm.to(bfloat16)
+gain = (runtime_norm.to(float32) + 1).to(bfloat16)
+W_enc_original = W_enc_source.T.to(bfloat16)
+W_enc = (W_enc_source.T / gain).to(bfloat16)
+```
+
+Compatibility `W_enc` division uses at least F32 precision and the rounded runtime gain.
+It does not define the original coordinate.
+The reference artifact also casts decoder rows, both biases, and thresholds directly to BF16.
+Addition before the source norm cast can produce different gain bytes and fails reference qualification.
 
 ## Frozen Path
 
@@ -118,7 +220,7 @@ local_logit(z) = s * z + b
 
 This map preserves the captured value and derivative.
 It does not reproduce the nonlinear model for arbitrary perturbations.
-Centered targets use the scaled token row minus the mean of all scaled unembedding rows.
+Ordinary centered targets use the scaled token row minus the mean of all scaled unembedding rows.
 The explicit offset and any head bias receive the same vocabulary centering and enter completeness accounting.
 The implementation uses bounded row blocks without a second full unembedding matrix.
 
@@ -129,8 +231,10 @@ An active set that exceeds memory admission receives a refusal.
 ## Conversion And Provenance
 
 `tools/interp/convert_gemma_scope.py` converts the exact local Scope snapshot against a verified pinned Gemma model.
-Its API is `convert_gemma_scope(source, output, *, model, memory_limit_gb=40, evaluation_source=None)`.
-The CLI accepts `--source`, `--output`, `--model-snapshot`, `--memory-limit-gb`, and `--evaluation-source`.
+Its API is `convert_gemma_scope(source, output, *, model, memory_limit_gb=40, evaluation_source=None, profile="caliper", model_snapshot=None)`.
+The CLI accepts `--source`, `--output`, `--model-snapshot`, `--memory-limit-gb`, `--evaluation-source`, and `--profile`.
+Select `--profile circuit_tracer_82996f14` explicitly for the original-coordinate BF16 artifact.
+Reference conversion requires the pinned model snapshot, including through the Python API.
 The model and source paths must identify their exact revisions in the standard Hugging Face cache layout.
 The converter performs no download or training.
 
@@ -142,6 +246,13 @@ It releases each layer before the next layer and publishes the complete director
 An existing output directory causes refusal.
 `import_source` records the source pins, selection, license, source and output hashes, gain hashes, and normalization conversion.
 These hashes record trusted local bytes and do not authenticate them against a remote service.
+
+Reference conversion and qualification require the exact version 2 conversion schema.
+Qualification checks every source NPZ, original F32 norm, runtime BF16 norm, effective gain, output file, and tensor byte.
+It independently checks source conversion results and binds the pinned model and dictionary sources.
+The reference declaration names `gemma_scope_pre_gain`, `W_enc_original`, and `bfloat16`.
+Version 1 reference evidence, an inverse conversion, or a profile name alone cannot qualify these resources.
+Ordinary conversion retains its existing version 1 evidence.
 
 The manifest records `training.origin="imported"`, `local_training=false`, zero local training tokens, and empty training partitions.
 Publisher training fields remain unknown, and `publisher_tokens` remains null.
@@ -194,12 +305,34 @@ Their fresh context can produce activations that differ from the original indexe
 The index excludes prefix and padding positions from feature counts, offsets, and returned example activations.
 
 An older Gemma index without these policies requires a rebuild.
-Release qualification requires the research quality report and both corrected index policies.
+Generic research qualification requires its research report and both corrected index policies.
+Published qualification uses the separate BF16 resource contract below.
 The live response also checks both index policies against the current model and tokenizer.
 Example admission includes the additional prefix position and retains a lower memory limit when supplied.
 The public Gemma tokenizer and index windows both place BOS before content.
+
 Legacy Qwen evaluation retains its existing context preparation, replacement behavior, and metric targets.
 The Qwen index format remains unchanged.
+
+## Reference Index
+
+The published profile requires a new index over exactly 2,000,000 source positions from the pinned index partition.
+Use `--profile circuit_tracer_82996f14` with `tools.interp.build_index` and `--model google/gemma-2-2b`.
+Construction uses BF16 reference arithmetic and captures original coordinates through the reference hooks.
+The lead must qualify the artifact against both pinned snapshots before index construction.
+Index compatibility checks do not replace source qualification.
+
+The index uses 256 model positions per context, including BOS, with at most 255 source positions.
+It retains 16 examples per feature and 33 source slots per example, with an additional BOS position.
+Prefixes and padding do not enter source counts or example offsets.
+Stable tie order and document partition rules remain unchanged.
+
+Format version 2 requires `encoder_policy="gemma_scope_pre_gain_v1"` and the exact reference declaration.
+Its threshold policy remains `live_input_v1`.
+The index binds the complete dictionary fingerprint, every artifact tensor, file hashes, tokenizer identity, and model execution identity.
+Execution identity includes the arithmetic operations, package versions, dtype, device, autocast, forward settings, and float32 matmul precision.
+Reference execution requires disabled autocast and highest float32 matmul precision.
+A changed resource or execution identity requires a new index.
 
 ## Research Evaluation Protocol
 
@@ -259,10 +392,14 @@ Its partial report retains `status="partial"`, `source_budget_complete=false`, a
 The report records the exact committed sample, observation count, loss-target count, and final cursor SHA256.
 The configured budget remains 200,000, and the cursor permits a later resume toward that budget.
 
-The measured Gemma comparison sample contains 52,231 source positions and 52,174 metric observations.
+The historical F32 Gemma comparison sample contains 52,231 source positions and 52,174 metric observations.
 Its stop reason is `signal 2`.
 These counts do not establish full-budget completion.
 Quality measurements supply comparison evidence, not a numerical release gate.
+
+Under Founder Decision 8 and Coordinator Decision 10, this F32 result remains separate comparison evidence.
+It cannot qualify new BF16 artifact bytes, arithmetic, or an original-coordinate index.
+Published qualification discloses absent or supplied historical quality evidence without a new quality gate.
 
 Research mode leaves the legacy `dictionary.json:quality` report and `evaluation/` cursor intact.
 The default `legacy` selector retains the historical contexts, masks, and resume behavior.
@@ -330,7 +467,7 @@ Queries preserve example order and cache the complete result only after all batc
 If one window cannot fit, the query refuses before its tensor allocation.
 The budget is a limit, not a measured memory result or a speed guarantee.
 
-Gemma qualification accepts complete research measurements from a sample of 50,000 through 199,999 source positions.
+Generic research qualification accepts complete measurements from a sample of 50,000 through 199,999 source positions.
 That sample requires `status="partial"` and `source_budget_complete=false`.
 Its stop reason must be `signal 2` or `signal 15`.
 Qualification also accepts a full 200,000-position result with consistent completion status and its original quality status.
@@ -339,11 +476,27 @@ The service binds the report to the exact cursor bytes.
 The acceptance result and quality disclosure retain the actual sample count and original status.
 
 Quality comparisons retain thresholds of 0.30 mean FVU, 0.15 dead fraction, and 0.5 nats all-layer loss rise.
-Quality values do not block the index or hidden acceptance after the valid comparison sample exists.
+These historical quality thresholds do not decide published Dallas acceptance.
 Quality evidence binds the evaluated model, dictionary tensor bytes, forward settings, and evaluation device.
-Use the acceptance device for evaluation. A device change requires a new evaluation because kernel arithmetic can differ.
-The index requires exactly 2,000,000 tokens.
-Graph validation still requires at least eight correct signs among ten features and Spearman correlation of at least 0.6.
-The existing feature-share, completeness, visual, parity, and directional steering checks also apply.
-Trace and steering limits remain 20 seconds and one second.
+An evaluation device change requires new comparison evidence because kernel arithmetic can differ.
+It does not require a new quality gate for the published profile.
+
+### Published Acceptance
+
+Feature-node Jaccard overlap with the actual reference must reach 0.9.
+Every edge must satisfy `abs(caliper - reference) <= 1e-6 + 1e-3 * abs(reference)`.
+The comparison uses the union of both edge sets and counts missing edges as zero.
+Every baseline and intervention comparison covers the full vocabulary, with absolute probability error at most 0.001 and exact top token IDs.
+Both implementations must reproduce every published semantic outcome, including the ineffective British Columbia intervention.
+
+Caliper completeness residuals must remain at most 0.02 per target.
+Trace time must remain at most 20 seconds, and each complete action must remain at most one second.
+Preparation time remains separate, and cached outputs cannot satisfy action timing.
+Visual, pixel, app/browser parity, the 40 decimal GB process cap, and the 8 decimal GB host reserve remain required.
+The five-point clamp, 8/10 signs, Spearman 0.6, and largest-effect selection do not define published Gemma acceptance.
 The Qwen quality override and upper-half fallback do not apply to Gemma.
+
+Hidden startup proof verifies browser assets, program views, and error retention for the repaired live path.
+That proof does not establish published Dallas replication or product acceptance.
+The [demo procedure](../python/interpretability.md#hidden-demo) separates live use, evidence collection, and independent review.
+M8 remains held until the complete comparison, product checks, reviews, and platform CI pass.
