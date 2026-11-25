@@ -21,7 +21,7 @@ from ._dictionary import (
     _GEMMA_IDENTITY, _VERIFIED_MODELS, _admit, _finite, _hash_admission, _hf_identity, _memory_limit,
     _positive, _state_hash, model_identity,
 )
-from ._memory import BudgetMemory, MemoryGuard, autorelease_scope, family_memory_limit
+from ._memory import BudgetMemory, MemoryGuard, autorelease_scope, family_memory_limit, host_reserve_for_model
 
 
 _WIDTH, _LATENTS = 2304, 16384
@@ -311,7 +311,7 @@ def verified_import_binding(folder, metadata, *, model, memory=None, profile="ca
         memory = MemoryGuard(40, next(model.parameters()).device)
     limit = family_memory_limit(model, memory=memory)
     _memory_limit(limit, _GEMMA_IDENTITY, "import qualification")
-    memory = BudgetMemory(memory, limit)
+    memory = BudgetMemory(memory, limit, host_reserve_bytes=host_reserve_for_model(model))
     _admit(memory, 4 * _CHUNK_BYTES, "scope_import_admission")
     identity = model_identity(model, memory=memory, memory_limit_gb=limit)
     if not reference and identity != _GEMMA_IDENTITY and metadata.get("model_hash") != _GEMMA_IDENTITY and "import_source" not in metadata:

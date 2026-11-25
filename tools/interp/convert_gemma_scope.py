@@ -23,7 +23,7 @@ from caliper.interp._dictionary import (
     _GEMMA_IDENTITY, _admit, _finite, _hf_identity, _manifest, _memory_limit,
     _positive, _state_hash, model_identity,
 )
-from caliper.interp._memory import MemoryGuard
+from caliper.interp._memory import BudgetMemory, MemoryGuard, host_reserve_for_model
 from caliper.interp._gemma_import_identity import (
     _REFERENCE_CONVERSION, _REFERENCE_INPUT, _REFERENCE_INPUT_CONVERSION,
     _REFERENCE_OUTPUT_CONVERSION, _REFERENCE_PROFILE, _reference_gain,
@@ -338,6 +338,7 @@ def convert_gemma_scope(source, output, *, model, memory_limit_gb=40, evaluation
         raise ValueError("Gemma Scope source snapshot revision differs")
     _memory_limit(memory_limit_gb, _GEMMA_IDENTITY, "conversion")
     memory = MemoryGuard(memory_limit_gb, next(model.parameters()).device)
+    memory = BudgetMemory(memory, memory_limit_gb, host_reserve_bytes=host_reserve_for_model(model))
     _admit(memory, 4 * _CHUNK_BYTES, "scope_conversion_start")
     evaluation_source = _evaluation_source(evaluation_source)
     blocks = _model_admission(model, memory_limit_gb)

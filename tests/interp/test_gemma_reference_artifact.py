@@ -395,6 +395,8 @@ def test_reference_qualification_leaves_prospective_host_reserve(reference_artif
     import psutil
     from types import SimpleNamespace
     monkeypatch.setattr(psutil, "virtual_memory", lambda: SimpleNamespace(available=8_000_000_000))
+    # Exercise full-model admission with the bounded artifact fixture.
+    monkeypatch.setattr(imported, "host_reserve_for_model", lambda model: 8_000_000_000)
     monkeypatch.setattr(imported, "model_identity", lambda *a, **k: pytest.fail("model hashing began"))
     with pytest.raises(CleanStop, match="8 GB host reserve"):
         qualify(reference_artifact)
