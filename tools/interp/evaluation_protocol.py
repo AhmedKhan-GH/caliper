@@ -21,19 +21,35 @@ def research_policy(model, context, tokenizer):
     if type(context) is not int or not 2 <= context <= 1024:
         raise ValueError("research context must have two to 1024 model positions")
     config = model.config
+    vocab = config.vocab_size
+    if type(vocab) is not int or vocab < 1:
+        raise ValueError("research context requires a valid vocabulary size")
+    for name in ("bos_token_id", "eos_token_id", "pad_token_id"):
+        if not hasattr(tokenizer, name):
+            raise ValueError("research tokenizer must declare its special token IDs")
+        value = getattr(tokenizer, name)
+        if value is not None and (type(value) is not int or not 0 <= value < vocab):
+            raise ValueError("research tokenizer requires valid special token IDs")
     bos = getattr(config, "bos_token_id", None)
+    if bos is not None and (type(bos) is not int or not 0 <= bos < vocab):
+        raise ValueError("research model requires a valid BOS ID")
     token_bos = getattr(tokenizer, "bos_token_id", None)
     if bos != token_bos:
         raise ValueError("research tokenizer BOS differs from the model")
-    if bos is None and getattr(tokenizer, "add_bos_token", False):
+    add_bos = getattr(tokenizer, "add_bos_token", False)
+    if type(add_bos) is not bool or (bos is None and add_bos):
         raise ValueError("research tokenizer requests an undeclared BOS")
     pad = getattr(config, "pad_token_id", None)
+    if pad is not None and (type(pad) is not int or not 0 <= pad < vocab):
+        raise ValueError("research model requires a valid padding ID")
     token_pad = getattr(tokenizer, "pad_token_id", None)
     if pad is not None and token_pad != pad:
         raise ValueError("research tokenizer padding differs from the model")
     pad = token_pad if pad is None else pad
     eos = getattr(config, "eos_token_id", None)
     eos = [] if eos is None else list(eos) if isinstance(eos, (list, tuple)) else [eos]
+    if any(type(value) is not int or not 0 <= value < vocab for value in eos):
+        raise ValueError("research model requires valid EOS IDs")
     token_eos = getattr(tokenizer, "eos_token_id", None)
     if eos and token_eos not in eos:
         raise ValueError("research tokenizer EOS differs from the model")
@@ -123,6 +139,9 @@ def admit_workspace(memory, required):
 @contextmanager
 def research_mlps(model, dictionary, active_layers, mask, *, chunk_tokens, health=None):
     """Replace semantic writes in bounded chunks and restore all hooks on exit."""
+    if (not isinstance(mask, torch.Tensor) or mask.dtype != torch.bool or mask.ndim != 2
+            or type(chunk_tokens) is not int or not 1 <= chunk_tokens <= 128):
+        raise ValueError("invalid research replacement mask or chunk size")
     handles, reads = [], {}
     probes = _architecture(model)
     try:
@@ -137,7 +156,8 @@ def research_mlps(model, dictionary, active_layers, mask, *, chunk_tokens, healt
 
             def replace(module, args, output, index=index):
                 x = reads.pop(index)
-                if output.shape != x.shape or mask.shape != output.shape[:-1]:
+                if (output.shape != x.shape or mask.shape != output.shape[:-1]
+                        or mask.device != output.device):
                     raise ValueError("research replacement shape differs from context")
                 value = output.clone()
                 positions = mask.reshape(-1).nonzero().flatten()

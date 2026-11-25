@@ -32,6 +32,9 @@ def settings_fixture(folder, family):
 
 def run(folder, model, dictionary, *, interrupt=False, **kwargs):
     class Tokenizer(TinyTokenizer):
+        # Keep the source EOS inside both fixture vocabularies, including saved suffixes.
+        eos_token_id = 0
+
         def encode(self, *args, **kwargs):
             return list(range(1, 9))
 

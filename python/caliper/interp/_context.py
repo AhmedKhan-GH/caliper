@@ -16,10 +16,12 @@ def context_policy(model, context_length, *, tokenizer=None):
         raise ValueError("Gemma context must reserve a prefix within two to 256 positions")
     bos, pad = model.config.bos_token_id, model.config.pad_token_id
     vocab = model.config.vocab_size
-    if any(type(value) is not int or not 0 <= value < vocab for value in (bos, pad)):
+    if (type(vocab) is not int or vocab < 1
+            or any(type(value) is not int or not 0 <= value < vocab for value in (bos, pad))):
         raise ValueError("Gemma context requires valid BOS and padding IDs")
     for name, value in (("bos_token_id", bos), ("pad_token_id", pad)):
-        if tokenizer is not None and hasattr(tokenizer, name) and getattr(tokenizer, name) != value:
+        if tokenizer is not None and (type(getattr(tokenizer, name, None)) is not int
+                                      or getattr(tokenizer, name) != value):
             raise ValueError("Gemma tokenizer special IDs differ from the model")
     return {"version": 1, "family": "gemma2", "prefix_ids": [bos], "pad_id": pad,
             "model_context": context_length, "content_context": context_length - 1,
@@ -68,13 +70,18 @@ def _prepare_contexts(rows, policy, *, device, pad_to):
 
 def source_segments(document_ids, positions, capacity, *, final=False):
     """Return complete source spans. Retain an incomplete final span for more input."""
+    if type(capacity) is not int or not 1 <= capacity < 2**63 or type(final) is not bool:
+        raise ValueError("invalid source context capacity or final flag")
     if len(document_ids) != len(positions):
         raise ValueError("source document and position counts differ")
     start = 0
     for index in range(len(positions)):
-        if any(type(value) is not int or value < 0 for value in (document_ids[index], positions[index])):
+        if any(type(value) is not int or not 0 <= value < 2**63
+               for value in (document_ids[index], positions[index])):
             raise ValueError("invalid source document position")
         if index > 0:
+            if document_ids[index] != document_ids[index - 1] and positions[index] != 0:
+                raise ValueError("new source document must start at position zero")
             boundary = document_ids[index] != document_ids[index - 1] or positions[index] == 0
             if not boundary and positions[index] != positions[index - 1] + 1:
                 raise ValueError("source document positions are not contiguous")

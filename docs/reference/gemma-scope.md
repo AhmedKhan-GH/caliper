@@ -257,6 +257,10 @@ Research settings bind the protocol, source, model, dictionary, context policy, 
 Resume rejects a changed setting before it loads statistics.
 The report includes the committed cursor digest for consumers that require a consistent report and cursor.
 
+Both protocols reject malformed counts, source coordinates, token IDs, and tensor headers before they load statistics.
+Policy comparisons preserve JSON types, and thus a boolean cannot substitute for a token ID or version.
+The evaluator checks mask type, shape, and device before it applies a replacement.
+
 A batch commits only after the baseline, isolated interventions, and all-active intervention succeed.
 Cooperative checkpoints run every 120 seconds, including during a layer sweep, and retain the prior complete statistics plus pending source coordinates.
 Resume replays an incomplete batch without a second contribution from any partial observation.

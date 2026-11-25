@@ -15,7 +15,8 @@ from safetensors.torch import load_file
 
 from caliper.interp import capture, load_dictionary
 from caliper.interp._context import context_policy, prepare_contexts, source_segments
-from caliper.interp._dictionary import fallback_metadata
+from caliper.interp._dictionary import fallback_metadata, _canonical_device
+from caliper.interp._memory import BudgetMemory
 from .checkpoint_state import _save_tensors, dictionary_fingerprint, write_json
 from .evaluation_binding import EvaluationBinding
 from .memory_limits import CleanStop, MemoryGuard, StopControl, autorelease_scope
@@ -30,7 +31,12 @@ _QUALITY_THRESHOLDS = {"fvu": 0.40, "dead_fraction": 0.15, "cross_entropy_delta"
 
 @contextmanager
 def replace_all_mlps(model, dictionary, *, content_mask=None):
-    """Replace every active MLP for one forward and restore it on every exit."""
+    """Replace active MLPs and restore them on exit. Gemma masks preserve unselected writes."""
+    if content_mask is not None:
+        if getattr(model.config, "model_type", None) != "gemma2":
+            raise ValueError("legacy replacement content masks require Gemma")
+        if not isinstance(content_mask, torch.Tensor) or content_mask.dtype != torch.bool or content_mask.ndim != 2:
+            raise ValueError("invalid replacement content mask")
     originals = []
     handles, reads = [], {}
     try:
@@ -57,7 +63,7 @@ def replace_all_mlps(model, dictionary, *, content_mask=None):
                         raise ValueError("Gemma replacement shape differs from the semantic write")
                     value = value.to(dtype=output.dtype, device=output.device)
                     if content_mask is not None:
-                        if content_mask.shape != output.shape[:-1]:
+                        if content_mask.shape != output.shape[:-1] or content_mask.device != output.device:
                             raise ValueError("replacement content mask differs from the model context")
                         value = torch.where(content_mask[..., None], value, output)
                     return value
@@ -83,14 +89,18 @@ def replace_all_mlps(model, dictionary, *, content_mask=None):
 @torch.no_grad()
 def cross_entropy_sum(model, hidden, input_ids, count, *, chunk_tokens=64, health=None,
                       prediction_mask=None):
-    """Project a bounded token chunk. Exclude padding and context boundaries."""
+    """Sum target loss in head chunks. An explicit mask selects predictors within each row."""
+    if type(chunk_tokens) is not int or not 1 <= chunk_tokens <= 128:
+        raise ValueError("invalid cross-entropy chunk size")
     width = hidden.shape[-1]
     context = input_ids.shape[-1]
     if prediction_mask is None:
         positions = torch.arange(max(count - 1, 0), device=hidden.device)
         positions = positions[(positions + 1) % context != 0]
     else:
-        if prediction_mask.dtype != torch.bool or prediction_mask.shape != input_ids[:, :-1].shape:
+        if (not isinstance(prediction_mask, torch.Tensor) or prediction_mask.dtype != torch.bool
+                or prediction_mask.shape != input_ids[:, :-1].shape
+                or prediction_mask.device != hidden.device or input_ids.device != hidden.device):
             raise ValueError("invalid cross-entropy prediction mask")
         positions = torch.arange(input_ids.numel(), device=hidden.device).reshape_as(input_ids)
         positions = positions[:, :-1][prediction_mask]
@@ -300,42 +310,171 @@ def save_evaluation(folder, stats, stream, pending, identity, settings, elapsed,
 def restore_evaluation(folder, stats, stream, identity, settings, binding):
     folder = Path(folder)
     state = json.loads((folder / "state.json").read_text())
-    if (state.get("version") != 1 or state["identity"] != identity or state["settings"] != settings
-            or state.get("tensor_binding") != binding.evidence):
+    if (not isinstance(state, dict) or type(state.get("version")) is not int or state["version"] != 1
+            or state.get("identity") != identity or not _same_json(state.get("settings"), settings)
+            or not _same_json(state.get("tensor_binding"), binding.evidence)):
         raise ValueError("evaluation dictionary or settings changed across resume")
-    if state.get("model_binding") != binding.model_evidence:
+    if not _same_json(state.get("model_binding"), binding.model_evidence):
         raise ValueError("evaluation model identity mismatch: cursor binding differs")
+    _validate_cursor_scalars(state, settings)
+    vocab = binding.model.config.vocab_size
     if "context_policy" in settings:
-        segments = state.get("content_segments")
         capacity = settings["context_policy"]["content_context"]
-        if (not isinstance(segments, list) or any(
-                not isinstance(row, list) or len(row) != 3 or
-                any(type(value) is not int or value < 0 for value in row) or not 1 <= row[2] <= capacity
-                for row in segments) or sum(row[2] for row in segments) != state["count"]):
-            raise ValueError("invalid evaluation content segmentation")
-        _validate_pending(state["pending_ids"], settings["tokens"] - state["count"])
-        stats.content_segments = segments
+        _validate_segments(state.get("content_segments"), state["count"], capacity)
+        _validate_pending(state.get("pending_ids"), settings["tokens"] - state["count"], vocab_size=vocab)
+        if state["ce_tokens"] != state["count"]:
+            raise ValueError("invalid legacy Gemma target count")
+    elif state.get("pending_ids") is not None:
+        _validate_ids(state["pending_ids"], vocab)
+        if len(state["pending_ids"]) > min(settings["batch_tokens"], settings["tokens"] - state["count"]):
+            raise ValueError("invalid legacy pending token count")
+    _validate_stream_cursor(state, stream, settings, vocab, state["count"])
     binding.verify()
-    if state["tensors"] not in ("stats-a.safetensors", "stats-b.safetensors"):
-        raise ValueError("invalid evaluation tensor path")
+    _validate_tensor_headers(folder, state, stats, ("mean", "variance_sum", "error_sum", "hits"))
+    stream.load_state_dict(state["stream"])
     tensors = load_file(folder / state["tensors"])
+    _validate_stat_tensors(tensors, state["count"], state["ce_tokens"])
     for name in ("mean", "variance_sum", "error_sum", "hits"):
         getattr(stats, name).copy_(tensors[name])
     for name in ("count", "original_ce", "replaced_ce", "ce_tokens"):
         setattr(stats, name, state[name])
-    stream.load_state_dict(state["stream"])
+    if "context_policy" in settings:
+        stats.content_segments = state["content_segments"]
     return state["pending_ids"], state["elapsed_seconds"]
 
 
-def _validate_pending(pending, remaining):
+def _same_json(left, right):
+    """Compare checkpoint settings without boolean or numeric type aliases."""
+    if type(left) is not type(right):
+        return False
+    if isinstance(right, dict):
+        return left.keys() == right.keys() and all(_same_json(left[k], v) for k, v in right.items())
+    if isinstance(right, list):
+        return len(left) == len(right) and all(_same_json(a, b) for a, b in zip(left, right))
+    return left == right
+
+
+def _finite_nonnegative(value):
+    return type(value) in (int, float) and 0 <= value <= float.fromhex("0x1.fffffffffffffp+1023")
+
+
+def _validate_cursor_scalars(state, settings, *, research=False):
+    counters = ("count", "ce_tokens", "source_tokens") if research else ("count", "ce_tokens")
+    if any(type(state.get(key)) is not int or not 0 <= state[key] <= settings["tokens"] for key in counters):
+        raise ValueError("invalid evaluation cursor counts")
+    if state["ce_tokens"] > state["count"] or (research and state["count"] > state["source_tokens"]):
+        raise ValueError("invalid evaluation observation counts")
+    if any(not _finite_nonnegative(state.get(key)) for key in ("original_ce", "replaced_ce", "elapsed_seconds")):
+        raise ValueError("invalid evaluation loss or elapsed time")
+    if not state["ce_tokens"] and (state["original_ce"] or state["replaced_ce"]):
+        raise ValueError("evaluation loss requires target observations")
+
+
+def _validate_ids(ids, vocab_size):
+    if (not isinstance(ids, list) or any(type(value) is not int or not 0 <= value < vocab_size for value in ids)):
+        raise ValueError("invalid evaluation source token IDs")
+
+
+def _validate_segments(segments, count, capacity):
+    if (not isinstance(segments, list) or any(
+            not isinstance(row, list) or len(row) != 3
+            or any(type(value) is not int or not 0 <= value < 2**63 for value in row)
+            or not 1 <= row[2] <= capacity or row[1] + row[2] >= 2**63 for row in segments)
+            or sum(row[2] for row in segments) != count):
+        raise ValueError("invalid evaluation content segmentation")
+    previous = None
+    for doc, position, length in segments:
+        _validate_next_coordinate(previous, doc, position)
+        if previous is not None and position and previous[2] != capacity:
+            raise ValueError("incomplete evaluation context before document continuation")
+        previous = (doc, position + length, length)
+
+
+def _validate_next_coordinate(previous, doc, position):
+    if position != 0 and (previous is None or doc != previous[0] or position != previous[1]):
+        raise ValueError("evaluation source positions are not contiguous")
+
+
+def _validate_stream_cursor(state, stream, settings, vocab_size, committed):
+    """Validate source metadata and coordinates before statistics or source restoration."""
+    source = state.get("stream")
+    expected = {"version": 1, "source_id": stream.source_id, "partition": stream.partition,
+                "partitions": partition_metadata()}
+    if not isinstance(source, dict) or any(not _same_json(source.get(k), v) for k, v in expected.items()):
+        raise ValueError("invalid evaluation stream identity")
+    for key in ("rows", "emitted", "skipped_long", "offset", "document_id"):
+        if type(source.get(key)) is not int or not 0 <= source[key] < 2**63:
+            raise ValueError("invalid evaluation stream cursor")
+    _validate_ids(source.get("pending"), vocab_size)
+    if (source["offset"] > len(source["pending"]) or source["skipped_long"] > source["rows"]
+            or (hasattr(stream.documents, "__len__") and source["rows"] > len(stream.documents))):
+        raise ValueError("invalid evaluation stream source bounds")
+    pending = state.get("pending_ids")
+    pending_count = len(pending["ids"]) if isinstance(pending, dict) else len(pending or [])
+    if source["emitted"] != committed + pending_count:
+        raise ValueError("evaluation stream emitted count differs from committed and pending tokens")
+    buffer = source.get("buffer", [[], [], []])
+    if not isinstance(buffer, list) or len(buffer) != 3:
+        raise ValueError("invalid evaluation stream buffer")
+    buffered = dict(zip(("ids", "documents", "positions"), buffer), exhausted=False)
+    _validate_pending(buffered, settings["tokens"] - source["emitted"], vocab_size=vocab_size)
+    segments = state.get("content_segments")
+    if segments is not None:
+        previous = None if not segments else (segments[-1][0], segments[-1][1] + segments[-1][2])
+        for block in (pending, buffered):
+            for doc, position in zip(block["documents"], block["positions"]):
+                _validate_next_coordinate(previous, doc, position)
+                previous = (doc, position + 1)
+        if source["pending"] and previous != (source["document_id"], source["offset"]):
+            raise ValueError("evaluation source offset differs from emitted coordinates")
+    nested = source.get("source_state")
+    if nested is not None:
+        if not isinstance(nested, dict) or not hasattr(stream.documents, "load_state_dict"):
+            raise ValueError("invalid evaluation source cursor")
+        if "version" in nested and type(nested["version"]) is not int:
+            raise ValueError("invalid evaluation source cursor version")
+
+
+def _validate_tensor_headers(folder, state, stats, names):
+    """Bound every saved tensor before any tensor payload is loaded."""
+    if state.get("tensors") not in ("stats-a.safetensors", "stats-b.safetensors"):
+        raise ValueError("invalid evaluation tensor path")
+    from safetensors import safe_open
+    with safe_open(folder / state["tensors"], framework="pt", device="cpu") as source:
+        if set(source.keys()) != set(names):
+            raise ValueError("invalid evaluation statistics tensors")
+        for name in names:
+            stored = source.get_slice(name)
+            if (stored.get_shape() != list(getattr(stats, name).shape)
+                    or stored.get_dtype() != ("I64" if name == "hits" else "F64")):
+                raise ValueError("invalid evaluation statistics shape or dtype")
+
+
+def _validate_stat_tensors(tensors, count, ce_tokens):
+    for name, value in tensors.items():
+        if not torch.isfinite(value).all():
+            raise ValueError("evaluation statistics contain nonfinite values")
+        if name != "mean" and (value < 0).any():
+            raise ValueError("invalid negative evaluation statistics")
+        if not count and value.any():
+            raise ValueError("evaluation statistics require observations")
+    if ((tensors["hits"] > count).any()
+            or (not ce_tokens and "isolated_ce" in tensors and tensors["isolated_ce"].any())):
+        raise ValueError("invalid evaluation statistics counts")
+
+
+def _validate_pending(pending, remaining, *, vocab_size=None):
     if (not isinstance(pending, dict) or set(pending) != {"ids", "documents", "positions", "exhausted"}
             or type(pending["exhausted"]) is not bool
             or any(not isinstance(pending[name], list) for name in ("ids", "documents", "positions"))
             or not len(pending["ids"]) == len(pending["documents"]) == len(pending["positions"])
             or not 0 <= len(pending["ids"]) <= min(4096, remaining)
-            or any(type(value) is not int or value < 0 for name in ("ids", "documents", "positions")
+            or any(type(value) is not int or not 0 <= value < 2**63 for name in ("ids", "documents", "positions")
                    for value in pending[name])):
         raise ValueError("invalid evaluation pending content")
+    if vocab_size is not None:
+        _validate_ids(pending["ids"], vocab_size)
+    list(source_segments(pending["documents"], pending["positions"], 4096, final=True))
 
 
 def _segmentation_record(segments):
@@ -349,9 +488,10 @@ def _segmentation_record(segments):
             "record": "evaluation/state.json:content_segments"}
 
 
-def _gemma_batch(stream, pending, remaining, policy, batch_tokens, *, device, health, prepare=None):
+def _gemma_batch(stream, pending, remaining, policy, batch_tokens, *, device, health, prepare=None,
+                 vocab_size=None, prior_segments=None):
     """Retain source coordinates and complete contexts across source batch boundaries."""
-    _validate_pending(pending, remaining)
+    _validate_pending(pending, remaining, vocab_size=vocab_size)
     row_limit = batch_tokens // policy["model_context"]
     capacity = policy["content_context"]
     while True:
@@ -364,6 +504,10 @@ def _gemma_batch(stream, pending, remaining, policy, batch_tokens, *, device, he
             rows = [pending["ids"][start:end] for start, end in spans]
             segments = [[pending["documents"][start], pending["positions"][start], end - start]
                         for start, end in spans]
+            if prior_segments is not None:
+                last = prior_segments[-1] if prior_segments else None
+                previous = None if last is None else (last[0], last[1] + last[2])
+                _validate_next_coordinate(previous, segments[0][0], segments[0][1])
             return (prepare or prepare_contexts)(rows, policy, device=device, pad_to=policy["model_context"]), segments
         requested = min(row_limit * capacity, remaining) - len(pending["ids"])
         batch = stream.next_tokens(requested, health=health)
@@ -372,7 +516,7 @@ def _gemma_batch(stream, pending, remaining, policy, batch_tokens, *, device, he
                 raise ValueError("evaluation source requires CPU int64 token coordinates")
             pending[field].extend(value.tolist())
         pending["exhausted"] = len(batch) < requested
-        _validate_pending(pending, remaining)
+        _validate_pending(pending, remaining, vocab_size=vocab_size)
 
 
 def evaluate(model, dictionary, stream, folder, *, tokens=200_000, context=None,
@@ -385,7 +529,8 @@ def evaluate(model, dictionary, stream, folder, *, tokens=200_000, context=None,
                                  memory=memory, stop=stop, resume=resume)
     if protocol != "legacy":
         raise ValueError("unknown evaluation protocol")
-    if (not 2 <= tokens <= 200_000 or not 2 <= context <= 256
+    if (any(type(x) is not int for x in (tokens, context, batch_tokens, chunk_tokens))
+            or not 2 <= tokens <= 200_000 or not 2 <= context <= 256
             or not context <= batch_tokens <= 4096 or not 1 <= chunk_tokens <= 128):
         raise ValueError("invalid evaluation dimensions")
     if stream.partition != "quality":
@@ -446,7 +591,8 @@ def evaluate(model, dictionary, stream, folder, *, tokens=200_000, context=None,
             prepared, segments = None, None
             if policy is not None:
                 prepared, segments = _gemma_batch(stream, pending, tokens - stats.count, policy, batch_tokens,
-                                                   device=device, health=health)
+                                                   device=device, health=health, vocab_size=model.config.vocab_size,
+                                                   prior_segments=stats.content_segments)
                 ids = prepared.input_ids
                 count = sum(row[2] for row in segments)
             elif pending is None:
@@ -620,46 +766,36 @@ def save_research(folder, stats, stream, pending, identity, settings, elapsed, b
 
 
 def restore_research(folder, stats, stream, identity, settings, binding):
-    """Reject protocol and identity changes before any statistics allocation."""
+    """Reject protocol and identity changes before statistics payload loads."""
     state = json.loads((folder / "state.json").read_text())
-    if (state.get("version") != 2 or state.get("settings") != settings or state.get("identity") != identity
-            or state.get("tensor_binding") != binding.evidence or state.get("model_binding") != binding.model_evidence):
+    if (not isinstance(state, dict) or type(state.get("version")) is not int or state["version"] != 2
+            or not _same_json(state.get("settings"), settings) or state.get("identity") != identity
+            or not _same_json(state.get("tensor_binding"), binding.evidence)
+            or not _same_json(state.get("model_binding"), binding.model_evidence)):
         raise ValueError("research evaluation protocol, source, model, or dictionary settings changed across resume")
-    for name in ("count", "source_tokens", "ce_tokens"):
-        if type(state.get(name)) is not int or not 0 <= state[name] <= settings["tokens"]:
-            raise ValueError("invalid research evaluation cursor counts")
-    if state.get("metric_observations") != state["count"] or state.get("cross_entropy_tokens") != state["ce_tokens"]:
+    _validate_cursor_scalars(state, settings, research=True)
+    if (not _same_json(state.get("metric_observations"), state["count"])
+            or not _same_json(state.get("cross_entropy_tokens"), state["ce_tokens"])):
         raise ValueError("research observation counters differ")
     segments = state.get("content_segments")
     capacity = settings["context_policy"]["content_context"]
-    if (not isinstance(segments, list) or any(
-            not isinstance(row, list) or len(row) != 3 or
-            any(type(value) is not int or value < 0 for value in row) or not 1 <= row[2] <= capacity
-            for row in segments) or sum(row[2] for row in segments) != state["source_tokens"]):
-        raise ValueError("invalid research source segmentation")
-    _validate_pending(state["pending_ids"], settings["tokens"] - state["source_tokens"])
-    if state["tensors"] not in ("stats-a.safetensors", "stats-b.safetensors"):
-        raise ValueError("invalid research tensor path")
-    if not math.isfinite(state["elapsed_seconds"]) or state["elapsed_seconds"] < 0:
-        raise ValueError("invalid research elapsed time")
+    _validate_segments(segments, state["source_tokens"], capacity)
+    vocab = binding.model.config.vocab_size
+    _validate_pending(state.get("pending_ids"), settings["tokens"] - state["source_tokens"], vocab_size=vocab)
+    if settings["context_policy"]["prefix_ids"] and state["ce_tokens"] != state["count"]:
+        raise ValueError("research BOS target count differs from metric observations")
+    _validate_stream_cursor(state, stream, settings, vocab, state["source_tokens"])
     binding.verify()
-    # Header validation prevents an oversized or malformed cursor allocation.
-    from safetensors import safe_open
-    with safe_open(folder / state["tensors"], framework="pt", device="cpu") as source:
-        if set(source.keys()) != set(stats.tensor_names):
-            raise ValueError("invalid research statistics tensors")
-        for name in stats.tensor_names:
-            target = getattr(stats, name)
-            stored = source.get_slice(name)
-            if stored.get_shape() != list(target.shape) or stored.get_dtype() != ("I64" if name == "hits" else "F64"):
-                raise ValueError("invalid research statistics shape or dtype")
-        for name in stats.tensor_names:
-            getattr(stats, name).copy_(source.get_tensor(name))
+    _validate_tensor_headers(folder, state, stats, stats.tensor_names)
+    stream.load_state_dict(state["stream"])
+    tensors = load_file(folder / state["tensors"])
+    _validate_stat_tensors(tensors, state["count"], state["ce_tokens"])
+    for name in stats.tensor_names:
+        getattr(stats, name).copy_(tensors[name])
     for name in stats.scalar_names:
         setattr(stats, name, state[name])
     stats.content_segments = segments
     stats.validate()
-    stream.load_state_dict(state["stream"])
     return state["pending_ids"], state["elapsed_seconds"]
 
 
@@ -688,8 +824,10 @@ def evaluate_research(model, dictionary, stream, folder, *, tokens, context, bat
         raise ValueError("research evaluation requires the pinned FineWeb source")
     policy = research_policy(model, context, stream.tokenizer)
     device = dictionary.layers[0].W_enc.device
-    if memory is None:
-        memory = MemoryGuard(40 if metadata.get("model_id") == GEMMA_ID else 12, device)
+    ceiling = 40 if metadata.get("model_id") == GEMMA_ID else 12
+    memory = MemoryGuard(ceiling, device) if memory is None else BudgetMemory(memory, ceiling)
+    if _canonical_device(memory.device) != _canonical_device(device):
+        raise ValueError("research evaluation requires a guard for its device")
     required = workspace_bytes(model, metadata, batch_tokens, context, chunk_tokens)
     if stop:
         stop.check()
@@ -740,7 +878,8 @@ def evaluate_research(model, dictionary, stream, folder, *, tokens, context, bat
             admit_workspace(memory, required)
             prepared, segments = _gemma_batch(stream, pending, tokens - stats.source_tokens,
                                                policy, batch_tokens, device=device, health=health,
-                                               prepare=research_contexts)
+                                               prepare=research_contexts, vocab_size=model.config.vocab_size,
+                                               prior_segments=stats.content_segments)
             count = sum(row[2] for row in segments)
             try:
                 result = evaluate_research_batch(model, dictionary, prepared, count, chunk_tokens=chunk_tokens,

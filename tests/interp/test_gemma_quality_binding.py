@@ -28,7 +28,8 @@ def evidence(model):
 
 
 def reply(folder, model, dictionary):
-    tokenizer = SimpleNamespace(eos_token_id=2, convert_ids_to_tokens=lambda value: str(value))
+    tokenizer = SimpleNamespace(bos_token_id=1, pad_token_id=0, eos_token_id=2,
+                                convert_ids_to_tokens=lambda value: str(value))
     build_index(folder, [("fixture", [3, 4, 5, 6])], model=model, tokenizer=tokenizer,
                 dictionary=dictionary, provenance={"partition": "fixture"}, context_length=4)
     with FeatureIndex(folder, model=model, tokenizer=tokenizer, dictionary=dictionary) as index:
@@ -39,7 +40,8 @@ def test_quality_and_live_response_share_verified_evidence(artifact):
     folder, model, dictionary, _ = artifact
     before = deepcopy(dictionary.metadata["training"])
     source = deepcopy(dictionary.metadata["evaluation_source"])
-    tokenizer = SimpleNamespace(encode=lambda text, **kw: [3 + ord(ch) % 34 for ch in text], eos_token_id=2)
+    tokenizer = SimpleNamespace(encode=lambda text, **kw: [3 + ord(ch) % 34 for ch in text],
+                                bos_token_id=1, pad_token_id=0, eos_token_id=2)
     with TextStream(documents(), tokenizer, "quality") as stream:
         quality = eval_dictionary.evaluate(model, dictionary, stream, folder, tokens=8,
                                           context=4, batch_tokens=8, chunk_tokens=2)
@@ -72,7 +74,8 @@ def test_quality_and_live_response_share_verified_evidence(artifact):
 @pytest.mark.parametrize("change", ["dtype", "decoder", "decoder_alias"])
 def test_fresh_index_cannot_reuse_quality_for_changed_dictionary(artifact, change):
     folder, model, dictionary, _ = artifact
-    tokenizer = SimpleNamespace(encode=lambda text, **kw: [3 + ord(ch) % 34 for ch in text], eos_token_id=2)
+    tokenizer = SimpleNamespace(encode=lambda text, **kw: [3 + ord(ch) % 34 for ch in text],
+                                bos_token_id=1, pad_token_id=0, eos_token_id=2)
     with TextStream(documents(), tokenizer, "quality") as stream:
         quality = eval_dictionary.evaluate(model, dictionary, stream, folder, tokens=8,
                                           context=4, batch_tokens=8, chunk_tokens=2)
