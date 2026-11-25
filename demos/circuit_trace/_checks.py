@@ -314,15 +314,20 @@ def finish(result):
     has_evidence = any(g["name"] != "dictionary_qualification" for g in result.get("checks", []))
     qualification = dictionary_qualification(result.get("dictionary_evidence"),
                                               quality_override=result.get("dictionary_quality_override"),
-                                              family="gemma" if result["mode"] == "gemma" else "qwen")
+                                              family="gemma" if result["mode"] == "gemma" else "qwen",
+                                              replication_profile=result.get("replication_profile"))
     result["dictionary_qualification"] = qualification
     if result["mode"] in ("qwen", "gemma"):
         # Recompute this gate from evidence. A cached status cannot qualify a run.
         result["checks"] = [g for g in result.get("checks", []) if g["name"] != "dictionary_qualification"]
-        sample_requirement = ("at least 50000 research source positions" if result["mode"] == "gemma"
-                              else "200000 quality tokens")
+        if result.get("replication_profile") == "published_dallas_v1":
+            requirement = "exact current BF16 reference resources, version 2 import evidence, 2000000-position reference index"
+        else:
+            sample_requirement = ("at least 50000 research source positions" if result["mode"] == "gemma"
+                                  else "200000 quality tokens")
+            requirement = f"exact current dictionary, {sample_requirement}, 2000000 index tokens"
         result["checks"].append(check("dictionary_qualification", qualification["qualified"], qualification,
-                                      f"exact current dictionary, {sample_requirement}, 2000000 index tokens",
+                                      requirement,
                                       required=result["mode"] == "gemma" or result.get("pixel_evidence_collected") is not False))
     result["accepted_replication"] = False
     if result["mode"] == "gemma":

@@ -326,7 +326,7 @@ def test_all_cases_execute_real_callback_route_from_fresh_baselines(callback_bou
 
 @pytest.fixture
 def reviewed_collection(callback_boundary):
-    from test_gemma_acceptance import gemma_reply
+    from test_published_qualification import published_reply
     root, prepared, session, state = callback_boundary
     actions = [driver.published_action(session, 10, prepared["id"])]
     for cell, before, case in driver.published_cases(session, prepared["id"]):
@@ -348,7 +348,7 @@ def reviewed_collection(callback_boundary):
     result = {"mode": "gemma", "replication_profile": published.PROFILE, "evidence_collection_complete": True,
               "pixel_evidence_collected": True, "preparation_id": prepared["id"], "published_actions": actions,
               "checks": [check(name, True, 0, "Synthetic external process receipt") for name in sorted(names)],
-              "trace": {"trace_id": "a" * 64, "counts": {"edges": 3}}, "dictionary_evidence": gemma_reply(),
+              "trace": {"trace_id": "a" * 64, "counts": {"edges": 3}}, "dictionary_evidence": published_reply(),
               "browser_assets": {name: {"status": 200} for name in ("caliper-views-loader.js", "caliper-views.js", "caliper-views.wasm")}}
     out = root / "driver"
     out.mkdir()
@@ -581,3 +581,29 @@ def test_published_live_cli_starts_interactive_session_before_any_preflight(tmp_
     assert launches[0]["CALIPER_HIDDEN"] == ("0" if mode == "--show" else "1")
     result = json.loads((out / "result.json").read_text())
     assert not result["accepted_replication"] and "external app boundary" in result["error"]
+
+
+@pytest.mark.parametrize("fault", ["f32", "missing_import", "stale_fingerprint"])
+def test_external_review_cannot_replace_current_bf16_resource_evidence(reviewed_collection, fault):
+    """Synthetic external receipts cannot bypass the independent resource gate."""
+    from _replication_review import main
+    from test_gemma_acceptance import gemma_reply
+    root, review, result = reviewed_collection
+    if fault == "f32":
+        result["dictionary_evidence"] = gemma_reply()
+    elif fault == "missing_import":
+        result["dictionary_evidence"].pop("import_binding")
+    else:
+        result["dictionary_evidence"]["index"]["dictionary_fingerprint"] = "0" * 64
+    out = root / "driver"
+    write_json(out / "result.json", result)
+    write_collection(out, root, result)
+    review["collection_sha256"] = published.file_hash(out / "collection.json")
+    write_json(root / "review.json", review)
+    assert main(["--private-output-directory", str(root), "--collection", "driver/collection.json",
+                 "--review", "review.json", "--out", str(root / "refused.json")]) == 1
+    refused = json.loads((root / "refused.json").read_text())
+    assert not refused["accepted_replication"] and not refused["gemma_acceptance"]
+    assert "dictionary_qualification" in refused["failed_checks"]
+    external = next(gate for gate in refused["checks"] if gate["name"] == "external_replication_review")
+    assert external["passed"]

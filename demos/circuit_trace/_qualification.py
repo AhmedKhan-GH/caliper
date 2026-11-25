@@ -127,7 +127,7 @@ def _completed_training(training, budget):
              "Qwen requires a complete training budget of 20000000 or 40000000 tokens.")
 
 
-def _gemma_source(metadata, response):
+def _gemma_provenance(metadata):
     """Bind the published Scope selection and keep publisher training unknown."""
     _require(_integer(metadata.get("width"), 2304) and _integer(metadata.get("latents"), 16384)
              and metadata.get("activation") == "jumprelu" and "k" in metadata and metadata["k"] is None,
@@ -139,11 +139,6 @@ def _gemma_source(metadata, response):
              and imported.get("selection") == {"repo": "mntss/gemma-scope-transcoders",
                  "revision": GEMMA_SELECTION_REVISION, "file": "config.yaml"},
              "Gemma Scope source or selection differs from the pinned set.")
-    _require(imported.get("original_input") == "pure_rms_normalized_pre_mlp_before_learned_gain"
-             and imported.get("input_conversion") == "W_enc.T / (1 + pre_feedforward_layernorm.weight)[None, :]"
-             and imported.get("output") == "after_post_feedforward_layernorm"
-             and imported.get("output_conversion") == "none",
-             "Gemma Scope normalization coordinates differ.")
     layers = imported["layers"]
     _require(isinstance(layers, list) and len(layers) == 26, "Gemma Scope requires every source layer.")
     for i, (row, l0) in enumerate(zip(layers, GEMMA_L0)):
@@ -155,12 +150,6 @@ def _gemma_source(metadata, response):
                  and isinstance(row.get("input_gain_hash"), str)
                  and row["input_gain_hash"].startswith("sha256:") and _digest(row["input_gain_hash"][7:]),
                  "Gemma Scope layer provenance is incomplete or differs from the selected set.")
-    binding = response["import_binding"]
-    _require(isinstance(binding, dict) and _integer(binding.get("version"), 1)
-             and binding.get("model_hash") == GEMMA_HASH
-             and _same_json(binding.get("layers"), [{key: row[key] for key in
-                                            ("layer", "file", "sha256", "input_gain_hash")} for row in layers]),
-             "Gemma Scope import does not match the current files and verified model gains.")
     training = metadata["training"]
     _require(training.get("origin") == "imported" and training.get("local_training") is False
              and _integer(training.get("tokens"), 0) and training.get("partitions") == {}
@@ -172,6 +161,24 @@ def _gemma_source(metadata, response):
         "dataset_revision": "87f09149ef4734204d70ed1d046ddc9ca3f2b8f9", "split": "train",
     }.items()), "Gemma evaluation requires the pinned held-out text source.")
     _partitions(source)
+    return source
+
+
+def _gemma_source(metadata, response):
+    source = _gemma_provenance(metadata)
+    imported = metadata["import_source"]
+    _require("reference_input" not in metadata and "reference_conversion" not in imported
+             and imported.get("original_input") == "pure_rms_normalized_pre_mlp_before_learned_gain"
+             and imported.get("input_conversion") == "W_enc.T / (1 + pre_feedforward_layernorm.weight)[None, :]"
+             and imported.get("output") == "after_post_feedforward_layernorm"
+             and imported.get("output_conversion") == "none",
+             "Gemma Scope normalization coordinates differ.")
+    binding = response["import_binding"]
+    _require(isinstance(binding, dict) and _integer(binding.get("version"), 1)
+             and binding.get("model_hash") == GEMMA_HASH
+             and _same_json(binding.get("layers"), [{key: row[key] for key in
+                 ("layer", "file", "sha256", "input_gain_hash")} for row in imported["layers"]]),
+             "Gemma Scope import does not match the current files and verified model gains.")
     _require(metadata["quality"].get("evaluation_source") == source
              and metadata["quality"].get("publisher_training_overlap") == "unknown",
              "Gemma quality must bind the evaluation source and unknown publisher overlap.")
@@ -190,7 +197,7 @@ def _gemma_model_binding(metadata, response):
              "Gemma quality model tensors or forward settings differ from the current resources.")
 
 
-def _gemma_context(metadata, index):
+def _gemma_index_context(index):
     """Require the corrected source positions for the index and examples."""
     policy = {"version": 1, "family": "gemma2", "prefix_ids": [2], "pad_id": 0,
               "model_context": 256, "content_context": 255,
@@ -205,6 +212,10 @@ def _gemma_context(metadata, index):
                  and all(type(value) is int for value in actual["prefix_ids"]),
                  "Gemma quality or index context policy differs from the corrected contract.")
     _require(_integer(index.get("context_length"), 256), "Gemma index context length differs.")
+
+
+def _gemma_context(metadata, index):
+    _gemma_index_context(index)
     spans = metadata["quality"].get("content_segmentation")
     capacity = metadata["quality"]["context_policy"]["content_context"]
     source_tokens = metadata["quality"]["source_tokens"]
@@ -363,8 +374,12 @@ def _fallback(metadata, response):
              "Fallback source evaluation is incomplete or stale.")
 
 
-def dictionary_qualification(response, *, quality_override=None, family="qwen"):
+def dictionary_qualification(response, *, quality_override=None, family="qwen", replication_profile=None):
     """Refuse absent or stale evidence without model, tensor, or file access."""
+    if replication_profile is not None:
+        from _published_qualification import published_dictionary_qualification
+        return published_dictionary_qualification(response, family=family, profile=replication_profile,
+                                                   quality_override=quality_override)
     result = {"qualified": False, "scope": None, "status": "unverified"}
     try:
         _require(isinstance(response, dict), "The feature.dictionary response is absent.")
