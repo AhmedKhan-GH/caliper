@@ -1,6 +1,7 @@
 """Published resource checks over the trusted live qualification response."""
 from __future__ import annotations
 
+from copy import deepcopy
 import hashlib
 import json
 import re
@@ -51,6 +52,23 @@ _OPERATIONS = {
 
 def _state_digest(value):
     return isinstance(value, str) and value.startswith("sha256:") and _digest(value[7:])
+
+
+def _restore_index(response):
+    """Restore the exact manifest before its content hash and source checks."""
+    if "index_transport" not in response:
+        return response
+    _require(response["index_transport"] == "operation_hash_pairs_v1", "Unsupported index evidence transport.")
+    response = deepcopy(response)
+    profile = response["index"]["model_encoding"]["reference_profile"]
+    rows = profile["operation_sha256"]
+    _require(isinstance(rows, list) and 0 < len(rows) <= 512 and all(
+        isinstance(row, list) and len(row) == 2 and isinstance(row[0], str) and row[0]
+        and _digest(row[1]) for row in rows), "Invalid index operation hash rows.")
+    names = [row[0] for row in rows]
+    _require(names == sorted(set(names)), "Index operation hash rows must be unique and ordered.")
+    profile["operation_sha256"] = dict(rows)
+    return response
 
 
 def _import_evidence(metadata, response):
@@ -197,6 +215,7 @@ def published_dictionary_qualification(response, *, family, profile, quality_ove
         _require(family == "gemma" and profile == PROFILE and quality_override is None,
                  "Published resource qualification requires the explicit Gemma Dallas profile without a quality override.")
         _require(isinstance(response, dict), "The feature.dictionary response is absent.")
+        response = _restore_index(response)
         metadata = response["metadata"]
         source = _import_evidence(metadata, response)
         identity = _index_evidence(metadata, response, source)

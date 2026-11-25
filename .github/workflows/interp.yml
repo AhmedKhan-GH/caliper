@@ -64,6 +64,7 @@ jobs:
           tests/demos/test_circuit_completion.py
           tests/demos/test_circuit_visible.py tests/demos/test_published_dallas.py
           tests/demos/test_published_native_collection.py
+          tests/demos/test_published_qualification.py
           tests/demos/test_circuit_visual.py python/tests/test_controls_budget.py
           python/tests/test_controls_step_admission.py
           python/tests/test_wire_standalone.py

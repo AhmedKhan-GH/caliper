@@ -26,6 +26,19 @@ def require_reference_index(manifest):
         raise ValueError("reference qualification requires an original-coordinate index")
 
 
+def _wire_index(manifest):
+    """Carry long operation names as values within the fixed metadata key bound."""
+    index = deepcopy(manifest)
+    profile = index.get("model_encoding", {}).get("reference_profile")
+    if profile is None:
+        return {"index": index}
+    hashes = profile["operation_sha256"]
+    if not isinstance(hashes, dict):
+        raise ValueError("index operation hashes must be a mapping")
+    profile["operation_sha256"] = [[name, digest] for name, digest in sorted(hashes.items())]
+    return {"index": index, "index_transport": "operation_hash_pairs_v1"}
+
+
 def dictionary_response(dictionary, index=None, *, model=None, tokenizer=None):
     result = {"metadata": deepcopy(dictionary.metadata)}
     if index is None:
@@ -77,7 +90,7 @@ def dictionary_response(dictionary, index=None, *, model=None, tokenizer=None):
         raise ValueError("reference qualification dictionary fingerprint changed")
     tensor_options = {"folder": index.root} if reference else {}
     tensor_binding = evaluation_dictionary_evidence(dictionary, memory=memory, **tensor_options)
-    result.update(index=deepcopy(manifest), model_binding=model_binding, tensor_binding=tensor_binding, identity={
+    result.update(**_wire_index(manifest), model_binding=model_binding, tensor_binding=tensor_binding, identity={
         "model_hash": identity, "dictionary_hash": content, "dictionary_fingerprint": fingerprint,
         "index_hash": manifest["index_hash"], "tokenizer_hash": tokenizer_hash,
     })

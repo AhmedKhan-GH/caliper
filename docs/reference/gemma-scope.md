@@ -336,6 +336,11 @@ Execution identity includes the arithmetic operations, package versions, dtype, 
 Reference execution requires disabled autocast and highest float32 matmul precision.
 A changed resource or execution identity requires a new index.
 
+The `feature.dictionary` response uses `index_transport="operation_hash_pairs_v1"` for published index evidence.
+It carries operation names and hashes as ordered pairs because operation names can exceed metadata key limits.
+The receiver restores the complete operation map before it checks the manifest hash.
+The stored index and its identity remain unchanged.
+
 ## Research Evaluation Protocol
 
 The explicit `research_v1` protocol retains CPU-tested aggregation and context code for Gemma and experimental Qwen.

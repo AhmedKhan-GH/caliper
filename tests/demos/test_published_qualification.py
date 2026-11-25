@@ -148,6 +148,37 @@ def test_exact_reference_response_requires_no_research_sample():
     assert response == before
 
 
+def test_full_reference_evidence_crosses_the_metadata_boundary():
+    from caliper import _interpret_protocol as protocol
+    from caliper.interp._qualification import _wire_index
+    from _published_qualification import _restore_index
+    response = published_reply()
+    original = deepcopy(response)
+    assert not protocol.bounded(response)  # Qualified operation names exceed key limits.
+    response.update(_wire_index(response["index"]))
+    encoded = deepcopy(response)
+    assert protocol.bounded(response)
+    assert qualify(response)["qualified"]
+    assert _restore_index(response)["index"] == original["index"]
+    assert response == encoded
+
+
+@pytest.mark.parametrize("fault", ["format", "duplicate", "order", "hash", "missing", "mapping"])
+def test_index_transport_cannot_change_qualified_identity(fault):
+    from caliper.interp._qualification import _wire_index
+    response = published_reply()
+    response.update(_wire_index(response["index"]))
+    profile = response["index"]["model_encoding"]["reference_profile"]
+    rows = profile["operation_sha256"]
+    if fault == "format": response["index_transport"] = "unknown"
+    elif fault == "duplicate": rows.append(rows[0])
+    elif fault == "order": rows.reverse()
+    elif fault == "hash": rows[0][1] = "a" * 64
+    elif fault == "missing": rows.pop()
+    else: profile["operation_sha256"] = dict(rows)
+    assert not qualify(response)["qualified"]
+
+
 @pytest.mark.parametrize("field", ["metadata", "index", "identity", "model_binding", "tensor_binding", "import_binding"])
 def test_missing_current_evidence_cannot_borrow_historical_quality(field):
     response = published_reply()
