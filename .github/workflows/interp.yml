@@ -63,6 +63,7 @@ jobs:
           tests/demos/test_circuit_trace.py tests/demos/test_gemma_acceptance.py
           tests/demos/test_circuit_completion.py
           tests/demos/test_circuit_visual.py python/tests/test_controls_budget.py
+          python/tests/test_controls_step_admission.py
           python/tests/test_wire_standalone.py
           --deselect tests/demos/test_circuit_trace.py::test_hidden_fixture
           -m "not gpu and not local_model" --strict-markers
