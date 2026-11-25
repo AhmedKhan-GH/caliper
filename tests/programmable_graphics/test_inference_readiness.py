@@ -8,9 +8,9 @@ import pytest
 import torch
 
 import caliper
-from caliper import _programs as P
+from caliper import _programs as P, _wire
 from caliper._watch import WatchHandle
-from caliper.interp import publish
+from caliper.interp import _publish, publish
 
 
 class Runtime:
@@ -87,7 +87,7 @@ def producer(monkeypatch):
     monkeypatch.setattr(P, "_controls_ports", lambda: [])
     adapter = SimpleNamespace(framework_done=lambda: None)
     monkeypatch.setattr(P, "_torch_adapter", lambda: adapter)
-    monkeypatch.setattr(caliper, "show", lambda t, **kwargs: shown.append(t.clone()))
+    monkeypatch.setattr(caliper, "show", lambda t, *args, **kwargs: shown.append(t.clone()))
     monkeypatch.setattr(caliper, "remove", lambda *args: None)
     model = torch.nn.Sequential(OrderedDict(main=torch.nn.Identity(), other=torch.nn.Identity()))
     watch = WatchHandle()
@@ -103,7 +103,7 @@ def producer(monkeypatch):
     assert not runtime.imports and not P._ACT_HOOKS and not P._ACTS
 
 
-def install_piece(*, source="live:trace.node_f", extra=None, every=1):
+def install_piece(*, source="live:trace.node_f", extra=None, every=1, bindings=None):
     inputs = [{"name": "payload", "kind": "tensor", "dtype": "f32"}, *(extra or [])]
     manifest = {
         "name": "readiness", "version": 1, "inputs": inputs,
@@ -113,7 +113,14 @@ def install_piece(*, source="live:trace.node_f", extra=None, every=1):
     return P.install_piece(
         "readiness", piece={"name": "readiness", "version": 1,
                             "hash": "sha256:" + "0" * 64, "from": "workspace"},
-        manifest=manifest, bind={"payload": source}, derive="fake derive", panel="probe")
+        manifest=manifest, bind={"payload": source, **(bindings or {})},
+        derive="fake derive", panel="probe")
+
+
+def install_program(source="live:main.act", *, pid="activation", every=1):
+    return P.install(pid, {"inputs": [{"var": "payload", "source": source}],
+                          "output": {"kind": "tensor", "shape": [1]},
+                          "limits": {"every": every}}, "fake program")
 
 
 def warmup(producer):
@@ -145,8 +152,9 @@ def test_unbound_piece_inputs_wait_for_required_publication(producer, extra):
     assert unbound == [x["name"] for x in extra if x.get("optional")]
 
 
-def test_readiness_resolves_inputs_without_native_calls(producer, monkeypatch):
-    install_piece(extra=[{"name": "label_text", "optional": True}])
+@pytest.mark.parametrize("source", ["live:trace.node_f", "live:main.act"])
+def test_readiness_resolves_inputs_without_native_calls(producer, monkeypatch, source):
+    install_piece(source=source, extra=[{"name": "label_text", "optional": True}])
 
     def forbidden(*args, **kwargs):
         raise AssertionError("readiness must not call the native runtime or import tensors")
@@ -155,7 +163,10 @@ def test_readiness_resolves_inputs_without_native_calls(producer, monkeypatch):
     monkeypatch.setattr(P, "_import", forbidden)
     monkeypatch.setattr(P, "_torch_adapter", forbidden)
     assert not P.inference_pending()
-    publish("trace.node_f", torch.ones(1))
+    if source == "live:main.act":
+        producer.model.main(torch.ones(1))
+    else:
+        publish("trace.node_f", torch.ones(1))
     assert P.inference_pending()
 
 
@@ -171,3 +182,169 @@ def test_unknown_bound_source_still_reaches_a_terminal_refusal(producer):
     assert program.state == "refused"
     assert program.error["code"] == "program.unknown_input"
     assert not producer.runtime.runs and not P.inference_pending()
+
+
+@pytest.mark.parametrize("kind", ["program", "piece"])
+@pytest.mark.parametrize("every", [2, 5])
+def test_activation_changes_stay_pending_through_cadence(producer, kind, every):
+    if kind == "program":
+        installed = install_program(every=every)
+    else:
+        installed = install_piece(source="live:main.act", every=every,
+                                  extra=[{"name": "label_text", "optional": True}])
+    assert installed["state"] == "waiting" and not P.inference_pending()
+    producer.model.main(torch.tensor([1.]))
+    assert P.inference_pending()
+    warmup(producer)
+    assert P.inference_pending()
+    producer.step(9)
+    assert producer.runtime.runs == [9] and not P.inference_pending()
+    publish("trace.edge_f", torch.ones(1))
+    # Even an installed hook for an unrelated source must not wake this program.
+    with pytest.raises(P._Waiting):
+        P._resolve("other.act")
+    producer.model.other(torch.tensor([99.]))
+    assert not P.inference_pending()
+    producer.model.main(torch.tensor([7.]))
+    assert P.inference_pending()
+    next_pass = 9 + max(P.N_MIN, every)
+    for number in range(10, next_pass):
+        producer.step(number)
+        assert producer.runtime.runs == [9] and P.inference_pending()
+    producer.step(next_pass)
+    assert producer.runtime.runs == [9, next_pass] and not P.inference_pending()
+    assert list(producer.runtime.values.values()) == [7.]
+    assert not _publish._VERSIONS.get("main.act")
+
+
+def test_same_activation_storage_and_shared_consumers_keep_separate_evidence(producer):
+    install_program(pid="fast", every=2)
+    install_program(pid="slow", every=5)
+    tensor = torch.tensor([1.])
+    producer.model.main(tensor)
+    warmup(producer)
+    producer.step(9)
+    tensor.add_(6)
+    producer.model.main((None, tensor))
+    assert P.inference_pending()
+    producer.step(10)
+    producer.step(11)
+    producer.step(12)
+    assert P._PROGS["fast"].last_step == 12
+    assert P._PROGS["slow"].last_step == 9 and P.inference_pending()
+    # The shared cadence postpones the slower consumer from step 14 to step 15.
+    producer.step(13)
+    producer.step(14)
+    assert P.inference_pending()
+    producer.step(15)
+    assert not P.inference_pending()
+    assert [float(t.item()) for t in producer.shown] == [1., 1., 7., 7., 7.]
+
+
+def test_activation_change_still_waits_for_a_bound_optional_publication(producer):
+    install_piece(source="live:main.act", extra=[{"name": "labels", "optional": True}],
+                  bindings={"labels": "live:trace.label_text"})
+    producer.model.main(torch.ones(1))
+    assert not P.inference_pending()
+    warmup(producer)
+    producer.step(9)
+    assert not producer.runtime.runs and not P.inference_pending()
+    publish("trace.label_text", torch.ones(1))
+    assert P.inference_pending()
+    producer.step(10)
+    assert producer.runtime.runs == [10] and not P.inference_pending()
+
+
+def test_dispatch_without_a_successful_pass_retains_activation_evidence(producer):
+    install_program()
+    producer.model.main(torch.ones(1))
+    warmup(producer)
+    producer.step(9)
+    producer.model.main(torch.tensor([7.]))
+    producer.runtime.ran = False
+    producer.step(10)
+    producer.step(11)
+    producer.step(12)
+    assert producer.runtime.runs == [9] and P.inference_pending()
+    producer.runtime.ran = True
+    producer.step(13)
+    assert producer.runtime.runs == [9, 13] and not P.inference_pending()
+    assert float(producer.shown[-1].item()) == 7.
+
+
+@pytest.mark.parametrize("delivery", ["backlog", "busy"])
+def test_resource_delivery_retry_retains_pending_work(producer, monkeypatch, delivery):
+    posts, backlog = [], SimpleNamespace(bytes=0)
+    link = SimpleNamespace(caps={_wire.CAP_RESOURCES}, attached=True, closed=False,
+                           backlog=lambda: backlog.bytes)
+    control = SimpleNamespace(server=SimpleNamespace(producer=SimpleNamespace(links=[link])),
+                              post=lambda ln, frame, cap: posts.append(_wire.decode_frame(bytes(frame))))
+    monkeypatch.setattr(P, "_controls_ports", lambda: [control])
+    install_piece(source="live:main.act")
+    producer.model.main(torch.ones(1))
+    warmup(producer)
+    producer.step(9)
+    assert not P.inference_pending()
+    producer.model.main(torch.tensor([7.]))
+    if delivery == "backlog":
+        backlog.bytes = P.RESOURCE_BACKLOG_BYTES
+    with monkeypatch.context() as patch:
+        if delivery == "busy":
+            patch.setattr(P, "_all_busy", lambda p: True)
+        producer.step(10)
+        producer.step(11)
+        producer.step(12)
+    assert P.inference_pending()
+    assert len([frame for frame in posts if frame.type == P.RESOURCE_TYPE]) == 1
+    backlog.bytes = 0
+    producer.step(13)
+    producer.step(14)
+    assert P.inference_pending()
+    producer.step(15)
+    assert not P.inference_pending()
+    assert len([frame for frame in posts if frame.type == P.RESOURCE_TYPE]) == 2
+    assert P._PROGS["readiness"].skipped == 1
+
+
+@pytest.mark.parametrize("action", ["remove", "detach", "replacement", "refusal", "stop"])
+def test_activation_evidence_ends_with_its_program_or_watch(producer, monkeypatch, action):
+    install_program()
+    producer.model.main(torch.ones(1))
+    warmup(producer)
+    producer.step(9)
+    program = P._PROGS["activation"]
+    old_hook = next(iter(producer.model.main._forward_hooks.values()))
+    producer.model.main(torch.tensor([7.]))
+    assert P.inference_pending()
+    if action == "remove":
+        P.remove(program.id)
+    elif action == "detach":
+        publish("trace.node_f", torch.ones(1))
+        producer.watch.remove()
+        assert not _publish._TENSORS and not _publish._VERSIONS
+    elif action == "replacement":
+        replacement = torch.nn.Sequential(OrderedDict(main=torch.nn.Identity()))
+        P.attach(replacement, None)
+        producer.watch.remove()
+        assert P._STATE["model"] is replacement
+    else:
+        if action == "refusal":
+            def refuse(*args):
+                raise P._Refused("program.import_refused", "CPU fixture refusal")
+            monkeypatch.setattr(P, "_import", refuse)
+        else:
+            monkeypatch.setattr(producer.runtime, "status", lambda h: {"state": "stopped"})
+        producer.step(10)
+        producer.step(11)
+        producer.step(12)
+        assert program.state == ("refused" if action == "refusal" else "stopped")
+    assert not P.inference_pending()
+    assert not P._ACTS and not P._ACT_HOOKS and not producer.model.main._forward_hooks
+    assert not program.act_dirty
+    if action == "replacement":
+        assert install_program()["state"] == "waiting"
+        producer.model.main(torch.tensor([99.]))
+        old_hook(producer.model.main, (), torch.tensor([99.]))
+        assert not P.inference_pending()
+        replacement.main(torch.ones(1))
+        assert P.inference_pending()

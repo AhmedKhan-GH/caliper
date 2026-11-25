@@ -328,7 +328,7 @@ class _Program:
                  "params", "builtin", "shape", "piece", "manifest", "bind", "panel", "segments",
                  "common", "draw", "types", "resources", "passes", "param_types", "written",
                  "sent_static", "static_frames", "relayed", "skipped", "behind", "output_retry",
-                 "input_version", "params_dirty")
+                 "input_version", "params_dirty", "act_dirty")
 
     def __init__(self, pid, decl, wgsl, scene, sha256):
         self.id = pid
@@ -354,6 +354,7 @@ class _Program:
         self.last_step = None
         self.input_version = -1
         self.params_dirty = True
+        self.act_dirty = False  # one pending flag per consumer, without tensor history
         self.last_pass_ms = None
         self.memory_bytes = 0
         self.warm = WARMUP_STEPS
@@ -502,6 +503,8 @@ def _drop_act_hooks() -> None:
         h.remove()
     _ACT_HOOKS.clear()
     _ACTS.clear()
+    for p in _PROGS.values():
+        p.act_dirty = False
 
 
 def _torch_adapter():
@@ -537,7 +540,7 @@ def _resolve(name: str):
             return None
         if mname not in _ACT_HOOKS:
             _ACT_HOOKS[mname] = mods[mname].register_forward_hook(
-                lambda _m, _i, out, mname=mname: _keep_act(mname, out))
+                lambda _m, _i, out, mname=mname, epoch=_WATCH_EPOCH: _keep_act(mname, out, epoch))
         t = _ACTS.get(mname)
         if t is None:
             raise _Waiting(name)
@@ -550,11 +553,19 @@ def _resolve(name: str):
     return t
 
 
-def _keep_act(mname, out) -> None:
+def _keep_act(mname, out, epoch) -> None:
     if isinstance(out, (tuple, list)):
         out = next((x for x in out if hasattr(x, "detach")), None)
     if out is not None:
-        _ACTS[mname] = out.detach()
+        with _LOCK:
+            if epoch != _WATCH_EPOCH or mname not in _ACT_HOOKS:
+                return
+            _ACTS[mname] = out.detach()
+            source = f"live:{mname}.act"
+            for p in _PROGS.values():
+                if p.state in ("waiting", "compiled", "running") and any(
+                        src == source for _, src in p.inputs):
+                    p.act_dirty = True
 
 
 def _storage_key(t):
@@ -730,6 +741,9 @@ def _prune_act_hooks() -> None:
     when the last program that needs them stops for any reason: a removal, a refusal, a stop over
     time or over budget, a timeout or a lost device.
     """
+    for p in _PROGS.values():
+        if p.state not in ("waiting", "compiled", "running"):
+            p.act_dirty = False
     if not _ACT_HOOKS:
         return
     needed = {src[len("live:"):-len(".act")] for p in _PROGS.values()
@@ -901,6 +915,7 @@ def _remove(program_id: str, *, clear_output=False):
             rt.remove(p.handle)
         p.handle = None
         p.bound = {}
+        p.act_dirty = False
         _release_unused()
         _set_active()
         if not _PROGS:
@@ -1053,7 +1068,7 @@ def inference_pending() -> bool:
                 continue
             delivery = p.output_retry or (p.kind == "piece" and any(
                 ln not in p.relayed or ln in p.behind for ln in links))
-            changed = delivery or p.params_dirty or any(
+            changed = delivery or p.params_dirty or p.act_dirty or any(
                 _publish._VERSIONS.get(src[len("live:"):], -1) > p.input_version
                 for _, src in p.inputs)
             if not changed:
@@ -1223,6 +1238,7 @@ def _at_step(step: int) -> None:
                     if p.skipped == skipped:
                         p.input_version = _publish._VERSION
                         p.params_dirty = False
+                        p.act_dirty = False
     # The outputs go out while the pass's gate is still open, so that their snapshots join the
     # tick of the views' snapshots and its one event.
     _publish_pass(published)
