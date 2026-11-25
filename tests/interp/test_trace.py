@@ -736,3 +736,90 @@ def test_full_json_export_keeps_all_records_and_diagnostics():
     assert len(graph.read()["edges"]) == 256
     assert graph.read(node_offset=299, edge_offset=299)["nodes"] == nodes[299:]
     assert len(json.loads(graph.to_json(node_limit=1))["nodes"]) == 1
+
+
+def test_reference_trace_preserves_full_sources_and_logical_queues(monkeypatch):
+    from caliper.interp._trace import Tracer
+    from .fixture import TinyLM, TinyTokenizer
+    with torch.random.fork_rng():
+        torch.manual_seed(73)
+        model = TinyLM(layers=2, width=8, heads=2, latents=12, k=4).cpu().eval()
+    tracer = Tracer(model, TinyTokenizer(), random_dictionary(model, latents=12, k=4))
+    graph = tracer.trace("abc", max_targets=8, profile="circuit_tracer_82996f14",
+                         max_n_logits=2, batch_size=2, update_interval=2,
+                         node_threshold=1., edge_threshold=1.)
+    assert graph.settings["profile"] == "circuit_tracer_82996f14"
+    assert graph.settings["objective"] == "centered_pre_softcap_logit"
+    assert graph.settings["batch_size"] == 2
+    assert graph.completeness["source_scope"] == "full_sources_before_reference_projection"
+    assert not any(node["kind"] in ("feature", "error") and node["position"] == 0 for node in graph.nodes)
+    assert all("reference_projection" in row for row in graph.completeness["targets"])
+    assert graph is tracer.trace("abc", max_targets=8, profile="circuit_tracer_82996f14",
+                                max_n_logits=2, batch_size=2, update_interval=2,
+                                node_threshold=1., edge_threshold=1.)
+    other = Tracer(model, TinyTokenizer(), tracer.dictionary)
+    admitted = other.guard.batch_size
+    monkeypatch.setattr(other.guard, "batch_size", lambda requested, **kw: min(1, admitted(requested, **kw)))
+    split = other.trace("abc", max_targets=8, profile="circuit_tracer_82996f14",
+                        max_n_logits=2, batch_size=2, update_interval=2,
+                        node_threshold=1., edge_threshold=1.)
+    assert graph.settings["logical_queues"] == split.settings["logical_queues"]
+    assert set(split.settings["physical_batches"]) == {1}
+    assert [n["id"] for n in graph.nodes] == [n["id"] for n in split.nodes]
+    torch.testing.assert_close(torch.tensor([e["weight"] for e in graph.edges]),
+                               torch.tensor([e["weight"] for e in split.edges]))
+    changed = tracer.trace("abc", max_targets=8, profile="circuit_tracer_82996f14",
+                           max_n_logits=2, batch_size=2, update_interval=1,
+                           node_threshold=1., edge_threshold=1.)
+    assert changed.trace_id != graph.trace_id
+
+
+@pytest.mark.parametrize("setting", ["max_n_logits", "desired_logit_prob", "node_threshold", "edge_threshold",
+                                     "batch_size", "update_interval", "profile"])
+def test_trace_settings_enter_cache_identity(setting):
+    from caliper.interp._trace import Tracer
+    from .fixture import TinyLM, TinyTokenizer
+    model = TinyLM(layers=1, width=8, heads=2, latents=8, k=2).cpu().eval()
+    tracer = Tracer(model, TinyTokenizer(), exact_dictionary(model))
+    first = tracer.trace("abc", max_targets=4)
+    value = {"max_n_logits": 2, "desired_logit_prob": .8, "node_threshold": .7,
+             "edge_threshold": .9, "batch_size": 2, "update_interval": 2,
+             "profile": "circuit_tracer_82996f14"}[setting]
+    second = tracer.trace("abc", max_targets=4, **{setting: value})
+    assert first.trace_id != second.trace_id
+    assert second.settings[setting] == value
+
+
+def test_reference_schedule_summary_respects_protocol_bounds():
+    from caliper._interpret_protocol import bounded
+    graph = Graph.build(nodes=[], edges=[], tokens=[{"text": "x"}], layers=1,
+                        completeness={"targets": []}, omitted_influence=0., error_share=0.,
+                        feature_share=0., trace_id="schedule", device="cpu",
+                        settings={"profile": "circuit_tracer_82996f14", "batch_size": 512,
+                                  "logical_queues": [[str(i) for i in range(5000)]],
+                                  "physical_batches": [1] * 5000})
+    page = graph.read()
+    assert bounded(page)
+    assert page["settings"]["physical_batch_count"] == 5000
+    assert page["settings"]["logical_queue_count"] == 1
+    assert "logical_queues" not in page["settings"]
+    assert len(json.loads(graph.to_json())["settings"]["logical_queues"][0]) == 5000
+
+
+def test_json_export_rechecks_the_caller_guard():
+    from caliper.interp._memory import CleanStop
+    class Guard:
+        stopped = False
+        def reserve(self, stage, amount):
+            if self.stopped:
+                raise CleanStop("supplied memory limit")
+    guard = Guard()
+    graph = Graph.build(nodes=[], edges=[], tokens=[{"text": "x"}], layers=1,
+                        completeness={}, omitted_influence=0., error_share=0., feature_share=0.,
+                        trace_id="guard", device="cpu", memory=guard)
+    graph.to_json()
+    guard.stopped = True
+    with pytest.raises(CleanStop, match="supplied memory limit"):
+        graph.to_json()
+    with pytest.raises(CleanStop, match="supplied memory limit"):
+        graph.publish()

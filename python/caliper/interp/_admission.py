@@ -16,6 +16,15 @@ def _admit_load(memory, required, stage, *, staged=False):
     used = getattr(memory, "current", memory.peak) if staged else memory.peak
     if used + required > memory.limit:
         raise CleanStop("model allocation exceeds the process memory limit")
+    _host_reserve(required, stage)
+
+
+def _host_reserve(required, stage):
+    """Leave eight decimal GB available after a prospective allocation."""
+    import psutil
+    from ._memory import CleanStop
+    if psutil.virtual_memory().available - required < 8_000_000_000:
+        raise CleanStop(f"{stage} allocation would consume the 8 GB host reserve")
 
 
 def _admit_model_load(snapshot, memory, device, *, staged=False):
@@ -75,12 +84,14 @@ def _admit_model_transfer(memory, estimate, device, *, staged=False):
     _admit_load(memory, required + 512_000_000, "model device admission", staged=staged)
 
 
-def _load_gemma_model(snapshot, *, device, memory):
+def _load_gemma_model(snapshot, *, device, memory, dtype=torch.float32):
     """Load and verify the exact local Gemma snapshot before device transfer."""
     from transformers import Gemma2Config, Gemma2ForCausalLM
     from dataclasses import replace
-    from ._dictionary import _VERIFIED_MODELS, model_identity, verify_hf_model
+    from ._dictionary import _VERIFIED_MODELS, _verification_memory, model_identity, verify_hf_model
 
+    if dtype not in (torch.float32, torch.bfloat16):
+        raise ValueError("Gemma load dtype must be float32 or bfloat16")
     snapshot = Path(snapshot).resolve(strict=True)
     if (snapshot.name != GEMMA_REVISION or snapshot.parent.name != "snapshots"
             or snapshot.parent.parent.name != "models--google--gemma-2-2b"):
@@ -93,7 +104,7 @@ def _load_gemma_model(snapshot, *, device, memory):
         raise ValueError("the pinned Gemma model has unexpected dimensions")
     estimate = _admit_model_load(snapshot, memory, device, staged=True)
     model, info = Gemma2ForCausalLM.from_pretrained(
-        snapshot, config=config, dtype=torch.float32, attn_implementation="eager",
+        snapshot, config=config, dtype=dtype, attn_implementation="eager",
         local_files_only=True, trust_remote_code=False, use_safetensors=True, output_loading_info=True)
     if any(info.get(key) for key in ("missing_keys", "unexpected_keys", "mismatched_keys", "error_msgs")):
         raise ValueError("local model weights do not match the pinned Gemma architecture")
@@ -102,10 +113,11 @@ def _load_gemma_model(snapshot, *, device, memory):
     memory.check("inference model CPU load")
     # Verify bytes, tied parameters, settings, and reconstructed buffers before
     # the trusted identity enters the cache. Loading information alone is insufficient.
-    verify_hf_model(model, snapshot, memory_limit_gb=memory.limit / 1e9)
+    with _verification_memory(memory):
+        verify_hf_model(model, snapshot, memory_limit_gb=memory.limit / 1e9)
     verified = _VERIFIED_MODELS[model]
     _admit_model_transfer(memory, estimate, device, staged=True)
-    model.to(device=device, dtype=torch.float32)
+    model.to(device=device, dtype=dtype)
     memory.check("inference model load")
     # Preserve the proven bytes and settings across transfer. Only the guard
     # changes, because future readbacks must use the destination device guard.

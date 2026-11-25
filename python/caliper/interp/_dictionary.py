@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import hashlib
+from contextlib import contextmanager
+from contextvars import ContextVar
 import json
 import math
 import os
@@ -33,6 +35,17 @@ _MAX_METADATA_DEPTH = 64
 _HASH_CHUNK_BYTES = 1024 * 1024
 _UNVERIFIED_CPU_BYTES = 64 * 1024 * 1024
 _VERIFIED_MODELS = weakref.WeakKeyDictionary()
+_VERIFICATION_GUARD = ContextVar("caliper_checkpoint_verification_guard", default=None)
+
+
+@contextmanager
+def _verification_memory(memory):
+    """Preserve loader guards through existing checkpoint-verifier adapters."""
+    token = _VERIFICATION_GUARD.set(memory)
+    try:
+        yield
+    finally:
+        _VERIFICATION_GUARD.reset(token)
 
 
 def weight_names(layer_or_metadata):
@@ -42,7 +55,9 @@ def weight_names(layer_or_metadata):
     if activation == "topk":
         return _WEIGHTS
     if activation == "jumprelu":
-        return (*_WEIGHTS, "threshold")
+        original = (layer_or_metadata.get("reference_input") is not None
+                    if isinstance(layer_or_metadata, dict) else hasattr(layer_or_metadata, "W_enc_original"))
+        return (*_WEIGHTS, "threshold", *(("W_enc_original",) if original else ()))
     raise ValueError("unsupported dictionary activation")
 
 
@@ -241,7 +256,7 @@ def _checkpoint_subset(model, identity, subset, key_mapping):
     return checkpoint_subset(model, identity, subset, key_mapping)
 
 
-def verify_hf_model(model, snapshot, *, key_mapping=None, checkpoint_subset=None, memory_limit_gb=12):
+def verify_hf_model(model, snapshot, *, key_mapping=None, checkpoint_subset=None, memory_limit_gb=12, memory=None):
     """Verify an external model against a local HF safetensors snapshot.
 
     The snapshot path must identify the same repository and exact commit as the
@@ -277,7 +292,9 @@ def verify_hf_model(model, snapshot, *, key_mapping=None, checkpoint_subset=None
     devices = {value.device for value in state.values()}
     if len(devices) != 1:
         raise ValueError("checkpoint verification requires one model device")
-    memory = MemoryGuard(memory_limit_gb, next(iter(devices)))
+    memory = _VERIFICATION_GUARD.get() if memory is None else memory
+    local_memory = MemoryGuard(memory_limit_gb, next(iter(devices)))
+    memory = (local_memory if memory is None else BudgetMemory(local_memory, memory_limit_gb, extra=memory))
     _hash_admission(memory)
     config_data, _ = _read_metadata(snapshot / "config.json", memory)
 
@@ -397,12 +414,16 @@ class JumpReLUTranscoder(TopKTranscoder):
 
     activation = "jumprelu"
 
-    def __init__(self, W_enc, b_enc, W_dec, b_dec, threshold, *, trainable=False):
+    def __init__(self, W_enc, b_enc, W_dec, b_dec, threshold, *, trainable=False, W_enc_original=None):
         if (threshold.shape != b_enc.shape or not _finite(threshold)
                 or not _positive(threshold)):
             raise ValueError("JumpReLU requires positive finite thresholds with one value per feature")
         super().__init__(W_enc, b_enc, W_dec, b_dec, None, trainable=trainable)
         self.register_parameter("threshold", nn.Parameter(threshold, requires_grad=trainable))
+        if W_enc_original is not None:
+            if W_enc_original.shape != W_enc.shape or not _finite(W_enc_original):
+                raise ValueError("original encoder must match the finite encoder shape")
+            self.register_parameter("W_enc_original", nn.Parameter(W_enc_original, requires_grad=trainable))
 
     def activate(self, preactivation, *, check=None):
         if self.threshold.dtype == preactivation.dtype:
@@ -509,6 +530,7 @@ def _manifest(data):
             raise ValueError("JumpReLU dictionary requires k=null")
     else:
         raise ValueError("dictionary requires TopK or JumpReLU activation")
+    _reference_coordinates(data)
     if data["model_hash"].startswith("hf:"):
         expected = f"hf:{data['model_id']}@{data['revision']}"
         if data["model_hash"] != expected or not re.fullmatch(r"[0-9a-f]{40}", data["revision"]):
@@ -553,6 +575,20 @@ def _manifest(data):
                                   or (field == "dead_fraction" and not 0 <= value <= 1)):
             raise ValueError(f"invalid quality metric {field}")
     return data
+
+
+def _reference_coordinates(metadata):
+    """Validate the original encoder contract without inferring lost bytes."""
+    reference = metadata.get("reference_input")
+    if reference is None:
+        return None
+    if (metadata.get("activation") != "jumprelu" or not isinstance(reference, dict)
+            or set(reference) != {"coordinate", "encoder", "dtype"}
+            or reference.get("coordinate") != "gemma_scope_pre_gain"
+            or reference.get("encoder") != "W_enc_original"
+            or reference.get("dtype") not in ("float32", "bfloat16")):
+        raise ValueError("invalid original encoder coordinate contract")
+    return reference
 
 
 def _reject_constant(value):
@@ -672,6 +708,8 @@ def _admit(memory, required, stage, *, floor=0):
     current = allocation_bytes(memory, floor=floor)
     if current + required > memory.limit:
         raise CleanStop("dictionary allocation exceeds the process memory limit")
+    from ._admission import _host_reserve
+    _host_reserve(required, stage)
     return current
 
 
@@ -733,6 +771,12 @@ def load_dictionary(path, *, model=None, model_hash=None, device=None, dtype=Non
         dtype = parameter.dtype if dtype is None else dtype
     if dtype is not None and dtype not in _DTYPES:
         raise ValueError("dictionary dtype must be floating point")
+    reference = _reference_coordinates(data)
+    if reference is not None and dtype is not None and str(dtype) != "torch." + reference["dtype"]:
+        raise ValueError("original encoder artifact dtype differs from the requested compute dtype")
+    if (dtype == torch.bfloat16 and data.get("import_source", {}).get("kind") == "gemma_scope"
+            and reference is None):
+        raise ValueError("bfloat16 Scope requires an original encoder artifact; a converted encoder cast is insufficient")
     device = torch.device(device or "cpu")
     if supplied is not None and _canonical_device(supplied.device) != _canonical_device(device):
         raise ValueError("dictionary requires a memory guard for its device")
@@ -740,11 +784,15 @@ def load_dictionary(path, *, model=None, model_hash=None, device=None, dtype=Non
               "W_dec": (data["latents"], data["width"]), "b_dec": (data["width"],)}
     if data["activation"] == "jumprelu":
         shapes["threshold"] = (data["latents"],)
+    if reference is not None:
+        shapes["W_enc_original"] = (data["latents"], data["width"])
     headers, budgets = [], []
     for index in range(data["layers"]):
         # Header inspection uses CPU mappings and never requests tensor data.
         with safe_open(folder / f"layer_{index:02d}.safetensors", framework="pt", device="cpu") as source:
             stored = _layer_header(source, index, shapes, dtype)
+        if reference is not None and any(str(value) != "torch." + reference["dtype"] for value in stored.values()):
+            raise ValueError("original encoder artifact must store the declared compute dtype")
         headers.append(stored)
         budgets.append(_layer_bytes(stored, shapes, device, dtype))
     remaining = sum(budget[0] for budget in budgets)

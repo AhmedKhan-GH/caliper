@@ -122,3 +122,47 @@ def test_index_gemma_budget_defaults_to_40_and_keeps_smaller_requests(requested)
 def test_index_rejects_budget_above_selected_family_cap(model, limit):
     with pytest.raises(SystemExit):
         build_index.parser().parse_args(["--dictionary", "fixture", "--model", model, "--memory-gb", str(limit)])
+
+
+def test_trace_allocations_keep_prospective_host_reserve(monkeypatch):
+    from caliper.interp._frozen import MemoryGuard as TraceMemory
+    required = 12345
+    host = SimpleNamespace(available=8 * GB + required)
+    monkeypatch.setattr("psutil.virtual_memory", lambda: host)
+    monkeypatch.setattr(TraceMemory, "check", lambda self, stage: 0)
+    memory = TraceMemory("cpu", memory_limit_gb=40)
+    memory.reserve("at reserve", required)
+    host.available -= 1
+    with pytest.raises(CleanStop, match="8 GB host reserve"):
+        memory.reserve("below reserve", required)
+
+
+def test_checkpoint_conversion_keeps_supplied_guard_and_exact_bytes(tmp_path):
+    import torch
+    from .test_gemma_runtime import gemma_model, local_gemma
+    model = gemma_model()
+    snapshot = local_gemma(tmp_path, model)
+    model.to(dtype=torch.bfloat16)
+    evidence = {"current": 0}
+    supplied = guard(12, evidence)
+    identity = _dictionary.verify_hf_model(model, snapshot, memory=supplied)
+    assert identity == _dictionary._GEMMA_IDENTITY
+    assert supplied in _dictionary._VERIFIED_MODELS[model].memory.guards
+    model.model.layers[0].mlp.up_proj.weight.data[0, 0] += 1
+    with pytest.raises(ValueError, match="weights differ"):
+        _dictionary.verify_hf_model(model, snapshot, memory=supplied)
+    evidence["current"] = 12 * GB + 1
+    with pytest.raises(CleanStop, match="memory limit"):
+        _dictionary.verify_hf_model(model, snapshot, memory=supplied)
+
+
+@pytest.mark.parametrize("admit", [_admission._admit_load, _dictionary._admit])
+def test_resource_load_leaves_prospective_host_reserve(monkeypatch, admit):
+    required = 4096
+    host = SimpleNamespace(available=8 * GB + required)
+    monkeypatch.setattr("psutil.virtual_memory", lambda: host)
+    memory = guard(40, {"current": 0})
+    admit(memory, required, "exact reserve")
+    host.available -= 1
+    with pytest.raises(CleanStop, match="8 GB host reserve"):
+        admit(memory, required, "reserve breach")

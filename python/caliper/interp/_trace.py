@@ -23,6 +23,7 @@ from ._graph import Graph, bounded_integer
 from ._influence import influence
 from ._labels import token_label
 from ._feature_labels import label_graph_nodes
+from . import _reference_graph
 
 
 class TraceTimeout(TimeoutError):
@@ -93,12 +94,14 @@ class _Target:
 class _DirectEffects:
     """Independent source writes and bounded vector-Jacobian products."""
 
-    def __init__(self, path, dictionary, token_ids, tokenizer, *, check=_no_check):
+    def __init__(self, path, dictionary, token_ids, tokenizer, *, check=_no_check,
+                 profile="caliper", max_n_logits=10, desired_logit_prob=.95):
         self.path, self.dictionary = path, dictionary
+        self.reference = profile == _reference_graph.PROFILE
         self.check = check
         self.nodes, self.source_layers = [], []
         self.feature_columns = {}
-        count = path.tokens * (path.layers + 1) + 10
+        count = path.tokens * (path.layers + 1) + min(max_n_logits, path.logits.shape[-1])
         count += sum(int((output.activations != 0).sum()) for output in path.feature_outputs)
         # Python node dictionaries and their lookup tables also use process memory.
         # Refuse an oversized active set explicitly. Never truncate JumpReLU sources.
@@ -132,14 +135,20 @@ class _DirectEffects:
                 self.source_layers.append((slice(start, end), slice(end, len(self.nodes)),
                                            indices, activations, active))
         probabilities = path.logits[0].softmax(-1)
-        order = torch.argsort(probabilities, descending=True, stable=True)[:10]
-        count = min(10, int((probabilities[order].cumsum(0) < .95).sum()) + 1, len(order))
+        limit = min(max_n_logits, len(probabilities))
+        order = (torch.topk(probabilities, limit).indices if self.reference else
+                 torch.argsort(probabilities, descending=True, stable=True)[:limit])
+        count = min(limit, int(torch.searchsorted(probabilities[order].cumsum(0), desired_logit_prob)) + 1)
         self.logit_nodes = []
         for token, probability in zip(order[:count].tolist(), probabilities[order[:count]].tolist()):
+            activation = path.logits[0, token] - path.logits[0].mean()
+            if self.reference:
+                direction, bias = path.logit_target(token, reference=True)
+                activation = (path.reference_final[0, -1] * direction).sum() + bias
             self.logit_nodes.append(len(self.nodes))
             self.nodes.append({"id": f"logit:{path.tokens - 1}:{token}", "kind": "logit", "layer": path.layers,
                                "position": path.tokens - 1, "token_id": token,
-                               "activation": float(path.logits[0, token] - path.logits[0].mean()),
+                               "activation": float(activation),
                                "probability": probability, "label": token_label(tokenizer, token)})
         self.feature_nodes = [i for i, n in enumerate(self.nodes) if n["kind"] == "feature"]
         path.guard.check("source preparation")
@@ -151,9 +160,11 @@ class _DirectEffects:
         zero = path.embedding.new_zeros(())
         if node["kind"] == "logit":
             token = node["token_id"]
-            direction, bias = path.logit_target(token)
+            direction, bias = path.logit_target(token, reference=True) if self.reference else path.logit_target(token)
+            expected = (path.reference_final[0, -1] * direction).sum() + bias if self.reference else (
+                path.logits[0, token] - path.logits[0].mean())
             return _Target(index, path.layers, path.tokens - 1, direction,
-                           path.logits[0, token] - path.logits[0].mean(), zero, bias, zero)
+                           expected, zero, bias, zero)
         if node["kind"] != "feature":
             raise ValueError("only features and logits are trace targets")
         layer, position, feature = node["layer"], node["position"], node["feature"]
@@ -161,7 +172,8 @@ class _DirectEffects:
         output = path.feature_outputs[layer]
         column = self.feature_columns[index]
         coefficient = output.coefficients[position, column]
-        direction = coefficient * weights.W_enc[feature].detach().to(path.dtype)
+        encoder = weights.W_enc_original if self.reference and path.raw_reference_input else weights.W_enc
+        direction = coefficient * encoder[feature].detach().to(path.dtype)
         bias = coefficient * weights.b_enc[feature].detach().to(path.dtype)
         constant = output.constants[position, column]
         expected = output.activations[position, column]
@@ -213,7 +225,12 @@ class _DirectEffects:
                     with autorelease_scope(path.device):
                         self.check("direct decoder block")
                         decoder = rows[selected[start:start + step]].to(path.dtype)
-                        products = (gradient[:, position] @ decoder.T) * values[start:start + step]
+                        if self.reference:
+                            # The reference rounds each scaled decoder before contraction.
+                            decoder = decoder * values[start:start + step, None]
+                            products = gradient[:, position].to(decoder.dtype) @ decoder.T
+                        else:
+                            products = (gradient[:, position] @ decoder.T) * values[start:start + step]
                         weights[node:node + decoder.shape[0]] = products.T
                         node += decoder.shape[0]
             weights[error_slice] = (gradient * path.errors[layer]).sum(-1).T
@@ -339,7 +356,8 @@ def _supported_token_path(effects, weights, target_indices):
     return _token_path(effects.nodes, incoming, top_logit)
 
 
-def _prune(effects, weights, target_indices, scores, normalized, *, max_nodes, max_edges):
+def _prune(effects, weights, target_indices, scores, normalized, *, max_nodes, max_edges,
+           node_threshold=.8, edge_threshold=.98):
     """Reserve a supported path, then apply influence thresholds within caps.
 
     If caps cannot hold the shortest path, retain the top logit and ranked
@@ -374,7 +392,7 @@ def _prune(effects, weights, target_indices, scores, normalized, *, max_nodes, m
         selected.add(index)
     retained = sum(score_values[i] for i in selected if i < logits[0])
     for index in rank:
-        if retained >= .8 * total or len(selected) >= max_nodes:
+        if retained >= node_threshold * total or len(selected) >= max_nodes:
             break
         if index < logits[0] and index not in selected and score_values[index] > 0:
             selected.add(index)
@@ -393,7 +411,7 @@ def _prune(effects, weights, target_indices, scores, normalized, *, max_nodes, m
     edge_total = float(importance.sum())
     if edge_total > 0 and max_edges:
         ranked = importance[edge_rank]
-        keep = min(max_edges, int((ranked.cumsum(0) < .98 * edge_total).sum()) + 1, len(edge_rank))
+        keep = min(max_edges, int((ranked.cumsum(0) < edge_threshold * edge_total).sum()) + 1, len(edge_rank))
         chosen = edge_rank[:keep].tolist()
     else:
         chosen = []
@@ -573,17 +591,40 @@ class Tracer:
             self._prompt = prompt
 
     @torch.inference_mode(False)
-    def trace(self, prompt, max_targets=512, max_nodes=512, max_edges=8192):
+    def trace(self, prompt, max_targets=512, max_nodes=512, max_edges=8192, *, profile="caliper",
+              max_n_logits=10, desired_logit_prob=.95, node_threshold=.8, edge_threshold=.98,
+              batch_size=None, update_interval=4):
         """Publish and return one graph without truncation or model downloads."""
         from ._publish import _publication_scope
         with _publication_scope(self.model):
-            return self._trace(prompt, max_targets, max_nodes, max_edges)
+            return self._trace(prompt, max_targets, max_nodes, max_edges, profile=profile,
+                               max_n_logits=max_n_logits, desired_logit_prob=desired_logit_prob,
+                               node_threshold=node_threshold, edge_threshold=edge_threshold,
+                               batch_size=batch_size, update_interval=update_interval)
 
-    def _trace(self, prompt, max_targets, max_nodes, max_edges):
+    def _trace(self, prompt, max_targets, max_nodes, max_edges, *, profile="caliper",
+               max_n_logits=10, desired_logit_prob=.95, node_threshold=.8, edge_threshold=.98,
+               batch_size=None, update_interval=4):
         check = _Deadline()
         label_index = self.index
         label_key = None if label_index is None else label_index.label_identity
         check("trace admission")
+        if profile not in ("caliper", _reference_graph.PROFILE):
+            raise ValueError("unsupported trace profile")
+        reference = profile == _reference_graph.PROFILE
+        logical_batch = (512 if reference else self.target_batch_size) if batch_size is None else batch_size
+        bounded_integer(logical_batch, "batch_size", 1, 2**31 - 1)
+        bounded_integer(max_n_logits, "max_n_logits", 1, 2**31 - 1)
+        bounded_integer(update_interval, "update_interval", 1, 2**31 - 1)
+        desired_logit_prob = _reference_graph.fraction(desired_logit_prob, "desired_logit_prob")
+        node_threshold = _reference_graph.fraction(node_threshold, "node_threshold")
+        edge_threshold = _reference_graph.fraction(edge_threshold, "edge_threshold")
+        settings = dict(profile=profile, max_targets=max_targets, max_nodes=max_nodes, max_edges=max_edges,
+                        max_n_logits=max_n_logits, desired_logit_prob=desired_logit_prob,
+                        node_threshold=node_threshold, edge_threshold=edge_threshold,
+                        batch_size=logical_batch, update_interval=update_interval,
+                        requested_batch_size=batch_size,
+                        objective="centered_pre_softcap_logit" if reference else "centered_logit")
 
         state = self._intervention_state(check)
         specifications = state["specifications"] if isinstance(state, dict) else state
@@ -598,9 +639,9 @@ class Tracer:
                 raise ValueError("trace requires an evaluation model")
             if not isinstance(prompt, str):
                 raise TypeError("prompt must be a string")
-            bounded_integer(max_targets, "max_targets", 0, 512)
-            bounded_integer(max_nodes, "max_nodes", 1, 512)
-            bounded_integer(max_edges, "max_edges", 0, 8192)
+            bounded_integer(max_targets, "max_targets", 0, 5000 if reference else 512)
+            bounded_integer(max_nodes, "max_nodes", 1, 8192 if reference else 512)
+            bounded_integer(max_edges, "max_edges", 0, 262144 if reference else 8192)
             bounded_integer(self.target_batch_size, "target_batch_size", 1, 64)
             self.guard.check("tokenization admission")
             check("tokenization admission")
@@ -638,10 +679,10 @@ class Tracer:
                         "dictionary_content": content,
                         "dictionary_metadata": self.dictionary.metadata,
                         "tokenizer": id(self.tokenizer), "prompt": prompt, "tokens": ids.tolist(),
-                        "interventions": state}
+                        "interventions": state, "profile": profile}
             identity.update(arithmetic_settings(self.model))
             state_key = hashlib.sha256(json.dumps(identity, sort_keys=True, allow_nan=False).encode()).hexdigest()
-            cache_key = (state_key, max_targets, max_nodes, max_edges, self.target_batch_size, label_key)
+            cache_key = (state_key, json.dumps(settings, sort_keys=True), self.target_batch_size, label_key)
             self._validate_forward_settings(check)
             if cache_key in self._cache:
                 graph = self._cache[cache_key]
@@ -661,66 +702,82 @@ class Tracer:
                         raise RuntimeError("intervention state changed during the trace forward")
                 path = FrozenPath(self.model, ids.to(self.guard.device), self.dictionary,
                                   guard=self.guard, interventions=specifications, check=check_forward,
-                                  _admission=admission)
+                                  _admission=admission, profile=profile)
                 self._validate_forward_settings(check)
                 if self._intervention_state(check) != identity["interventions"]:
                     raise RuntimeError("intervention state changed during the trace forward")
             check("forward complete")
-            effects = _DirectEffects(path, self.dictionary, ids[0].tolist(), self.tokenizer, check=check)
-            target_indices = list(effects.logit_nodes)
-            budget = len(target_indices) + min(max_targets, len(effects.feature_nodes))
-            # Influence retains normalized edges and work tensors beside the matrix.
-            path.guard.reserve("trace edge matrices", len(effects.nodes) *
-                               (4 * budget + 4 * self.target_batch_size + 32) * path.embedding.element_size())
-            weights = path.embedding.new_zeros(len(effects.nodes), budget)
-            seeds = path.embedding.new_zeros(len(effects.nodes))
-            for index in effects.logit_nodes:
-                seeds[index] = effects.nodes[index]["probability"]
-            diagnostics, batch_sizes = [], []
-            visited = torch.zeros(len(effects.nodes), dtype=torch.bool, device=path.device)
-            feature_mask = visited.clone()
-            feature_mask[effects.feature_nodes] = True
-            completed = 0
-            while completed < budget:
-                with autorelease_scope(path.device):
-                    check("target selection")
-                    size = self.guard.batch_size(self.target_batch_size, layers=path.layers, tokens=path.tokens,
-                                                 width=path.width, mixer_width=path.mixer_width,
-                                                 itemsize=path.embedding.element_size())
-                    if completed < len(effects.logit_nodes):
-                        batch = target_indices[completed:min(completed + size, len(effects.logit_nodes))]
-                    else:
-                        targets = torch.tensor(target_indices, dtype=torch.long, device=path.device)
-                        estimated, _ = influence(weights[:, :completed], targets, seeds)
-                        check("target influence")
-                        available = feature_mask & ~visited
-                        ranked = torch.argsort(estimated.masked_fill(~available, -1), descending=True, stable=True)
-                        count = min(size, budget - completed)
-                        batch = ranked[:count].tolist()
-                        target_indices.extend(batch)
-                    incoming, accounting = effects.backward(batch)
-                    for field in ("absolute_residual", "relative_residual"):
-                        _finite_max((row[field] for row in accounting), f"direct-effect {field}")
-                    batch_sizes.append(len(batch))
-                    weights[:, completed:completed + len(batch)] = incoming
-                    diagnostics.extend(accounting)
-                    visited[batch] = True
-                    completed += len(batch)
-                    self.guard.check("target batch complete")
-                    check("target batch complete")
-            targets = torch.tensor(target_indices, dtype=torch.long, device=path.device)
-            scores, normalized = influence(weights, targets, seeds)
-            check("graph influence")
-            top_seed = torch.zeros_like(seeds)
-            top_seed[effects.logit_nodes[0]] = 1
-            top_scores, _ = influence(weights, targets, top_seed)
-            check("top logit influence")
-            source_total = float(top_scores[:effects.logit_nodes[0]].sum())
-            feature_share = float(top_scores[feature_mask].sum()) / source_total if source_total else 0.
-            error_mask = torch.tensor([n["kind"] == "error" for n in effects.nodes], device=path.device)
-            error_share = float(top_scores[error_mask].sum()) / source_total if source_total else 0.
-            display_nodes, display_edges, omitted, edge_omitted, connectivity = _prune(
-                effects, weights, target_indices, scores, normalized, max_nodes=max_nodes, max_edges=max_edges)
+            effects = _DirectEffects(path, self.dictionary, ids[0].tolist(), self.tokenizer, check=check,
+                                     profile=profile, max_n_logits=max_n_logits,
+                                     desired_logit_prob=desired_logit_prob)
+            logical_queues = []
+            if reference:
+                result, diagnostics, target_indices, batch_sizes, logical_queues = _reference_graph.build(
+                    effects, max_targets=max_targets, max_nodes=max_nodes, max_edges=max_edges,
+                    batch_size=logical_batch, update_interval=update_interval,
+                    node_threshold=node_threshold, edge_threshold=edge_threshold, check=check)
+                display_nodes, display_edges, omitted, edge_omitted, feature_share, error_share = result
+                connectivity = {"status": "reference_pruning"}
+                probability_mass = sum(effects.nodes[i]["probability"] for i in effects.logit_nodes)
+                unvisited_influence = None
+            else:
+                target_indices = list(effects.logit_nodes)
+                budget = len(target_indices) + min(max_targets, len(effects.feature_nodes))
+                # Influence retains normalized edges and work tensors beside the matrix.
+                path.guard.reserve("trace edge matrices", len(effects.nodes) *
+                                   (4 * budget + 4 * min(64, logical_batch) + 32) * path.embedding.element_size())
+                weights = path.embedding.new_zeros(len(effects.nodes), budget)
+                seeds = path.embedding.new_zeros(len(effects.nodes))
+                for index in effects.logit_nodes:
+                    seeds[index] = effects.nodes[index]["probability"]
+                diagnostics, batch_sizes = [], []
+                visited = torch.zeros(len(effects.nodes), dtype=torch.bool, device=path.device)
+                feature_mask = visited.clone()
+                feature_mask[effects.feature_nodes] = True
+                completed = 0
+                while completed < budget:
+                    with autorelease_scope(path.device):
+                        check("target selection")
+                        size = self.guard.batch_size(min(64, logical_batch), layers=path.layers, tokens=path.tokens,
+                                                     width=path.width, mixer_width=path.mixer_width,
+                                                     itemsize=path.embedding.element_size())
+                        if completed < len(effects.logit_nodes):
+                            batch = target_indices[completed:min(completed + size, len(effects.logit_nodes))]
+                        else:
+                            targets = torch.tensor(target_indices, dtype=torch.long, device=path.device)
+                            estimated, _ = influence(weights[:, :completed], targets, seeds)
+                            check("target influence")
+                            available = feature_mask & ~visited
+                            ranked = torch.argsort(estimated.masked_fill(~available, -1), descending=True, stable=True)
+                            count = min(size, budget - completed)
+                            batch = ranked[:count].tolist()
+                            target_indices.extend(batch)
+                        incoming, accounting = effects.backward(batch)
+                        for field in ("absolute_residual", "relative_residual"):
+                            _finite_max((row[field] for row in accounting), f"direct-effect {field}")
+                        batch_sizes.append(len(batch))
+                        weights[:, completed:completed + len(batch)] = incoming
+                        diagnostics.extend(accounting)
+                        visited[batch] = True
+                        completed += len(batch)
+                        self.guard.check("target batch complete")
+                        check("target batch complete")
+                targets = torch.tensor(target_indices, dtype=torch.long, device=path.device)
+                scores, normalized = influence(weights, targets, seeds)
+                check("graph influence")
+                top_seed = torch.zeros_like(seeds)
+                top_seed[effects.logit_nodes[0]] = 1
+                top_scores, _ = influence(weights, targets, top_seed)
+                check("top logit influence")
+                source_total = float(top_scores[:effects.logit_nodes[0]].sum())
+                feature_share = float(top_scores[feature_mask].sum()) / source_total if source_total else 0.
+                error_mask = torch.tensor([n["kind"] == "error" for n in effects.nodes], device=path.device)
+                error_share = float(top_scores[error_mask].sum()) / source_total if source_total else 0.
+                display_nodes, display_edges, omitted, edge_omitted, connectivity = _prune(
+                    effects, weights, target_indices, scores, normalized, max_nodes=max_nodes, max_edges=max_edges,
+                    node_threshold=node_threshold, edge_threshold=edge_threshold)
+                probability_mass = float(seeds.sum())
+                unvisited_influence = float(scores[feature_mask & ~visited].sum())
             check("graph pruning")
             completeness = {"max_absolute_residual": _finite_max(
                                 (d["absolute_residual"] for d in diagnostics), "direct-effect absolute residual"),
@@ -731,15 +788,22 @@ class Tracer:
                             "replacement_forward_residual": path.replacement_forward_residual,
                             "target_count": len(diagnostics),
                             "feature_targets": len(target_indices) - len(effects.logit_nodes),
-                            "logit_targets": len(effects.logit_nodes), "logit_probability_mass": float(seeds.sum()),
-                            "unvisited_feature_influence": float(scores[feature_mask & ~visited].sum()),
+                            "logit_targets": len(effects.logit_nodes), "logit_probability_mass": probability_mass,
+                            "unvisited_feature_influence": unvisited_influence,
+                            "source_scope": "full_sources_before_reference_projection" if reference else "full_sources",
+                            "objective": settings["objective"],
                             "omitted_edge_influence": edge_omitted, "token_path": connectivity,
                             "targets": diagnostics}
             tolerance = 1e-9 if path.dtype == torch.float64 else 2e-2
             if completeness["max_absolute_residual"] > tolerance:
                 raise ValueError(f"direct-effect completeness residual exceeds {tolerance}")
             display_nodes = label_graph_nodes(display_nodes, label_index, check=check)
-            graph_data = dict(nodes=display_nodes, edges=display_edges, tokens=effects.tokens,
+            settings = dict(settings, dtype=str(path.dtype), physical_batches=batch_sizes,
+                            logical_queues=logical_queues,
+                            source_projection="selected_features_without_bos_features_or_errors" if reference else "all_sources")
+            self.guard.reserve("graph export and publication", len(display_nodes) * 4096 + len(display_edges) * 1024 +
+                               (8192 * 32 + 262144 * 16 if reference else 512 * 32 + 8192 * 16))
+            graph_data = dict(settings=settings, nodes=display_nodes, edges=display_edges, tokens=effects.tokens,
                               layers=path.layers, completeness=completeness, omitted_influence=omitted,
                               error_share=error_share, feature_share=feature_share,
                               logits=[effects.nodes[index] for index in effects.logit_nodes])
@@ -749,7 +813,7 @@ class Tracer:
                               "targets": [effects.nodes[index]["id"] for index in target_indices],
                               "batches": batch_sizes, "graph": graph_data}
             trace_id = hashlib.sha256(json.dumps(trace_identity, sort_keys=True, allow_nan=False).encode()).hexdigest()
-            graph = Graph.build(**graph_data, trace_id=trace_id, device=path.device)
+            graph = Graph.build(**graph_data, trace_id=trace_id, device=path.device, memory=self.guard)
             check("graph construction")
             self.guard.check("graph publication")
             if self._intervention_state(check) != identity["interventions"]:

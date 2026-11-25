@@ -11,7 +11,7 @@ import time
 import torch
 from torch.nn import functional as F
 
-from ._dictionary import _encoder_matches_dtype, model_identity
+from ._dictionary import _encoder_matches_dtype, _reference_coordinates, model_identity
 from ._families import model_family
 from . import _qwen_family
 from ._points import _architecture, capture
@@ -155,6 +155,26 @@ def _decode_selected(layer, indices, activations, *, check=_no_check):
     return result
 
 
+def _decode_reference(layer, indices, activations, *, check=_no_check):
+    """Scale decoder rows before the ordered per-position accumulation."""
+    width = layer.W_dec.shape[1]
+    result = activations.new_zeros(*activations.shape[:-1], width)
+    step = max(1, _ENCODER_BLOCK_ELEMENTS // width)
+    for position in range(indices.shape[0]):
+        active = activations[..., position, :] != 0
+        selected = active if active.ndim == 1 else active.any(0)
+        features = indices[position, selected]
+        values = activations[..., position, selected]
+        for start in range(0, len(features), step):
+            with autorelease_scope(activations.device):
+                check("reference decoder block")
+                rows = layer.W_dec.detach()[features[start:start + step]].to(activations.dtype)
+                scaled = rows * values[..., start:start + step, None]
+                destinations = torch.full((len(rows),), position, dtype=torch.long, device=rows.device)
+                result.index_add_(-2, destinations, scaled)
+    return result
+
+
 def _validate_dictionary(model, dictionary, check=_no_check, *, memory=None):
     """Check identity, dimensions, and probes before any model forward."""
     check("dictionary admission")
@@ -192,6 +212,11 @@ def _validate_dictionary(model, dictionary, check=_no_check, *, memory=None):
               "b_enc": (latents,), "b_dec": (config.hidden_size,)}
     if activation == "jumprelu":
         shapes["threshold"] = (latents,)
+    reference = _reference_coordinates(data)
+    if reference is not None:
+        shapes["W_enc_original"] = shapes["W_enc"]
+        if str(next(model.parameters()).dtype) != "torch." + reference["dtype"]:
+            raise ValueError("original encoder artifact dtype differs from model coordinates")
     device = next(model.parameters()).device
     for i, layer in enumerate(dictionary.layers):
         if getattr(layer, "activation", "topk") != activation or layer.k != k:
@@ -204,6 +229,8 @@ def _validate_dictionary(model, dictionary, check=_no_check, *, memory=None):
                 raise ValueError(f"dictionary {name} shape differs from its metadata")
             if not value.is_floating_point():
                 raise ValueError("dictionary tensors must use floating point storage")
+            if reference is not None and str(value.dtype) != "torch." + reference["dtype"]:
+                raise ValueError("original encoder tensor dtype differs from its coordinate contract")
             if value.device != device:
                 raise ValueError("dictionary and model must share one device")
             if name == "threshold" and (value <= 0).any().item():
@@ -294,6 +321,8 @@ class MemoryGuard:
         current = self.check(stage)
         if current + size > self.limit:
             raise CleanStop(f"{stage} allocation exceeds the trace memory limit")
+        from ._admission import _host_reserve
+        _host_reserve(size, stage)
 
     def _check_interval(self, stage):
         """Check bounded encoder work without another forced process read."""
@@ -308,6 +337,8 @@ class MemoryGuard:
         # Bound live values, adjoints, convolution work, and allocator headroom.
         per_target = max(4, itemsize) * tokens * (width * (layers + 1) * 12 + mixer_width * layers * 8)
         available = self.limit - current - 512_000_000
+        import psutil
+        available = min(available, psutil.virtual_memory().available - 8_000_000_000 - 512_000_000)
         admitted = min(requested, int(available // max(1, per_target)))
         if admitted < 1:
             raise CleanStop("no target batch fits the process memory limit")
@@ -346,6 +377,7 @@ class FrozenNorm:
         if not qwen and getattr(module, "frozen_scale", None) is not None:
             scale = module.frozen_scale.detach()
         self.scale = scale.detach()
+        self.denominator = (work.square().mean(-1, keepdim=True) + module.eps).sqrt().detach()
         self.weight = (1 + module.weight.detach().float()) if qwen else module.weight.detach()
         self.bias = _bias(module)
         self.qwen = qwen
@@ -356,6 +388,10 @@ class FrozenNorm:
         if self.bias is not None:
             result = result + bias * self.bias
         return result
+
+    def pure(self, x):
+        """Return the original Scope input before gain and encoder conversion."""
+        return (x.float() / self.denominator).to(x.dtype)
 
 
 class FrozenAttentionOutput:
@@ -529,13 +565,13 @@ class FrozenFeatures:
                     self.constants += spec["value"] * selected.to(original.dtype)
         self.activations = self.coefficients * self.original + self.constants
 
-    def evaluate(self, read, layer):
+    def evaluate(self, read, layer, *, original=False):
         values = read.new_empty(*read.shape[:-1], self.indices.shape[-1])
         step = max(1, _ENCODER_BLOCK_ELEMENTS // max(1, self.indices.shape[0] * read.shape[-1]))
         for start in range(0, self.indices.shape[-1], step):
             with autorelease_scope(read.device):
                 indices = self.indices[:, start:start + step]
-                encoder = layer.W_enc.detach()[indices].to(read.dtype)
+                encoder = (layer.W_enc_original if original else layer.W_enc).detach()[indices].to(read.dtype)
                 values[..., start:start + step] = (torch.einsum("btw,tkw->btk", read, encoder) +
                                                     layer.b_enc.detach()[indices].to(read.dtype))
         return values * self.coefficients + self.constants
@@ -588,12 +624,16 @@ class FrozenPath:
     """
 
     def __init__(self, model, input_ids, dictionary, *, guard=None, interventions=(), check=_no_check,
-                 memory_limit_gb=None, _admission=None):
+                 memory_limit_gb=None, _admission=None, profile="caliper"):
         _validate_ablation_points(model, interventions)
         _validate_intervention_positions(input_ids.shape[1], interventions)
         parameter = next(model.parameters())
         self.device, self.dtype = parameter.device, parameter.dtype
         self.family = model_family(model)
+        self.reference = profile == "circuit_tracer_82996f14"
+        self.raw_reference_input = self.reference and self.family.name == "gemma2"
+        if self.raw_reference_input and _reference_coordinates(dictionary.metadata) is None:
+            raise ValueError("Gemma reference tracing requires the original pre-gain encoder artifact")
         memory_limit_gb = family_memory_limit(model, memory_limit_gb, guard)
         self.guard = guard if guard is not None else MemoryGuard(self.device, memory_limit_gb=memory_limit_gb)
         if guard is not None and int(memory_limit_gb * 1e9) < guard.limit:
@@ -612,10 +652,12 @@ class FrozenPath:
             probes = _admission.consume(model, dictionary)
         if model.training:
             raise ValueError("trace requires an evaluation model")
-        if self.dtype not in (torch.float32, torch.float64):
+        if self.dtype not in (torch.float32, torch.float64) and not (
+                self.reference and self.family.name == "gemma2" and self.dtype == torch.bfloat16):
             raise ValueError("trace requires float32 or float64 model weights")
         self.qwen = model.config.model_type == _qwen_family.FAMILY_NAME
-        if self.family.unit_offset_norm and self.dtype != torch.float32:
+        if self.family.unit_offset_norm and self.dtype != torch.float32 and not (
+                self.reference and self.family.name == "gemma2" and self.dtype == torch.bfloat16):
             raise ValueError(f"{self.family.name} tracing requires float32 model weights")
         modules = dict(model.named_modules())
         root, prefix, self.blocks = self.family.locate(model)
@@ -626,6 +668,13 @@ class FrozenPath:
         self.width = model.config.hidden_size
         self.mixer_width = max((getattr(getattr(b, "linear_attn", None), "value_dim", self.width)
                                 for b in self.blocks), default=self.width)
+        if self.reference:
+            # Record tensors, feature buffers, decoder blocks, and vocabulary work.
+            self.guard.reserve("reference forward workspace", self.tokens * self.layers * (
+                self.width * 64 + dictionary.metadata["latents"] * 16) +
+                model.config.vocab_size * 32 + _ENCODER_BLOCK_ELEMENTS * 16)
+            if interventions and self.raw_reference_input:
+                raise ValueError("original-coordinate reference traces require an unchanged baseline")
         recorded = {}
         self.norms, self.post_norms, self.mixers = [], [], []
         self.attention_post_norms, self.mlp_post_norms = [], []
@@ -707,7 +756,14 @@ class FrozenPath:
                     layer = dictionary.layers[i]
                     check(f"freeze layer {i} admission")
                     self.guard.check(f"freeze layer {i} admission")
-                    a = _trace_features(layer, x, self.guard, memory_check)
+                    if self.raw_reference_input:
+                        raw_input = recorded[f"{i}.post_norm"].float()
+                        denominator = (raw_input.square().mean(-1, keepdim=True) +
+                                       getattr(block, self.family.mlp_read_norm).eps).sqrt()
+                        x = (raw_input / denominator).to(self.dtype)
+                        a = layer.activate(F.linear(x, layer.W_enc_original, layer.b_enc))
+                    else:
+                        a = _trace_features(layer, x, self.guard, memory_check)
                     raw = recorded[f"{i}.mlp_raw"]
                     output_specs = [s for s in interventions
                                     if s["point"] in (f"{base}.mlp", f"{base}.mlp_out")
@@ -716,11 +772,17 @@ class FrozenPath:
                     self.feature_outputs.append(output)
                     transformed = torch.zeros_like(a).scatter_add(
                         -1, output.indices[None], output.activations[None])
-                    reconstruction = _trace_reconstruction(layer, a)
+                    decode = _decode_reference if self.reference else _decode_selected
+                    if self.reference:
+                        original = FrozenFeatures(a, layer, [])
+                        reconstruction = decode(layer, original.indices, original.activations, check=memory_check)[None]
+                        reconstruction = reconstruction + layer.b_dec.detach().to(self.dtype)
+                    else:
+                        reconstruction = _trace_reconstruction(layer, a)
                     error = output.scale * (raw - reconstruction)
                     decoder_bias = output.scale * layer.b_dec.detach().to(self.dtype)
                     # Explicit edits can add signed features outside the recorded region.
-                    decoded = _decode_selected(layer, output.indices, output.activations, check=memory_check)[None]
+                    decoded = decode(layer, output.indices, output.activations, check=memory_check)[None]
                     # Only external vector writes need an output constant. Feature edits
                     # already have affine coefficients and constants in FrozenFeatures.
                     external = any(s["op"] in ("add", "patch") for s in output_specs)
@@ -766,6 +828,7 @@ class FrozenPath:
                 self.writes = [(y - b - c).detach() for y, b, c in
                                zip(self.outputs, self.decoder_biases, self.output_offsets)]
                 reads, final = self.run(self.embedding, self.writes, check=check)
+                self.reference_final = self.final_norm(recorded["final_norm"]).detach()
                 self._freeze_logits(model, self.final_norm(recorded["final_norm"])[:, -1], memory_check)
                 # Compare every read and all next-token logits, before any edge calculation.
                 self.forward_residual = _finite_max([float((a - b).abs().max()) for a, b in zip(reads, self.inputs)] +
@@ -823,11 +886,14 @@ class FrozenPath:
             logits = logits * self.logit_scale + self.logit_offset
         return logits
 
-    def logit_target(self, token):
+    def logit_target(self, token, *, reference=False):
         """Return the centered logit derivative and explicit target bias."""
         self.guard.check("logit target admission")
         direction = self.unembedding[token]
         bias = self.unembedding_bias
+        if reference:
+            constant = self.embedding.new_zeros(()) if bias is None else bias[token] - bias.mean()
+            return direction - self.unembedding.mean(0), constant
         if self.logit_scale is not None:
             direction = direction * self.logit_scale[token]
             bias = self.logit_offset if bias is None else self.logit_scale * bias + self.logit_offset
@@ -853,7 +919,8 @@ class FrozenPath:
                 if self.attention_post_norms[i] is not None:
                     mixed = self.attention_post_norms[i](mixed, norm)
                 x = x + mixed
-                reads.append(self.mlp_inputs[i](post_norm(x, norm), intervention))
+                reads.append(post_norm.pure(x) if self.raw_reference_input else
+                             self.mlp_inputs[i](post_norm(x, norm), intervention))
                 x = x + write + decoder * self.decoder_biases[i] + intervention * self.output_offsets[i]
                 self.guard.check(f"frozen layer {i}")
                 check(f"frozen layer {i}")
@@ -876,12 +943,13 @@ class FrozenPath:
                 if self.attention_post_norms[i] is not None:
                     mixed = self.attention_post_norms[i](mixed)
                 x = x + mixed
-                read = self.mlp_inputs[i](post_norm(x))
+                read = post_norm.pure(x) if self.raw_reference_input else self.mlp_inputs[i](post_norm(x))
                 reads.append(read)
                 layer = dictionary.layers[i]
                 output = self.feature_outputs[i]
-                activation = output.evaluate(read, layer)
-                x = (x + _decode_selected(layer, output.indices, activation, check=check) +
+                activation = output.evaluate(read, layer, original=self.raw_reference_input)
+                decode = _decode_reference if self.reference else _decode_selected
+                x = (x + decode(layer, output.indices, activation, check=check) +
                      self.decoder_biases[i] + self.errors[i] + self.output_offsets[i])
                 self.guard.check(f"replacement layer {i}")
                 check(f"replacement layer {i}")

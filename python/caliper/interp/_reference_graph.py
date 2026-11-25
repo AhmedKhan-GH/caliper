@@ -5,6 +5,8 @@ import math
 
 import torch
 
+from ._memory import autorelease_scope
+
 
 PROFILE = "circuit_tracer_82996f14"
 
@@ -72,6 +74,7 @@ def prune(nodes, weights, targets, seeds, *, node_threshold, edge_threshold,
     adjacency[targets] = weights.T
     all_targets = torch.arange(count)
     scores, normalized = propagate(adjacency.T, all_targets, seeds, check=check)
+    del normalized
     keep = scores >= cutoff(scores, node_threshold)
     feature = torch.tensor([n["kind"] == "feature" for n in nodes])
     error = torch.tensor([n["kind"] == "error" for n in nodes])
@@ -105,17 +108,20 @@ def prune(nodes, weights, targets, seeds, *, node_threshold, edge_threshold,
     sorted_scores, sorted_indices = torch.sort(scores, descending=True)
     cumulative = torch.zeros_like(scores)
     # Empty influence has no finite cumulative rank. Keep the absence explicit.
-    if float(sorted_scores.sum()) > 0:
+    has_influence = float(sorted_scores.sum()) > 0
+    if has_influence:
         cumulative[sorted_indices] = sorted_scores.cumsum(0) / sorted_scores.sum()
     order = keep.nonzero().flatten().tolist()
     row = {old: new for new, old in enumerate(order)}
     top = next(i for i, n in enumerate(nodes) if n["kind"] == "logit")
     kept_nodes = [dict(nodes[i], index=row[i], influence=float(scores[i]),
-                       cumulative_influence=float(cumulative[i]), effect=float(adjacency[top, i]))
+                       cumulative_influence=float(cumulative[i]) if has_influence else None,
+                       effect=float(adjacency[top, i]))
                   for i in order]
     endpoints = edge_mask.nonzero().tolist()
-    edges = [{"source": row[source], "target": row[target], "weight": float(adjacency[target, source])}
-             for target, source in endpoints]
+    raw_weights = adjacency[edge_mask].tolist()
+    edges = [{"source": row[source], "target": row[target], "weight": weight}
+             for (target, source), weight in zip(endpoints, raw_weights)]
     total = float(scores.sum())
     omitted = max(0., 1 - float(scores[keep].sum()) / total) if total else 0.
     edge_total = float(edge_scores.sum())
@@ -159,11 +165,13 @@ def build(effects, *, max_targets, max_nodes, max_edges, batch_size, update_inte
                     tokens=path.tokens, width=path.width, mixer_width=path.mixer_width,
                     itemsize=path.embedding.element_size())
                 batch = logical[offset:offset + size]
-                incoming, accounting = effects.backward(batch)
-                projected = incoming[source_rows].float().cpu()
-                projected[bos_errors] = 0
-                begin = len(targets)
-                weights[:, begin:begin + len(batch)] = projected
+                with autorelease_scope(path.device):
+                    incoming, accounting = effects.backward(batch)
+                    projected = incoming[source_rows].float().cpu()
+                    projected[bos_errors] = 0
+                    begin = len(targets)
+                    weights[:, begin:begin + len(batch)] = projected
+                    del incoming, projected
                 targets.extend(inverse[i] for i in batch)
                 diagnostics.extend(accounting)
                 physical_batches.append(len(batch))
@@ -187,6 +195,16 @@ def build(effects, *, max_targets, max_nodes, max_edges, batch_size, update_inte
     retained = sorted(selected) + list(range(len(features), len(order)))
     mapping = {old: new for new, old in enumerate(retained)}
     projected = weights[retained]
+    all_incoming = weights.sum(0)
+    selected_incoming = projected.sum(0)
+    excluded_incoming = (all_incoming - selected_incoming).tolist()
+    selected_incoming = selected_incoming.tolist()
+    for column, diagnostic in enumerate(diagnostics):
+        check("reference projection diagnostics")
+        diagnostic["reference_projection"] = {
+            "selected_source_incoming": selected_incoming[column],
+            "unselected_feature_incoming": excluded_incoming[column],
+            "completeness_scope": "projection_only"}
     projected_targets = torch.tensor([mapping[i] for i in targets])
     projected_nodes = [effects.nodes[order[i]] for i in retained]
     result = prune(projected_nodes, projected, projected_targets, seeds[retained],

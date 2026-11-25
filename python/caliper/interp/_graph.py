@@ -46,10 +46,11 @@ class Graph:
     status: str = "done"
     logits: list[dict] | None = field(default=None, repr=False)
     settings: dict = field(default_factory=dict)
+    _memory: object = field(default=None, repr=False, compare=False)
 
     @classmethod
     def build(cls, *, nodes, edges, tokens, layers, completeness, omitted_influence,
-              error_share, feature_share, trace_id, device, logits=None, settings=None):
+              error_share, feature_share, trace_id, device, logits=None, settings=None, memory=None):
         settings = {} if settings is None else dict(settings)
         reference = settings.get("profile") == "circuit_tracer_82996f14"
         node_cap = REFERENCE_NODE_CAP if reference else NODE_CAP
@@ -77,7 +78,7 @@ class Graph:
         tensors = dict(zip(("trace.counts", "trace.node_i", "trace.node_f", "trace.edge_i", "trace.edge_f"),
                            (counts, node_i, node_f, edge_i, edge_f)))
         return cls(nodes, edges, tokens, layers, completeness, omitted_influence, error_share,
-                   feature_share, trace_id, tensors, logits=logits, settings=settings)
+                   feature_share, trace_id, tensors, logits=logits, settings=settings, _memory=memory)
 
     def _panel_tensors(self):
         """Prepare labels and traced probabilities on the structural tensors' device."""
@@ -104,6 +105,8 @@ class Graph:
     def publish(self):
         """Publish structural tensors and all graph and bar inputs on their existing device."""
         from ._publish import _publication_scope, _publish_many
+        if self._memory is not None:
+            self._memory.reserve("graph panel publication", self.tensors["trace.node_i"].shape[0] * 1024 + 65536)
         with _publication_scope():
             values = {**self.tensors, **self._panel_tensors()}
             _publish_many(values)
@@ -118,11 +121,16 @@ class Graph:
         end_n = min(node_offset + node_limit, len(self.nodes))
         end_e = min(edge_offset + edge_limit, len(self.edges))
         summary = {k: v for k, v in self.completeness.items() if k != "targets"}
+        settings = {k: v for k, v in self.settings.items() if k not in ("physical_batches", "logical_queues")}
+        if "physical_batches" in self.settings:
+            settings["physical_batch_count"] = len(self.settings["physical_batches"])
+            settings["logical_queue_count"] = len(self.settings.get("logical_queues", []))
+            settings["schedule_in_full_export"] = True
         return {"trace_id": self.trace_id, "status": self.status,
                 "counts": {"nodes": len(self.nodes), "edges": len(self.edges),
                            "tokens": len(self.tokens), "layers": self.layers},
                 "nodes": self.nodes[node_offset:end_n], "edges": self.edges[edge_offset:end_e],
-                "tokens": self.tokens, "completeness": summary, "settings": self.settings,
+                "tokens": self.tokens, "completeness": summary, "settings": settings,
                 "omitted_influence": self.omitted_influence,
                 "error_share": self.error_share, "feature_share": self.feature_share,
                 "next_node_offset": end_n if node_limit and end_n < len(self.nodes) else None,
@@ -133,8 +141,13 @@ class Graph:
 
     def to_json(self, **paging):
         """Export the complete graph unless explicit page arguments are supplied."""
+        if self._memory is not None:
+            nodes = min(256, len(self.nodes)) if paging else len(self.nodes)
+            edges = min(256, len(self.edges)) if paging else len(self.edges)
+            diagnostics = 0 if paging else len(self.completeness.get("targets", []))
+            self._memory.reserve("graph JSON export", 65536 + nodes * 4096 + edges * 1024 + diagnostics * 4096)
         result = self.read(**paging)
         if not paging:
             result.update(nodes=self.nodes, edges=self.edges, completeness=self.completeness,
-                          logits=self.logits, next_node_offset=None, next_edge_offset=None)
+                          logits=self.logits, settings=self.settings, next_node_offset=None, next_edge_offset=None)
         return json.dumps(result, allow_nan=False, separators=(",", ":"))

@@ -400,3 +400,152 @@ def test_softcap_centered_rows_use_bounded_blocks(monkeypatch):
     expected = (path.logit_scale[:, None] * model.lm_head.weight).mean(0)
     torch.testing.assert_close(path.unembedding_mean, expected, atol=1e-8, rtol=1e-5)
     assert path.forward_residual < 2e-5
+
+
+def original_encoder_dictionary(model, *, dtype=torch.float32):
+    from caliper.interp._dictionary import JumpReLUTranscoder, model_identity
+    dictionary = random_dictionary(model, latents=19, k=4)
+    # These original rows are independently specified fixture inputs. They do
+    # not come from an attempted inverse of an existing converted artifact.
+    with torch.random.fork_rng(devices=[]):
+        torch.manual_seed(319)
+        layers = []
+        for block, layer in zip(model.model.layers, dictionary.layers):
+            original = torch.randn_like(layer.W_enc) * .03
+            gain = 1 + block.pre_feedforward_layernorm.weight.detach().float()
+            layers.append(JumpReLUTranscoder(
+                W_enc=(original / gain).to(dtype), W_enc_original=original.to(dtype),
+                b_enc=layer.b_enc.to(dtype), W_dec=layer.W_dec.to(dtype), b_dec=layer.b_dec.to(dtype),
+                threshold=torch.full_like(layer.b_enc, .03).to(dtype)))
+    dictionary.layers = nn.ModuleList(layers)
+    dictionary.metadata.update(model_hash=model_identity(model), activation="jumprelu", k=None,
+        reference_input={"coordinate": "gemma_scope_pre_gain", "encoder": "W_enc_original",
+                         "dtype": str(dtype).removeprefix("torch.")})
+    return dictionary
+
+
+def test_reference_original_encoder_and_pre_softcap_objective():
+    model = gemma_model(layers=1)
+    model.config._name_or_path = "caliper-test/random-gemma2"
+    model.config._commit_hash = "b" * 40
+    dictionary = original_encoder_dictionary(model)
+    ids = torch.tensor([[1, 2, 3, 4, 5]])
+    raw = {}
+    handle = model.model.layers[0].pre_feedforward_layernorm.register_forward_pre_hook(
+        lambda module, args: raw.update(value=args[0].detach().clone()))
+    try:
+        path = FrozenPath(model, ids, dictionary, profile="circuit_tracer_82996f14")
+    finally:
+        handle.remove()
+    # Independent formula uses the live norm input and the original source rows.
+    x = raw["value"].float()
+    x = x / (x.square().mean(-1, keepdim=True) + model.config.rms_norm_eps).sqrt()
+    layer = dictionary.layers[0]
+    preactivation = F.linear(x, layer.W_enc_original, layer.b_enc)
+    expected = preactivation * (preactivation > layer.threshold)
+    torch.testing.assert_close(path.features[0], expected)
+    effects = _DirectEffects(path, dictionary, ids[0].tolist(), Tokenizer(),
+                             profile="circuit_tracer_82996f14", max_n_logits=2)
+    target = effects.target(effects.logit_nodes[0])
+    expected_direction = model.lm_head.weight[effects.nodes[target.node]["token_id"]]
+    expected_direction = expected_direction - model.lm_head.weight.mean(0)
+    torch.testing.assert_close(target.direction, expected_direction)
+    assert not torch.allclose(target.direction, path.logit_target(effects.nodes[target.node]["token_id"])[0])
+    _, diagnostics = effects.backward(effects.logit_nodes + effects.feature_nodes[:2])
+    assert max(row["absolute_residual"] for row in diagnostics) < 2e-5
+
+
+def test_reference_requires_original_encoder_before_forward(monkeypatch):
+    model, dictionary, ids = setup(jump=True)
+    monkeypatch.setattr(model, "forward", lambda **kwargs: pytest.fail("unexpected forward"))
+    with pytest.raises(ValueError, match="original pre-gain encoder artifact"):
+        FrozenPath(model, ids, dictionary, profile="circuit_tracer_82996f14")
+
+
+def test_bfloat16_gain_conversion_cannot_recover_original_encoder():
+    original = torch.tensor([1.0049])
+    gain = torch.tensor([1.01])
+    converted = original / gain
+    reconstructed = converted.bfloat16() * gain.bfloat16()
+    assert not torch.equal(reconstructed, original.bfloat16())
+
+
+def test_reference_decoder_scales_before_accumulation_in_bfloat16():
+    from types import SimpleNamespace
+    from caliper.interp._frozen import _decode_reference
+    rows = torch.tensor([[1.125, -.5], [-.625, 2.25], [3., .25]], dtype=torch.bfloat16)
+    values = torch.tensor([[.75, 1.5], [-.5, 2.]], dtype=torch.bfloat16)
+    indices = torch.tensor([[0, 1], [1, 2]])
+    expected = torch.zeros(2, 2, dtype=torch.bfloat16)
+    for position, selected in enumerate(indices):
+        for column, feature in enumerate(selected):
+            expected[position] += rows[feature] * values[position, column]
+    torch.testing.assert_close(_decode_reference(SimpleNamespace(W_dec=rows), indices, values), expected, atol=0, rtol=0)
+
+
+def test_reference_edges_match_independent_pre_softcap_source_derivatives():
+    model = gemma_model(layers=2)
+    model.config._name_or_path = "caliper-test/random-gemma2"
+    model.config._commit_hash = "b" * 40
+    dictionary = original_encoder_dictionary(model)
+    ids = torch.tensor([[1, 2, 3, 4, 5]])
+    path = FrozenPath(model, ids, dictionary, profile="circuit_tracer_82996f14")
+    effects = _DirectEffects(path, dictionary, ids[0].tolist(), Tokenizer(),
+                             profile="circuit_tracer_82996f14", max_n_logits=1)
+    weights, _ = effects.backward(effects.logit_nodes)
+    token = effects.nodes[effects.logit_nodes[0]]["token_id"]
+    feature = next(i for i in effects.feature_nodes if effects.nodes[i]["layer"] == 0)
+    error = next(i for i, n in enumerate(effects.nodes) if n["kind"] == "error" and n["layer"] == 0)
+    with frozen_live(model, path), ExitStack() as stack:
+        writes = list(path.outputs)
+        captured = {}
+        for i, block in enumerate(model.model.layers):
+            stack.callback(block.post_feedforward_layernorm.register_forward_hook(
+                lambda module, args, output, i=i: writes[i]).remove)
+        stack.callback(model.model.norm.register_forward_hook(
+            lambda module, args, output: captured.update(final=output)).remove)
+        for source in (0, feature, error):
+            magnitude = torch.zeros((), requires_grad=True)
+            node = effects.nodes[source]
+            perturbation = torch.zeros_like(path.embedding)
+            embedding = path.embedding
+            if node["kind"] == "token":
+                perturbation[:, node["position"]] = embedding[:, node["position"]]
+                embedding = embedding + magnitude * perturbation
+            else:
+                value = (dictionary.layers[0].W_dec[node["feature"]] * node["activation"]
+                         if node["kind"] == "feature" else path.errors[0][0, node["position"]])
+                perturbation[:, node["position"]] = value
+                writes[0] = path.outputs[0] + magnitude * perturbation
+            model(inputs_embeds=embedding, use_cache=False)
+            direction = model.lm_head.weight[token] - model.lm_head.weight.mean(0)
+            objective = (captured["final"][0, -1] * direction).sum()
+            expected = torch.autograd.grad(objective, magnitude)[0]
+            torch.testing.assert_close(weights[source, 0], expected, atol=2e-5, rtol=2e-5)
+            writes[0] = path.outputs[0]
+
+
+def test_original_encoder_artifact_roundtrip_and_dtype_refusal(tmp_path):
+    import json
+    from safetensors.torch import save_file
+    from caliper.interp._dictionary import load_dictionary, weight_names, weights_hash
+    model = gemma_model(layers=1).to(dtype=torch.bfloat16)
+    model.config._name_or_path = "caliper-test/random-gemma2"
+    model.config._commit_hash = "b" * 40
+    dictionary = original_encoder_dictionary(model, dtype=torch.bfloat16)
+    (tmp_path / "dictionary.json").write_text(json.dumps(dictionary.metadata))
+    layer = dictionary.layers[0]
+    save_file({name: value.detach().contiguous() for name, value in layer.state_dict().items()},
+              tmp_path / "layer_00.safetensors")
+    loaded = load_dictionary(tmp_path, model=model)
+    assert "W_enc_original" in weight_names(loaded.metadata)
+    assert "W_enc_original" in weight_names(loaded.layers[0])
+    assert weights_hash(loaded) == weights_hash(dictionary)
+    with pytest.raises(ValueError, match="artifact dtype"):
+        load_dictionary(tmp_path, model=model, dtype=torch.float32)
+    # The legacy artifact cannot silently become an original-coordinate encoder.
+    del dictionary.metadata["reference_input"]
+    dictionary.metadata["import_source"] = {"kind": "gemma_scope"}
+    (tmp_path / "dictionary.json").write_text(json.dumps(dictionary.metadata))
+    with pytest.raises(ValueError, match="converted encoder cast is insufficient"):
+        load_dictionary(tmp_path, model=model)
