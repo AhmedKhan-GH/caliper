@@ -46,7 +46,7 @@ template <typename T> inline void store_seqcst(T* p, T v)  { __atomic_store_n(p,
 template <typename T> inline T fetch_add(T* p, T v) { return __atomic_fetch_add(p, v, __ATOMIC_ACQ_REL); }
 
 // CLOCK_UPTIME_RAW == mach_absolute_time in ns == Python's time.monotonic_ns()
-// on macOS (checked in python/bench/results/B-clock.txt).
+// on macOS (verified by `python/bench/bench_live.py clock`).
 inline uint64_t now_ns() { return clock_gettime_nsec_np(CLOCK_UPTIME_RAW); }
 inline uint64_t unix_ms() {
     struct timespec ts{};

@@ -187,6 +187,7 @@ def cmd_liveness(args):
     tag = f"{args.prefix}-liveness-{mode}"
     wl = Workload("mps", 512)
     stall = args.stall
+    os.makedirs(RESULTS, exist_ok=True)
 
     if mode == "spike":
         # The spike's caliper.show model, inactive window: drain, synchronous

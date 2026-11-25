@@ -117,7 +117,7 @@ The cheaper exact form
 is the float guess compiled with fast math, one 16-byte entry per level in the 4,112-byte block, and a 16 by 8
 workgroup for `colormap_texture`: 128 invocations, the most that a compatibility-mode WebGPU device allows in a
 workgroup by default, so that one program serves every device. The decision rested on its cost on Metal, measured on
-an M-series Max in quiet moments (`python/bench/results/step6-colormap-keys.txt`). As first built, with keys packed
+an M-series Max in quiet moments (measured with `python/bench/bench_live.py`). As first built, with keys packed
 four to a vector, the layer's safe math and an 8 x 8 workgroup, the compute form took 31.0 µs on a 1,024 x 1,024
 heatmap and 79.2 µs on a 2,048 x 2,048 one, against 9.5 µs and 25.8 µs for the Metal renderer's float pass (load
 3.49). Most of the difference was the precise division of the float guess, which the decision does not need, and the
