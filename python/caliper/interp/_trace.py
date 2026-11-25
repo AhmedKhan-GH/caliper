@@ -113,14 +113,16 @@ def _reference_target_objective(path, reads, final, targets, check):
     for row, target in enumerate(targets):
         groups.setdefault(target.layer, []).append((row, target))
     # Admit both full scatter storages, four compact tensors, coordinates,
-    # and scalar work. This local reserve does not reduce batch admission.
+    # host staging, and scalar work. Keep metadata in the second reserve
+    # because the first reserve is a check, not an exclusive reservation.
+    # This local reserve does not reduce batch admission.
     workspace = 2048 * len(targets)
     for layer, entries in groups.items():
         if len(entries) > 1:
             source = final if layer == path.layers else reads[layer]
             itemsize = max(source.element_size(), *(target.direction.element_size() for _, target in entries))
             workspace += (2 * source.numel() + 4 * len(entries) * path.width + 8 * len(entries)) * itemsize
-            workspace += 16 * len(entries)
+            workspace += 32 * len(entries)
     path.guard.reserve("target objective tensors", workspace)
     terms = []
     rows = positions = directions = None

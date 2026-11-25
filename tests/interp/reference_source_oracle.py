@@ -20,7 +20,8 @@ class Geometry(TorchDispatchMode):
     def __torch_dispatch__(self, func, types, args=(), kwargs=None):
         result = func(*args, **(kwargs or {}))
         if (func == torch.ops.aten.bmm.default or
-                (func == torch.ops.aten.index.Tensor and args[0].ndim == 3)):
+                (func == torch.ops.aten.index.Tensor and args[0].ndim == result.ndim == 3)):
+            # Source gathers retain the batch axis. Target gathers return rows.
             tensors = [args[0], args[1], result] if func == torch.ops.aten.bmm.default else [args[0], result]
             self.calls.append((str(func), [(tuple(x.shape), x.stride(), x.dtype, x.clone()) for x in tensors]))
         return result

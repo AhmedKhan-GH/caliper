@@ -167,7 +167,8 @@ def test_refusal_precedes_block_allocations_and_releases_cast(monkeypatch, block
     assert len(allocations) == block - 1
     assert len(calls) == min(1, block - 1)
     assert all(ref() is None for ref in refs)
-    assert scopes == [entry for _ in range(block) for entry in ("enter", "exit")]
+    # Both logit targets share one objective scope before decoder work.
+    assert scopes == [entry for _ in range(block + 1) for entry in ("enter", "exit")]
     effects.release_decoders()
     assert effects._decoder_blocks is None
 

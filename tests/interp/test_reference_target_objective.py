@@ -1,6 +1,7 @@
 """Exact CPU evidence for target seeds against the immutable scalar objective."""
 import ast
 import hashlib
+import json
 import os
 from pathlib import Path
 from types import SimpleNamespace
@@ -101,7 +102,6 @@ def synthetic_effects(features=3, dtype=torch.bfloat16):
             W_dec=torch.ones(path.width, features, dtype=torch.float64).T))
     return _trace._DirectEffects(path, SimpleNamespace(layers=dictionary), list(range(path.tokens)),
                                 SimpleNamespace(decode=lambda *args, **kwargs: "x"), profile=PROFILE)
-
 
 
 class Products(TorchDispatchMode):
@@ -246,7 +246,7 @@ def test_full_edges_biases_and_pinned_source_hooks(original, pinned_context, pin
     with Products() as candidate_products:
         actual, diagnostics = effects.backward(indices)
     exact(actual, expected)
-    assert diagnostics == accounts
+    assert json.dumps(diagnostics) == json.dumps(accounts)
     for value, reference in zip(records[1], records[0]):
         exact(value, reference)
     compare_products(candidate_products.calls, baseline_products.calls)
@@ -286,7 +286,6 @@ class StorageEvents(TorchDispatchMode):
 
 @pytest.mark.parametrize("layers", [(0, 0, 0, 0), (0, 1, 0, 1), (0, 1, 1, 2)])
 def test_scatter_storage_and_lifetimes(original, layers):
-    import json
     batch, tokens, width = len(layers), 3, 8
     targets = [SimpleNamespace(layer=layer, position=row % 2, direction=torch.ones(width, dtype=torch.bfloat16))
                for row, layer in enumerate(layers)]
@@ -313,7 +312,6 @@ def test_scatter_storage_and_lifetimes(original, layers):
             assert all(call[3] == batch * tokens * width * 2 for call in full)
         after_backward = events.summary()
         del loss, gradients, values
-        records[-1] = (events, records[-1][1])
         print("OBJECTIVE_STORAGE", json.dumps(dict(layers=layers, variant=name, forward=forward, backward=after_backward)))
     for value, reference in zip(records[1][1], records[0][1]):
         exact(value, reference)
@@ -409,7 +407,7 @@ def test_ordinary_tracing_keeps_original_objective(original, monkeypatch):
     expected, accounts = baseline.backward(baseline.logit_nodes)
     actual, diagnostics = effects.backward(effects.logit_nodes)
     exact(actual, expected)
-    assert diagnostics == accounts
+    assert json.dumps(diagnostics) == json.dumps(accounts)
 
 
 @pytest.mark.parametrize("exception", [_trace.CleanStop, _trace.TraceTimeout])
@@ -449,3 +447,36 @@ def test_nonfinite_accounts_keep_original_refusal(original, field, value):
         effects.target = invalid
         with pytest.raises(ValueError, match="must be finite"):
             effects.backward(effects.logit_nodes * 2)
+
+
+@pytest.mark.parametrize("write_dtypes", [(torch.bfloat16, torch.float32, torch.bfloat16),
+                                          (torch.float32, torch.bfloat16, torch.float32)])
+@pytest.mark.parametrize("layers", [(1, 3, 0, 1, 3), (0, 1, 0)])
+def test_mixed_write_dtypes_preserve_all_leaf_bits(original, write_dtypes, layers):
+    path = synthetic_effects().path
+    path.errors = [value.to(dtype) for value, dtype in zip(path.errors, write_dtypes)]
+    targets = [SimpleNamespace(layer=layer, position=row % 2,
+        direction=torch.tensor([.125, -.375, 0., -0., 2., -3., .0078125, -1.], dtype=path.dtype))
+        for row, layer in enumerate(layers)]
+    expected, order, products = evaluate(path, targets, original[1])
+    actual, candidate_order, candidate_products = evaluate(path, targets, _trace._reference_target_objective)
+    for value, reference in zip(actual, expected):
+        exact(value, reference)
+    compare_order(candidate_order, order)
+    compare_products(candidate_products, products)
+
+
+@pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float32])
+def test_noncontiguous_reads_preserve_leaf_strides(original, dtype):
+    targets = [SimpleNamespace(layer=0, position=row % 2,
+        direction=torch.tensor([-.5, 0., -0., .25, 2., -3., .125, 1.], dtype=dtype)) for row in range(3)]
+    path = SimpleNamespace(device=torch.device("cpu"), layers=1, width=8,
+                           guard=SimpleNamespace(reserve=lambda *args: None))
+    gradients = []
+    for objective in (original[1], _trace._reference_target_objective):
+        leaf = torch.zeros(3, 8, 2, dtype=dtype, requires_grad=True)
+        read = leaf.transpose(1, 2)
+        assert not read.is_contiguous()
+        loss = objective(path, [read], read, targets, lambda stage: None)
+        gradients.append(torch.autograd.grad(loss, leaf)[0])
+    exact(gradients[1], gradients[0])
