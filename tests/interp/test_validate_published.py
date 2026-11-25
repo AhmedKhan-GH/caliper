@@ -1,5 +1,6 @@
 """CPU checks for live validation beside prepared published actions."""
 from copy import deepcopy
+from contextlib import nullcontext
 from contextvars import Context
 from types import SimpleNamespace
 
@@ -11,6 +12,8 @@ from caliper.interp import Tracer, _replication_actions as actions
 from caliper.interp._hosted import HostedInference, HostedService
 from caliper.interp._memory import CleanStop
 from .test_intervention_replay import hook_objects
+from .test_reference_interventions import (reference, independent as reference_forward,
+                                           objective as reference_objective, specification, traced_graph)
 from .test_validate import validation_case
 
 
@@ -233,3 +236,56 @@ def test_nested_live_scope_keeps_other_models_and_contexts_frozen(published_vali
     finally:
         other.close()
         service.remove()
+
+
+@pytest.mark.parametrize("outer_attention", [False, True])
+def test_prepared_reference_validation_uses_live_pre_softcap_objective(reference, monkeypatch, tmp_path,
+                                                                     outer_attention):
+    case = reference
+    model, service = case.model, case.service
+    graph = traced_graph(case)
+    ids = case.tokenizer("prompt")["input_ids"]
+    _, baseline = reference_forward(case, ids)
+    _, live = reference_forward(case, ids, specification(case))
+    token = graph.nodes[0]["token_id"]
+    expected = reference_objective(case, live, token) - reference_objective(case, baseline, token)
+    monkeypatch.setattr(actions, "PROMPTS", dict(dallas="prompt", oakland="fork", shanghai="fork", vancouver="fork"))
+    monkeypatch.setattr(actions, "GROUPS", {name: [(0, case.feature, case.position)] for name in actions.GROUPS})
+    stages = []
+    guard = SimpleNamespace(device=torch.device("cpu"), limit=12_000_000_000, peak=0,
+                            check=lambda stage, **kwargs: stages.append(stage))
+    runtime = actions.PublishedCases(model, case.tokenizer, service, guard=guard, output_directory=tmp_path)
+    owner = HostedInference("random-gemma-fixture", tmp_path, "prompt",
+                            resources=(model, case.tokenizer, case.dictionary, None, guard),
+                            replication_profile=actions.PROTOCOL, private_output_directory=tmp_path)
+    owner.controls, owner.interventions, owner.replication = case.controls, service, runtime
+    owner.service = HostedService(owner)
+    owner.service.graph, owner.traced_prompt, owner.traced_state = graph, "prompt", []
+    try:
+        runtime.prepare()
+        with service.suspend(), actions.attention_patterns(model, runtime.patterns):
+            _, frozen = reference_forward(case, ids, specification(case))
+        # BF16 can round the selected scalar to the same value. Compare the full readout too.
+        assert not torch.equal(live["final"], frozen["final"])
+        state, hooks = service.state_dict(), hook_objects(model)
+        readouts = []
+        handle = model.model.norm.register_forward_hook(
+            lambda module, args, output: readouts.append(output.detach().clone()))
+        try:
+            with actions.attention_patterns(model, runtime.patterns) if outer_attention else nullcontext():
+                result = owner.service._execute("trace.validate", {}, 0)
+        finally:
+            handle.remove()
+        assert result["baseline_centered_logit"] == reference_objective(case, baseline, token)
+        assert result["measurements"][0]["measured"] == expected
+        assert len(readouts) == 2
+        torch.testing.assert_close(readouts[0], baseline["final"], rtol=0, atol=0)
+        torch.testing.assert_close(readouts[1], live["final"], rtol=0, atol=0)
+        assert "validation admission" in stages
+        assert service.state_dict() == state and hook_objects(model) == hooks
+        assert not actions._LIVE_ATTENTION.get() and not runtime._forward_scopes
+        assert service.executor._published_forward_depth == 0
+        torch.testing.assert_close(model(ids).logits[0, -1], runtime.baseline_logits, rtol=0, atol=0)
+    finally:
+        owner.service.close()
+        runtime.close()
