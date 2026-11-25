@@ -470,6 +470,55 @@ def test_bfloat16_gain_conversion_cannot_recover_original_encoder():
     assert not torch.equal(reconstructed, original.bfloat16())
 
 
+def test_reference_frozen_norm_preserves_cast_order_and_gradient():
+    from caliper.interp._frozen import FrozenNorm
+    from caliper.interp._gemma_reference import PROFILE, install_reference_profile
+    from .test_gemma_reference import reference_fixture
+    model = reference_fixture()
+    install_reference_profile(model, PROFILE)
+    norm = model.model.layers[0].pre_feedforward_layernorm
+    recorded = torch.linspace(-2.71, 3.13, 7 * 24).reshape(1, 7, 24).bfloat16()
+    frozen = FrozenNorm(norm, recorded, qwen=True, reference=True)
+    torch.testing.assert_close(frozen(recorded), norm(recorded), atol=0, rtol=0)
+    actual = (recorded * .73).requires_grad_()
+    independent = actual.detach().clone().requires_grad_()
+    denominator = (recorded.float().square().mean(-1, keepdim=True) + norm.eps).sqrt()
+    gain = (norm.weight.detach().float() + 1).bfloat16()
+    expected = (independent.float() / denominator).bfloat16() * gain
+    observed = frozen(actual)
+    torch.testing.assert_close(observed, expected, atol=0, rtol=0)
+    observed.sum().backward()
+    expected.sum().backward()
+    torch.testing.assert_close(actual.grad, independent.grad, atol=0, rtol=0)
+    ordinary = FrozenNorm(norm, recorded, qwen=True)
+    assert not torch.equal(ordinary(recorded), norm(recorded))
+
+
+def test_reference_frozen_path_uses_qualified_bfloat16_coordinates():
+    from caliper.interp._gemma_reference import PROFILE, capture_reference_inputs, install_reference_profile
+    from .test_gemma_reference import reference_fixture
+    model = reference_fixture()
+    install_reference_profile(model, PROFILE)
+    dictionary = original_encoder_dictionary(model, dtype=torch.bfloat16)
+    ids = torch.tensor([[1, 4, 6, 9, 2, 11, 3]])
+    with torch.no_grad(), capture_reference_inputs(model) as observed:
+        model(ids)
+    path = FrozenPath(model, ids, dictionary, profile=PROFILE)
+    assert path.reference_arithmetic and path.forward_residual <= 2e-2
+    for layer, value in enumerate(path.inputs):
+        torch.testing.assert_close(value, observed[f"model.layers.{layer}.mlp_in"], atol=0, rtol=0)
+    assert all(norm.reference for norm in [*path.norms, *path.post_norms,
+               *path.attention_post_norms, *path.mlp_post_norms, path.final_norm])
+
+
+def test_bfloat16_reference_path_refuses_unqualified_arithmetic():
+    from .test_gemma_reference import reference_fixture
+    model = reference_fixture()
+    dictionary = original_encoder_dictionary(model, dtype=torch.bfloat16)
+    with pytest.raises(ValueError, match="qualified Gemma arithmetic"):
+        FrozenPath(model, torch.tensor([[1, 2, 3]]), dictionary, profile="circuit_tracer_82996f14")
+
+
 def test_reference_decoder_scales_before_accumulation_in_bfloat16():
     from types import SimpleNamespace
     from caliper.interp._frozen import _decode_reference

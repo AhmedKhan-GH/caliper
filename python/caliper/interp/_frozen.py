@@ -377,7 +377,7 @@ def _bias(module):
 class FrozenNorm:
     """A recorded RMS denominator, fixed gain, and explicit affine bias."""
 
-    def __init__(self, module, x, *, qwen=False):
+    def __init__(self, module, x, *, qwen=False, reference=False):
         x = x.detach()
         work = x.float() if qwen else x
         scale = torch.rsqrt(work.square().mean(-1, keepdim=True) + module.eps)
@@ -386,12 +386,16 @@ class FrozenNorm:
         self.scale = scale.detach()
         self.denominator = (work.square().mean(-1, keepdim=True) + module.eps).sqrt().detach()
         self.weight = (1 + module.weight.detach().float()) if qwen else module.weight.detach()
+        if reference:
+            self.weight = self.weight.to(x.dtype)
         self.bias = _bias(module)
         self.qwen = qwen
+        self.reference = reference
 
     def __call__(self, x, bias=1.):
         work = x.float() if self.qwen else x
-        result = ((work * self.scale) * self.weight).to(x.dtype)
+        result = (self.pure(x) * self.weight if self.reference else
+                  ((work * self.scale) * self.weight).to(x.dtype))
         if self.bias is not None:
             result = result + bias * self.bias
         return result
@@ -639,6 +643,12 @@ class FrozenPath:
         self.family = model_family(model)
         self.reference = profile == "circuit_tracer_82996f14"
         self.raw_reference_input = self.reference and self.family.name == "gemma2"
+        self.reference_arithmetic = False
+        if self.family.name == "gemma2":
+            from ._gemma_reference import profile_metadata
+            self.reference_arithmetic = profile_metadata(model) is not None
+            if self.raw_reference_input and self.dtype == torch.bfloat16 and not self.reference_arithmetic:
+                raise ValueError("bfloat16 reference tracing requires a qualified Gemma arithmetic profile")
         if self.raw_reference_input and _reference_coordinates(dictionary.metadata) is None:
             raise ValueError("Gemma reference tracing requires the original pre-gain encoder artifact")
         memory_limit_gb = family_memory_limit(model, memory_limit_gb, guard)
@@ -806,12 +816,12 @@ class FrozenPath:
                     _require_finite(self.errors[-1], f"layer {i} reconstruction residual", memory_check)
                     self.decoder_biases.append(decoder_bias)
                     self.output_offsets.append(offset.detach())
-                    self.norms.append(FrozenNorm(block.input_layernorm, recorded[f"{i}.input_norm"], qwen=self.family.unit_offset_norm))
-                    self.post_norms.append(FrozenNorm(getattr(block, self.family.mlp_read_norm), recorded[f"{i}.post_norm"], qwen=self.family.unit_offset_norm))
+                    self.norms.append(FrozenNorm(block.input_layernorm, recorded[f"{i}.input_norm"], qwen=self.family.unit_offset_norm, reference=self.reference_arithmetic))
+                    self.post_norms.append(FrozenNorm(getattr(block, self.family.mlp_read_norm), recorded[f"{i}.post_norm"], qwen=self.family.unit_offset_norm, reference=self.reference_arithmetic))
                     self.attention_post_norms.append(None if self.family.attention_write_norm is None else
-                        FrozenNorm(getattr(block, self.family.attention_write_norm), recorded[f"{i}.attention_post_norm"], qwen=True))
+                        FrozenNorm(getattr(block, self.family.attention_write_norm), recorded[f"{i}.attention_post_norm"], qwen=True, reference=self.reference_arithmetic))
                     self.mlp_post_norms.append(None if self.family.mlp_write_module == "mlp" else
-                        FrozenNorm(block.post_feedforward_layernorm, recorded[f"{i}.mlp_post_norm"], qwen=True))
+                        FrozenNorm(block.post_feedforward_layernorm, recorded[f"{i}.mlp_post_norm"], qwen=True, reference=self.reference_arithmetic))
                     self.residual_inputs.append(FrozenInput(recorded[f"{i}.residual_source"],
                         recorded[f"{i}.input_norm"], [s for s in interventions if s["point"] == f"{base}.resid_pre"]))
                     self.mlp_inputs.append(FrozenInput(recorded[f"{i}.mlp_source"], x,
@@ -831,7 +841,7 @@ class FrozenPath:
                     self.guard.check(f"freeze layer {i}")
                     check(f"freeze layer {i}")
             with autorelease_scope(self.device):
-                self.final_norm = FrozenNorm(root.norm, recorded["final_norm"], qwen=self.family.unit_offset_norm)
+                self.final_norm = FrozenNorm(root.norm, recorded["final_norm"], qwen=self.family.unit_offset_norm, reference=self.reference_arithmetic)
                 head = model.get_output_embeddings()
                 self.unembedding = head.weight.detach()
                 self.unembedding_mean = self.unembedding.mean(0)
