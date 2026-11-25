@@ -57,8 +57,8 @@ def independent_forward(case, embedding, writes=None):
         module = model.get_submodule(name)
         recorded = case.norm_inputs[name].float()
         denominator = (recorded.square().mean(-1, keepdim=True) + module.eps).sqrt()
-        normalized = (value.float() / denominator).to(value.dtype)
-        return normalized if pure else normalized * (1 + module.weight.float()).to(value.dtype)
+        normalized = (value.float() / denominator).to(module.weight.dtype)
+        return normalized if pure else normalized * (1 + module.weight.float()).to(module.weight.dtype)
     x, reads = embedding, []
     for i, block in enumerate(model.model.layers):
         base = f"model.layers.{i}"
@@ -74,7 +74,7 @@ def independent_forward(case, embedding, writes=None):
             active = baseline > layer.threshold
             current = F.linear(read, layer.W_enc_original, layer.b_enc)
             differences = (current - baseline) * active
-            delta = torch.zeros_like(x)
+            delta = torch.zeros_like(x, dtype=layer.W_dec.dtype)
             # Keep the recorded support at zero delta to retain its derivative.
             positions, features = active[0].nonzero(as_tuple=True)
             scaled = differences[:, positions, features, None] * layer.W_dec[features]
@@ -89,6 +89,9 @@ def independent_forward(case, embedding, writes=None):
 def test_reference_baseline_preserves_every_recorded_value(reference_case):
     case, path = reference_case, reference_case.path
     assert path.forward_residual == 0
+    assert path.embedding.dtype == torch.bfloat16
+    assert all(write.dtype == torch.float32 for write in path.outputs)
+    assert all(value.dtype == torch.bfloat16 for value in path.inputs)
     assert path.forward_residuals == {"direct_reads": [0.] * 6, "direct_logits": 0.,
                                      "replacement_reads": [0.] * 6, "replacement_logits": 0.}
     for write, output in zip(path.writes, path.outputs):
@@ -102,18 +105,18 @@ def test_reference_baseline_preserves_every_recorded_value(reference_case):
         preactivation = F.linear(path.inputs[i], layer.W_enc_original, layer.b_enc)
         activations = preactivation * (preactivation > layer.threshold)
         positions, features = activations[0].nonzero(as_tuple=True)
-        reconstruction = torch.zeros_like(path.outputs[i][0])
+        reconstruction = torch.zeros_like(path.outputs[i][0], dtype=layer.W_dec.dtype)
         reconstruction.index_add_(0, positions, layer.W_dec[features] * activations[0, positions, features, None])
         reconstruction = reconstruction[None] + layer.b_dec
-        # Graph source errors retain the pinned BF16 subtraction exactly.
+        # Graph errors subtract the rounded BF16 reconstruction from float32 writes.
         torch.testing.assert_close(path.errors[i], path.outputs[i] - reconstruction, atol=0, rtol=0)
         torch.testing.assert_close(path.decoder_biases[i], layer.b_dec.expand_as(path.decoder_biases[i]), atol=0, rtol=0)
         reconstructed_residuals.append(float((reconstruction + path.errors[i] - path.outputs[i]).abs().max()))
         output = path.feature_outputs[i]
         torch.testing.assert_close(output.evaluate(path.inputs[i], layer, original=True)[0],
                                    output.activations, atol=0, rtol=0)
-    # Rounded graph decomposition errors remain visible and do not alter writes.
-    assert max(reconstructed_residuals) > 0
+    # Float32 errors recover these BF16 writes without a second BF16 rounding.
+    assert reconstructed_residuals == [0.] * 6
 
 
 @pytest.mark.parametrize("replacement", [False, True])
