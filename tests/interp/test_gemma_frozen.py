@@ -484,11 +484,36 @@ def test_reference_decoder_scales_before_accumulation_in_bfloat16():
 
 
 def test_reference_edges_match_independent_pre_softcap_source_derivatives():
+    from caliper.interp._points import capture
     model = gemma_model(layers=2)
     model.config._name_or_path = "caliper-test/random-gemma2"
     model.config._commit_hash = "b" * 40
     dictionary = original_encoder_dictionary(model)
     ids = torch.tensor([[1, 2, 3, 4, 5]])
+    # Record independent live inputs. The oracle does not call FrozenNorm,
+    # FrozenAttention, FrozenPath.run, or the production decoder helper.
+    norm_inputs, baseline_writes = {}, {}
+    norms = {name: module for name, module in model.named_modules()
+             if name.endswith("norm")}
+    pattern_points = [f"model.layers.{i}.attn_pattern" for i in range(2)]
+    with ExitStack() as stack, capture(model, pattern_points) as recorded:
+        for name, module in norms.items():
+            stack.callback(module.register_forward_pre_hook(
+                lambda module, args, name=name: norm_inputs.update({name: args[0].detach().clone()})).remove)
+        for i, block in enumerate(model.model.layers):
+            stack.callback(block.post_feedforward_layernorm.register_forward_hook(
+                lambda module, args, output, i=i: baseline_writes.update({i: output.detach().clone()})).remove)
+        with torch.no_grad():
+            model(input_ids=ids, use_cache=False)
+    patterns = [recorded[point].detach() for point in pattern_points]
+    embedding_source = model.model.embed_tokens(ids).detach()
+    raw_read = norm_inputs["model.layers.0.pre_feedforward_layernorm"].float()
+    raw_read = raw_read / (raw_read.square().mean(-1, keepdim=True) + model.config.rms_norm_eps).sqrt()
+    layer = dictionary.layers[0]
+    preactivation = F.linear(raw_read, layer.W_enc_original, layer.b_enc)
+    activations = preactivation * (preactivation > layer.threshold)
+    reconstruction = (activations[..., None] * layer.W_dec[None, None]).sum(-2) + layer.b_dec
+    errors = baseline_writes[0] - reconstruction
     path = FrozenPath(model, ids, dictionary, profile="circuit_tracer_82996f14")
     effects = _DirectEffects(path, dictionary, ids[0].tolist(), Tokenizer(),
                              profile="circuit_tracer_82996f14", max_n_logits=1)
@@ -496,8 +521,23 @@ def test_reference_edges_match_independent_pre_softcap_source_derivatives():
     token = effects.nodes[effects.logit_nodes[0]]["token_id"]
     feature = next(i for i in effects.feature_nodes if effects.nodes[i]["layer"] == 0)
     error = next(i for i, n in enumerate(effects.nodes) if n["kind"] == "error" and n["layer"] == 0)
-    with frozen_live(model, path), ExitStack() as stack:
-        writes = list(path.outputs)
+    with ExitStack() as stack:
+        for name, module in norms.items():
+            scale = (norm_inputs[name].float().square().mean(-1, keepdim=True) + module.eps).rsqrt()
+            gain = 1 + module.weight.detach().float()
+            def norm(value, scale=scale, gain=gain):
+                return (value.float() * scale * gain).to(value.dtype)
+            stack.enter_context(pytest.MonkeyPatch.context()).setattr(module, "forward", norm)
+        for block, pattern in zip(model.model.layers, patterns):
+            attention = block.self_attn
+            def mix(hidden_states, attention=attention, pattern=pattern, **kwargs):
+                batch, tokens, _ = hidden_states.shape
+                values = attention.v_proj(hidden_states).reshape(batch, tokens, -1, attention.head_dim).transpose(1, 2)
+                values = values.repeat_interleave(attention.num_key_value_groups, dim=1)
+                mixed = (pattern @ values).transpose(1, 2).reshape(batch, tokens, -1)
+                return attention.o_proj(mixed), pattern
+            stack.enter_context(pytest.MonkeyPatch.context()).setattr(attention, "forward", mix)
+        writes = dict(baseline_writes)
         captured = {}
         for i, block in enumerate(model.model.layers):
             stack.callback(block.post_feedforward_layernorm.register_forward_hook(
@@ -507,22 +547,22 @@ def test_reference_edges_match_independent_pre_softcap_source_derivatives():
         for source in (0, feature, error):
             magnitude = torch.zeros((), requires_grad=True)
             node = effects.nodes[source]
-            perturbation = torch.zeros_like(path.embedding)
-            embedding = path.embedding
+            perturbation = torch.zeros_like(embedding_source)
+            embedding = embedding_source
             if node["kind"] == "token":
                 perturbation[:, node["position"]] = embedding[:, node["position"]]
                 embedding = embedding + magnitude * perturbation
             else:
-                value = (dictionary.layers[0].W_dec[node["feature"]] * node["activation"]
-                         if node["kind"] == "feature" else path.errors[0][0, node["position"]])
+                value = (layer.W_dec[node["feature"]] * activations[0, node["position"], node["feature"]]
+                         if node["kind"] == "feature" else errors[0, node["position"]])
                 perturbation[:, node["position"]] = value
-                writes[0] = path.outputs[0] + magnitude * perturbation
+                writes[0] = baseline_writes[0] + magnitude * perturbation
             model(inputs_embeds=embedding, use_cache=False)
             direction = model.lm_head.weight[token] - model.lm_head.weight.mean(0)
             objective = (captured["final"][0, -1] * direction).sum()
             expected = torch.autograd.grad(objective, magnitude)[0]
             torch.testing.assert_close(weights[source, 0], expected, atol=2e-5, rtol=2e-5)
-            writes[0] = path.outputs[0]
+            writes[0] = baseline_writes[0]
 
 
 def test_original_encoder_artifact_roundtrip_and_dtype_refusal(tmp_path):
