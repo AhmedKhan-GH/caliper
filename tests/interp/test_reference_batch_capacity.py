@@ -20,6 +20,7 @@ class ScalarGuard(MemoryGuard):
     """Use actual admission arithmetic with deterministic scalar readers."""
 
     def __init__(self, current):
+        self.device = torch.device("cpu")
         self.limit = 40_000_000_000
         self._host_reserve_bytes = 8_000_000_000
         self.current = current

@@ -10,6 +10,7 @@ import re
 import signal
 import subprocess
 import sys
+from threading import Lock
 import time
 
 import torch
@@ -18,6 +19,11 @@ try:
     import resource
 except ImportError:
     resource = None
+
+
+# PyTorch has no public MPS cap getter. Retain only the ceiling Caliper sets.
+_mps_allocator_limit = None
+_mps_allocator_lock = Lock()
 
 
 class CleanStop(RuntimeError):
@@ -214,9 +220,22 @@ class MemoryGuard:
         if self.device.type == "mps":
             if not torch.backends.mps.is_available():
                 raise ValueError("MPS is unavailable")
-            recommended = torch.mps.recommended_max_memory()
-            # Leave room for CPU allocations inside the total process limit.
-            torch.mps.set_per_process_memory_fraction(min(1.0, 0.8 * self.limit / recommended))
+            global _mps_allocator_limit
+            with _mps_allocator_lock:
+                recommended = torch.mps.recommended_max_memory()
+                # Leave room for CPU allocations and never raise an owned cap.
+                fraction = min(1.0, 0.8 * self.limit / recommended)
+                ceiling = int(fraction * recommended)
+                if ceiling <= 0:
+                    raise CleanStop("MPS allocator ceiling must be positive")
+                if _mps_allocator_limit is None or ceiling < _mps_allocator_limit:
+                    torch.mps.set_per_process_memory_fraction(fraction)
+                    _mps_allocator_limit = ceiling
+
+    @property
+    def mps_allocator_limit(self):
+        """Return the process-wide ceiling last set by a Caliper guard."""
+        return _mps_allocator_limit if self.device.type == "mps" else None
 
     def check(self, stage, *, force=True):
         now = self.clock()

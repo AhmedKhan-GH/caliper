@@ -116,7 +116,7 @@ def test_hosted_owner_checkpoints_once_and_exits_on_independent_stop(hosted_run,
     monkeypatch.setattr(run.managed, "_keep", lambda *args: pytest.fail("normal keep followed a stop"))
     if origin == "tracer":
         # Exercise the real admission formula without an MPS tensor or API call.
-        guard = SimpleNamespace(device=SimpleNamespace(type="mps"), limit=12_000_000_000,
+        guard = SimpleNamespace(device=SimpleNamespace(type="cpu"), limit=12_000_000_000,
                                 host_reserve_bytes=0, check=lambda stage: 11_800_000_000)
         def admit(**kwargs):
             calls.append(origin)

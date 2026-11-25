@@ -351,11 +351,24 @@ class MemoryGuard:
             raise CleanStop("trace exceeded the process or MPS memory limit")
         return current
 
+    def _mps_headroom(self):
+        """Use the owned allocator cap and the latest forced device readings."""
+        ceiling = getattr(self._guard, "mps_allocator_limit", None)
+        if ceiling is None:
+            raise CleanStop("MPS allocator ceiling is unavailable")
+        # A lower supplied process budget also lowers prospective device use.
+        ceiling = min(ceiling, int(0.8 * self.limit))
+        record = self.records[-1]
+        # Driver bytes include cache and framework use, and overlap tensor bytes.
+        return ceiling - max(record["allocated_bytes"], record["driver_bytes"])
+
     def reserve(self, stage, size):
-        """Refuse a known allocation before it can exceed the process limit."""
+        """Refuse a known allocation before it can exceed either memory limit."""
         current = self.check(stage)
         if current + size > self.limit:
             raise CleanStop(f"{stage} allocation exceeds the trace memory limit")
+        if self.device.type == "mps" and size > self._mps_headroom():
+            raise CleanStop(f"{stage} allocation exceeds the MPS allocator limit")
         from ._admission import _host_reserve
         _host_reserve(size, stage, memory=self)
 
@@ -375,9 +388,12 @@ class MemoryGuard:
         import psutil
         if self.host_reserve_bytes:
             available = min(available, psutil.virtual_memory().available - self.host_reserve_bytes - 512_000_000)
+        if self.device.type == "mps":
+            available = min(available, self._mps_headroom() - 512_000_000)
         admitted = min(requested, int(available // max(1, per_target)))
         if admitted < 1:
-            raise CleanStop("no target batch fits the process memory limit")
+            limit = "process or MPS allocator" if self.device.type == "mps" else "process"
+            raise CleanStop(f"no target batch fits the {limit} memory limit")
         return admitted
 
 

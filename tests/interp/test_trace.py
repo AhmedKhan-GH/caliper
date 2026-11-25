@@ -49,11 +49,11 @@ def test_trace_memory_guard_uses_physical_footprint_and_prior_peak(monkeypatch):
 
 def test_target_batch_admission_reduces_before_allocation(monkeypatch):
     from caliper.interp import _frozen
-    from caliper.interp._memory import CleanStop
-    monkeypatch.setattr(_frozen, "free_percent", lambda: 80.)
+    from caliper.interp._memory import CleanStop, MemoryGuard as ProcessMemoryGuard
+    monkeypatch.setattr(_frozen, "ProcessMemoryGuard", lambda limit, device, **kwargs:
+        ProcessMemoryGuard(limit, device, pressure=lambda: 80., resident=lambda: 0,
+                           footprint=lambda: 0, peak=lambda: 0, clock=lambda: 0))
     guard = _frozen.MemoryGuard(torch.device("cpu"))
-    # Only the accounting device changes. No MPS tensor or dispatch exists in this test.
-    guard.device = torch.device("mps")
     monkeypatch.setattr(guard, "check", lambda stage: 9_000_000_000)
     admitted = guard.batch_size(64, layers=24, tokens=32, width=1024, mixer_width=2048)
     assert 1 <= admitted < 64

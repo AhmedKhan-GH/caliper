@@ -129,6 +129,7 @@ def scalar_guard(monkeypatch, *, current=1_000, available=64_000_000_000):
     """Use unchanged production reserve logic with small scalar readers."""
     import psutil
     guard = _frozen.MemoryGuard.__new__(_frozen.MemoryGuard)
+    guard.device = torch.device("cpu")
     guard.limit = 40_000_000_000
     guard._host_reserve_bytes = 8_000_000_000
     guard.check = lambda stage: current
