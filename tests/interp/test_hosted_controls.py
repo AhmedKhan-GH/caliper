@@ -282,6 +282,48 @@ def test_slider_registration_refusal_preserves_owner_and_reset(hosted_run, monke
             child_route.detach()
 
 
+def test_slider_registration_resource_stop_terminates_reset_without_refusal(hosted_run, monkeypatch):
+    from caliper.interp._intervene import Intervention
+    from caliper.interp._memory import CleanStop
+    from .test_intervention_replay import hook_objects
+
+    run, route = hosted_run
+    run.selected.set(_feature_rows(run)[0])
+    run.clamp.set(0.)
+    run.boundary()
+    record = run._owned_record()
+    hook, applied, hooks = record.hook, record.applied_spec, hook_objects(run.model)
+    before = _resolve("output.probs").clone()
+    module = run.model.layers[run.selection["layer"]].mlp
+    register, attempts = module.register_forward_hook, []
+    failure = CleanStop("slider resource stop")
+
+    def fail(callback, **kwargs):
+        if isinstance(getattr(callback, "__self__", None), Intervention):
+            attempts.append(1)
+            raise failure
+        return register(callback, **kwargs)
+
+    monkeypatch.setattr(module, "register_forward_hook", fail)
+    assert route.on_control(None, _wire.Control(1, "set", name="clamp", value=1.).to_meta())["status"] == "ok"
+    _queue_action(route, "reset", 2)
+    with pytest.raises(CleanStop) as caught:
+        run.boundary()
+    assert caught.value is failure and run.service.failure is failure
+    assert record.replace and record.spec["value"] > 0 and record.spec is run._owned_clamp
+    assert record.error is None and record.error_code is None
+    assert record.hook is hook and record.applied_spec is applied and not hook.removed
+    assert hook_objects(run.model) == hooks
+    torch.testing.assert_close(_resolve("output.probs"), before, rtol=0, atol=0)
+    reply, = route.transport.replies
+    assert (reply.request_id, reply.status) == (2, "error")
+    assert reply.error == {"code": "action_failed", "message": "slider resource stop"}
+    assert not run.controls.queue
+    with pytest.raises(CleanStop) as repeated:
+        run.boundary()
+    assert repeated.value is failure and attempts == [1] and len(route.transport.replies) == 1
+
+
 @pytest.mark.parametrize("draft", ["", "A" * 33])
 def test_reset_removes_clamp_with_invalid_draft_without_false_output_evidence(hosted_run, draft):
     run, route = hosted_run
