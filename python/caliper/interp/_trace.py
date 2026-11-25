@@ -98,6 +98,34 @@ class _Target:
     intervention_bias: torch.Tensor
 
 
+def _decoder_groups(nodes, feature_slice, tokens, step, capacity, check):
+    """Combine whole adjacent chunks and preserve every singleton boundary."""
+    node = feature_slice.start
+    pending = None
+    for position in range(tokens):
+        check("direct decoder cache position")
+        end = node
+        while end < feature_slice.stop and nodes[end]["position"] == position:
+            end += 1
+        for start in range(node, end, step):
+            check("direct decoder cache block")
+            stop = min(start + step, end)
+            if stop - start == 1:
+                # A singleton changes which BMM operand holds the target axis.
+                if pending is not None:
+                    yield pending
+                    pending = None
+                yield slice(start, stop)
+            else:
+                if pending is not None and stop - pending.start > capacity:
+                    yield pending
+                    pending = None
+                pending = slice(start if pending is None else pending.start, stop)
+        node = end
+    if pending is not None:
+        yield pending
+
+
 class _DirectEffects:
     """Independent source writes and bounded vector-Jacobian products."""
 
@@ -166,8 +194,8 @@ class _DirectEffects:
         """Retain reference scaled rows for this trace, after memory admission.
 
         Storage is O(active sources * width), including BOS sources for the
-        full-source audit. Scratch contains one bounded decoder block and one
-        position's indices and values. The pinned decode_sparse scales once.
+        full-source audit. Scratch contains one bounded decoder block and its
+        source coordinates. The pinned decode_sparse scales once.
         """
         if not self.reference or self._decoder_blocks is not None:
             return
@@ -180,31 +208,39 @@ class _DirectEffects:
         # Account for retained rows and block records, then gather/cast/scale
         # scratch. The gather can use a wider dictionary dtype than the path.
         retained = count * path.width * itemsize + (count + path.layers * path.tokens) * 256
+        retained += count * 8  # Mixed-position groups retain one position per row.
         scratch = min(step, columns) * path.width * (source_itemsize + 2 * itemsize)
         scratch += columns * (8 + itemsize + 16)
         self.check("direct decoder cache admission")
         path.guard.reserve("direct decoder cache", retained + scratch)
         blocks = [[] for _ in self.source_layers]
         try:
-            for layer, (feature_slice, _, indices, activations, active) in enumerate(self.source_layers):
+            for layer, (feature_slice, _, indices, activations, _) in enumerate(self.source_layers):
                 rows = self.dictionary.layers[layer].W_dec.detach()
-                node = feature_slice.start
-                for position in range(path.tokens):
+                groups = _decoder_groups(self.nodes, feature_slice, path.tokens, step,
+                                         min(step, columns), self.check)
+                for node_slice in groups:
                     with autorelease_scope(path.device):
-                        self.check("direct decoder cache position")
-                        selected = indices[position, active[position]]
-                        values = activations[position, active[position]]
-                        for start in range(0, len(selected), step):
-                            with autorelease_scope(path.device):
-                                self.check("direct decoder cache block")
-                                decoder = rows[selected[start:start + step]].to(path.dtype)
-                                # Keep the BF16 scale boundary before the contraction.
-                                decoder = decoder * values[start:start + step, None]
-                                end = node + len(decoder)
-                                blocks[layer].append((slice(node, end), position, decoder))
-                                node = end
-                                del decoder
-                        del selected, values
+                        self.check("direct decoder cache group")
+                        position = selected_columns = selected = values = decoder = None
+                        try:
+                            first = self.nodes[node_slice.start]["position"]
+                            last = self.nodes[node_slice.stop - 1]["position"]
+                            node_range = range(node_slice.start, node_slice.stop)
+                            position = first if first == last else torch.tensor(
+                                [self.nodes[node]["position"] for node in node_range],
+                                dtype=torch.long, device=path.device)
+                            selected_columns = torch.tensor(
+                                [self.feature_columns[node] for node in node_range],
+                                dtype=torch.long, device=path.device)
+                            selected = indices[position, selected_columns]
+                            values = activations[position, selected_columns]
+                            decoder = rows[selected].to(path.dtype)
+                            # Keep the BF16 scale boundary before the contraction.
+                            decoder = decoder * values[:, None]
+                            blocks[layer].append((node_slice, position, decoder))
+                        finally:
+                            del position, selected_columns, selected, values, decoder
             path.guard.check("direct decoder cache complete")
             self.check("direct decoder cache complete")
         except BaseException:
@@ -290,6 +326,7 @@ class _DirectEffects:
                 continue
             if self.reference:
                 cast_gradient = None
+                decoder = position = positions = gathered = products = None
                 try:
                     for block, (node_slice, position, decoder) in enumerate(self._decoder_blocks[layer]):
                         with autorelease_scope(path.device):
@@ -303,7 +340,8 @@ class _DirectEffects:
                             scratch = batch * path.tokens * path.width * itemsize
                             scratch += batch * count * (path.width + 1) * itemsize + count * 8
                             path.guard.reserve("direct decoder contraction", scratch)
-                            positions = torch.full((count,), position, dtype=torch.long, device=path.device)
+                            positions = (torch.full((count,), position, dtype=torch.long, device=path.device)
+                                         if isinstance(position, int) else position)
                             if cast_gradient is None:
                                 # Every decoder in this layer has path.dtype. The
                                 # gradient stays immutable throughout these blocks.
@@ -315,7 +353,9 @@ class _DirectEffects:
                             weights[node_slice] = products
                             del products, gathered, positions
                 finally:
-                    del cast_gradient
+                    del cast_gradient, decoder, position
+                    # A retained exception must not keep block temporaries alive.
+                    positions = gathered = products = None
             else:
                 # JumpReLU can activate every column. Copy bounded decoder
                 # blocks for the ordinary path, which does not retain rows.
