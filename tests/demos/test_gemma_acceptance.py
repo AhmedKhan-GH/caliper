@@ -51,6 +51,17 @@ def gemma_reply():
     metadata["quality"]["model_binding"] = deepcopy(response["model_binding"])
     response["tensor_binding"] = {"version": 1, "tensor_hash": "4" * 64}
     metadata["quality"]["tensor_binding"] = deepcopy(response["tensor_binding"])
+    policy = {"version": 1, "family": "gemma2", "prefix_ids": [2], "pad_id": 0,
+              "model_context": 256, "content_context": 255,
+              "segmentation": "contiguous_document_positions", "observations": "source_tokens_only",
+              "replacement": "source_positions_only",
+              "cross_entropy": "within_context_content_targets_including_bos_to_first"}
+    metadata["quality"].update(context_policy=deepcopy(policy), content_segmentation={
+        "contexts": 1000, "sha256": "6" * 64, "encoding": "sha256_ascii_json_rows_with_newlines",
+        "fields": ["document_id", "source_position", "content_length"],
+        "record": "evaluation/state.json:content_segments"})
+    index.update(context_length=256, context_policy=deepcopy(policy),
+                 example_context_policy=dict(policy, model_context=34, content_context=33))
     identity["model_hash"] = index["model_hash"] = GEMMA_HASH
     index.update(layers=26, features=16384,
                  provenance={**deepcopy(source), "partition": "index", "publisher_training_overlap": "unknown"})
@@ -211,3 +222,34 @@ def test_memory_budget_requires_the_exact_gemma_snapshot(tmp_path):
     assert acceptance_profile("tiny-lm") == ("fixture", 12_000_000_000)
     with pytest.raises(Failure, match="exact supported"):
         acceptance_profile(str(qwen.with_name(GEMMA_REVISION)))
+
+
+@pytest.mark.parametrize("owner", ["quality", "index", "examples"])
+@pytest.mark.parametrize("fault", ["missing", "bos", "boolean", "segmentation", "replacement"])
+def test_gemma_qualification_requires_corrected_context_policy(owner, fault):
+    response = gemma_reply()
+    parent = response["metadata"]["quality"] if owner == "quality" else response["index"]
+    key = "example_context_policy" if owner == "examples" else "context_policy"
+    if fault == "missing":
+        del parent[key]
+    else:
+        field, value = {"bos": ("prefix_ids", []), "boolean": ("pad_id", False),
+                        "segmentation": ("segmentation", "flat_content"),
+                        "replacement": ("replacement", "all_positions")}[fault]
+        parent[key][field] = value
+    result = dictionary_qualification(response, family="gemma")
+    assert not result["qualified"] and "context policy" in result["reason"]
+
+
+@pytest.mark.parametrize("fault", ["missing", "hash", "count", "record"])
+def test_gemma_qualification_requires_content_segmentation_evidence(fault):
+    response = gemma_reply()
+    quality = response["metadata"]["quality"]
+    if fault == "missing":
+        del quality["content_segmentation"]
+    else:
+        field, value = {"hash": ("sha256", "invalid"), "count": ("contexts", True),
+                        "record": ("record", "different")}[fault]
+        quality["content_segmentation"][field] = value
+    result = dictionary_qualification(response, family="gemma")
+    assert not result["qualified"] and "segmentation evidence" in result["reason"]

@@ -199,6 +199,8 @@ Their fresh context can produce activations that differ from the original indexe
 The index excludes prefix and padding positions from feature counts, offsets, and returned example activations.
 
 An older Gemma index without these policies requires a rebuild.
+Release qualification requires the corrected policy in both quality and index evidence.
+The live response also checks both index policies against the current model and tokenizer.
 Example admission includes the additional prefix position and retains supplied lower memory limits.
 Default public Gemma tokenization and index windows both place BOS before content.
 Qwen retains its existing context preparation, replacement behavior, metric targets, and index format.

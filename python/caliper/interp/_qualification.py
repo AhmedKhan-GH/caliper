@@ -3,10 +3,11 @@ from copy import deepcopy
 import hashlib
 import json
 
+from ._context import context_policy
 from ._dictionary import dictionary_fingerprint, model_identity
 from ._evaluation_identity import evaluation_dictionary_evidence, evaluation_model_evidence
 from ._gemma_import_identity import verified_import_binding
-from ._index import FeatureIndex, _FILES, _dictionary_hash, _hash_file, _json, _source_hash, _tokenizer_hash
+from ._index import FeatureIndex, WINDOW_TOKENS, _FILES, _dictionary_hash, _hash_file, _json, _source_hash, _tokenizer_hash
 
 
 def dictionary_response(dictionary, index=None, *, model=None, tokenizer=None):
@@ -31,6 +32,11 @@ def dictionary_response(dictionary, index=None, *, model=None, tokenizer=None):
     manifest = json.loads(manifest_file.read_text(encoding="utf-8"))
     if manifest != index.metadata:
         raise ValueError("index qualification manifest changed")
+    policy = context_policy(model, manifest["context_length"], tokenizer=tokenizer)
+    example_policy = context_policy(model, WINDOW_TOKENS + 1, tokenizer=tokenizer)
+    if (_json(manifest.get("context_policy")) != _json(policy)
+            or _json(manifest.get("example_context_policy")) != _json(example_policy)):
+        raise ValueError("index qualification context policy changed")
     payload = {key: value for key, value in manifest.items() if key != "index_hash"}
     if manifest["index_hash"] != hashlib.sha256(_json(payload).encode()).hexdigest():
         raise ValueError("index qualification identity mismatch")

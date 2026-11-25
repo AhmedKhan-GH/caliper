@@ -183,6 +183,32 @@ def _gemma_model_binding(metadata, response):
              "Gemma quality model tensors or forward settings differ from the current resources.")
 
 
+def _gemma_context(metadata, index):
+    """Require the corrected context policy for quality, index, and examples."""
+    policy = {"version": 1, "family": "gemma2", "prefix_ids": [2], "pad_id": 0,
+              "model_context": 256, "content_context": 255,
+              "segmentation": "contiguous_document_positions",
+              "observations": "source_tokens_only", "replacement": "source_positions_only",
+              "cross_entropy": "within_context_content_targets_including_bos_to_first"}
+    examples = dict(policy, model_context=34, content_context=33)
+    for actual, expected in ((metadata["quality"].get("context_policy"), policy),
+                             (index.get("context_policy"), policy),
+                             (index.get("example_context_policy"), examples)):
+        _require(isinstance(actual, dict) and actual == expected
+                 and all(type(actual[key]) is type(value) for key, value in expected.items())
+                 and all(type(value) is int for value in actual["prefix_ids"]),
+                 "Gemma quality or index context policy differs from the corrected contract.")
+    _require(_integer(index.get("context_length"), 256), "Gemma index context length differs.")
+    spans = metadata["quality"].get("content_segmentation")
+    _require(isinstance(spans, dict) and set(spans) == {"contexts", "sha256", "encoding", "fields", "record"}
+             and type(spans["contexts"]) is int and 1 <= spans["contexts"] <= QUALITY_TOKENS
+             and _digest(spans["sha256"])
+             and spans["encoding"] == "sha256_ascii_json_rows_with_newlines"
+             and spans["fields"] == ["document_id", "source_position", "content_length"]
+             and spans["record"] == "evaluation/state.json:content_segments",
+             "Gemma quality content segmentation evidence is incomplete.")
+
+
 def _gemma_dictionary_binding(metadata, response):
     """Require the exact dictionary tensors that produced the quality metrics."""
     for binding in (metadata["quality"].get("tensor_binding"), response.get("tensor_binding")):
@@ -269,6 +295,7 @@ def dictionary_qualification(response, *, quality_override=None, family="qwen"):
         if gemma:
             _gemma_model_binding(metadata, response)
             _gemma_dictionary_binding(metadata, response)
+            _gemma_context(metadata, index)
             _require(provenance.get("publisher_training_overlap") == "unknown",
                      "Gemma index must retain unknown publisher training overlap.")
         else:
