@@ -181,6 +181,7 @@ struct Run {
     std::string script_path;   // absolute
     std::string kind = "script";
     std::string model, dictionary, prompt;
+    std::string replication_profile, private_output_directory;
     std::string dir, link_file, output;
     std::unique_ptr<ChildProcess> proc;
     Clock::time_point started = Clock::now();
@@ -596,6 +597,10 @@ ChildSpec run_spec(const ModelRunner::Options& o, const std::string& python, con
         // selected interpreter and its normal site packages.
         spec.args = {"-E", "-P", "-u", "-m", "caliper.interp._entry", "--model=" + r.model,
                      "--dictionary=" + r.dictionary};
+        if (!r.replication_profile.empty()) {
+            spec.args.push_back("--replication-profile=" + r.replication_profile);
+            spec.args.push_back("--private-output-directory=" + r.private_output_directory);
+        }
     } else {
         spec.args.push_back(r.script_path);
         spec.args.insert(spec.args.end(), r.entry.args.begin(), r.entry.args.end());
@@ -765,6 +770,8 @@ cb::Error ModelRunner::start(const cb::RunStartRequest& request, cb::RunEntry* o
         run->model = request.model;
         run->dictionary = request.dictionary;
         run->prompt = request.prompt;
+        run->replication_profile = request.replication_profile;
+        run->private_output_directory = request.private_output_directory;
         run->dir = dir.u8string();
         run->link_file = (dir / "link.txt").u8string();
         run->output = (dir / "output.log").u8string();
@@ -900,6 +907,8 @@ cb::Error ModelRunner::fork(const cb::RunForkRequest& request, cb::RunEntry* out
         run->model = parent->model;
         run->dictionary = parent->dictionary;
         run->prompt = parent->prompt;
+        run->replication_profile = parent->replication_profile;
+        run->private_output_directory = parent->private_output_directory;
         run->dir = dir.u8string();
         run->link_file = (dir / "link.txt").u8string();
         run->output = (dir / "output.log").u8string();

@@ -1320,8 +1320,11 @@ TEST_CASE("runner: native inference keeps prompts out of arguments and excludes 
     if (const char* python = std::getenv("CALIPER_INTERPRET_PYTHON")) w.python = python;
     REQUIRE(!w.python.empty());
     std::string installation;
+    bool replication = false;
     SUBCASE("installed package") { installation = "installed"; }
     SUBCASE("editable package") { installation = "editable"; }
+    SUBCASE("installed replication package") { installation = "installed"; replication = true; }
+    SUBCASE("editable replication package") { installation = "editable"; replication = true; }
     cr::ChildSpec setup;
     setup.program = w.python;
     setup.args = {(fs::path(CALIPER_RUNNER_STAND_IN).parent_path() / "inference_probe.py").u8string(),
@@ -1367,14 +1370,36 @@ TEST_CASE("runner: native inference keeps prompts out of arguments and excludes 
     request.dictionary = "fixture dictionary";
     request.prompt = u8"native prompt marker: 'quotes' \"double\" $value $(literal)\n\u03bb";
     request.params = json{{"prompt", "parameter override"}};
+    const std::string hold = w.ws + "/hold-inference";
+    if (replication) {
+        request.replication_profile = "published_dallas_v1";
+        request.private_output_directory = w.ws + u8"/private output \u03bb --module=untrusted";
+        fs::create_directory(request.private_output_directory);
+        std::ofstream(hold) << "held";
+        environment.set("CALIPER_TEST_INFERENCE_HOLD", hold);
+    }
+    const auto wait_for_output = [&](const std::string& id) {
+        // Output does not signal a runner state change. Check file readiness
+        // between bounded state waits while the fixture holds its process open.
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(15);
+        do {
+            if (runner.wait_for([&](const auto&) {
+                    const auto output = read_file(w.ws + "/runs/" + id + "/output.log");
+                    return !output.empty() && output.back() == '\n';
+                }, 20)) return true;
+        } while (std::chrono::steady_clock::now() < deadline);
+        return false;
+    };
     cb::RunEntry entry;
     REQUIRE(!runner.start(request, &entry));
-    REQUIRE(runner.wait_for(state_is(entry.id, "exited"), 15000));
+    REQUIRE(wait_for_output(entry.id));
     const auto observed = json::parse(read_file(w.ws + "/runs/" + entry.id + "/output.log"));
-    CHECK(observed.at("prompt") == request.prompt);
+    CHECK(observed.at("prompt_sha256") == "014352fd1b6ffba4ae7b72f3282b141b682998315ed1cfb7d38dc7e51d693bc5");
     CHECK(observed.at("model") == request.model);
     CHECK(observed.at("dictionary") == request.dictionary);
-    CHECK(observed.at("params") == request.params);
+    CHECK(observed.at("params") == json{{"prompt_sha256", "49c55f34c6fd4deb504e86b271408e6a2eafd912d87c56a2786a984bf40c2f8c"}});
+    CHECK(observed.at("replication_profile") == (replication ? json(request.replication_profile) : json()));
+    CHECK(observed.at("private_output_directory") == (replication ? json(request.private_output_directory) : json()));
     CHECK(observed.at("prompt_removed") == true);
     CHECK(observed.at("executable") == w.ws + "/.venv/bin/python");
     const auto arguments = observed.at("original_argv").get<std::vector<std::string>>();
@@ -1383,12 +1408,44 @@ TEST_CASE("runner: native inference keeps prompts out of arguments and excludes 
     // Framework launchers can report their binary in orig_argv[0]. The selected
     // virtual environment remains in sys.executable, checked above.
     const std::vector<std::string> interpreter_options(arguments.begin() + 1, arguments.end());
-    CHECK(interpreter_options == std::vector<std::string>{"-E", "-P", "-u", "-m",
-          "caliper.interp._entry", "--model=" + request.model, "--dictionary=" + request.dictionary});
+    std::vector<std::string> expected{"-E", "-P", "-u", "-m", "caliper.interp._entry",
+                                     "--model=" + request.model, "--dictionary=" + request.dictionary};
+    if (replication) {
+        expected.push_back("--replication-profile=" + request.replication_profile);
+        expected.push_back("--private-output-directory=" + request.private_output_directory);
+    }
+    CHECK(interpreter_options == expected);
     for (const char* key : {"original_argv", "argv"}) {
         CHECK(observed.at(key).dump().find("native prompt marker") == std::string::npos);
         CHECK(observed.at(key).dump().find("--prompt") == std::string::npos);
     }
+    if (replication) {
+        const auto kept = fs::path(w.ws) / "runs" / entry.id / "kept";
+        fs::create_directory(kept);
+        std::ofstream(kept / "checkpoint-3.json") << "{}";
+        cb::RunForkRequest fork;
+        fork.parent = entry.id;
+        fork.step = 3;
+        fork.params = {{"prompt", "fork parameter override"}};
+        fork.interventions = one_ablate();
+        cb::RunEntry child_entry;
+        const auto fork_error = runner.fork(fork, &child_entry);
+        REQUIRE_MESSAGE(!fork_error, fork_error.code << ": " << fork_error.message);
+        REQUIRE(wait_for_output(child_entry.id));
+        const auto forked = json::parse(read_file(w.ws + "/runs/" + child_entry.id + "/output.log"));
+        CHECK(forked.at("replication_profile") == observed.at("replication_profile"));
+        CHECK(forked.at("private_output_directory") == observed.at("private_output_directory"));
+        CHECK(forked.at("original_argv") == observed.at("original_argv"));
+        CHECK(forked.at("prompt_sha256") == observed.at("prompt_sha256"));
+        CHECK(forked.at("params") == json{{"prompt_sha256", "39b4e34992ee0d750716c80183a045d7d99a989cf5531fcae01b3f582c0454df"}});
+        CHECK(forked.at("prompt_removed") == true);
+        CHECK(forked.at("parent") == entry.id);
+        CHECK(forked.at("resume") == w.ws + "/runs/" + child_entry.id + "/resume-3.json");
+        CHECK(forked.at("interventions") == fork.interventions);
+        fs::remove(hold);
+        REQUIRE(runner.wait_for(state_is(child_entry.id, "exited"), 15000));
+    }
+    REQUIRE(runner.wait_for(state_is(entry.id, "exited"), 15000));
     CHECK(runner.running_pids().empty());
 
     auto script = w.start({"ordinary script argument"}, json::object(), "script-probe");

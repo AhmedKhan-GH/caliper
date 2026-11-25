@@ -1,12 +1,14 @@
 """Bounded native launcher fixture with no model or network dependencies."""
 
 import argparse
+import hashlib
 import json
 import os
 from pathlib import Path
 import shutil
 import sys
 import sysconfig
+import time
 import venv
 
 
@@ -44,15 +46,29 @@ def main(argv=None):
     parser = argparse.ArgumentParser()
     for name in ("model", "dictionary", "prompt"):
         parser.add_argument("--" + name, required=True)
+    parser.add_argument("--replication-profile")
+    parser.add_argument("--private-output-directory")
     values = vars(parser.parse_args(argv))
+    # The fixture records transport identity without prompt text in output.log.
+    values["prompt_sha256"] = hashlib.sha256(values.pop("prompt").encode("utf-8")).hexdigest()
+    params = json.loads(os.environ.get("CALIPER_RUN_PARAMS", "{}"))
+    if "prompt" in params:
+        params["prompt_sha256"] = hashlib.sha256(params.pop("prompt").encode("utf-8")).hexdigest()
     values.update(original_argv=sys.orig_argv, argv=sys.argv,
                   prompt_removed="CALIPER_RUN_PROMPT" not in os.environ,
-                  params=json.loads(os.environ.get("CALIPER_RUN_PARAMS", "{}")),
+                  params=params,
                   parent=os.environ.get("CALIPER_RUN_PARENT"),
                   resume=os.environ.get("CALIPER_RUN_RESUME"),
                   interventions=json.loads(os.environ.get("CALIPER_RUN_INTERVENTIONS", "[]")),
                   executable=sys.executable)
     print(json.dumps(values), flush=True)
+    # A kept-checkpoint fork needs a live parent. The native test owns this file.
+    release = os.environ.get("CALIPER_TEST_INFERENCE_HOLD")
+    deadline = time.monotonic() + 60
+    while release and Path(release).exists():
+        if time.monotonic() >= deadline:
+            raise RuntimeError("the native test did not release its inference fixture")
+        time.sleep(0.01)
 
 
 if __name__ == "__main__":
