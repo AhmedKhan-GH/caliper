@@ -139,6 +139,7 @@ class _TraceTransaction:
                       "selection", "_selected_version", "_selection_graph")
 
     def rollback(self):
+        from .._controls import _NO
         service = self.service
         for owner, name, present, value in reversed(self.attributes):
             if present:
@@ -153,6 +154,7 @@ class _TraceTransaction:
             service.tracer._forward_cache = service.tracer._prompt = None
         with service.owner.controls.lock:
             for param, value, version, pending in getattr(self, "parameters", ()):
+                service.owner.controls._npending += int(pending is not _NO) - int(param._pending is not _NO)
                 param._value, param._version, param._pending = value, version, pending
             service.owner.controls._update_busy()
 
