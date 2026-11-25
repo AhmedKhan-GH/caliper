@@ -21,10 +21,10 @@ The flow runs from build to record, and each step needs the one before it.
 
 ## Build
 
-From the repository root:
+From the repository root in an x64 developer command prompt (or run `./init-submodules.sh` in Git Bash):
 
 ```bat
-git submodule update --init --recursive
+init-submodules.bat
 cmake --preset release -DCALIPER_BUILD_APPLETS=ON
 cmake --build --preset release
 ```

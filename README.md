@@ -35,9 +35,9 @@
 </p>
 
 <p align="center">
-  <a href="#quick-start">Quick start</a> ·
+  <a href="#quick-start">Quick Start</a> ·
   <a href="#prerequisites">Prerequisites</a> ·
-  <a href="#build-options">Build options</a> ·
+  <a href="#build-options">Build Options</a> ·
   <a href="#libtorch-configuration">LibTorch</a> ·
   <a href="#troubleshooting">Troubleshooting</a> ·
   <a href="#license">License</a>
@@ -45,11 +45,11 @@
 
 <br>
 
-## Quick start
+## Quick Start
 
 ```bash
-# 1. Initialize submodules
-git submodule update --init --recursive
+# 1. Initialize submodules (use init-submodules.bat in Windows Command Prompt)
+./init-submodules.sh
 
 # 2. Configure and build (the configure step downloads LibTorch)
 cmake --preset release
@@ -60,17 +60,15 @@ cmake --build --preset release
 .\cmake-build-release\caliper.exe        # Windows
 ```
 
-The core build compiles no applets. Applets build against the installed SDK
-(`cmake --install cmake-build-release --prefix <prefix> --component sdk`), each in
-its own folder; [Your first applet](docs/applets/first-applet.md) walks through
-it, and [SDK package](docs/applets/sdk-package.md) describes the package.
+Run `./init-submodules.sh`, not `git submodule update`, because some submodule pins need the script fallbacks. On Windows without Git Bash, run `init-submodules.bat` in Command Prompt.
 
-`--preset release-notorch` builds the host without LibTorch, into
-`cmake-build-notorch/`. The presets need CMake 3.25 or later.
+The core build compiles no applets. Applets build against the installed SDK (`cmake --install cmake-build-release --prefix <prefix> --component sdk`), each in its own folder. [First Applet](docs/applets/first-applet.md) describes the build steps, and [SDK Package](docs/applets/sdk-package.md) describes the package.
+
+The `release-notorch` preset builds the host without LibTorch in `cmake-build-notorch/`. The presets need CMake 3.25 or later.
 
 ## Prerequisites
 
-### All platforms
+### All Platforms
 - **Git** (for submodule management)
 - **CMake 3.25 or later** and **Ninja** (the presets use the Ninja generator; configuring without a preset needs CMake 3.20)
 - **A C++20 compiler** for the host and the applets
@@ -85,7 +83,7 @@ it, and [SDK package](docs/applets/sdk-package.md) describes the package.
 - **Xcode** with command line tools
 - **Metal compiler** (`xcrun --find metal`)
 
-## Build options
+## Build Options
 
 | Option | Default | Description |
 |--------|---------|-------------|
@@ -108,7 +106,7 @@ cmake --preset release-notorch
 cmake --preset release -DCALIPER_WITH_SLANG=OFF
 ```
 
-## LibTorch configuration
+## LibTorch Configuration
 
 Caliper's applets use **LibTorch 2.5.1**. The host executable and `libcaliper` do not link it. The build downloads the archive at configure time into `third_party/` and does nothing else to it. There is no option that names a variant; the platform and the CUDA toolkit that CMake finds decide it (`cmake/Dependencies.cmake`).
 
@@ -140,11 +138,11 @@ To build without LibTorch, use the `release-notorch` preset or set `CALIPER_WITH
 
 At run time LibTorch chooses the device. The same archive runs on the CPU when no GPU backend is available, and a CUDA archive on a machine without a usable GPU or driver falls back to the CPU.
 
-## Python package
+## Python Package
 
 Caliper LIB, the `python/caliper` package, opens a live Caliper session from a training script, so that `caliper.show` and the other view calls draw into the viewer. See [`docs/python/caliper-lib-api.md`](docs/python/caliper-lib-api.md). It is built with `CALIPER_BUILD_PYTHON=ON` or as a wheel through `pyproject.toml`.
 
-## Project structure
+## Project Structure
 
 ```
 caliper/
@@ -197,9 +195,9 @@ caliper/
 **Downloaded:**
 - [LibTorch](https://pytorch.org) - Prebuilt archive for every platform
 
-Everything is handled by git submodules and CMake. Run `git submodule update --init --recursive` once.
+Git submodules and CMake manage all dependencies. Run `./init-submodules.sh` once, or run `init-submodules.bat` in Windows Command Prompt.
 
-## Platform-specific notes
+## Platform-Specific Notes
 
 ### Windows (CUDA)
 - The first configure downloads the prebuilt LibTorch archive (about 2 GB)
@@ -216,7 +214,7 @@ Everything is handled by git submodules and CMake. Run `git submodule update --i
 | Issue | Solution |
 |-------|----------|
 | **CUDA not available** | Check the configure output for the `CUDA support` line. `USE_CUDA` turns itself OFF when CMake finds no CUDA toolkit. Check that the CUDA DLLs sit next to the executable in `cmake-build-release/`. |
-| **Submodules missing** | Run `git submodule update --init --recursive` |
+| **Submodules missing** | Run `./init-submodules.sh`, or run `init-submodules.bat` in Windows Command Prompt. |
 | **The Metal renderer could not start** or **the Vulkan renderer could not start** | The message gives the reason. Caliper needs a working Metal device on macOS or a Vulkan driver on Windows, and has no fallback renderer until the WebGPU fallback through Dawn lands. On Windows, update the graphics driver; a remote desktop session may have no Vulkan |
 | **LibTorch download fails** | Check internet; manually download the archive from the PyTorch website and extract it to the folder named in the LibTorch section |
 | **Wrong LibTorch variant** | Delete the LibTorch folder and configure again; see the LibTorch section |
@@ -224,7 +222,7 @@ Everything is handled by git submodules and CMake. Run `git submodule update --i
 | **Out of memory** | Reduce parallel jobs: `cmake --build --preset release -j2` |
 | **Clean rebuild** | `rm -rf cmake-build-release/ && cmake --preset release && cmake --build --preset release` |
 
-## GPU usage examples
+## GPU Usage Examples
 
 ### Apple Silicon (MPS)
 ```cpp
@@ -248,7 +246,7 @@ model.to(device);
 
 Caliper is licensed under the [Apache License 2.0](LICENSE), the host and the SDK alike. Copyright 2026 Ahmed Khan; `NOTICE` holds the copyright line. Applet authors need a permissive licence, and Apache 2.0 is as permissive as the MIT licence of ImGui and ImPlot, adds an explicit patent grant and gives no rights to the Caliper name.
 
-## Third-party licenses
+## Third-Party Licenses
 
 Caliper uses the following open-source libraries. Their license texts can be found in the respective directories under `third_party/` and, for the fonts, in the font folder of the Sternbild design token package that CMake fetches, and beside the JavaScript libraries the docs site's roadmap page loads, in the `vendor/` folders under `theme/assets/` of the `sternbild-docs` package. The libraries that CMake fetches at configure time carry their own license files in their source trees.
 
