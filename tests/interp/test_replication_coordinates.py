@@ -61,6 +61,8 @@ def original_case(tmp_path, monkeypatch):
             yield values
 
     monkeypatch.setattr(_intervene, '_capture_reference_inputs', capture_double)
+    monkeypatch.setattr(_intervene, '_reference_read_point',
+                        lambda current, layer: current.layers[layer].post_attention_layernorm.reference_input)
     monkeypatch.setattr(actions, 'PROMPTS', {'dallas': 'AB', 'oakland': 'CD', 'shanghai': 'EF', 'vancouver': 'GH'})
     _, active, _, _ = oracle(model, tokenizer('AB')['input_ids'], dictionary)
     _, donor, _, _ = oracle(model, tokenizer('EF')['input_ids'], dictionary)
@@ -160,11 +162,7 @@ def test_missing_live_coordinate_aborts_candidate_and_cleans_scope(original_case
     runtime.run(26)
     prior = service.state_dict(), deepcopy(runtime.last_result), set(runtime.directory.iterdir())
 
-    @contextmanager
-    def empty_capture(model):
-        yield {}
-
-    monkeypatch.setattr(_intervene, '_capture_reference_inputs', empty_capture)
+    monkeypatch.setattr(_intervene.Intervention, 'read', lambda *args, **kwargs: None)
     with pytest.raises(_intervene.InterventionError, match='shapes differ'):
         runtime.run(26)
     assert service.state_dict() == prior[0] and runtime.last_result == prior[1]

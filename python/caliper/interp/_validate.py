@@ -7,9 +7,10 @@ import torch
 from ._frozen import _trace_features
 from ._dictionary import _canonical_device
 from ._memory import BudgetMemory, MemoryGuard, autorelease_scope, family_memory_limit
-from ._output import forward_logits, prompt_inputs
+from ._output import forward_logits, forward_reference_logit, prompt_inputs
 from ._points import _architecture, capture
-from ._intervene import InterventionError, InterventionService, selected_rows, _effective_feature_operations
+from ._intervene import (InterventionError, InterventionService, selected_rows, _effective_feature_operations,
+                        _uses_reference_inputs, _reference_input_scope, _reference_features)
 
 
 def _validation_guard(model, dictionary, interventions, guard, memory_limit_gb=None):
@@ -117,6 +118,10 @@ def validate_trace(model, tokenizer, dictionary, interventions, graph, *, prompt
             and interventions.dictionary is not dictionary):
         raise ValueError("feature interventions require the same dictionary instance as validation")
     modules = dict(model.named_modules())
+    original = _uses_reference_inputs(dictionary)
+    reference = getattr(graph, "settings", {}).get("profile") == "circuit_tracer_82996f14"
+    if reference and not original:
+        raise ValueError("reference validation requires original encoder coordinates")
 
     def write_module(point):
         probe = architecture.get(point)
@@ -134,13 +139,24 @@ def validate_trace(model, tokenizer, dictionary, interventions, graph, *, prompt
         row = logits[0, -1 if position == inputs["input_ids"].shape[1] - 1 else position]
         return float(row[token_id] - row.mean())
 
+    def objective():
+        if reference:
+            return forward_reference_logit(model, inputs, position=position, token_id=token_id, guard=guard)
+        return centered(forward_logits(model, inputs,
+                        last_token=position == inputs["input_ids"].shape[1] - 1, guard=guard))
+
     read_points = {layer: probe.point.rsplit(".", 1)[0] + ".mlp_in" for layer, probe in probes.items()}
-    captured = capture(model, list(read_points.values()))
+    captured = {}
     try:
         with _validation_executor(model, tokenizer, dictionary, interventions, guard) as temporary, \
                 autorelease_scope(next(model.parameters()).device):
-            with captured:
-                baseline = centered(forward_logits(model, inputs, last_token=position == inputs["input_ids"].shape[1] - 1, guard=guard))
+            with (_reference_input_scope(model) if original else
+                  capture(model, list(read_points.values()))) as observed:
+                try:
+                    baseline = objective()
+                    captured.update(observed)
+                finally:
+                    observed.clear()
             def measure(node):
                 with autorelease_scope(next(model.parameters()).device):
                     layer, feature, selected = node["layer"], node["feature"], node["position"]
@@ -151,7 +167,8 @@ def validate_trace(model, tokenizer, dictionary, interventions, graph, *, prompt
 
                     x = captured[read_points[layer]][0, selected].to(device=weights.W_enc.device)
                     with torch.no_grad():
-                        activation = float(_trace_features(weights, x, guard)[feature])
+                        activation = float((_reference_features(weights, x) if original else
+                                            _trace_features(weights, x, guard))[feature])
                     coefficient, constant = 1., 0.
                     for spec in related:
                         if spec["op"] in ("patch", "ablate"):
@@ -170,7 +187,7 @@ def validate_trace(model, tokenizer, dictionary, interventions, graph, *, prompt
                     try:
                         hook = temporary.install({"kind": "clamp", "point": probe.point, "feature": feature,
                                                   "positions": [selected], "value": activation - effective})
-                        measured = centered(forward_logits(model, inputs, last_token=position == inputs["input_ids"].shape[1] - 1, guard=guard)) - baseline
+                        measured = objective() - baseline
                         if hook.error is not None:
                             raise ValueError("validation clamp failed: " + hook.error)
                     finally:
@@ -206,4 +223,4 @@ def validate_trace(model, tokenizer, dictionary, interventions, graph, *, prompt
                     "correct_signs": signs, "passed": not reasons, "reasons": reasons, "measurements": measurements,
                     "secondary_measurement": secondary_measurement}
     finally:
-        captured.close(clear=True)
+        captured.clear()

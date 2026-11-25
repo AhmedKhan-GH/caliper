@@ -69,6 +69,31 @@ def forward_logits(model, inputs, *, last_token=True, guard=None):
         return logits.detach()
 
 
+def forward_reference_logit(model, inputs, *, position, token_id, guard=None):
+    """Measure the traced centered direction before the qualified model's softcap."""
+    from ._gemma_reference import profile_metadata
+    if profile_metadata(model) is None:
+        raise ValueError("reference validation requires a Gemma reference profile")
+    last_token = position == inputs["input_ids"].shape[1] - 1
+    values = []
+
+    def measure(module, args):
+        # Center weights before contraction, with the same dtype as traced edges.
+        weight = module.weight.detach()
+        direction = weight[token_id] - weight.mean(0)
+        row = args[0][0, -1 if last_token else position]
+        values.append(float(row @ direction))
+
+    handle = model.lm_head.register_forward_pre_hook(measure)
+    try:
+        forward_logits(model, inputs, last_token=last_token, guard=guard)
+        if len(values) != 1 or not torch.isfinite(torch.tensor(values)).all():
+            raise ValueError("reference validation requires one finite output objective")
+        return values[0]
+    finally:
+        handle.remove()
+
+
 def bounded_text(text, limit=1024):
     """Keep complete UTF-8 characters and the shared NUL display escape."""
     return display_text(text).encode("utf-8")[:limit].decode("utf-8", errors="ignore")

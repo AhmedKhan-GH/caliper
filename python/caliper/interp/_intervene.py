@@ -79,6 +79,14 @@ def _capture_reference_inputs(model):
     return capture_reference_inputs(model)
 
 
+def _reference_read_point(model, layer):
+    """Resolve an original-coordinate hook only on the qualified adapter."""
+    from ._gemma_reference import profile_metadata
+    if profile_metadata(model) is None:
+        raise InterventionError("original encoder coordinates require a Gemma reference profile")
+    return model.model.layers[layer].pre_feedforward_layernorm.reference_input
+
+
 @contextmanager
 def _reference_input_scope(model):
     with _capture_reference_inputs(model) as inputs:
@@ -1208,16 +1216,7 @@ class InterventionService:
             hook = Intervention(self, spec, width, probe, on_error)
             try:
                 if spec["op"] in ("scale", "clamp"):
-                    read = self._target(self.dictionary.metadata["read_points"][probe.layer])
-                    if read[0] is not module:
-                        if read[1] != "input":
-                            raise InterventionError("feature interventions require a semantic input probe")
-                        hook.separate_read = True
-                        block = self.model.get_submodule(
-                            self.dictionary.metadata["read_points"][probe.layer].rsplit(".", 1)[0])
-                        hook.handles.append(read[0].register_forward_hook(hook.read, with_kwargs=True))
-                        hook.handles.append(block.register_forward_pre_hook(hook.enter_read))
-                        hook.handles.append(block.register_forward_hook(hook.clear_read, always_call=True))
+                    hook._install_feature_read(module)
                 if event == "input":
                     hook.handles.append(module.register_forward_pre_hook(hook.pre, with_kwargs=True))
                 else:
@@ -1290,9 +1289,27 @@ class Intervention:
         self.on_error = on_error
         self.handles = []
         self.separate_read = False
+        self.reference_input = False
         self.live_input = None
         self.read_stack = []
         self.calls, self.errors, self.error = 0, 0, None
+
+    def _install_feature_read(self, module):
+        point = self.service.dictionary.metadata["read_points"][self.probe.layer]
+        self.reference_input = _uses_reference_inputs(self.service.dictionary)
+        if self.reference_input:
+            read_module = _reference_read_point(self.service.model, self.probe.layer)
+        else:
+            read_module, event, _, _ = self.service._target(point)
+            if read_module is module:
+                return
+            if event != "input":
+                raise InterventionError("feature interventions require a semantic input probe")
+        self.separate_read = True
+        block = self.service.model.get_submodule(point.rsplit(".", 1)[0])
+        self.handles.append(read_module.register_forward_hook(self.read, with_kwargs=True))
+        self.handles.append(block.register_forward_pre_hook(self.enter_read))
+        self.handles.append(block.register_forward_hook(self.clear_read, always_call=True))
 
     @property
     def removed(self):
@@ -1352,7 +1369,9 @@ class Intervention:
             dictionary = self.service.dictionary
             weights = dictionary.layers[layer]
             x = live_input[b, p].to(device=weights.W_enc.device)
-            activation = _trace_features(weights, x, self.service.resource_guard)[..., self.spec["feature"]]
+            features = (_reference_features(weights, x) if self.reference_input else
+                        _trace_features(weights, x, self.service.resource_guard))
+            activation = features[..., self.spec["feature"]]
             amount = ((self.spec["multiplier"] - 1) * activation if kind == "scale" else
                       self.spec["value"] - activation)
             decoder = weights.W_dec[self.spec["feature"]].to(x.dtype)
@@ -1403,7 +1422,7 @@ class Intervention:
     def read(self, module, args, kwargs, output):
         self.live_input = None
         if not self.removed and not _hook_muted(self) and selected_rows(self.service.model) != ():
-            self.live_input = _input(args, kwargs)
+            self.live_input = output if self.reference_input else _input(args, kwargs)
 
     def enter_read(self, module, args):
         self.read_stack.append(self.live_input)
@@ -1449,15 +1468,7 @@ class _PositionedFeatures(Intervention):
         super().__init__(service, spec, width, probe, None)
         self.members = []
         try:
-            read = service._target(service.dictionary.metadata["read_points"][probe.layer])
-            if read[0] is not module:
-                if read[1] != "input":
-                    raise InterventionError("feature groups require a semantic input probe")
-                self.separate_read = True
-                block = service.model.get_submodule(spec["point"].rsplit(".", 1)[0])
-                self.handles.append(read[0].register_forward_hook(self.read, with_kwargs=True))
-                self.handles.append(block.register_forward_pre_hook(self.enter_read))
-                self.handles.append(block.register_forward_hook(self.clear_read, always_call=True))
+            self._install_feature_read(module)
             self.handles.append(module.register_forward_hook(self.post, with_kwargs=True))
         except BaseException:
             self._remove()
@@ -1482,12 +1493,6 @@ class _PositionedFeatures(Intervention):
             return None
 
     def _apply_members(self, value, live_input, members):
-        original = self.service._published_forward_depth and _uses_reference_inputs(self.service.dictionary)
-        if original:
-            captured = next((values for model, values in reversed(_REFERENCE_INPUTS.get())
-                             if model is self.service.model), {})
-            point = self.service.dictionary.metadata["read_points"][self.probe.layer]
-            live_input = captured.get(point)
         if (not isinstance(value, torch.Tensor) or value.ndim != 3 or value.shape[-1] != self.width
                 or not value.is_floating_point() or not isinstance(live_input, torch.Tensor)
                 or live_input.shape != value.shape):
@@ -1506,7 +1511,7 @@ class _PositionedFeatures(Intervention):
             reserve = elements * (4 * value.element_size() + 24) + value.numel() * value.element_size() * 4
             reserve += len(batch) * sum(len(m.spec["positions"]) for m in members) * self.width * value.element_size() * 2
             _DictionarySnapshot._admit(memory, reserve, force=True)
-        activations = (_reference_features(weights, live_input) if original else
+        activations = (_reference_features(weights, live_input) if self.reference_input else
                        _trace_features(weights, live_input.to(weights.W_enc.device), self.service.resource_guard))
         changes = torch.zeros_like(activations)
         b = torch.tensor(batch, device=activations.device, dtype=torch.long)[:, None]
