@@ -9,6 +9,7 @@ from ._dictionary import _canonical_device
 from ._memory import BudgetMemory, MemoryGuard, autorelease_scope, family_memory_limit
 from ._output import forward_logits, forward_reference_logit, prompt_inputs
 from ._points import _architecture, capture
+from ._replication_actions import _live_attention
 from ._intervene import (InterventionError, InterventionService, selected_rows, _effective_feature_operations,
                         _uses_reference_inputs, _reference_input_scope, _reference_features)
 
@@ -86,6 +87,7 @@ def validate_trace(model, tokenizer, dictionary, interventions, graph, *, prompt
     """Zero-clamp up to ten influential features at their traced positions.
 
     Temporary output hooks leave the intervention lifecycle and caches intact.
+    Published attention replay stays disabled for baseline and clamped forwards.
     Ordered output resets, scale effects, and clamp effects define the live value.
     An independent secondary measurement retains the original demo selection.
     It never contributes to the ten-feature score.
@@ -148,7 +150,8 @@ def validate_trace(model, tokenizer, dictionary, interventions, graph, *, prompt
     read_points = {layer: probe.point.rsplit(".", 1)[0] + ".mlp_in" for layer, probe in probes.items()}
     captured = {}
     try:
-        with _validation_executor(model, tokenizer, dictionary, interventions, guard) as temporary, \
+        with _live_attention(model), \
+                _validation_executor(model, tokenizer, dictionary, interventions, guard) as temporary, \
                 autorelease_scope(next(model.parameters()).device):
             with (_reference_input_scope(model) if original else
                   capture(model, list(read_points.values()))) as observed:

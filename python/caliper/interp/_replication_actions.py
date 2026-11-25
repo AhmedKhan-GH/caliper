@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from contextlib import contextmanager, ExitStack, nullcontext
+from contextvars import ContextVar
 from copy import deepcopy
 import hashlib
 import json
@@ -23,6 +24,7 @@ from ._points import _architecture, capture
 from ._published_identity import _PublishedModelSnapshot, forward_hooks, published_memory
 
 PROTOCOL = 'published_dallas_v1'
+_LIVE_ATTENTION = ContextVar('caliper_published_live_attention', default=frozenset())
 
 SOURCE_REVISION = '82996f144b3371ae858ea5713590d004c218f0c2'
 
@@ -80,6 +82,16 @@ def _digest(value):
 
 
 @contextmanager
+def _live_attention(model):
+    """Exclude published attention replay without suspension of feature edits."""
+    token = _LIVE_ATTENTION.set(_LIVE_ATTENTION.get() | {id(model)})
+    try:
+        yield
+    finally:
+        _LIVE_ATTENTION.reset(token)
+
+
+@contextmanager
 def attention_patterns(model, patterns):
     """Replay baseline attention probabilities with current projected values."""
     probes = _architecture(model)
@@ -89,15 +101,19 @@ def attention_patterns(model, patterns):
             module = model.get_submodule(probe.module)
             if probe.family == 'fixture':
                 def replace(_module, _args, _output, pattern=pattern):
-                    return pattern
+                    if id(model) not in _LIVE_ATTENTION.get():
+                        return pattern
                 stack.callback(module.pattern.register_forward_hook(replace).remove)
                 continue
             if model.config.model_type != 'gemma2':
                 raise ValueError('published attention replay requires Gemma or the CPU fixture')
             values = []
             def read(_module, _args, value, values=values):
-                values[:] = [value]
+                if id(model) not in _LIVE_ATTENTION.get():
+                    values[:] = [value]
             def replace(_module, args, values=values, pattern=pattern, module=module):
+                if id(model) in _LIVE_ATTENTION.get():
+                    return
                 if len(values) != 1:
                     raise InterventionError('attention replay has no current value projection')
                 value = values.pop()
@@ -115,6 +131,8 @@ def attention_patterns(model, patterns):
             stack.callback(module.v_proj.register_forward_hook(read).remove)
             stack.callback(module.o_proj.register_forward_pre_hook(replace).remove)
             def report(_module, _args, output, pattern=pattern):
+                if id(model) in _LIVE_ATTENTION.get():
+                    return
                 weights = pattern.expand(output[0].shape[0], -1, -1, -1)
                 return (output[0], weights, *output[2:])
             # Semantic capture must observe the pattern that produced the output.
@@ -281,7 +299,7 @@ class PublishedCases:
 
     def _enter_forward(self, module, args, kwargs):
         self._forward_scopes.append(None)
-        if self.interventions.suspended:
+        if self.interventions.suspended or id(self.model) in _LIVE_ATTENTION.get():
             return
         inputs = args[0] if args else kwargs.get('input_ids')
         if not isinstance(inputs, torch.Tensor) or inputs.ndim != 2:
