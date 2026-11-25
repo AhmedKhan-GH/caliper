@@ -209,6 +209,24 @@ TEST_CASE("closed schemas state additionalProperties false, list required and de
     CHECK(cb::check_closed_command_schema(s, "args").where == "args.missing");
 }
 
+TEST_CASE("closed schemas permit typed maps only at explicit open paths") {
+    json schema = {{"type", "object"}, {"additionalProperties", {{"type", "integer"}}}};
+    CHECK(cb::check_command_schema(schema).ok());
+    CHECK(cb::check_closed_command_schema(schema, "result.steps").where == "result.steps");
+    CHECK(cb::check_closed_command_schema(schema, "result.steps", {"result.other"}).where ==
+          "result.steps");
+    CHECK(cb::check_closed_command_schema(schema, "result.steps", {"result.steps"}).ok());
+    CHECK(cb::validate_command_value(schema, {{"anchors", 3}, {"labels", 2}}).ok());
+    CHECK_FALSE(cb::validate_command_value(schema, {{"anchors", "3"}}).ok());
+
+    schema["additionalProperties"] = {{"type", "object"}, {"additionalProperties", true}};
+    CHECK(cb::check_closed_command_schema(schema, "result.steps", {"result.steps"}).where ==
+          "result.steps{}");
+    schema["additionalProperties"] = {{"type", "object"}, {"additionalProperties", false},
+                                       {"required", json::array()}, {"properties", json::object()}};
+    CHECK(cb::check_closed_command_schema(schema, "result.steps", {"result.steps"}).ok());
+}
+
 TEST_CASE("hostile values: deep nesting and huge arrays are refused without recursion") {
     const json schema = {{"type", "object"}, {"additionalProperties", true}};
 

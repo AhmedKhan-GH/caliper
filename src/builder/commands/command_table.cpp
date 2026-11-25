@@ -2209,6 +2209,7 @@ std::string command_table_json_text() {
 
 std::vector<std::pair<std::string, std::string>> command_table_open_paths() {
     return {{"spec.get", "result.json"}, {"panel.data", "result.data"},
+            {"program.status", "result.programs[].draw.resource_steps"},
             {"feature.dictionary", "result.result"}, {"feature.show", "result.result"},
             {"feature.examples", "result.result"}, {"trace.run", "result.result"},
             {"trace.status", "result.result"}, {"trace.read", "result.result"},

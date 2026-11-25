@@ -114,7 +114,7 @@ TEST_CASE("every schema is closed, lists its required properties and describes e
         CHECK(d.summary.size() < 1200);
         CHECK(d.summary.back() == '.');
     }
-    // The one open result really is open, and nothing else is.
+    // The spec payload is open only at its declared result path.
     const auto* get = cb::find_command_descriptor("spec.get");
     REQUIRE(get);
     CHECK(get->result["properties"]["json"]["additionalProperties"] == true);
