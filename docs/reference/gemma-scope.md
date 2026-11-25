@@ -160,6 +160,49 @@ Both tools select a 40 GB limit by default for that explicit model choice.
 Evaluation must replace the semantic residual write and apply the actual final softcap during cross-entropy computation.
 The local affine tangent belongs only to attribution.
 
+## Context Policy
+
+The pinned Gemma tokenizer adds BOS by default, and the pinned reference prepends a special token before attribution.
+The independent BOS control on 2,048 content tokens reduces reference mean FVU from 0.73672165 to 0.42086141.
+The original comparison without BOS gives Caliper mean FVU 0.73672177.
+The BOS control uses 256 content positions plus one prefix position and excludes BOS from statistics.
+These diagnostic results do not establish a quality pass or a result for the production adapter.
+The Gemma FVU gate remains 0.30.
+
+The separate diagnostic with 255 content positions and one BOS gives Caliper mean FVU 0.4208069904 and reference mean FVU 0.4208069786.
+
+Quality evaluation and the feature index use one shared context adapter for Gemma.
+The source stream still excludes tokenizer special tokens and appends EOS to each document.
+The adapter retains those source IDs, document partitions, and content token budgets.
+It prepends BOS ID 2 to each context and reserves one model position for that prefix.
+Thus, a model context of 256 contains at most 255 source tokens.
+Contexts end at document boundaries, the context limit, or the content token budget.
+
+Quality batches retain document IDs and source positions across stream reads.
+The batch token limit includes synthetic prefixes and right padding, and each row has its own attention mask.
+FVU, feature activity, and evaluated token counts include only source positions.
+During replacement, BOS and padding retain their actual MLP outputs at each layer.
+Original and replacement cross-entropy use identical targets and the actual nonlinear final-logit softcap.
+Cross-entropy includes BOS-to-first-content prediction and excludes pairs across document or context boundaries and targets in padding.
+
+Evaluation settings and quality metadata record `context_policy`.
+The cursor records exact `[document_id, source_position, content_length]` rows in `evaluation/state.json` under `content_segments`.
+Quality metadata records their count and SHA256 under `content_segmentation`.
+The digest covers compact ASCII JSON rows, each with a final newline, in evaluation order.
+Resume refuses a missing or changed policy before statistics load and retains the existing tensor, model, and source checks.
+
+Index files retain source tokens and offsets without synthetic prefixes.
+The manifest records `context_policy` and `example_context_policy`, and both records enter the index identity.
+Document lengths and `content_context` determine the indexed source spans.
+Example windows retain 33 content slots and use a separate BOS position, for at most 34 model positions.
+Their fresh context can produce activations that differ from the original indexed context.
+The index excludes prefix and padding positions from feature counts, offsets, and returned example activations.
+
+An older Gemma index without these policies requires a rebuild.
+Example admission includes the additional prefix position and retains supplied lower memory limits.
+Default public Gemma tokenization and index windows both place BOS before content.
+Qwen retains its existing context preparation, replacement behavior, metric targets, and index format.
+
 ## Resource And Acceptance Limits
 
 The explicit Gemma process budget is at most 40 GB in decimal units.

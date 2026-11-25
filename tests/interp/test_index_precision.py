@@ -124,6 +124,8 @@ def test_verified_checkpoint_precision_change_refuses_stale_threshold_counts(tmp
     from caliper.interp._frozen import _trace_features
     from .test_gemma_runtime import gemma_model, local_gemma, runtime_dictionary
     model = gemma_model()
+    tokenizer = TinyTokenizer()
+    tokenizer.bos_token_id, tokenizer.eos_token_id, tokenizer.pad_token_id = 1, 2, 0
     with torch.no_grad():
         model.model.embed_tokens.weight.fill_(1)
         model.model.layers[0].self_attn.o_proj.weight.zero_()
@@ -145,7 +147,7 @@ def test_verified_checkpoint_precision_change_refuses_stale_threshold_counts(tmp
     with torch.no_grad(), capture(model, [point]) as saved:
         model(torch.tensor([tokens]), use_cache=False)
     assert saved[point][..., 0].gt(1).all()
-    build_index(tmp_path, [("first", tokens)], model=model, tokenizer=TinyTokenizer(),
+    build_index(tmp_path, [("first", tokens)], model=model, tokenizer=tokenizer,
                 dictionary=dictionary, provenance={"partition": "fixture"})
     assert np.load(tmp_path / "index" / "counts.npy")[0, 0] == 4
     half = gemma_model().half()
@@ -158,7 +160,7 @@ def test_verified_checkpoint_precision_change_refuses_stale_threshold_counts(tmp
     assert not _trace_features(dictionary.layers[0], saved[point])[..., 0].any()
     monkeypatch.setattr(np, "load", lambda *a, **kw: pytest.fail("stale index maps opened"))
     with pytest.raises(ValueError, match="index model encoding differs; rebuild"):
-        FeatureIndex(tmp_path, model=half, tokenizer=TinyTokenizer(), dictionary=dictionary)
+        FeatureIndex(tmp_path, model=half, tokenizer=tokenizer, dictionary=dictionary)
 
 
 @pytest.mark.parametrize("change", ["missing", "matmul", "autocast"])

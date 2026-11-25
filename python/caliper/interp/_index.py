@@ -10,6 +10,7 @@ from pathlib import Path
 import numpy as np
 import torch
 
+from ._context import context_policy, prepare_contexts
 from ._dictionary import _canonical_device, _memory_limit, load_dictionary, model_identity, weights_hash
 from ._memory import (BudgetMemory, CleanStop, MemoryGuard, allocation_bytes, family_memory_limit,
                       autorelease_scope as _device_scope)
@@ -271,6 +272,8 @@ def build_index(dictionary_path, documents, *, model, tokenizer, provenance,
     vocab = model.get_output_embeddings().weight.shape[0]
     tokenizer_hash = _tokenizer_hash(tokenizer, vocab)
     model_encoding = _model_encoding(model, memory)
+    policy = context_policy(model, context_length, tokenizer=tokenizer)
+    content_context = context_length if policy is None else policy["content_context"]
     folder = root / "index"
     folder.mkdir()  # An incomplete prior build also requires explicit removal by its owner.
     table = _TopTable(folder, data["layers"], data["latents"])
@@ -296,20 +299,24 @@ def build_index(dictionary_path, documents, *, model, tokenizer, provenance,
             tokens = tokens[:length].astype("<u4", copy=False)
             token_file.write(tokens.tobytes())
             doc_file.write(np.array([(document_id.encode(), total, length, truncated)], dtype=_DOCUMENT).tobytes())
-            for begin in range(0, length, context_length):
+            for begin in range(0, length, content_context):
                 check("before batch")
-                ids = torch.tensor(tokens[begin:begin + context_length].astype(np.int64), device=device).unsqueeze(0)
+                content = tokens[begin:begin + content_context].astype(np.int64)
+                prepared = None if policy is None else prepare_contexts([content], policy, device=device)
+                ids = torch.tensor(content, device=device).unsqueeze(0) if prepared is None else prepared.input_ids
                 with _device_scope(device), torch.inference_mode(), capture(model, data["read_points"]) as saved:
-                    _forward(model, ids, torch.ones_like(ids))
+                    _forward(model, ids, torch.ones_like(ids) if prepared is None else prepared.attention_mask)
                     check("model batch")
                     for layer, point in enumerate(data["read_points"]):
                         weights = dictionary.layers[layer].W_enc
                         x = saved.pop(point).to(device=weights.device)
+                        if prepared is not None:
+                            x = x[prepared.content_mask]
                         activations = _trace_features(dictionary.layers[layer], x, check=check)
                         table.update(layer, activations, total + begin)
                         del x, activations
                         check("dictionary batch")
-                del ids
+                del ids, prepared
             total += length
             document_count += 1
             if total == max_tokens:
@@ -331,6 +338,9 @@ def build_index(dictionary_path, documents, *, model, tokenizer, provenance,
         "files": {name: {"bytes": (folder / name).stat().st_size,
                          "sha256": _hash_file(folder / name)} for name in _FILES},
     }
+    if policy is not None:
+        manifest.update(context_policy=policy,
+                        example_context_policy=context_policy(model, WINDOW_TOKENS + 1, tokenizer=tokenizer))
     manifest["index_hash"] = hashlib.sha256(_json(manifest).encode()).hexdigest()
     check("before completion")
     # Write the completion record last. A partial or malformed record is refused.
@@ -376,6 +386,11 @@ class FeatureIndex:
                 raise ValueError("index hash mismatch")
             manifest["index_hash"] = claimed
             _encoding_policy(manifest, model, self.dictionary, self.memory)
+            self.context_policy = context_policy(model, manifest["context_length"], tokenizer=tokenizer)
+            self.example_context_policy = context_policy(model, WINDOW_TOKENS + 1, tokenizer=tokenizer)
+            if (manifest.get("context_policy") != self.context_policy or
+                    manifest.get("example_context_policy") != self.example_context_policy):
+                raise ValueError("index context policy differs; rebuild the index")
             if (manifest["complete"] is not True or
                     manifest["top_examples"] != TOP_EXAMPLES or manifest["window_tokens"] != WINDOW_TOKENS):
                 raise ValueError("incomplete or unsupported index")
@@ -628,11 +643,12 @@ class FeatureIndex:
             raise ValueError("example admission requires bounded model dimensions")
         size = max(4, *(p.element_size() for p in self.model.parameters()),
                    *(layer.W_enc.element_size() for layer in self.dictionary.layers))
-        tokens = rows * WINDOW_TOKENS
+        context = WINDOW_TOKENS + (self.context_policy is not None)
+        tokens = rows * context
         mixer = max(width, heads * head_dim, key_heads * key_dim, value_heads * value_dim)
         workspace = tokens * (32 * width + 8 * intermediate + 8 * mixer + 4 * latents)
         # Attention patterns can remain on fixture modules after each layer.
-        patterns = 4 * rows * heads * WINDOW_TOKENS**2 * len(self.dictionary.layers)
+        patterns = 4 * rows * heads * context**2 * len(self.dictionary.layers)
         recurrent = 4 * rows * value_heads * key_dim * value_dim
         logits = 0 if config.model_type in ("qwen3_5_text", "gemma2") else tokens * config.vocab_size
         # Include token tensors, output lists, temporary copies, and allocator reserve.
@@ -648,6 +664,22 @@ class FeatureIndex:
 
     def _example_values(self, rows, layer, feature, device):
         """Return CPU values and release batch tensors before the next admission."""
+        if self.example_context_policy is not None:
+            content = [[value for value in row["token_ids"] if value is not None] for row in rows]
+            prepared = prepare_contexts(content, self.example_context_policy, device=device,
+                                        pad_to=WINDOW_TOKENS + 1)
+            point = self.dictionary.metadata["read_points"][layer]
+            with torch.inference_mode(), capture(self.model, [point]) as saved:
+                _forward(self.model, prepared.input_ids, prepared.attention_mask)
+                weights = self.dictionary.layers[layer].W_enc
+                x = saved[point][prepared.content_mask].to(device=weights.device)
+                values = _trace_features(self.dictionary.layers[layer], x, guard=self.memory)
+                if not torch.isfinite(values).all().item():
+                    raise ValueError("index window activations must be finite")
+                selected = values[..., feature].cpu().split([len(row) for row in content])
+                result = [row.tolist() for row in selected]
+                self.memory.check("example windows complete")
+            return result
         pad = getattr(self.tokenizer, "pad_token_id", None)
         pad = 0 if pad is None else pad
         ids = torch.full((len(rows), WINDOW_TOKENS), pad, dtype=torch.long, device=device)

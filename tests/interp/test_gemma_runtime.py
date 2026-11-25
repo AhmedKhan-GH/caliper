@@ -444,8 +444,9 @@ def test_gemma_small_index_build_and_examples_use_decoder_only(tmp_path, gemma_s
     expected = []
     for _, tokens in documents:
         with torch.no_grad(), capture(model, dictionary.metadata["read_points"]) as values:
-            _index._forward(model, torch.tensor([tokens]), torch.ones(1, len(tokens), dtype=torch.long))
-            expected.append(dictionary.layers[0].encode(values[dictionary.metadata["read_points"][0]])[0])
+            ids = torch.tensor([[model.config.bos_token_id, *tokens]])
+            _index._forward(model, ids, torch.ones_like(ids))
+            expected.append(dictionary.layers[0].encode(values[dictionary.metadata["read_points"][0]])[0, 1:])
     all_features = torch.cat(expected)
     feature = int(all_features.sum(0).argmax())
     monkeypatch.setattr(model.lm_head, "forward", lambda *a: pytest.fail("vocabulary projection ran"))
