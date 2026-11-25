@@ -87,6 +87,11 @@ def verify_review(root, collection_path, review_path):
             required.update(name + "." + suffix for suffix in (
                 "capture_generation", "rendered_nodes", "host_labels", "example_page", "bar_height",
                 "graph_composition", "examples_composition", "output_composition",
+                "graph_resource_generation", "examples_resource_generation", "output_resource_generation",
+                "graph_orthographic", "examples_orthographic", "output_orthographic",
+                "graph_label_spacing", "examples_label_spacing", "output_label_spacing",
+                "graph_decoded_text", "examples_decoded_text", "output_decoded_text",
+                "graph_framing", "graph_panel_share", "compact_disclosures", "output_label_count",
                 "graph_visible_nodes", "example_row_layout", "output_bar_layout"))
             for program in ("attribution", "probabilities", "example_tokens"):
                 required.update(name + "." + program + "." + metric for metric in (

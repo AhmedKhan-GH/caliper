@@ -328,7 +328,12 @@ def reviewed_collection(callback_boundary):
     for name in ["cell" + str(cell) for cell in published.CASES] + ["examples-page-2"]:
         names.update(name + "." + suffix for suffix in (
             "capture_generation", "rendered_nodes", "host_labels", "example_page", "bar_height", "graph_composition",
-            "examples_composition", "output_composition", "graph_visible_nodes", "example_row_layout", "output_bar_layout"))
+            "examples_composition", "output_composition", "graph_visible_nodes", "example_row_layout", "output_bar_layout",
+            "graph_resource_generation", "examples_resource_generation", "output_resource_generation",
+            "graph_orthographic", "examples_orthographic", "output_orthographic",
+            "graph_label_spacing", "examples_label_spacing", "output_label_spacing",
+            "graph_decoded_text", "examples_decoded_text", "output_decoded_text",
+            "graph_framing", "graph_panel_share", "compact_disclosures", "output_label_count"))
         for program in ("attribution", "probabilities", "example_tokens"):
             names.update(name + "." + program + "." + metric for metric in (
                 "derive_time_ms", "derive_memory_bytes", "draw_time_ms", "draw_memory_bytes"))
@@ -534,3 +539,16 @@ def test_missing_case_readout_publication_is_not_complete(callback_boundary):
     result = driver.published_action(session, 10, prepared["id"])
     assert not result["completed"] and "readout publication" in result["error"]
     assert not json.loads((root / "action-1.json").read_text())["completed"]
+
+
+@pytest.mark.parametrize("missing", ["cell29.graph_label_spacing", "cell10.output_resource_generation", "bounded_memory",
+                                     "dictionary_identity_stable", "examples-page-2.compact_disclosures"])
+def test_absent_native_requirements_cannot_be_accepted(reviewed_collection, missing):
+    root, review, result = reviewed_collection
+    result["checks"] = [gate for gate in result["checks"] if gate["name"] != missing]
+    write_json(root / "driver/result.json", result)
+    write_collection(root / "driver", root, result)
+    review["collection_sha256"] = published.file_hash(root / "driver/collection.json")
+    write_json(root / "review.json", review)
+    with pytest.raises(Failure, match="Required native"):
+        verify_review(root, "driver/collection.json", "review.json")
