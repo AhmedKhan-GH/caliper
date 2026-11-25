@@ -316,11 +316,12 @@ An earlier released peak below the limit does not consume the next phase reserve
 Any historical breach still requires a clean stop.
 
 Dictionary identity covers all tensor content, including thresholds, and content checks require memory admission.
-Gemma MPS dictionaries can retain a private CPU snapshot when the complete process reserve fits.
-Each identity check reads bounded live byte blocks and compares every byte with that snapshot.
-Readbacks have a 16 MiB cap, and macOS CPU comparisons use native `memcmp`.
+Gemma MPS dictionaries can retain a private MPS snapshot when the complete process reserve fits.
+Each identity check compares every byte on the device in blocks of at most 16 MiB.
+A batch contains at most 64 blocks and fits the current process and host reserves.
+The device returns comparison flags to the CPU after each batch.
 The snapshot preserves source device identity and never supplies model weights.
-If the reserve does not fit, checks hash all live bytes instead.
+If the snapshot reserve does not fit, checks hash all live bytes instead.
 
 Example queries admit up to 16 windows in batches that fit current memory, including any live snapshot.
 Each batch retains the workspace reserve and releases temporary tensors within an autorelease scope before the next admission.

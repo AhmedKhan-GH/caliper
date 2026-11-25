@@ -18285,7 +18285,7 @@
       "effect": "run",
       "examples": [
         {
-          "prompt": "The capital of France is"
+          "prompt": "Fact: the capital of the state containing Dallas is"
         }
       ],
       "frame_thread": true,
