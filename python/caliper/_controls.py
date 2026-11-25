@@ -923,7 +923,7 @@ class Interventions:
             if self._ctl._iv_model is not self:
                 return []
             if active_only:
-                return [deepcopy(iv.applied_spec) for iv in self._ctl._ivs.values()
+                return [deepcopy(iv.applied_spec) for iv in self._ordered_records()
                         if iv.state == IV_ACTIVE and iv.hook is not None and iv.applied_spec is not None]
             return [deepcopy(iv.spec) for iv in self._ctl._ivs.values()
                     if iv.state != IV_ENDED and not iv.clear]
@@ -943,7 +943,20 @@ class Interventions:
              "applied_specification": deepcopy(iv.applied_spec),
              "since_step": iv.since_step, "clear": iv.clear,
              "error": iv.error, "error_code": iv.error_code}
-            for iv in self._ctl._ivs.values()]}
+            for iv in self._ordered_records()]}
+
+    def _ordered_records(self, records=None):
+        """Keep active effects in hook order and retain inactive record slots."""
+        records = list(self._ctl._ivs.values() if records is None else records.values())
+        active = iter(sorted((iv for iv in records if iv.hook is not None),
+                             key=lambda iv: self.executor.execution_order(iv.hook)))
+        return [next(active) if iv.hook is not None else iv for iv in records]
+
+    def _order_live_records(self):
+        """Expose hook order to trace readers without a new lifecycle mapping."""
+        ordered = {intervention_key(iv.spec): iv for iv in self._ordered_records()}
+        self._ctl._ivs.clear()
+        self._ctl._ivs.update(ordered)
 
     @contextmanager
     def temporary_state(self, state):
@@ -1132,7 +1145,7 @@ class Interventions:
                     check()
                 old = list(self._ctl._ivs.values())
                 # No fallible preparation follows either state replacement.
-                self._ctl._ivs = restored
+                self._ctl._ivs = {intervention_key(iv.spec): iv for iv in self._ordered_records(restored)}
                 self._ctl._iv_revision += 1
                 self._ctl._iv_due = True
                 self._ctl.busy = True
@@ -2083,6 +2096,7 @@ class Controls:
         callback = lambda message, iv=iv if owner is None else owner: self._intervention_failed(iv, message)
         if iv.op == "ablate":
             iv.hook = service.adapter.ablate(service.model, iv.point)
+            service.executor._remember_hook_order(iv.hook)
             if hasattr(iv.hook, "on_error"):
                 iv.hook.on_error = callback
         else:
@@ -2286,7 +2300,7 @@ class Controls:
             if traffic or self._iv_model is not m:
                 return completed, False
             revision = self._iv_revision
-            originals = dict(self._ivs)
+            originals = {intervention_key(iv.spec): iv for iv in m._ordered_records()}
             records = {key: copy(iv) for key, iv in originals.items()}
             previous = {key: copy(iv) for key, iv in originals.items()}
             changed = controllers is not None and self._linger(controllers, records)
@@ -2341,6 +2355,7 @@ class Controls:
                         prepared = records[key]
                         for field in _Intervention.__slots__:
                             setattr(iv, field, getattr(prepared, field))
+                m._order_live_records()
                 self._iv_revision += 1
                 self._iv_due = m._shapes_off is not None or any(
                     iv.clear or iv.state != IV_ENDED for iv in self._ivs.values())
@@ -2447,7 +2462,7 @@ class Controls:
         if not scheduled:
             return changed, False
         revision = self._iv_revision
-        originals = dict(self._ivs)
+        originals = {intervention_key(iv.spec): iv for iv in m._ordered_records()}
         previous = {key: copy(iv) for key, iv in originals.items()
                     if iv.hook is not None or key in scheduled}
         records = {key: copy(iv) for key, iv in previous.items()}
@@ -2505,6 +2520,7 @@ class Controls:
                 iv = originals[key]
                 for field in _Intervention.__slots__:
                     setattr(iv, field, getattr(prospective[key], field))
+            m._order_live_records()
             self._iv_revision += 1
             committed = True
             return True, traffic

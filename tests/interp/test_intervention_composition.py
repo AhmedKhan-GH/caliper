@@ -54,16 +54,21 @@ def assert_frozen(composition, expected):
 
 
 @pytest.mark.parametrize("mode", ["snapshot", "specifications", "restore"])
-def test_group_keeps_hook_position_after_first_member_removal(composition, mode):
+@pytest.mark.parametrize("removal", ["clear", "expire"])
+def test_group_keeps_hook_position_after_first_member_removal(composition, mode, removal):
     model, _, _, controls, service, ids, _, feature = composition
     point = "layers.0.mlp_out"
     anchor = (feature + 1) % 8
-    service.set(dict(kind="scale", point=point, feature=anchor, positions=[2], multiplier=1.))
+    scale = dict(kind="scale", point=point, feature=anchor, positions=[2], multiplier=1.)
+    if removal == "expire":
+        scale["until_step"] = 3
+    service.set(scale)
     service.set(dict(kind="patch", point=point, positions=[2], source_prompt="CD"))
     service.set(dict(kind="clamp", point=point, feature=feature, positions=[2], value=-2.))
     controls.step()
     before = observe(model, ids)
-    assert service.clear_feature(point, anchor, kind="scale", positions=[2])
+    if removal == "clear":
+        assert service.clear_feature(point, anchor, kind="scale", positions=[2])
     controls.step()
     expected = observe(model, ids)
     for actual, original in zip(expected, before):
@@ -79,7 +84,15 @@ def test_group_keeps_hook_position_after_first_member_removal(composition, mode)
             actual = observe(model, ids)
     for value, original in zip(actual, expected):
         torch.testing.assert_close(value, original, rtol=0, atol=0)
-    assert_frozen(composition, expected)
+    path = assert_frozen(composition, expected)
+    assert torch.count_nonzero(path.features[0][:, 2]) == 0
+    tracer = Tracer(model, composition[1], composition[2], controls=controls)
+    assert tracer._intervention_state()["specifications"] == service.specifications()
+    # A later boundary retains the group's position when its member changes.
+    service.set(dict(kind="clamp", point=point, feature=feature, positions=[2], value=-3.))
+    controls.step()
+    for value, original in zip(observe(model, ids), expected):
+        torch.testing.assert_close(value, original, rtol=0, atol=0)
 
 
 @pytest.mark.parametrize("overlap", ["scale_clamp", "clamp_positions"])

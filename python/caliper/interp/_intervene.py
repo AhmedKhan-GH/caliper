@@ -672,6 +672,8 @@ class InterventionService:
         self._cache_identity = None
         self.preparing_source = False
         self._hooks = weakref.WeakSet()
+        self._hook_order = weakref.WeakKeyDictionary()
+        self._next_hook_order = 0
         self._retiring_sources = frozenset()
         self._feature_groups = {}
         self._published_forward_depth = 0
@@ -1140,6 +1142,17 @@ class InterventionService:
         self._cache.move_to_end(key)
         return self._cache[key]
 
+    def _remember_hook_order(self, hook):
+        """Retain registration order without ownership of the hook."""
+        self._hook_order[hook] = self._next_hook_order
+        self._next_hook_order += 1
+
+    def execution_order(self, hook):
+        """Order group members at their shared hook, then in member order."""
+        order = self._hook_order.get(hook, math.inf)
+        group = getattr(hook, "group", None)
+        return self._hook_order.get(group, order) if group is not None else order, order
+
     def install(self, request, *, on_error=None):
         """Install a validated hook. The caller selects the step boundary."""
         spec = self.validate(request)
@@ -1155,9 +1168,11 @@ class InterventionService:
                 group = self._feature_groups.get(spec["point"])
                 if group is None or all(member in self._retiring_sources for member in group.members):
                     group = _PositionedFeatures(self, spec, width, probe, module)
+                    self._remember_hook_order(group)
                     self._feature_groups[spec["point"]] = group
                 hook = _PositionedMember(self, spec, width, probe, on_error, group)
                 group.members.append(hook)
+                self._remember_hook_order(hook)
                 self._hooks.add(hook)
                 return hook
             if spec["op"] == "patch":
@@ -1186,6 +1201,7 @@ class InterventionService:
             except BaseException:
                 hook()
                 raise
+        self._remember_hook_order(hook)
         self._hooks.add(hook)
         return hook
 
@@ -1215,7 +1231,8 @@ class _InterventionReplay:
 
     def specifications(self):
         """Return detached specifications for effects that remain installed."""
-        return [deepcopy(spec) for spec, hook in self._effects if not getattr(hook, "removed", False)]
+        effects = sorted(self._effects, key=lambda effect: self.executor.execution_order(effect[1]))
+        return [deepcopy(spec) for spec, hook in effects if not getattr(hook, "removed", False)]
 
     @contextmanager
     def _scope(self, live_hooks, specifications):
@@ -1227,6 +1244,7 @@ class _InterventionReplay:
             try:
                 for spec in specifications:
                     self._effects.append((spec, self.executor.install(spec)))
+                self._effects.sort(key=lambda effect: self.executor.execution_order(effect[1]))
                 yield self
                 for _, hook in self._effects:
                     if getattr(hook, "error", None) is not None:
