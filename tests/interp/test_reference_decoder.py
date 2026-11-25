@@ -1,5 +1,6 @@
 """Bounded reference decoder checks with synthetic CPU tensors only."""
 import ast
+from contextlib import contextmanager
 import hashlib
 import os
 from pathlib import Path
@@ -9,6 +10,7 @@ import pytest
 import torch
 
 from caliper.interp import _frozen
+from caliper.interp._memory import CleanStop
 
 
 @pytest.fixture
@@ -90,3 +92,105 @@ def test_joint_decoder_preserves_zero_delta_derivatives():
     (actual * direction).sum().backward()
     expected = (layer.W_dec[indices] * direction).sum(-1).expand_as(deltas)
     torch.testing.assert_close(deltas.grad, expected, atol=0, rtol=0)
+
+
+@pytest.mark.parametrize("include_zeros", [False, True])
+def test_joint_operation_has_ordered_support_and_one_call(monkeypatch, include_zeros):
+    layer, _, indices, values = synthetic_case()
+    calls = []
+    index_add = torch.Tensor.index_add_
+
+    def record(result, dim, positions, scaled):
+        calls.append((positions.tolist(), scaled.shape))
+        return index_add(result, dim, positions, scaled)
+
+    monkeypatch.setattr(torch.Tensor, "index_add_", record)
+    _frozen._decode_reference(layer, indices, values, include_zeros=include_zeros)
+    wanted = [0] * 3 + [1] * (3 if include_zeros else 1) + [2] * 3
+    if include_zeros:
+        wanted += [3] * 3
+    assert calls == [(wanted, (len(wanted), 3))]
+
+
+@pytest.mark.parametrize("shape", [(3, 0), (0, 0)])
+def test_empty_reference_support_has_zero_output_and_derivative(shape):
+    layer, _, _, _ = synthetic_case()
+    indices = torch.empty(shape, dtype=torch.long)
+    values = torch.empty(shape, dtype=torch.bfloat16, requires_grad=True)
+    decoded = _frozen._decode_reference(layer, indices, values, include_zeros=True)
+    assert decoded.shape == (shape[0], 3)
+    assert decoded.count_nonzero() == 0
+    decoded.sum().backward()
+    assert values.grad.shape == values.shape
+
+
+def scalar_guard(monkeypatch, *, current=1_000, available=64_000_000_000):
+    """Use unchanged production reserve logic with small scalar readers."""
+    import psutil
+    guard = _frozen.MemoryGuard.__new__(_frozen.MemoryGuard)
+    guard.limit = 40_000_000_000
+    guard._host_reserve_bytes = 8_000_000_000
+    guard.check = lambda stage: current
+    monkeypatch.setattr(psutil, "virtual_memory", lambda: SimpleNamespace(available=available))
+    return guard
+
+
+@pytest.mark.parametrize("bound", ["process", "host"])
+@pytest.mark.parametrize("phase", ["selection", "workspace"])
+def test_exact_workspace_refuses_before_decoder_allocation(monkeypatch, bound, phase):
+    layer, _, indices, values = synthetic_case()
+    layer.W_dec = layer.W_dec.repeat(1, 32)
+    room = 1 if phase == "selection" else 500
+    guard = scalar_guard(monkeypatch, **({"current": 40_000_000_000 - room} if bound == "process"
+                                        else {"available": 8_000_000_000 + room}))
+    stages = []
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("the decoder must refuse before rows or output allocation")
+
+    monkeypatch.setattr(torch.Tensor, "detach", forbidden)
+    monkeypatch.setattr(torch.Tensor, "new_zeros", forbidden)
+    match = "memory limit" if bound == "process" else "8 GB host reserve"
+    with pytest.raises(CleanStop, match=match):
+        _frozen._decode_reference(layer, indices, values, guard=guard, check=stages.append)
+    assert stages == (["reference decoder selection"] if phase == "selection" else
+                      ["reference decoder selection", "reference decoder workspace"])
+
+
+def test_zero_delta_workspace_includes_retained_rows_and_adjoint(monkeypatch):
+    layer, _, indices, values = synthetic_case()
+    reservations = []
+    guard = SimpleNamespace(reserve=lambda stage, size: reservations.append((stage, size)))
+    deltas = torch.zeros(2, *values.shape, dtype=values.dtype, requires_grad=True)
+    _frozen._decode_reference(layer, indices, deltas, include_zeros=True, guard=guard)
+    count, batches, width, itemsize = indices.numel(), 2, 3, 2
+    row_bytes = count * width * (layer.W_dec.element_size() + itemsize)
+    value_bytes = batches * count * itemsize
+    output_bytes = batches * indices.shape[0] * width * itemsize
+    expected = count * 8 + row_bytes + 2 * value_bytes * (width + 1) + 2 * output_bytes
+    assert reservations == [("reference decoder selection", count * (batches + 1 + 32)),
+                            ("reference decoder joint workspace", expected)]
+
+
+@pytest.mark.parametrize("stage", ["selection", "workspace", "rows", "scaling", "accumulation", "complete"])
+@pytest.mark.parametrize("reason", ["cancelled", "deadline"])
+def test_decoder_stop_preserves_autorelease_cleanup(monkeypatch, stage, reason):
+    layer, _, indices, values = synthetic_case()
+    scopes = []
+
+    @contextmanager
+    def scope(device):
+        scopes.append("enter")
+        try:
+            yield
+        finally:
+            scopes.append("exit")
+
+    def check(name):
+        if name == "reference decoder " + stage:
+            raise CleanStop(reason)
+
+    monkeypatch.setattr(_frozen, "autorelease_scope", scope)
+    with pytest.raises(CleanStop, match=reason):
+        _frozen._decode_reference(layer, indices, values, check=check)
+    assert scopes == ["enter", "exit"]

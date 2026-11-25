@@ -156,25 +156,53 @@ def _decode_selected(layer, indices, activations, *, check=_no_check):
     return result
 
 
-def _decode_reference(layer, indices, activations, *, check=_no_check, include_zeros=False):
-    """Scale decoder rows before the ordered per-position accumulation."""
+def _decode_reference(layer, indices, activations, *, check=_no_check, include_zeros=False, guard=None):
+    """Use one joint sparse accumulation, or refuse its complete workspace."""
+    tokens, columns = indices.shape
     width = layer.W_dec.shape[1]
-    result = activations.new_zeros(*activations.shape[:-1], width)
-    step = max(1, _ENCODER_BLOCK_ELEMENTS // width)
-    for position in range(indices.shape[0]):
-        active = activations[..., position, :] != 0
-        selected = (torch.ones_like(indices[position], dtype=torch.bool) if include_zeros else
-                    active if active.ndim == 1 else active.any(0))
-        features = indices[position, selected]
-        values = activations[..., position, selected]
-        for start in range(0, len(features), step):
-            with autorelease_scope(activations.device):
-                check("reference decoder block")
-                rows = layer.W_dec.detach()[features[start:start + step]].to(activations.dtype)
-                scaled = rows * values[..., start:start + step, None]
-                destinations = torch.full((len(rows),), position, dtype=torch.long, device=rows.device)
-                result.index_add_(-2, destinations, scaled)
-    return result
+    batches = math.prod(activations.shape[:-2])
+    itemsize = activations.element_size()
+    with autorelease_scope(activations.device):
+        check("reference decoder selection")
+        if guard is not None:
+            # Masks, coordinate pairs, and contiguous coordinate copies. No
+            # decoder row or result allocation precedes workspace admission.
+            selection_bytes = tokens * columns * (batches + 1 + 4 * 8)
+            guard.reserve("reference decoder selection", selection_bytes)
+        if include_zeros:
+            selected = torch.ones_like(indices, dtype=torch.bool)
+        else:
+            active = activations != 0
+            selected = active.any(tuple(range(active.ndim - 2))) if active.ndim > 2 else active
+        positions, slots = selected.nonzero(as_tuple=True)
+        positions, slots = positions.contiguous(), slots.contiguous()
+        count = positions.numel()
+        check("reference decoder workspace")
+        if guard is not None:
+            # Include stored and converted rows, values, scaled rows, and the
+            # result. Reserve decoder adjoint scratch when gradients are live.
+            row_bytes = count * width * (layer.W_dec.element_size() + itemsize)
+            value_bytes = batches * count * itemsize
+            scaled_bytes = value_bytes * width
+            output_bytes = batches * tokens * width * itemsize
+            workspace = count * 8 + row_bytes + value_bytes + scaled_bytes + output_bytes
+            if torch.is_grad_enabled() and activations.requires_grad:
+                workspace += scaled_bytes + value_bytes + output_bytes
+            guard.reserve("reference decoder joint workspace", workspace)
+        features = indices[positions, slots]
+        values = activations[..., positions, slots]
+        check("reference decoder rows")
+        rows = layer.W_dec.detach()[features].to(activations.dtype)
+        check("reference decoder scaling")
+        scaled = rows * values[..., None]
+        check("reference decoder accumulation")
+        result = activations.new_zeros(*activations.shape[:-1], width)
+        # The pinned decode_sparse uses this single call across all positions.
+        # Position or feature blocks change BF16 sums on some backends. Keep
+        # BOS rows here because full-source diagnostics require those sources.
+        result.index_add_(-2, positions, scaled)
+        check("reference decoder complete")
+        return result
 
 
 def _validate_dictionary(model, dictionary, check=_no_check, *, memory=None):
@@ -813,14 +841,16 @@ class FrozenPath:
                     decode = _decode_reference if self.reference else _decode_selected
                     if self.reference:
                         original = FrozenFeatures(a, layer, [])
-                        reconstruction = decode(layer, original.indices, original.activations, check=memory_check)[None]
+                        reconstruction = decode(layer, original.indices, original.activations,
+                                                check=memory_check, guard=self.guard)[None]
                         reconstruction = reconstruction + layer.b_dec.detach().to(self.dtype)
                     else:
                         reconstruction = _trace_reconstruction(layer, a)
                     error = output.scale * (raw - reconstruction)
                     decoder_bias = output.scale * layer.b_dec.detach().to(self.dtype)
                     # Explicit edits can add signed features outside the recorded region.
-                    decoded = decode(layer, output.indices, output.activations, check=memory_check)[None]
+                    decoded = decode(layer, output.indices, output.activations, check=memory_check,
+                                     **({"guard": self.guard} if self.reference else {}))[None]
                     # Only external vector writes need an output constant. Feature edits
                     # already have affine coefficients and constants in FrozenFeatures.
                     external = any(s["op"] in ("add", "patch") for s in output_specs)
@@ -1016,7 +1046,7 @@ class FrozenPath:
                     # A rounded reconstruction plus its rounded error cannot
                     # recover that output exactly in BF16.
                     delta = decode(layer, output.indices, activation - output.activations,
-                                   check=check, include_zeros=True)
+                                   check=check, include_zeros=True, guard=self.guard)
                     x = x + (self.outputs[i] + delta)
                 else:
                     x = (x + decode(layer, output.indices, activation, check=check) +
