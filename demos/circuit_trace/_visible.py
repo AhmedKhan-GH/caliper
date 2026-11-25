@@ -28,6 +28,14 @@ def configure_assets(env):
         env["CALIPER_WEB_DIR"] = str(Path(directory).resolve())
 
 
+def startup_instrument(session):
+    session.mcp.body("spec.new", id="circuit-trace", title="Circuit Trace")
+    session.mcp.body("panel.create", id="startup", primitive="text", title="Model Initialization",
+                     options={"text": "The model and dictionary must load before the graph is available."})
+    session.mcp.body("layout.set", layout={"root": "startup", "nodes": []})
+    session.mcp.body("applet.save")
+
+
 def check_assets(session):
     """Check the actual viewer routes without recording their access token."""
     settings = json.loads((session.out / "data" / "api.json").read_text())
@@ -78,6 +86,7 @@ def show_error(session, error):
             spec["layout"] = {"panel": "demo_error"}
         session.mcp.body("spec.set_text", text="\n".join(
             toml_value(key) + " = " + toml_value(value) for key, value in spec.items()) + "\n")
+        session.mcp.body("applet.save")
     except Exception as exc:
         # A broken command connection must not close the app either.
         (session.out / "demo-error-display.json").write_text(json.dumps({"error": str(exc)}) + "\n")

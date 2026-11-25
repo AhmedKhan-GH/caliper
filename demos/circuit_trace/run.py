@@ -23,7 +23,7 @@ from _inference_evidence import (bound_completion, comparison_evidence, generati
 from _qualification import (GEMMA_REVISION, MODEL_REVISION, dictionary_qualification,
                              validate_quality_override)
 from _spec import scene_programs
-from _visible import StartupFailure, check_assets, configure_assets, hold_after_error
+from _visible import StartupFailure, check_assets, configure_assets, hold_after_error, startup_instrument
 
 ROOT = Path(__file__).resolve().parents[2]
 METHOD_DISCLOSURES = {
@@ -72,7 +72,7 @@ def memory_bytes(folder, *, platform=None):
 
 class Session:
     """Own one app and one MCP process, plus the hosted run that MCP starts."""
-    def __init__(self, args, out, *, show=False):
+    def __init__(self, args, out, *, show=False, interactive=False):
         self.out, self.show = out, show
         self.quality_override = getattr(args, "quality_override", None)
         self.family = getattr(args, "family", "fixture" if args.model == "tiny-lm" else "qwen")
@@ -137,6 +137,8 @@ class Session:
             self.app_process = children[0]
             self.mcp = MCP(mcp, out / "data" / "api.json", out, env)
             self.events = Events(self.mcp)
+            if show or interactive:
+                startup_instrument(self)
             self.mcp.body("run.start", kind="inference", id=self.run_id, model=args.model,
                           dictionary=str(Path(args.dictionary).resolve()), prompt=args.prompt)
             self.started = True
@@ -152,7 +154,7 @@ class Session:
                 return state if state["attached"] and {"prompt", "selected_node", "clamp", "retrace"} <= names else False
             self.events.until("hosted inference readiness", ready)
         except BaseException as exc:
-            if (show or getattr(args, "demo", False)) and isinstance(exc, Exception) and self.live():
+            if (show or interactive) and isinstance(exc, Exception) and self.live():
                 raise StartupFailure(self, exc) from exc
             self.close()
             raise
@@ -530,9 +532,15 @@ class Bridge:
             try:
                 self.session.events.wait(1)
                 self.consume(tolerate_refusals=True)
-            except Failure:
+            except Failure as exc:
                 if not self.session.live():
                     return
+                if "mcp.app_busy" in str(exc) and "app is closing" in str(exc):
+                    try:
+                        self.session.app.wait(timeout=5)
+                        return
+                    except subprocess.TimeoutExpired:
+                        pass
                 raise
 
 
@@ -794,7 +802,7 @@ def main(argv=None):
         result["checks"].append(check("bounded_memory", peak <= memory_limit, peak, memory_limit))
         if peak > memory_limit:
             raise Failure("The bounded app case exceeds the process memory limit.")
-        session = Session(args, out / "acceptance", show=args.show)
+        session = Session(args, out / "acceptance", show=args.show, interactive=args.demo)
         if args.show or args.demo:
             bridge = live_demo(session, args, result)
         else:

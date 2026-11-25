@@ -79,6 +79,8 @@ def test_error_panel_is_valid_before_and_after_instrument_creation(tmp_path, exi
     def body(method, **args):
         if method == "spec.get":
             return {"json": spec}
+        if method == "applet.save":
+            return {}
         assert method == "spec.set_text"
         changed.append(tomllib.loads(args["text"]))
     show_error(SimpleNamespace(out=tmp_path, mcp=SimpleNamespace(body=body)), Failure("Dictionary {request} failed."))
@@ -136,7 +138,7 @@ def test_live_startup_failure_retains_process_before_bridge_exists(tmp_path, mon
     monkeypatch.setattr(driver, "wait_file", fail_ready)
     args = SimpleNamespace(model="tiny-lm", dictionary=str(tmp_path), prompt="Test", demo=True)
     with pytest.raises(driver.StartupFailure) as raised:
-        driver.Session(args, tmp_path / "session", show=show)
+        driver.Session(args, tmp_path / "session", show=show, interactive=not show)
     session = raised.value.session
     pid = json.loads((session.out / "data/probe.json").read_text())["pid"]
     try:
@@ -146,3 +148,17 @@ def test_live_startup_failure_retains_process_before_bridge_exists(tmp_path, mon
     finally:
         session.close()
     assert not psutil.pid_exists(pid) and session.app_log.closed
+
+
+@pytest.mark.parametrize("exits", [False, True])
+def test_close_response_requires_actual_owned_process_exit(exits):
+    session = SimpleNamespace(live=lambda: True, app=Mock(), events=Mock())
+    failure = Failure("mcp.app_busy: the app is closing")
+    session.events.wait.side_effect = failure
+    if not exits:
+        session.app.wait.side_effect = subprocess.TimeoutExpired("owned-app", 5)
+        with pytest.raises(Failure, match="app is closing"):
+            driver.Bridge(session).keep_alive()
+    else:
+        driver.Bridge(session).keep_alive()
+    session.app.wait.assert_called_once_with(timeout=5)

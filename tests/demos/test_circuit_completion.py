@@ -37,7 +37,7 @@ def completion_case(tmp_path, monkeypatch, steering_case):
             raise state.fault
 
     class FakeSession:
-        def __init__(self, args, out, *, show=False):
+        def __init__(self, args, out, *, show=False, interactive=False):
             self.out, self.show = out, show
             out.mkdir()
             self.app = None
