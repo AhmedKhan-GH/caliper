@@ -375,3 +375,24 @@ def test_reference_cli_selects_explicit_profile_without_dtype_inference(tmp_path
     assert calls[0][1]["model"] is model
     assert calls[0][1]["profile"] == PROFILE
     assert calls[0][1]["model_snapshot"] == snapshot
+
+
+@pytest.mark.parametrize("target", ["output", "source", "checkpoint"])
+def test_reference_binding_detects_changes_after_an_earlier_layer(reference_artifact, monkeypatch, target):
+    source, folder, snapshot, _, metadata = reference_artifact
+    rows = metadata["import_source"]["layers"]
+    first = {"output": folder / rows[0]["file"], "source": source / rows[0]["source_file"],
+             "checkpoint": next(snapshot.glob("*.safetensors"))}[target]
+    second_source = source / rows[1]["source_file"]
+    read = imported._source_arrays
+
+    def replace_earlier(path):
+        arrays = read(path)
+        if path == second_source:
+            # Identical bytes still invalidate a file snapshot during admission.
+            first.write_bytes(first.read_bytes())
+        return arrays
+
+    monkeypatch.setattr(imported, "_source_arrays", replace_earlier)
+    with pytest.raises(ValueError, match="import binding"):
+        qualify(reference_artifact)

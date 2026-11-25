@@ -337,6 +337,11 @@ def verified_import_binding(folder, metadata, *, model, memory=None, profile="ca
     rows = imported.get("layers")
     _require(isinstance(rows, list) and len(rows) == len(blocks))
     evidence = []
+    stamps = {}
+    if reference:
+        checkpoint_files = set(islice(Path(model_snapshot).glob("*.safetensors"), 65))
+        _require(0 < len(checkpoint_files) <= 64)
+        stamps.update((path, _stamp(path.stat())) for path in checkpoint_files)
     for i, (row, block, l0) in enumerate(zip(rows, blocks, _L0)):
         _require(isinstance(row, dict))
         filename = f"layer_{i:02d}.safetensors"
@@ -348,9 +353,11 @@ def verified_import_binding(folder, metadata, *, model, memory=None, profile="ca
                  and re.fullmatch(r"[0-9a-f]{64}", row["source_sha256"]) is not None)
         weight = block.pre_feedforward_layernorm.weight.detach()
         if reference:
+            output_path, source_path = Path(folder) / filename, Path(source) / row["source_file"]
+            stamps.update((path, _stamp(path.stat())) for path in (output_path, source_path))
             gain, gain_evidence = _reference_gain(model_snapshot, i, weight, memory)
             _require(all(row.get(key) == value for key, value in gain_evidence.items()))
-            layer_evidence = _reference_layer(Path(folder) / filename, Path(source) / row["source_file"], row, gain, memory)
+            layer_evidence = _reference_layer(output_path, source_path, row, gain, memory)
             evidence.append({"layer": i, "file": filename, "source_file": row["source_file"],
                              **gain_evidence, **layer_evidence})
             del gain
@@ -369,6 +376,8 @@ def verified_import_binding(folder, metadata, *, model, memory=None, profile="ca
         evidence.append({"layer": i, "file": filename, "sha256": digest, "input_gain_hash": gain_hash})
     if reference:
         _require(model_identity(model, memory=memory, memory_limit_gb=limit) == identity)
+        _require(set(islice(Path(model_snapshot).glob("*.safetensors"), 65)) == checkpoint_files
+                 and all(_stamp(path.stat()) == before for path, before in stamps.items()))
         return {"version": 2, "model_hash": identity, "profile": profile,
                 "reference_input": dict(_REFERENCE_INPUT), "source": dict(_SOURCE), "layers": evidence}
     return {"version": 1, "model_hash": identity, "layers": evidence}
