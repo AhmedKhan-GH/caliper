@@ -48,7 +48,7 @@ Its baseline top token is ` Austin`.
 The lowercase `the` is part of the input bytes.
 The [published graph JSON](https://neuronpedia-attrib.s3.us-east-1.amazonaws.com/user-graphs/cmao6p1xd0000ypedw0qhlhob/gemma-fact-dallas-austin.json) uses uppercase `The` and cannot substitute for this executable example.
 
-The seven interventions use exact published feature groups and positions, including BOS.
+The seven interventions use exact published feature groups and positions, with BOS.
 The runtime catalog retains each source label and every layer, feature, and position ID.
 Cell numbers below are zero-based notebook cells.
 Each `run.action` name is `published_dallas_v1.cellN`, where `N` is the cell number.
@@ -83,7 +83,7 @@ Preparation binds prompt bytes, token IDs, source resources, arithmetic, and dty
 Graph reconstruction uses ten logits, cumulative probability 0.95, and at most 5,000 feature targets.
 The cited graph JSON supplies node threshold 0.7 and edge threshold 0.9.
 Its display thresholds and feature-density filter do not replace these generation parameters.
-Reconstruction applies these settings to the lowercase prompt and compares the actual resulting reference graph.
+Reconstruction applies these settings to the lowercase prompt and compares the actual computed reference graph.
 
 The Dallas materials omit batch size, update interval, and offload settings.
 Reconstruction uses the [pinned API defaults](https://github.com/decoderesearch/circuit-tracer/blob/82996f144b3371ae858ea5713590d004c218f0c2/circuit_tracer/attribution/attribute_transformerlens.py#L42): batch size 512, update interval 4, and `offload=None`.
@@ -99,7 +99,7 @@ Every setting enters cache identity and result metadata, and `trace.read` expose
 The reference objective centers unembedding directions before the final softcap derivative.
 The reference projection excludes BOS feature and error sources before influence normalization.
 Caliper retains separate diagnostics for completeness over all sources.
-The ordinary `caliper` profile retains its existing objective, 512 feature targets, 512 nodes, and 8,192 edges.
+The ordinary `caliper` profile retains its original objective, 512 feature targets, 512 nodes, and 8,192 edges.
 
 ## Reference Results
 
@@ -234,7 +234,7 @@ An active set that exceeds memory admission receives a refusal.
 Its API is `convert_gemma_scope(source, output, *, model, memory_limit_gb=40, evaluation_source=None, profile="caliper", model_snapshot=None)`.
 The CLI accepts `--source`, `--output`, `--model-snapshot`, `--memory-limit-gb`, `--evaluation-source`, and `--profile`.
 Select `--profile circuit_tracer_82996f14` explicitly for the original-coordinate BF16 artifact.
-Reference conversion requires the pinned model snapshot, including through the Python API.
+Reference conversion requires the pinned model snapshot, also through the Python API.
 The model and source paths must identify their exact revisions in the standard Hugging Face cache layout.
 The converter performs no download or training.
 
@@ -252,7 +252,7 @@ Qualification checks every source NPZ, original F32 norm, runtime BF16 norm, eff
 It independently checks source conversion results and binds the pinned model and dictionary sources.
 The reference declaration names `gemma_scope_pre_gain`, `W_enc_original`, and `bfloat16`.
 Version 1 reference evidence, an inverse conversion, or a profile name alone cannot qualify these resources.
-Ordinary conversion retains its existing version 1 evidence.
+Ordinary conversion retains its original version 1 evidence.
 
 The manifest records `training.origin="imported"`, `local_training=false`, zero local training tokens, and empty training partitions.
 Publisher training fields remain unknown, and `publisher_tokens` remains null.
@@ -322,7 +322,7 @@ Construction uses BF16 reference arithmetic and captures original coordinates th
 The lead must qualify the artifact against both pinned snapshots before index construction.
 Index compatibility checks do not replace source qualification.
 
-The index uses 256 model positions per context, including BOS, with at most 255 source positions.
+The index uses 256 model positions per context, with BOS, with at most 255 source positions.
 It retains 16 examples per feature and 33 source slots per example, with an additional BOS position.
 Prefixes and padding do not enter source counts or example offsets.
 Stable tie order and document partition rules remain unchanged.
@@ -487,10 +487,10 @@ Feature-node Jaccard overlap with the actual reference must reach 0.9.
 Every edge must satisfy `abs(caliper - reference) <= 1e-6 + 1e-3 * abs(reference)`.
 The comparison uses the union of both edge sets and counts missing edges as zero.
 Every baseline and intervention comparison covers the full vocabulary, with absolute probability error at most 0.001 and exact top token IDs.
-Both implementations must reproduce every published semantic outcome, including the ineffective British Columbia intervention.
+Both implementations must reproduce every published semantic outcome, with the ineffective British Columbia intervention.
 
 Caliper completeness residuals must remain at most 0.02 per target.
-Trace time must remain at most 20 seconds, and each complete action must remain at most one second.
+Trace time must remain at most 20 seconds, and each complete intervention action must remain at most one second.
 Preparation time remains separate, and cached outputs cannot satisfy action timing.
 Visual, pixel, app/browser parity, the 40 decimal GB process cap, and the 8 decimal GB host reserve remain required.
 The five-point clamp, 8/10 signs, Spearman 0.6, and largest-effect selection do not define published Gemma acceptance.

@@ -7,8 +7,9 @@ The [interpretation tools](../agents/interpretation.md) expose the same data thr
 
 Supported decoder families are the seeded fixture, Gemma 2, and experimental Qwen3.5 text.
 Generic Llama models are unsupported.
-Gemma 2 2B is the only M8 acceptance model.
-M8 release requires every Gemma acceptance check and platform CI to pass.
+Gemma 2 2B is the only M8 acceptance model, and M8 remains held.
+Its target is: reproduces the published circuit-tracer Gemma 2 2B Dallas example.
+Release requires the published comparison, all product checks, and platform CI to pass.
 
 ## Model Probes
 
@@ -133,7 +134,8 @@ The allocation must also fit the remaining process budget.
 Historical peak checks and pressure stop thresholds remain active.
 Other codecs and unbounded decode units are refused before data allocation.
 
-The Qwen preparation commands below use local resource folders.
+The Qwen preparation commands below document supported interfaces with local resource folders.
+Further Qwen GPU work and acceptance attempts remain shelved.
 Each full job requires an external resource wrapper, a heavy slot, and an exclusive model slot.
 The wrapper must set `nice -n 10` and enforce exclusive GPU access for training.
 These requirements are run policy. Portable tools do not contain machine-specific lock paths.
@@ -178,36 +180,35 @@ The official model requires gated access, and its complete pinned snapshot must 
 The [Gemma Scope reference](../reference/gemma-scope.md) records every source pin, selected L0 value, and license.
 
 `tools/interp/convert_gemma_scope.py` imports the selected 16,384-feature JumpReLU transcoders without training.
-It transposes the source encoder and divides input columns by `1 + pre_feedforward_layernorm.weight`.
-It preserves decoder rows, both biases, and thresholds.
+The ordinary `caliper` profile transposes the source encoder and divides input columns by the learned gain.
 The decoder writes after the post-feedforward norm without another normalization.
 A Qwen dictionary cannot serve Gemma.
 
-Gemma research evaluation retains a configured resume budget of 200,000 source positions, 1,024 model positions, and explicit special-token masks.
-It reports per-layer splice loss beside all-layer loss.
-The comparison sample can end at the first published checkpoint with at least 50,000 source positions.
-The final report retains the exact sample and observation counts, final cursor SHA256, `status="partial"`, and `source_budget_complete=false`.
-The stop reason must be `signal 2` or `signal 15` for a clean checkpoint stop.
+The explicit `circuit_tracer_82996f14` profile uses an original-coordinate BF16 artifact.
+`W_enc_original` is the direct source encoder transpose cast to BF16.
+Reference hooks capture the normalized input before the learned gain, without division of rounded inputs after the gain.
+The runtime casts source F32 norms to BF16, then promotes them to F32 for gain addition and casts the gain to BF16.
+Conversion and qualification bind all source bytes and the exact version 2 conversion schema.
+The [reference contract](../reference/gemma-scope.md#conversion-and-provenance) defines the artifact and qualification boundaries.
 
-The measured Gemma comparison sample contains 52,231 source positions and 52,174 metric observations.
-Its stop reason is `signal 2`.
-The cursor permits a later resume toward 200,000 positions.
-Qualification also accepts a valid full-budget result and preserves its original quality status.
-The acceptance result and quality disclosure state the measured sample count and its comparison role.
+The published index requires exactly 2,000,000 source positions and 256 model positions per context, with BOS.
+It uses original coordinates, BF16 reference arithmetic, and the complete artifact fingerprint and execution identity.
+Format version 2 requires `encoder_policy="gemma_scope_pre_gain_v1"`.
+Changes to source bytes, arithmetic, dtype, device, or execution settings require a new index.
+Ordinary indexes retain their compatible policies and limits.
 
-Quality comparisons retain thresholds of 0.30 mean FVU, 0.15 dead fraction, and 0.5 nats all-layer loss rise.
-These comparisons do not block the index or hidden acceptance after the valid comparison sample exists.
-Quality measurements supply comparison evidence, not a numerical release gate.
-The shared protocol code retains CPU tests for experimental Qwen, but M8 comparison evidence uses Gemma only.
+The historical F32 research comparison contains 52,231 source positions and 52,174 metric observations.
+It retains `status="partial"`, `source_budget_complete=false`, and stop reason `signal 2` against a 200,000-position resume budget.
+Founder Decision 8 and Coordinator Decision 10 define this result as separate comparison evidence.
+It cannot qualify the new BF16 artifact or index, and the published profile adds no quality gate.
+The generic `research_v1` protocol retains its sample, identity, context, and per-layer loss checks.
+Qwen CPU protocol paths remain supported, but further Qwen GPU runs, regrading, and acceptance attempts remain shelved.
 
-The example index requires exactly 2,000,000 tokens from the unchanged index partition.
-The explicit Gemma process limit is 40 decimal GB.
+Independent arithmetic checks use actual TransformerLens conversion with small CPU models.
+They cover F32 and BF16, contexts of 33, 256, and 1,024 positions, and right padding at 256 positions.
+These checks do not prove full model parity, device memory, trace time, or action time.
+The explicit Gemma process limit remains 40 decimal GB, with an 8 decimal GB host reserve.
 The Qwen quality override does not apply to Gemma.
-
-CPU tests with random Gemma configurations verify the implemented paths without gated weights.
-Pretrained conversion, research evaluation, index correctness, and hidden acceptance require model-bound evidence.
-CPU tests do not establish pretrained peak memory, trace time, or steering time.
-Evaluation and index tools select Gemma with `--model google/gemma-2-2b` and require the pinned `evaluation_source` record.
 
 ## Example Index
 
@@ -256,19 +257,36 @@ The completeness and stale-feature checks retain their existing tolerances.
 Edges represent direct effects between token, feature, error, and logit nodes.
 The tracer accounts for biases separately and measures completeness before display pruning.
 It reports feature share, error share, and omitted influence.
-The graph uses per-layer transcoders, without cross-layer features, supernodes, or global weight analysis.
-Feature labels use promoted output tokens and frequent example tokens, without model-generated descriptions.
+The graph uses per-layer transcoders, without cross-layer features or global weight analysis.
+Ordinary feature labels use promoted output tokens and frequent example tokens, without model-generated descriptions.
+The published Dallas profile also exposes the exact source groups and labels.
 
-A prompt contains at most 32 tokens, including special tokens.
+A prompt contains at most 32 tokens, with special tokens.
 The tracer refuses excess tokens without truncation.
-Defaults cap feature targets at 512, displayed nodes at 512, and edges at 8,192.
+Ordinary calls cap feature targets at 512, displayed nodes at 512, and edges at 8,192.
 Logit targets cover 95 percent cumulative probability, with at most ten targets.
-An eight-entry cache uses the prompt, intervention state, and feature-label index identity as its key.
+An eight-entry cache binds the prompt, intervention state, profile, trace settings, and feature-label index identity.
 A different label index preserves compatible forward activations but requires a new graph identity.
+
+### Reference Profile
+
+`Tracer.trace` accepts the explicit profile `circuit_tracer_82996f14` beside the ordinary `caliper` profile.
+The published Dallas request supplies 5,000 feature targets, ten logits, and cumulative probability 0.95.
+It sets node threshold 0.7, edge threshold 0.9, batch size 512, and update interval 4.
+Node and edge ceilings are 8,192 and 262,144.
+An excess causes refusal without truncation of the pruned result.
+The [reference graph contract](../reference/gemma-scope.md#reference-graph) distinguishes published parameters from unpublished reconstruction choices.
+
+The reference objective centers unembedding directions before the final softcap derivative.
+Its projection excludes BOS feature and error sources before influence normalization.
+Separate Caliper diagnostics retain completeness over all sources.
+The complete graph remains available through `trace.read`, with at most 256 records of each kind per page.
+Ordinary calls retain their lower limits, objective, and default batch size of 64.
 
 ## Graph Tensors
 
-The tracer publishes fixed tensor shapes on the model device.
+The tracer publishes tensor shapes fixed by the profile on the model device.
+The table below describes ordinary calls.
 Counts define the valid rows, and unused rows contain zeros.
 Graph JSON retains labels, prompt tokens, and completeness diagnostics.
 `trace.read` pages at most 256 nodes and 256 edges per request.
@@ -281,6 +299,9 @@ Graph JSON retains labels, prompt tokens, and completeness diagnostics.
 | `live:trace.edge_i` | `int32` | `(8192,2)` | Source and target node rows |
 | `live:trace.edge_f` | `float32` | `(8192,2)` | Weight and normalized weight |
 | `live:trace.label_text` | `uint32` | `(544,16)` | Packed prompt and node labels |
+
+The reference profile uses 8,192 node rows, 262,144 edge rows, and 8,224 label rows.
+Counts and field layouts retain their ordinary form.
 
 Node kinds are token zero, feature one, error two, and logit three.
 Token layers use minus one, and logit layers use the layer count.
@@ -382,7 +403,8 @@ The sweep patches residual inputs across layers and positions, with at most 32 c
 It publishes `patch.grid` and returns normalized recovery from actual model outputs.
 The circuit demo uses three panels, and the sweep has separate tests.
 
-`trace.validate` replays the latest trace's intervention snapshot.
+The generic `trace.validate` diagnostic replays the latest trace's intervention snapshot.
+Its sign and rank results do not define published Dallas acceptance.
 It zero-clamps up to ten influential features and measures changes in the centered top-token logit.
 The reply contains sign agreement, Spearman correlation, individual measurements, and explicit failure reasons.
 Insufficient features and zero variance do not produce a passing result.
@@ -394,6 +416,29 @@ It requires a local model, dictionary, and prompt.
 The model is `tiny-lm` or an exact pinned Qwen or Gemma snapshot folder in the Hugging Face cache.
 The dictionary folder must also contain its compatible example index.
 The loader uses local safe weights and refuses missing or incompatible resources.
+
+### Published Controls
+
+An explicit published inference request pairs `replication_profile="published_dallas_v1"` with `private_output_directory`.
+The caller must first create a unique local private directory.
+Script requests reject both fields, and inference requests require the pair.
+The hosted profile selects the pinned Gemma model, qualified reference arithmetic, BF16 artifact, and compatible original-coordinate index.
+It refuses missing or incompatible sources without a profile fallback or download.
+
+The exact prompt is `Fact: the capital of the state containing Dallas is`.
+The [published group table](../reference/gemma-scope.md#published-dallas-profile) lists the seven interventions, source labels, and expected top tokens.
+Each group action uses `run.action` with `published_dallas_v1.cellN`.
+Cell 10 restores the baseline, and each other action replaces the previous complete case atomically.
+A failed member restores the prior state and returns one terminal failure.
+The controls show actual outputs from fresh model execution.
+
+Preparation captures baseline and donor activations from independent, unchanged prompts before action timing.
+It retains baseline attention patterns while actions recompute norms and MLPs.
+Absolute clamps use those prepared activations, never index maxima or an earlier case's modified activations.
+Full vocabulary evidence stays in the explicit private directory, outside MCP replies and the public repository.
+The published profile permits selected rows through 8,191, while ordinary runs retain 511.
+
+### Ordinary Controls
 
 The `prompt` parameter accepts text, and `selected_node` accepts a graph row or minus one for no selection.
 Selection alone applies no clamp.
@@ -455,26 +500,30 @@ Run the hidden fixture after exclusive graphics access becomes available:
   --dictionary "$FIXTURE_DICTIONARY" --hidden --out "$DEMO_OUT"
 ```
 
-For Gemma acceptance, set `MODEL` to its pinned snapshot folder and `DICTIONARY` to its prepared dictionary folder.
-Use a separate output folder and a `GEMMA GPU MODEL` wrapper description:
+For published Gemma collection, set `MODEL` and `DICTIONARY` to the qualified pinned resources.
+Create a unique private directory named by `PRIVATE_OUTPUT` before launch.
+Select an empty output folder beneath it:
 
 ```sh
-"$HEAVY_WRAPPER" 'GEMMA GPU MODEL circuit trace' "${DEMO_OUT}.log" \
+"$HEAVY_WRAPPER" 'GEMMA GPU MODEL published Dallas' "$DEMO_LOG" \
   env CALIPER_AGENT_OFFLINE=1 PYTHONPATH=python:. \
   .venv/bin/python demos/circuit_trace/run.py --model "$MODEL" \
-  --dictionary "$DICTIONARY" --hidden --out "$DEMO_OUT"
+  --dictionary "$DICTIONARY" --replication-profile published_dallas_v1 \
+  --private-output-directory "$PRIVATE_OUTPUT" \
+  --hidden --out "$PRIVATE_OUTPUT/driver"
 ```
 
-The fixture prompt is `The red cube is beside a tree.`
-The default model prompt is `Fact: the capital of the state containing Dallas is`.
-The expected answer is `Austin`.
-`--prompt` supplies another prompt within the token limit.
-Gemma acceptance requires a baseline top-token probability above 0.5 for a custom prompt.
-The default Dallas prompt has no confidence threshold.
+Both profile and private output arguments are required.
+The published profile fixes the exact lowercase Dallas prompt and refuses `--quality-override`.
+It selects a 40 decimal GB process cap and retains the 8 decimal GB host reserve.
+Collection uses Caliper MCP for the full reference-profile trace, baseline, and all seven published actions.
+A fresh baseline precedes each intervention.
+The driver waits for terminal events and complete output publication.
 
-The Gemma profile selects a 40 GB process limit and refuses `--quality-override`.
-Every control operation uses Caliper MCP, including feature selection, examples, clamps, validation, and window capture.
-The driver waits for file events, run events, and published steps.
+The fixture prompt remains `The red cube is beside a tree.`
+Ordinary model demos retain `--prompt` and the default Dallas prompt within the 32-token limit.
+Their generic diagnostics do not establish published replication.
+The published profile permits no replacement prompt or invented confidence threshold.
 
 For `tiny-lm`, the driver sets `CALIPER_FIXTURE_DISPLAY_MPS=1` in its child environment.
 This option copies only 18 fixed display tensors to MPS, with a total limit of 256 KiB.
@@ -487,6 +536,8 @@ Only the founder uses `--show` in place of `--hidden`.
 This form prepares the baseline instrument without the acceptance batch.
 `--hidden --demo` uses the same interactive path without a visible window.
 The interactive path checks the browser asset routes before it creates the graph.
+Hidden startup proof verifies the served assets, program views, retained attachment, and visible error retention.
+These results establish launch and display reliability, not published replication or product acceptance.
 It records `demo_ready` and makes no acceptance claim.
 The visible form retains its MCP event bridge until its own app closes.
 A setup error stays visible while the app remains open, including errors before the bridge exists.
@@ -499,116 +550,144 @@ The visible result records that hidden pixel evidence was not collected and make
 
 ## Acceptance Evidence
 
-The driver saves `result.json` with the graph, command log, event log, example pages, validation result, generated text, and instrument specification.
-Hidden runs also save `before.png`, `after.png`, and the second example page capture under the acceptance folder.
-A bounded hidden diagnostic reads actual renderer IDs, color pixels, panel image quads, clips, generations, and font references from those captures.
+Published evidence collection and independent acceptance review are separate steps.
+The hidden collection first measures a bounded preparation and baseline, then collects the complete graph and all seven actions.
+Live `--demo` and founder `--show` modes prepare the interactive instrument without that acceptance batch.
+A live `demo_ready` result establishes no acceptance claim.
 
-An explicit founder decision can admit the recorded Qwen demo dictionary through `--quality-override FILE`.
-The override cannot admit a Gemma dictionary.
-The JSON record uses version 1 and authority `founder`, with `dictionary_fingerprint`, `evaluated_tokens`, `fvu`, `dead_fraction`, `cross_entropy_delta`, and `failed_gates`.
-The fingerprint and measured values must match the live dictionary evidence exactly.
-The driver retains failed quality status and displays the override, measurements, and full fingerprint in the instrument and `result.json`.
-The override cannot bypass incomplete resources, stale evidence, or causal, pixel, parity, and budget checks.
-The hidden test reads the optional record path from `CALIPER_QWEN_QUALITY_OVERRIDE`.
+### Published Comparison
 
-The pixel oracle applies the window origin, framebuffer scale, linear texture samples, and text alpha composition.
-It compares the resulting panel pixels with the window PNG and requires visible geometry for every source item.
-The PNG/raw equality check establishes only capture consistency.
+The actual pinned circuit-tracer run completed all seven cases and canonical CPU pruning.
+All seven top tokens match the published outcomes, but most rounded probability lists differ.
+Cell 26 matches its rounded list.
+The [reference results](../reference/gemma-scope.md#reference-results) state the graph counts and distinguish source-library scores from Caliper completeness.
+The comparison must use these actual full reference outputs and graph, not rounded publication labels alone.
 
-An independent text reference uses the actual font atlas and expected glyph quads for the prompt and selected labels.
-Each required label needs visible ink and pixels within two channel levels of that reference.
-Synthetic captures test failures in this oracle. They do not supply application acceptance evidence.
+Feature-node Jaccard overlap must reach 0.9.
+Every union edge must satisfy `abs(caliper - reference) <= 1e-6 + 1e-3 * abs(reference)`.
+A missing edge counts as zero.
+Baseline and intervention probabilities must agree across the full vocabulary within 0.001 absolute, with exact top token IDs.
+Both implementations must reproduce every published semantic outcome, with the ineffective British Columbia intervention.
 
-The fixture comparison uses the actual published graph resources with the existing native and browser parity harness.
-It exports those resources, closes the hidden app and run, then starts the native and browser comparisons in sequence.
-The process exits with code one when a required check fails.
+The published path requires completeness residuals at most 0.02 per target and trace time at most 20 seconds.
+Each complete intervention action must take at most one second.
+This duration includes model execution, validation, export, publication, and terminal checks.
+Preparation time remains separate, and cached outputs cannot satisfy this limit.
+The process must remain within 40 decimal GB and preserve 8 decimal GB of available host memory.
+Historical five-point clamps, 8/10 signs, Spearman 0.6, and largest-effect selection do not decide published Gemma acceptance.
 
-The driver reads optional inference metadata from `trace.status` before and after Generate.
-A completion must advance its identity and supply exactly two rows of 24 integer token IDs.
-Prompt and intervention hashes must match the current state, and both output texts must match their completion hashes.
-The semantic steering check uses the actual comparison argmax IDs from this metadata.
+### Collection And Review
 
-The demo selects the feature with the largest absolute effect on the top logit before the last layer.
-The result also records the original influence-based selection and its zero-ablation measurement from `trace.validate`.
-Validation retains the ten most influential active features and reports every prediction and measurement.
-The zero clamp predicts a centered-logit change equal to the negative of the selected feature's direct effect.
-An inhibitory feature predicts an increase, and an excitatory feature predicts a decrease.
-A zero or nonfinite prediction establishes no direction and cannot pass either direction check.
+The driver saves `result.json`, `collection.json`, complete graph pages, action records, example pages, captures, and resource identities beneath the private root.
+Private action files retain full vocabulary logits and probabilities as exact F32 casts of native values.
+Metadata retains native dtype and exact source and case identities.
+Collection checks fresh output sequences and hashes every required file.
+An exit of zero means collection completed, while `accepted_replication` remains false.
+Measured failures remain in the collection and cannot become optional checks.
 
-Each capture also saves actual `program.status` values and the declared piece limits after the resource barrier.
-Derive passes have limits of 50 ms and 64 MiB, while draw frames have limits of 4 ms and 64 MiB.
-The result checks these budgets before and after the clamp.
-Missing GPU times remain unverified and fail the required check.
+After independent comparison and capture inspection, the lead supplies a review file beneath the same private root.
+The review binds the collection hash to the numerical, browser, capture, parity, and memory evidence.
+Use a new output file for final verification:
 
-Acceptance for Qwen and Gemma requires feature share of at least 0.30, 20 to 512 nodes, and a token-to-logit path.
-It also requires 16 positive sorted examples, at least eight correct signs among ten features, and Spearman correlation of at least 0.6.
-Every target residual must remain at most 0.02.
-The trace limit is 20 seconds, and the steering limit is one second.
-The process limit is 12 GB for Qwen and 40 GB for Gemma.
+```sh
+.venv/bin/python demos/circuit_trace/_replication_review.py \
+  --private-output-directory "$PRIVATE_OUTPUT" \
+  --collection driver/collection.json --review review.json \
+  --out "$PRIVATE_OUTPUT/verified-result.json"
+```
 
-The absolute probability change for the original top token must reach 0.05, or the top token must change.
-Both alternatives require the original token's probability to change in the predicted direction.
-The driver finds that token's exact probability by its ID, even when the bar order or top token changes.
-The `steering_change_matches_prediction` check records both token IDs, both probabilities, the signed change, the prediction, and both directions in `result.json`.
+The verifier rechecks every file hash, case identity, required check, and external review metric.
+Only a successful review sets `accepted_replication=true` and `acceptance_complete=true`.
+Resource qualification and synthetic review fixtures cannot establish real acceptance.
+M8 remains held until all checks, independent reviews, and platform CI pass.
 
-macOS process checks use the peak memory footprint from `/usr/bin/time`, which includes unified memory.
+### Visual Evidence
+
+Native and browser captures must show the graph, published labels, group controls, examples, and actual output bars.
+Every visible graph node needs its expected ID, and bar heights must match current probabilities within two pixels.
+Both example pages retain eight rows and 16 distinct examples in total.
+The pixel oracle uses actual image quads, clips, framebuffer scale, texture samples, and text alpha composition.
+PNG/raw equality establishes capture consistency only.
+
+An independent text reference uses the actual font atlas and expected glyph quads for prompt and selected labels.
+Every required label needs visible ink and pixels within two channel levels of that reference.
+App/browser parity requires exact interior IDs, at most two color levels of interior difference, and at most one percent unmatched edge pixels.
+The published path requires independent parity evidence for its actual resources.
+Synthetic captures test oracle failures but do not establish product acceptance.
+
+Each capture records actual `program.status` values and declared piece limits after the resource barrier.
+Derive limits remain 50 ms and 64 MiB, while draw limits remain 4 ms and 64 MiB.
+Missing GPU times leave required checks unverified.
+Browser proof requires available asset routes, visible program views, and attachment before and after the capture.
+The verified startup repair does not replace these checks for the published collection.
+
+macOS process checks use peak memory footprint from `/usr/bin/time`, with unified memory.
 Linux checks use maximum resident set size.
-Missing high-water measurements fail acceptance.
-The native fixture parity process retains a 12 GB limit.
+Missing high-water or host-reserve evidence fails published acceptance.
+Local measurements remain acceptance evidence and do not establish public product performance before approval.
 
-Pixel checks require all visible node IDs and the original top token's bar height in each capture.
-That height must match its current probability times scale within two pixels.
-The original top token's bar must change in the predicted direction after the Qwen or Gemma clamp.
-The `bar_change_matches_prediction` check records both pixel heights, their signed change, the prediction, and both directions.
-Fixture parity requires exact interior IDs, at most two color levels of interior difference, and at most one percent differing edge pixels.
-App/browser parity applies to the fixture graph.
-Qwen and Gemma require both the semantic steering check and the bar direction check.
+### Generic Diagnostics
 
-M8 release requires every Gemma acceptance check and platform CI to pass.
-Quality measurements remain visible, but they do not decide M8 acceptance.
-Graph validation requires at least eight of ten signs and Spearman correlation of at least 0.6.
+Ordinary demos retain feature selection, zero clamps, `trace.validate`, generation, and fixture checks.
+The generic selector uses the largest absolute top-logit effect before the last layer.
+Its historical causal check uses 8/10 signs and Spearman 0.6.
+Its directional check requires a probability change of 0.05 or a changed top token, with the predicted direction.
+These ordinary diagnostics do not replace any published group action or reference comparison.
 
-The macOS and Windows fixture workflows also run isolated inference entry checks.
-These checks use the production entry helper with a harmless hosted substitute.
-They establish argument and environment transfer, including fork metadata and prompt removal from process arguments.
-They do not establish production package attachment, checkpoint restoration, shutdown, or native Windows inference.
+Generic learned-model checks retain 20 to 512 nodes, feature share at least 0.30, and a token-to-logit path.
+They require 16 positive sorted examples and completeness residuals at most 0.02.
+Ordinary Gemma diagnostics require baseline confidence above 0.5 for a custom prompt, but the default Dallas prompt has no confidence threshold.
+These generic requirements remain separate from published acceptance.
 
-Fixture results separate mathematical and display checks from learned-model semantics.
-The unchanged fixture requires a positive measured clamp effect and records the stricter steering result without a Qwen acceptance claim.
-It retains the sign and rank thresholds from validation.
-A probability change smaller than one pixel can leave the fixture bar height unchanged.
-The selected fixture examples have 13 valid tokens and 12 padding slots in each 25-slot display row.
-The two pages retain all 16 example IDs and verify each token slot against the API response.
+The generic Generate check requires a fresh completion with two rows of 24 integer token IDs.
+Prompt, intervention, and text hashes must match the current state.
+The actual comparison argmax IDs determine semantic outcomes, independently of bar order.
+Ordinary controls and their CPU tests remain supported.
+
+The fixture comparison exports actual graph resources and runs the native and browser parity harnesses in sequence.
+It retains the 12 GB limit and requires a positive measured clamp effect without a learned-model acceptance claim.
+Its sign and rank thresholds remain unchanged.
+A probability change smaller than one pixel can leave its bar height unchanged.
+The selected fixture examples retain 13 valid tokens and 12 padding slots in each 25-slot display row.
 
 The normal fixture test is `tests/demos/test_circuit_trace.py::test_hidden_fixture` in Native Build CI.
-Missing Python modules or resources fail setup, while verified absence of Metal permits a platform skip.
-The opt-in `local_model` test uses the same driver with `CALIPER_QWEN_MODEL` and `CALIPER_QWEN_DICTIONARY`.
-That test runs only outside CI, with explicit local paths and no downloads.
-The separate `test_local_gemma_hidden` case uses `CALIPER_GEMMA_MODEL` and `CALIPER_GEMMA_DICTIONARY` under the same restrictions.
+Missing modules or resources fail setup, while verified absence of Metal permits a platform skip.
+Isolated inference entry checks also cover argument and environment transfer on macOS and Windows.
+Those checks do not establish production attachment, checkpoint restoration, shutdown, or native Windows inference.
+
+Supported local-model test entry points remain available, but Qwen acceptance attempts remain shelved.
+The Qwen entry uses `CALIPER_QWEN_MODEL` and `CALIPER_QWEN_DICTIONARY`, with optional `CALIPER_QWEN_QUALITY_OVERRIDE`.
+The generic Gemma entry uses `CALIPER_GEMMA_MODEL` and `CALIPER_GEMMA_DICTIONARY`.
+These opt-in checks run outside CI with explicit local resources and no downloads.
 
 ## Experimental Qwen Limits
 
 Qwen3.5-0.8B remains experimental and does not decide M8 acceptance.
 Its CPU and fixture tests remain in CI.
-Its recorded dictionary and index retain their measured limitations.
+Further Qwen GPU runs, research regrading, and acceptance attempts remain shelved.
+Its historical dictionary and index retain their measured limitations.
 
-The Qwen dictionary contains 8,192 features per layer across 24 layers and records 40 million training tokens.
+The historical Qwen dictionary contains 8,192 features per layer across 24 layers and records 40 million training tokens.
 Its held-out FVU is 0.329109366111, dead fraction is 0.261149088542, and cross-entropy rise is 1.18043922644 nats.
 FVU passes the Qwen-specific 0.40 limit but exceeds the original 0.30 limit.
 Dead fraction and cross-entropy fail their unchanged limits of 0.15 and 0.5 nats.
-The founder override admits only this exact Qwen dictionary and retains those failed measurements.
-Its index contains two million tokens.
+Its historical index contains two million tokens.
 
-The recorded Qwen graph result fails at 6/10 signs and Spearman correlation 0.539394.
-The requirements remain 8/10 signs and 0.6.
-The quality override does not change those requirements.
+The explicit founder override admits only this exact Qwen dictionary and retains those failed measurements.
+The generic driver accepts it through `--quality-override FILE`, with the full fingerprint and identical measured values.
+Its version 1 record uses authority `founder` and cannot admit Gemma or bypass missing resources and failed nonquality checks.
+The instrument and result retain the override and the failed quality status.
+
+The historical Qwen graph result failed at 6/10 signs and Spearman correlation 0.539394.
+Its historical requirements were 8/10 signs and 0.6.
+The quality override did not change those requirements.
 These Qwen results supply no Gemma quality or acceptance evidence.
 
-The influence-based selection, L3 F5742, supplies a secondary comparison.
-It predicts -0.361462 and measures +0.003521.
-The primary selection uses the largest absolute predicted effect on the top logit outside the last layer.
-Validation still uses the ten most influential active features.
-Recorded Qwen evidence passes 151 of 152 required checks, with graph validation below its unchanged thresholds.
+The historical influence-based selection, L3 F5742, supplies a secondary comparison.
+It predicted -0.361462 and measured +0.003521.
+The historical primary selection used the largest absolute predicted effect on the top logit outside the last layer.
+Validation used the ten most influential active features.
+Historical Qwen evidence passed 151 of 152 required checks, with graph validation below its thresholds.
 
 ## Refusals And Limits
 
