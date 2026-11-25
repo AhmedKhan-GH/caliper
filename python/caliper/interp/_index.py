@@ -746,14 +746,25 @@ class FeatureIndex:
             size = max(8, output.element_size())
             workspace = (len(missing) * (4 * output.shape[1] + 16 * min(
                 LABEL_VOCAB_CHUNK, output.shape[0])) * size + 64_000_000)
+
+            def admit():
+                if allocation_bytes(self.memory) + workspace > self.memory.limit:
+                    raise CleanStop("feature label allocation exceeds the process memory limit")
+                reserve = max(getattr(self.memory, "host_reserve_bytes", 0), host_reserve_for_model(self.model))
+                if reserve:
+                    import psutil
+                    if psutil.virtual_memory().available - workspace < reserve:
+                        raise CleanStop("feature label allocation would consume the host reserve")
+
             self.memory.check("feature labels admission")
-            if allocation_bytes(self.memory) + workspace > self.memory.limit:
-                raise CleanStop("feature label allocation exceeds the process memory limit")
+            admit()
 
             def progress(stage):
                 self.memory.check(stage, force=False)
                 if check is not None:
                     check(stage)
+                if stage == "feature label chunk":
+                    admit()
 
             promoted = self._promoted_many(missing, check=progress)
             for (layer, feature), tokens in zip(missing, promoted):
