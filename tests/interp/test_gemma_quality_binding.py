@@ -175,13 +175,15 @@ sys.path[:0] = sys.argv[2:]
 import torch
 from caliper.interp._dictionary import model_identity, verify_hf_model
 from caliper.interp._evaluation_identity import evaluation_model_evidence
+from tests.interp.cpu_pressure import cpu_fixture_pressure
 from tests.interp.test_gemma_runtime import gemma_model
 model = gemma_model()
 with torch.no_grad():
     for block in model.model.layers:
         block.pre_feedforward_layernorm.weight.copy_(torch.linspace(-.3, .7, 16))
-verify_hf_model(model, sys.argv[1])
-print(json.dumps(evaluation_model_evidence(model, model_identity(model))))
+with cpu_fixture_pressure():
+    verify_hf_model(model, sys.argv[1])
+    print(json.dumps(evaluation_model_evidence(model, model_identity(model))))
 """
     from pathlib import Path
     root = Path(__file__).resolve().parents[2]
