@@ -2,10 +2,16 @@
 from __future__ import annotations
 
 import hashlib
+import io
 import json
 import math
 from pathlib import Path
+import pickle
+import pickletools
 import re
+import struct
+import zipfile
+from collections import OrderedDict
 
 import numpy as np
 
@@ -85,6 +91,89 @@ def verify_descriptor(root, record):
     path = private_path(root, record.get("file"))
     require(file_hash(path) == record.get("sha256"), "Private evidence hash differs.")
     return path
+
+
+def _native_tensor(storage, offset, shape, stride, requires_grad, hooks):
+    """Retain tensor metadata without tensor allocation or model imports."""
+    require(offset == 0 and requires_grad is False and not hooks, "Unsupported native tensor view.")
+    return storage, shape, stride
+
+
+class _NativeMetadata(pickle.Unpickler):
+    def find_class(self, module, name):
+        allowed = {("torch", "BFloat16Storage"): "bfloat16",
+                   ("torch._utils", "_rebuild_tensor_v2"): _native_tensor,
+                   ("collections", "OrderedDict"): OrderedDict}
+        require((module, name) in allowed, "Unsupported native tensor metadata global.")
+        return allowed[module, name]
+
+    def persistent_load(self, value):
+        require(isinstance(value, tuple) and len(value) == 5 and value[:2] == ("storage", "bfloat16")
+                and isinstance(value[2], str) and re.fullmatch(r"[0-9]+", value[2])
+                and value[3] == "cpu" and type(value[4]) is int and value[4] > 0,
+                "Unsupported native tensor storage.")
+        return value[2], value[4]
+
+
+def native_arrays(root, record, shapes):
+    """Read only bounded, dense BF16 records from the private native exporter."""
+    try:
+        path = verify_descriptor(root, record)
+        require(record.get("tensors") == {name: {"dtype": "torch.bfloat16", "shape": shape}
+                                           for name, shape in shapes.items()}, "Native tensor declarations differ.")
+        storage_bytes = sum(math.prod(shape) * 2 for shape in shapes.values())
+        require(22 <= path.stat().st_size <= storage_bytes + 65536, "Native archive exceeds its evidence limit.")
+        # Bound the directory before ZipFile creates its entry table.
+        with path.open("rb") as stream:
+            stream.seek(-22, 2)
+            signature, disk, directory_disk, disk_count, count, length, _, comment = struct.unpack(
+                "<4s4H2LH", stream.read(22))
+        require(signature == b"PK\x05\x06" and disk == directory_disk == comment == 0
+                and disk_count == count and 1 <= count <= 16 and length <= 8192,
+                "Unsupported native archive directory.")
+        with zipfile.ZipFile(path) as archive:
+            entries = archive.infolist()
+            names = [item.filename for item in entries]
+            require(len(entries) == count and len(set(names)) == count, "Duplicate native archive entries.")
+            prefix = names[0].split("/")[0] + "/"
+            require(all(name.startswith(prefix) for name in names), "Mixed native archive roots.")
+            members = {item.filename[len(prefix):]: item for item in entries}
+            auxiliary = {"data.pkl", "byteorder", "version", ".data/serialization_id",
+                         ".format_version", ".storage_alignment"}
+            require({"data.pkl", "byteorder", "version"} <= members.keys()
+                    and all(name in auxiliary or re.fullmatch(r"data/[0-9]+", name) for name in members),
+                    "Unsupported native archive members.")
+            require(all(item.compress_type == zipfile.ZIP_STORED and not item.flag_bits & 1
+                        and item.file_size <= (storage_bytes if name.startswith("data/") else 16384)
+                        for name, item in members.items()), "Native archive member exceeds its evidence limit.")
+            require(archive.read(members["byteorder"]) == b"little"
+                    and archive.read(members["version"]) == b"3\n", "Unsupported native archive format.")
+            raw = archive.read(members["data.pkl"])
+            operations = {"PROTO", "EMPTY_DICT", "EMPTY_TUPLE", "MARK", "GLOBAL", "BINPUT", "BINGET",
+                          "BINUNICODE", "BININT", "BININT1", "BININT2", "TUPLE", "TUPLE1", "TUPLE2", "TUPLE3",
+                          "BINPERSID", "NEWFALSE", "REDUCE", "SETITEM", "SETITEMS", "STOP"}
+            require(raw.startswith(b"\x80\x02") and all(op.name in operations for op, _, _ in pickletools.genops(raw)),
+                    "Unsupported native metadata encoding.")
+            metadata = _NativeMetadata(io.BytesIO(raw)).load()
+            require(type(metadata) is dict and metadata.keys() == shapes.keys(), "Native tensor coverage differs.")
+            arrays, used = {}, set()
+            for name, shape in shapes.items():
+                (key, size), actual_shape, stride = metadata[name]
+                expected_stride = tuple(math.prod(shape[i + 1:]) for i in range(len(shape)))
+                require(actual_shape == tuple(shape) and stride == expected_stride and size == math.prod(shape),
+                        "Native tensor shape or storage differs.")
+                member = members["data/" + key]
+                require(member.file_size == size * 2, "Native storage byte count differs.")
+                bits = np.frombuffer(archive.read(member), dtype="<u2").astype(np.uint32) << 16
+                arrays[name] = bits.view(np.float32).reshape(shape)
+                require(np.isfinite(arrays[name]).all(), "Native tensor contains nonfinite values.")
+                used.add("data/" + key)
+            require({name for name in members if name.startswith("data/")} == used,
+                    "Native archive contains unbound storage.")
+            return arrays
+    except (KeyError, TypeError, ValueError, OSError, IndexError, EOFError, pickle.UnpicklingError,
+            zipfile.BadZipFile, struct.error, RecursionError) as error:
+        raise Failure(f"Invalid native evidence: {error}") from error
 
 
 def replication_state(status):
@@ -175,6 +264,15 @@ def validate_case(root, status, cell, *, previous_sequence, preparation_id=None)
             logits, probabilities = data["logits"], data["probabilities"]
         require(all(a.shape == tuple(shape) and a.dtype == np.float32 and np.isfinite(a).all()
                     for a in (logits, probabilities)), "Private arrays have invalid values or shape.")
+        native = native_arrays(root, record.get("native_evidence"), {"logits": shape, "probabilities": shape})
+        require(all(native[name].tobytes() == value.tobytes() for name, value in
+                    (("logits", logits), ("probabilities", probabilities))), "Native bytes differ from private arrays.")
+        if cell == 29:
+            observation = record.get("observations", {}).get("Say Victoria", {})
+            require(observation.get("node") == SOURCE["groups"]["Say Victoria"][0],
+                    "The Say Victoria observation identity differs.")
+            observed = native_arrays(root, observation.get("native_evidence"), {"activation": [1]})
+            require(observed["activation"][0] == 0, "The Say Victoria activation is not zero.")
         require(((probabilities >= 0) & (probabilities <= 1)).all()
                 and np.allclose(probabilities.sum(axis=1), 1, atol=.01, rtol=0), "Private probabilities are invalid.")
         require(record["argmax_token_ids"] == probabilities.argmax(axis=1).tolist(), "Private argmax identity differs.")
