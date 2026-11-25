@@ -37,8 +37,11 @@ _REFERENCE_INPUT = {"coordinate": "gemma_scope_pre_gain", "encoder": "W_enc_orig
 _REFERENCE_INPUT_CONVERSION = "(W_enc.T / reference_gain).to(bfloat16)"
 _REFERENCE_OUTPUT_CONVERSION = "direct source cast to bfloat16"
 _REFERENCE_CONVERSION = {
-    "version": 1, "profile": _REFERENCE_PROFILE, "model_hash": _GEMMA_IDENTITY,
-    "gain": "(1 + source_norm_weight.to(float32)).to(bfloat16)",
+    "version": 2, "profile": _REFERENCE_PROFILE, "model_hash": _GEMMA_IDENTITY,
+    "source_norm_cast": "runtime_norm_weight = source_norm_weight.to(bfloat16)",
+    "source_float32_gain": "1 + source_norm_weight.to(float32)",
+    "runtime_float32_gain": "1 + runtime_norm_weight.to(float32)",
+    "gain": "(1 + runtime_norm_weight.to(float32)).to(bfloat16)",
     "division_dtype": "promote_types(source_dtype, float32)",
     "tensors": {
         "W_enc_original": "W_enc.T.to(bfloat16).contiguous()",
@@ -58,10 +61,11 @@ def _unique_object(pairs):
     return result
 
 
-def _reference_gain(snapshot, index, weight, memory):
-    """Read one source norm vector and bind its cast to verified model bytes."""
+def _reference_gain(snapshot, index, weight, memory, *, source_model=False):
+    """Bind source provenance and the loader cast before reference gain addition."""
     _require(snapshot is not None and _snapshot_identity(snapshot) == _GEMMA_IDENTITY)
-    _require(weight.dtype in (torch.float32, torch.bfloat16) and weight.shape == (_WIDTH,))
+    expected_dtype = torch.float32 if source_model else torch.bfloat16
+    _require(weight.dtype == expected_dtype and weight.shape == (_WIDTH,))
     _admit(memory, 64 * (4 * 1024 * 1024 + 1) + 4096, "scope_gain_header_admission")
     files = list(islice(Path(snapshot).glob("*.safetensors"), 65))
     _require(0 < len(files) <= 64)
@@ -105,14 +109,22 @@ def _reference_gain(snapshot, index, weight, memory):
         actual = weight.detach().to(device="cpu").contiguous()
         expected = found.to(dtype=actual.dtype)
         _require(torch.equal(actual.view(torch.uint8), expected.view(torch.uint8)))
-    gain_float = 1 + found.to(torch.float32)
-    gain = gain_float.to(torch.bfloat16)
+    # Keep the source FP32 evidence separate from the actual loader operations.
+    source_gain_float = 1 + found.to(torch.float32)
+    runtime_weight = found.to(torch.bfloat16)
+    runtime_gain_float = 1 + runtime_weight.to(torch.float32)
+    gain = runtime_gain_float.to(torch.bfloat16)
+    if source_model:
+        actual = actual.to(torch.bfloat16)
     _require(bool(torch.isfinite(gain).all()) and not bool((gain == 0).any()))
     _require(torch.equal(gain.view(torch.uint8), (1 + actual.float()).to(torch.bfloat16).view(torch.uint8)))
     return gain, {
         "source_gain_dtype": str(found.dtype).removeprefix("torch."),
         "source_gain_hash": _state_hash({"weight": found}, memory=memory),
-        "float32_gain_hash": _state_hash({"gain": gain_float}, memory=memory),
+        "float32_gain_hash": _state_hash({"gain": source_gain_float}, memory=memory),
+        "runtime_norm_dtype": "bfloat16",
+        "runtime_norm_hash": _state_hash({"weight": runtime_weight}, memory=memory),
+        "runtime_float32_gain_hash": _state_hash({"gain": runtime_gain_float}, memory=memory),
         "input_gain_hash": _state_hash({"gain": gain}, memory=memory),
     }
 
@@ -379,5 +391,7 @@ def verified_import_binding(folder, metadata, *, model, memory=None, profile="ca
         _require(set(islice(Path(model_snapshot).glob("*.safetensors"), 65)) == checkpoint_files
                  and all(_stamp(path.stat()) == before for path, before in stamps.items()))
         return {"version": 2, "model_hash": identity, "profile": profile,
-                "reference_input": dict(_REFERENCE_INPUT), "source": dict(_SOURCE), "layers": evidence}
+                "reference_input": dict(_REFERENCE_INPUT),
+                "reference_conversion": json.loads(json.dumps(_REFERENCE_CONVERSION)),
+                "source": dict(_SOURCE), "layers": evidence}
     return {"version": 1, "model_hash": identity, "layers": evidence}

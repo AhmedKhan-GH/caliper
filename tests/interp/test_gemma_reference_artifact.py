@@ -41,6 +41,24 @@ def assert_source_cast(tensor, array):
     np.testing.assert_array_equal(tensor.view(torch.uint16).numpy(), bf16_bits(array))
 
 
+def bf16_values(array):
+    return (bf16_bits(array).astype(np.uint32) << 16).view(np.float32)
+
+
+def source_norm(snapshot, index=0):
+    return load_file(next(snapshot.glob("*.safetensors")))[
+        f"model.layers.{index}.pre_feedforward_layernorm.weight"]
+
+
+def loaded_fixture_model(snapshot, dtype=torch.bfloat16):
+    transformers = pytest.importorskip("transformers")
+    model = transformers.AutoModelForCausalLM.from_pretrained(
+        snapshot, dtype=dtype, local_files_only=True, trust_remote_code=False,
+        attn_implementation="eager").eval().requires_grad_(False)
+    verify_hf_model(model, snapshot)
+    return model
+
+
 @pytest.mark.parametrize("dtype", [np.float16, np.float32, np.float64])
 def test_reference_encoder_is_direct_source_cast(dtype):
     arrays = source_arrays(dtype=dtype)
@@ -77,14 +95,10 @@ def reference_artifact(tmp_path, monkeypatch):
     monkeypatch.setattr(imported, "_LATENTS", 20)
     monkeypatch.setattr(imported, "_L0", (76, 65))
     model = gemma_model()
-    with torch.no_grad():
-        for parameter in model.parameters():
-            parameter.copy_(parameter.to(torch.bfloat16))
     for block in model.model.layers:
         block.pre_feedforward_layernorm.weight = torch.nn.Parameter(
             torch.linspace(-.297, .713, 16), requires_grad=False)
     snapshot = local_gemma(tmp_path, model)
-    model.float()
     verify_hf_model(model, snapshot)
     source = tmp_path / "models--google--gemma-scope-2b-pt-transcoders" / "snapshots" / conversion.SOURCE_REVISION
     for index, name in enumerate(conversion.SOURCE_PATHS):
@@ -94,7 +108,7 @@ def reference_artifact(tmp_path, monkeypatch):
     output = tmp_path / "reference"
     metadata = conversion.convert_gemma_scope(source, output, model=model,
                                                model_snapshot=snapshot, profile=PROFILE)
-    reference_model_dtype(model, snapshot)
+    model = loaded_fixture_model(snapshot)
     return source, output, snapshot, model, metadata
 
 
@@ -103,7 +117,12 @@ def test_reference_publication_binds_source_gain_and_all_output_tensors(referenc
     assert metadata == json.loads((folder / "dictionary.json").read_text())
     assert metadata["reference_input"] == {
         "coordinate": "gemma_scope_pre_gain", "encoder": "W_enc_original", "dtype": "bfloat16"}
-    assert metadata["import_source"]["reference_conversion"]["profile"] == PROFILE
+    operations = metadata["import_source"]["reference_conversion"]
+    assert operations["profile"] == PROFILE and operations["version"] == 2
+    assert operations["source_norm_cast"] == "runtime_norm_weight = source_norm_weight.to(bfloat16)"
+    assert operations["source_float32_gain"] == "1 + source_norm_weight.to(float32)"
+    assert operations["runtime_float32_gain"] == "1 + runtime_norm_weight.to(float32)"
+    assert operations["gain"] == "(1 + runtime_norm_weight.to(float32)).to(bfloat16)"
     for index, row in enumerate(metadata["import_source"]["layers"]):
         tensors = load_file(folder / row["file"])
         assert row["original_dtype"] == "float32"
@@ -112,11 +131,20 @@ def test_reference_publication_binds_source_gain_and_all_output_tensors(referenc
         assert row["sha256"] == hashlib.sha256((folder / row["file"]).read_bytes()).hexdigest()
         assert row["tensor_hashes"] == {name: _state_hash({name: value}) for name, value in tensors.items()}
         assert_source_cast(tensors["W_enc_original"], source_arrays(12 + index)["W_enc"].T)
-        weight = model.model.layers[index].pre_feedforward_layernorm.weight.detach()
-        assert row["source_gain_hash"] == _state_hash({"weight": weight})
-        assert row["float32_gain_hash"] == _state_hash({"gain": 1 + weight})
-        assert row["input_gain_hash"] == _state_hash({"gain": (1 + weight).to(torch.bfloat16)})
-    reference_model_dtype(model, snapshot)
+        original = source_norm(snapshot, index)
+        runtime = model.model.layers[index].pre_feedforward_layernorm.weight.detach()
+        runtime_float = bf16_values(original.numpy())
+        gain_float = runtime_float + np.float32(1)
+        expected_gain = torch.from_numpy(bf16_bits(gain_float)).view(torch.bfloat16)
+        assert_source_cast(runtime, original.numpy())
+        assert row["source_gain_hash"] == _state_hash({"weight": original})
+        assert row["float32_gain_hash"] == _state_hash({"gain": 1 + original})
+        assert row["runtime_norm_dtype"] == "bfloat16"
+        assert row["runtime_norm_hash"] == _state_hash({"weight": runtime})
+        assert row["runtime_float32_gain_hash"] == _state_hash({"gain": torch.from_numpy(gain_float)})
+        assert row["input_gain_hash"] == _state_hash({"gain": expected_gain})
+        expected_encoder = source_arrays(12 + index)["W_enc"].T / bf16_values(gain_float)[None, :]
+        assert_source_cast(tensors["W_enc"], expected_encoder)
     dictionary = load_dictionary(folder, model=model)
     assert all(layer.W_enc_original.dtype == torch.bfloat16 for layer in dictionary.layers)
 
@@ -130,16 +158,6 @@ def test_reference_profile_requires_explicit_pinned_gain_source(tmp_path):
         conversion.convert_arrays(source_arrays(), torch.ones(16), width=16, latents=20, profile=PROFILE)
 
 
-def reference_model_dtype(model, snapshot):
-    # Match source norm precision. This fixture does not install a model adapter.
-    norms = [block.pre_feedforward_layernorm.weight.detach().clone() for block in model.model.layers]
-    for parameter in model.parameters():
-        parameter.data = parameter.data.to(torch.bfloat16)
-    for block, norm in zip(model.model.layers, norms):
-        block.pre_feedforward_layernorm.weight = torch.nn.Parameter(norm, requires_grad=False)
-    verify_hf_model(model, snapshot)
-
-
 def qualify(artifact, **kwargs):
     source, folder, snapshot, model, metadata = artifact
     return imported.verified_import_binding(folder, metadata, model=model, memory=memory(),
@@ -151,23 +169,26 @@ def test_reference_qualification_uses_original_sources(reference_artifact):
     result = qualify(reference_artifact)
     assert result["version"] == 2 and result["profile"] == PROFILE
     assert result["reference_input"] == metadata["reference_input"]
+    assert result["reference_conversion"] == metadata["import_source"]["reference_conversion"]
+    assert all(parameter.dtype == torch.bfloat16 for parameter in model.parameters())
     assert len(result["layers"]) == 2
     for result_row, row in zip(result["layers"], metadata["import_source"]["layers"]):
         assert all(row[key] == value for key, value in result_row.items())
 
 
 def test_reference_profile_refuses_float32_runtime(reference_artifact):
-    _, _, snapshot, model, _ = reference_artifact
-    model.float()
-    verify_hf_model(model, snapshot)
+    source, folder, snapshot, _, metadata = reference_artifact
+    model = loaded_fixture_model(snapshot, torch.float32)
     with pytest.raises(ValueError, match="import binding"):
-        qualify(reference_artifact)
+        qualify((source, folder, snapshot, model, metadata))
 
 
 @pytest.mark.parametrize("fault", [
     "missing_reference", "coordinate", "encoder", "dtype", "operations", "operation_version", "boolean_version",
+    "source_norm_cast", "source_float32_gain", "runtime_float32_gain", "gain",
     "model_revision", "source_revision", "selection", "reference_revision", "source_verification",
     "original_dtype", "source_gain_dtype", "source_gain_hash", "float32_gain_hash", "input_gain_hash",
+    "runtime_norm_dtype", "runtime_norm_hash", "runtime_float32_gain_hash",
     "tensor_hashes", "sha256", "source_sha256", "source_file",
 ])
 def test_reference_metadata_mismatch_is_refused(reference_artifact, fault):
@@ -180,8 +201,10 @@ def test_reference_metadata_mismatch_is_refused(reference_artifact, fault):
         metadata["reference_input"][fault] = "incorrect"
     elif fault == "operations":
         source["reference_conversion"]["tensors"]["W_enc_original"] = "W_enc * gain"
+    elif fault in ("source_norm_cast", "source_float32_gain", "runtime_float32_gain", "gain"):
+        source["reference_conversion"][fault] = "1 + source_norm_weight"
     elif fault in ("operation_version", "boolean_version"):
-        source["reference_conversion"]["version"] = 2 if fault == "operation_version" else True
+        source["reference_conversion"]["version"] = 1 if fault == "operation_version" else True
     elif fault == "model_revision":
         metadata["revision"] = "b" * 40
     elif fault in ("source_revision", "selection", "reference_revision"):
@@ -216,7 +239,7 @@ def test_reforged_output_hashes_cannot_replace_source_bytes(reference_artifact, 
     path = folder / row["file"]
     tensors = load_file(path)
     if fault == "inverse":
-        gain = (1 + model.model.layers[0].pre_feedforward_layernorm.weight.detach()).to(torch.bfloat16)
+        gain = (1 + model.model.layers[0].pre_feedforward_layernorm.weight.detach().float()).to(torch.bfloat16)
         tensors["W_enc_original"] = (tensors["W_enc"].float() * gain.float()).to(torch.bfloat16)
     elif fault == "dtype":
         tensors["W_enc_original"] = tensors["W_enc_original"].float()
@@ -251,29 +274,85 @@ def test_gain_alias_mutation_cannot_rebaseline_reference_metadata(reference_arti
     weight.data.add_(.125)
     assert weight._version == version
     row = metadata["import_source"]["layers"][0]
-    row["source_gain_hash"] = _state_hash({"weight": weight.detach()})
-    row["float32_gain_hash"] = _state_hash({"gain": 1 + weight.detach()})
-    row["input_gain_hash"] = _state_hash({"gain": (1 + weight.detach()).to(torch.bfloat16)})
+    row["runtime_norm_hash"] = _state_hash({"weight": weight.detach()})
+    row["runtime_float32_gain_hash"] = _state_hash({"gain": 1 + weight.detach().float()})
+    row["input_gain_hash"] = _state_hash({"gain": (1 + weight.detach().float()).to(torch.bfloat16)})
     with pytest.raises(ValueError, match="identity mismatch"):
         qualify(reference_artifact)
 
 
-def test_early_norm_rounding_refuses_a_different_effective_gain(reference_artifact):
+def test_reference_loader_cast_precedes_gain_addition(reference_artifact):
+    _, _, snapshot, model, metadata = reference_artifact
+    original = source_norm(snapshot)
+    runtime = model.model.layers[0].pre_feedforward_layernorm.weight.detach()
+    correct = bf16_bits(bf16_values(original.numpy()) + np.float32(1))
+    wrong = bf16_bits(original.numpy() + np.float32(1))
+    assert np.count_nonzero(correct != wrong) > 0
+    assert_source_cast(runtime, original.numpy())
+    gain, evidence = imported._reference_gain(snapshot, 0, runtime, memory())
+    np.testing.assert_array_equal(gain.view(torch.uint16).numpy(), correct)
+    assert all(metadata["import_source"]["layers"][0][key] == value for key, value in evidence.items())
+    qualify(reference_artifact)
+
+
+def test_reference_profile_refuses_retained_float32_norms(reference_artifact):
     _, _, snapshot, model, _ = reference_artifact
-    weight = model.model.layers[0].pre_feedforward_layernorm.weight.detach()
-    expected = (1 + weight).to(torch.bfloat16)
-    rounded_first = (1 + weight.to(torch.bfloat16).float()).to(torch.bfloat16)
-    assert not torch.equal(expected, rounded_first)
-    model.bfloat16()
+    model.model.layers[0].pre_feedforward_layernorm.weight = torch.nn.Parameter(
+        source_norm(snapshot), requires_grad=False)
     verify_hf_model(model, snapshot)
     with pytest.raises(ValueError, match="import binding"):
         qualify(reference_artifact)
 
 
+def test_reference_gain_checks_norm_bytes_even_when_effective_gain_matches(reference_artifact):
+    _, _, snapshot, model, _ = reference_artifact
+    runtime = model.model.layers[0].pre_feedforward_layernorm.weight.detach()
+    altered = runtime.clone()
+    altered.view(torch.int16)[4] += 1
+    assert not torch.equal(runtime, altered)
+    np.testing.assert_array_equal(bf16_bits(1 + runtime.float().numpy()),
+                                  bf16_bits(1 + altered.float().numpy()))
+    with pytest.raises(ValueError, match="import binding"):
+        imported._reference_gain(snapshot, 0, altered, memory())
+
+
+def test_reference_conversion_checks_source_bytes_before_loader_cast(reference_artifact):
+    _, _, snapshot, _, _ = reference_artifact
+    original = source_norm(snapshot)
+    altered = original.clone()
+    altered[0] = torch.nextafter(altered[0], torch.tensor(0.))
+    assert not torch.equal(original, altered)
+    np.testing.assert_array_equal(bf16_bits(original.numpy()), bf16_bits(altered.numpy()))
+    with pytest.raises(ValueError, match="import binding"):
+        imported._reference_gain(snapshot, 0, altered, memory(), source_model=True)
+
+
+@pytest.mark.parametrize("reforge_gain", [False, True])
+def test_reference_profile_refuses_gain_addition_before_loader_cast(reference_artifact, reforge_gain):
+    _, folder, snapshot, _, metadata = reference_artifact
+    row = metadata["import_source"]["layers"][0]
+    original = source_norm(snapshot)
+    wrong_gain_float = original.numpy() + np.float32(1)
+    wrong_gain = torch.from_numpy(bf16_bits(wrong_gain_float)).view(torch.bfloat16)
+    path = folder / row["file"]
+    tensors = load_file(path)
+    wrong_encoder = source_arrays()["W_enc"].T / bf16_values(wrong_gain_float)[None, :]
+    replacement = torch.from_numpy(bf16_bits(wrong_encoder).copy()).view(torch.bfloat16)
+    assert not torch.equal(tensors["W_enc"], replacement)
+    tensors["W_enc"] = replacement
+    save_file(tensors, path)
+    row["sha256"] = hashlib.sha256(path.read_bytes()).hexdigest()
+    row["tensor_hashes"] = {name: _state_hash({name: value}) for name, value in tensors.items()}
+    if reforge_gain:
+        row["input_gain_hash"] = _state_hash({"gain": wrong_gain})
+        row["runtime_float32_gain_hash"] = row["float32_gain_hash"]
+    with pytest.raises(ValueError, match="import binding"):
+        qualify(reference_artifact)
+
+
 def test_reference_ordinary_float32_regression(reference_artifact, tmp_path):
-    source, _, snapshot, model, _ = reference_artifact
-    model.float()
-    verify_hf_model(model, snapshot)
+    source, _, snapshot, _, _ = reference_artifact
+    model = loaded_fixture_model(snapshot, torch.float32)
     output = tmp_path / "ordinary"
     metadata = conversion.convert_gemma_scope(source, output, model=model)
     assert "reference_input" not in metadata

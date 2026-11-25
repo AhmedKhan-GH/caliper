@@ -358,7 +358,9 @@ def convert_gemma_scope(source, output, *, model, memory_limit_gb=40, evaluation
                 raise ValueError("Gemma Scope conversion requires float32 model norm weights")
             extra = {}
             if reference:
-                gain, extra = _reference_gain(model_snapshot, index, weight, memory)
+                # Verify the FP32 source, then apply the reference loader's BF16
+                # norm cast before FP32 gain addition and the final BF16 cast.
+                gain, extra = _reference_gain(model_snapshot, index, weight, memory, source_model=True)
             else:
                 gain = 1 + weight.to(device="cpu")
             tensors, original_hash = load_scope_layer(
