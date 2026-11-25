@@ -158,7 +158,7 @@ def test_gemma_clean_stop_requires_a_partial_sample(source_tokens, stop_reason):
 def test_gemma_acceptance_result_preserves_comparison_disclosure(source_tokens):
     result = {"mode": "gemma", "completed": True, "dictionary_evidence": gemma_reply(source_tokens=source_tokens),
               "pixel_evidence_collected": True, "checks": [check("validation", True, 8, ">=8")]}
-    assert finish(result) == 0
+    assert finish(result) == 1 and not result["gemma_acceptance"]
     qualification = result["dictionary_qualification"]
     assert qualification["source_tokens"] == source_tokens
     assert qualification["reported_status"] == ("partial" if source_tokens < 200000 else "passed")
@@ -412,17 +412,18 @@ def test_qwen_retains_legacy_quality_evidence_policy():
 
 
 @pytest.mark.parametrize("source_tokens", [51237, 200000])
-def test_gemma_finish_keeps_causal_failure_and_separate_model_result(source_tokens):
+def test_gemma_finish_refuses_legacy_causal_acceptance(source_tokens):
     result = {"mode": "gemma", "completed": True, "dictionary_evidence": gemma_reply(source_tokens=source_tokens),
               "pixel_evidence_collected": True,
               "checks": [check("validation", False, {"correct_signs": 6, "spearman": .539},
                                "10 features, >=8 correct signs, Spearman >=0.6")]}
     assert finish(result) == 1 and not result["gemma_acceptance"]
-    assert result["failed_checks"] == ["validation"]
+    assert result["failed_checks"] == ["validation", "published_profile", "external_replication_review"]
     # finish aggregates checks from the internal driver. Each check owns its measurements.
     result["checks"][0] = check("validation", True, {"correct_signs": 8, "spearman": .6},
                                 "10 features, >=8 correct signs, Spearman >=0.6")
-    assert finish(result) == 0 and result["gemma_acceptance"]
+    assert finish(result) == 1 and not result["gemma_acceptance"]
+    assert result["failed_checks"] == ["published_profile", "external_replication_review"]
     assert not result["qwen_acceptance"] and not result["qwen_full_mlp_acceptance"]
 
 

@@ -216,10 +216,11 @@ def test_finish_requires_explicit_completion(family, completion):
 def test_complete_driver_publishes_success_after_cleanup(completion_case, family):
     case = completion_case
     case.family = family
-    assert case.run() == 0
+    assert case.run() == (1 if family == "gemma" else 0)
     result = case.read()
-    assert result["completed"] and result["acceptance_complete"] and result["passed"]
-    assert result["gemma_acceptance"] is (family == "gemma")
+    assert result["completed"] and result["acceptance_complete"]
+    assert result["passed"] is (family != "gemma")
+    assert not result["gemma_acceptance"]
     assert result["qwen_acceptance"] is (family == "qwen")
     gates = {gate["name"] for gate in result["checks"]}
     assert {"validation", "generation", "reset", "dictionary_identity_stable", "process_memory"} <= gates
@@ -438,7 +439,7 @@ def test_dallas_preflight_records_bound_probability_below_confidence_threshold(c
     case = completion_case
     case.baseline_top_probability = probability
     case.preflight_edit = lambda status: status["inference"]["comparison"].update(argmax_token_ids=[top, top])
-    assert case.run() == 0
+    assert case.run() == 1
     result = case.read()
     gate = next(g for g in result["checks"] if g["name"] == "dallas_preflight")
     assert gate["required"] and gate["passed"]
@@ -453,7 +454,8 @@ def test_dallas_preflight_records_bound_probability_below_confidence_threshold(c
     assert len(case.sessions) == 2
     assert case.calls.count("bounded.trace") == case.calls.count("acceptance.trace") == 1
     assert case.calls.index("bounded.status") < case.calls.index("bounded.close") < case.calls.index("acceptance.trace")
-    assert result["completed"] and result["passed"] and result["gemma_acceptance"]
+    assert result["completed"] and not result["passed"] and not result["gemma_acceptance"]
+    assert {"published_profile", "external_replication_review"} <= set(result["failed_checks"])
 
 
 @pytest.mark.parametrize("probability", [None, True, "0.409", float("nan"), float("inf"),
@@ -519,7 +521,7 @@ def test_dallas_preflight_scope_preserves_existing_prompt_behavior(completion_ca
     assert not any(g["name"] == "dallas_preflight" for g in result["checks"])
     assert result["completed"]
     if family == "gemma":
-        assert result["failed_checks"] == ["prompt_confidence"]
+        assert result["failed_checks"] == ["prompt_confidence", "published_profile", "external_replication_review"]
     else:
         assert result["passed"]
 

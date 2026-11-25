@@ -351,4 +351,6 @@ def finish(result):
     result["gemma_acceptance"] = (result["passed"] and result["mode"] == "gemma"
                                  and qualification["qualified"] and result.get("pixel_evidence_collected", False))
     result["accepted_replication"] = result["gemma_acceptance"]
+    if result.get("replication_profile") == "published_dallas_v1":
+        result["acceptance_complete"] = result["accepted_replication"]
     return 0 if result["passed"] else 1

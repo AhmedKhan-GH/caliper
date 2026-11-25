@@ -492,15 +492,28 @@ class Bridge:
                 s.mcp.body("state.set", id="published_members", value=group_text(int(event["value"])))
                 return
             if event["kind"] == "run" and event.get("change") == "action" and event.get("name", "").startswith(published.PROFILE + "."):
-                if event.get("status") != "ok":
-                    s.mcp.body("state.set", id="published_status", value=f"{event['name']}: {event.get('text', 'Action failed.')}")
+                handled = getattr(s, "published_handled_events", [])
+                if any(event is item for item in handled):
+                    s.published_handled_events = [item for item in handled if item is not event]
                     return
                 status = s.events.complete("trace.status")
                 _, replication = published.replication_state(status)
+                sequence = getattr(s, "published_last_sequence", 0)
+                if event.get("status") != "ok":
+                    published.require(replication.get("last_attempt") == {
+                        "case_id": event["name"], "sequence": sequence + 1, "status": "error"},
+                        "The live action failure belongs to another attempt.")
+                    s.published_last_sequence = sequence + 1
+                    s.mcp.body("state.set", id="published_status", value=f"{event['name']}: {event.get('text', 'Action failed.')}")
+                    return
                 record = replication.get("result") or {}
                 published.require(record.get("case_id") == event["name"], "The live case publication is stale.")
                 evidence = published.validate_case(s.private_output_directory, status, record["cell"],
-                                                   previous_sequence=record["sequence"] - 1)
+                                                   previous_sequence=sequence,
+                                                   preparation_id=getattr(s, "published_preparation_id", None))
+                published.require(evidence["baseline_array_sha256"] == s.published_baseline_hash,
+                                  "The live case changed baseline arrays.")
+                s.published_last_sequence = record["sequence"]
                 display_result(s, evidence)
                 save(s.out / "live-case.json", evidence)
                 return
@@ -537,6 +550,8 @@ class Bridge:
             except Failure as exc:
                 if not tolerate_refusals:
                     raise
+                if getattr(s, "replication_profile", None) == published.PROFILE:
+                    s.mcp.body("state.set", id="published_status", value="Case evidence error: " + str(exc))
                 with (s.out / "bridge-errors.jsonl").open("a", encoding="utf-8") as log:
                     log.write(json.dumps({"event": event, "error": str(exc)}) + "\n")
 
@@ -763,7 +778,7 @@ def live_demo(session, args, result):
 
 
 
-def published_action(session, cell, preparation_id):
+def published_action(session, cell, preparation_id, *, display=True):
     """Measure a real callback through terminal reply and current publication."""
     s = session
     before = s.events.complete("trace.status")
@@ -777,13 +792,22 @@ def published_action(session, cell, preparation_id):
     try:
         published.require(attachment.get("attached") is True, "The producer detached before the action.")
         entry["event"] = s.action(published.action_name(cell))
+        s.published_handled_events = [*getattr(s, "published_handled_events", []), entry["event"]]
         entry["callback_seconds"] = time.monotonic() - started
         status = s.events.complete("trace.status")
         entry["status"] = status
         evidence = published.validate_case(s.private_output_directory, status, cell,
                                             previous_sequence=sequence, preparation_id=preparation_id)
-        # The array publication and its case metadata must refer to one output step.
+        prior_step = (before["inference"].get("comparison") or {}).get("completed_step")
         step = status["inference"]["comparison"]["completed_step"]
+        published.require(prior_step is None or step > prior_step, "The published output step did not advance.")
+        baseline_hash = getattr(s, "published_baseline_hash", None)
+        published.require(baseline_hash is None or baseline_hash == evidence["baseline_array_sha256"],
+                          "The published baseline arrays changed between cases.")
+        s.published_baseline_hash = evidence["baseline_array_sha256"]
+        s.published_last_sequence = sequence + 1
+        s.published_preparation_id = evidence["preparation"]["id"]
+        # The array publication and its case metadata must refer to one output step.
         if getattr(s, "published_programs_ready", False):
             reply = s.read("probabilities", "cells", minimum_step=step)
             bars = bar_rows(reply)
@@ -802,14 +826,27 @@ def published_action(session, cell, preparation_id):
         entry["attachment_after"] = s.mcp.body("run.state", run=s.run_id)
         published.require(entry["attachment_after"].get("attached") is True, "The producer detached after the action.")
         entry.update(evidence=evidence, completed=True)
-        from _published_ui import display_result
-        display_result(s, evidence)
+        if display:
+            from _published_ui import display_result
+            display_result(s, evidence)
     except Exception as error:
+        entry["completed"] = False
         entry["error"] = error_detail(error)
     finally:
         entry["full_action_seconds"] = time.monotonic() - started
         save(s.out / f"action-{sequence + 1}.json", entry)
     return entry
+
+
+def published_cases(session, preparation_id):
+    """Execute each intervention after a new baseline callback."""
+    for cell in published.CASES:
+        if cell == 10:
+            continue
+        fresh = published_action(session, 10, preparation_id)
+        case = (published_action(session, cell, preparation_id) if fresh["completed"] else
+                {"case_id": published.action_name(cell), "completed": False, "error": "The fresh baseline failed."})
+        yield cell, fresh, case
 
 
 def published_demo(session, args, result, *, collect):
@@ -827,7 +864,7 @@ def published_demo(session, args, result, *, collect):
     result["published_actions"].append(baseline)
     published.require(baseline["completed"], baseline.get("error", "The published baseline failed."))
     trace = s.events.complete("trace.run", prompt=published.PROMPT, **published.TRACE_REQUEST)
-    graph, pages = published.read_graph(s, trace)
+    graph, pages = published.read_graph(s, trace, token_ids=prepared["prompts"]["dallas"]["token_ids"])
     save(s.out / "graph-pages.json", pages)
     save(s.out / "graph.json", graph)
     result["trace"] = trace
@@ -879,14 +916,8 @@ def published_demo(session, args, result, *, collect):
         s.events.complete("feature.examples", node=selected["index"], limit=16)
         rows, _ = s.example_page(0, minimum_step=page["step"] + 1)
         steps["example_tokens"] = rows["step"]
-        for cell in published.CASES:
-            if cell == 10:
-                continue
-            fresh = published_action(s, 10, prepared["id"])
-            result["published_actions"].append(fresh)
-            case = (published_action(s, cell, prepared["id"]) if fresh["completed"] else
-                    {"case_id": published.action_name(cell), "completed": False, "error": "The fresh baseline failed."})
-            result["published_actions"].append(case)
+        for cell, fresh, case in published_cases(s, prepared["id"]):
+            result["published_actions"].extend((fresh, case))
             result["checks"].append(check(f"cell{cell}.current_evidence", fresh["completed"] and case["completed"],
                                            case.get("error"), "fresh baseline, callback, publication, private evidence, attachment"))
             if case["completed"]:
@@ -899,6 +930,9 @@ def published_demo(session, args, result, *, collect):
         from parity import export_resources
         export_resources(s, s.out / "parity")
         result["evidence_collection_complete"] = all(item["completed"] for item in result["published_actions"])
+        current_dictionary = s.events.complete("feature.dictionary")
+        result["checks"].append(check("dictionary_identity_stable", current_dictionary == result["dictionary_evidence"],
+                                       current_dictionary.get("identity"), "the qualification evidence remains unchanged"))
     s.mcp.body("applet.save")
     (s.out / "instrument.toml").write_text(s.mcp.body("spec.get")["text"], encoding="utf-8")
     attachment = s.mcp.body("run.state", run=s.run_id)
@@ -975,7 +1009,23 @@ def main(argv=None):
     session = None
     completed = False
     try:
-        if not args.replication_profile:
+        if args.replication_profile:
+            # Bound the explicit model preparation and baseline before the full trace.
+            session = Session(args, out / "bounded")
+            _, catalog = published.replication_state(session.events.complete("trace.status"))
+            prepared = published.preparation(args.private_output_directory, catalog)
+            baseline = published_action(session, 10, prepared["id"], display=False)
+            result["bounded_evidence"] = baseline
+            save(out / "bounded-baseline.json", baseline)
+            published.require(baseline["completed"], baseline.get("error", "The bounded published baseline failed."))
+            session.close()
+            if session.cleanup_error:
+                raise Failure(session.cleanup_error)
+            session = None
+            peak = memory_bytes(out / "bounded")
+            result["checks"].append(check("bounded_memory", peak <= memory_limit, peak, memory_limit))
+            published.require(peak <= memory_limit, "The bounded published baseline exceeds the process memory limit.")
+        else:
             # Generic acceptance retains its bounded precursor.
             session = Session(args, out / "bounded")
             measured = session.events.complete("trace.run", prompt=args.prompt, max_targets=32, max_nodes=64, max_edges=256)
@@ -1057,7 +1107,12 @@ def main(argv=None):
             save(out / "result.json", result)
             if args.replication_profile and not (args.show or args.demo):
                 from _replication_review import write_collection
-                write_collection(out, args.private_output_directory, result)
+                try:
+                    write_collection(out, args.private_output_directory, result)
+                except Exception as error:
+                    result.update(error=error_detail(error), evidence_collection_complete=False)
+                    code = finish(result)
+                    save(out / "result.json", result)
     if args.show or args.demo:
         return 0 if result.get("demo_ready") and not result.get("error") and not result.get("cleanup_error") else 1
     if args.replication_profile:

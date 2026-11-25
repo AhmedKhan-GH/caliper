@@ -91,7 +91,7 @@ def replication_state(status):
             "The explicit published runtime is absent or unprepared.")
     expected = [{"cell": cell, "action": action_name(cell), "label": case["label"], "operations": case["operations"]}
                 for cell, case in CASES.items()]
-    require(replication.get("cases") == expected and replication.get("groups") == SOURCE["groups"],
+    require(digest(replication.get("cases")) == digest(expected) and digest(replication.get("groups")) == digest(SOURCE["groups"]),
             "The runtime case catalog differs from the published source.")
     return state, replication
 
@@ -137,6 +137,9 @@ def validate_case(root, status, cell, *, previous_sequence, preparation_id=None)
         require(record.get("case_id") == action_name(cell) and record.get("cell") == cell
                 and record.get("label") == CASES[cell]["label"] and record.get("producer") == "caliper"
                 and record.get("preparation_id") == prepared["id"], "Committed case identity differs.")
+        require(all(isinstance(record.get(key), list) and len(record[key]) == 2
+                    and all(type(token) is int and token >= 0 for token in record[key])
+                    for key in ("argmax_token_ids", "top_token_ids")), "Case token identities are invalid.")
         comparison = state.get("comparison")
         require(bound_completion(comparison, state) and comparison.get("case_id") == action_name(cell)
                 and comparison.get("argmax_token_ids") == record.get("argmax_token_ids"),
@@ -179,7 +182,7 @@ def validate_case(root, status, cell, *, previous_sequence, preparation_id=None)
                 token = item["id"]
                 require(type(token) is int and 0 <= token < shape[1] and isinstance(item.get("text"), str)
                         and item.get("probability") == float(probabilities[row, token]), "Case top output differs from private arrays.")
-            require([item["probability"] for item in items] == sorted(probabilities[row], reverse=True)[:5]
+            require([item["probability"] for item in items] == np.sort(np.partition(probabilities[row], -5)[-5:])[::-1].tolist()
                     and items[0]["id"] == record["top_token_ids"][row], "Case top token identity differs.")
         require(record.get("baseline_top_probability") == float(probabilities[0].max())
                 and comparison.get("baseline_top_probability") == record["baseline_top_probability"]
@@ -188,6 +191,7 @@ def validate_case(root, status, cell, *, previous_sequence, preparation_id=None)
             require(np.array_equal(logits[0], logits[1]) and np.array_equal(probabilities[0], probabilities[1]),
                     "The fresh baseline does not restore the original output.")
         return {"status": status, "preparation": prepared, "result": record,
+                "baseline_array_sha256": hashlib.sha256(logits[0].tobytes() + probabilities[0].tobytes()).hexdigest(),
                 "metadata": descriptor(root, private_path(root, record["metadata_file"])),
                 "preparation_file": descriptor(root, private_path(root, replication["preparation_file"]))}
     except (KeyError, TypeError, ValueError, OSError, IndexError) as error:
@@ -204,12 +208,17 @@ def published_selection(graph):
     raise Failure("The complete graph has no published feature for examples.")
 
 
-def read_graph(session, trace):
+def read_graph(session, trace, *, token_ids=None):
     """Read every MCP page and refuse incomplete or mixed trace identities."""
     require(trace.get("state") == "done" and trace.get("status") == "done" and trace.get("trace_id"),
             "The published trace did not complete.")
     require(all(type(trace.get("settings", {}).get(k)) is type(v) and trace["settings"][k] == v
                 for k, v in TRACE_REQUEST.items()), "The trace did not use the exact reference settings.")
+    require(trace["settings"].get("dtype") == "torch.bfloat16"
+            and trace["settings"].get("objective") == "centered_pre_softcap_logit"
+            and trace["settings"].get("source_projection") == "selected_features_without_bos_features_or_errors"
+            and trace.get("completeness", {}).get("source_scope") == "full_sources_before_reference_projection",
+            "The trace lacks the published objective and separate full-source diagnostics.")
     pages, graph = [], None
     for kind, ceiling in (("node", TRACE_REQUEST["max_nodes"]), ("edge", TRACE_REQUEST["max_edges"])):
         target, offset = kind + "s", 0
@@ -224,6 +233,7 @@ def read_graph(session, trace):
                     "The trace changed during graph pagination.")
             if graph is None:
                 graph = {**page, "nodes": [], "edges": []}
+            require(page.get("tokens") == graph.get("tokens"), "The graph token identities changed during pagination.")
             rows = page[target]
             require(len(rows) == min(256, total - offset), "The graph page is incomplete.")
             graph[target].extend(rows)
@@ -233,6 +243,12 @@ def read_graph(session, trace):
             if expected is None:
                 break
     graph.update(next_node_offset=None, next_edge_offset=None)
+    tokens = graph.get("tokens", [])
+    require(len(tokens) == trace["counts"]["tokens"] and [item.get("position") for item in tokens] == list(range(len(tokens)))
+            and all(type(item.get("token_id")) is int and item["token_id"] >= 0 for item in tokens),
+            "The graph token identities are incomplete.")
+    if token_ids is not None:
+        require([item["token_id"] for item in tokens] == token_ids, "The graph belongs to another prompt token sequence.")
     indices = [node["index"] for node in graph["nodes"]]
     require(indices == list(range(len(indices))), "The complete graph has duplicate or absent node identities.")
     require(all(type(edge[key]) is int and edge[key] in range(len(indices)) for edge in graph["edges"]

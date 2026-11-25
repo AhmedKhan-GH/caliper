@@ -13,7 +13,7 @@ from _published import (CASES, MANIFEST_SHA256, PROFILE, PROMPT, SOURCE, TRACE_R
 def write_collection(out, root, result):
     from run import save
     files = {str(path.resolve()) for path in out.rglob("*") if path.is_file() and path.name != "collection.json"}
-    for action in result.get("published_actions", []):
+    for action in [result.get("bounded_evidence", {}), *result.get("published_actions", [])]:
         evidence = action.get("evidence")
         if evidence:
             for item in (evidence["metadata"], evidence["preparation_file"], evidence["result"]["evidence"]):
@@ -57,7 +57,7 @@ def verify_review(root, collection_path, review_path):
         cells = [10] + [item for cell in CASES if cell != 10 for item in (10, cell)]
         require([item.get("case_id") for item in actions] == [action_name(cell) for cell in cells],
                 "The collection lacks fresh baselines or all seven callbacks.")
-        sequence, cases = 0, {}
+        sequence, cases, baseline_hash = 0, {}, None
         for cell, action in zip(cells, actions):
             require(action.get("completed") is True and action.get("prior_sequence") == sequence
                     and action.get("event", {}).get("status") == "ok"
@@ -67,6 +67,12 @@ def verify_review(root, collection_path, review_path):
             evidence = validate_case(root, action["status"], cell, previous_sequence=sequence,
                                      preparation_id=result["preparation_id"])
             require(evidence == action["evidence"], "A collected case differs from its current private evidence.")
+            require(baseline_hash is None or baseline_hash == evidence["baseline_array_sha256"],
+                    "The collection changed baseline arrays between cases.")
+            baseline_hash = evidence["baseline_array_sha256"]
+            prior_step = (action["before_status"]["inference"].get("comparison") or {}).get("completed_step")
+            require(prior_step is None or action["status"]["inference"]["comparison"]["completed_step"] > prior_step,
+                    "A collected output publication is stale.")
             require(finite(action.get("callback_seconds")) and finite(action.get("full_action_seconds"))
                     and action["full_action_seconds"] >= action["callback_seconds"], "The complete action timer is absent.")
             if cell != 10:
@@ -75,7 +81,7 @@ def verify_review(root, collection_path, review_path):
             cases.setdefault(cell, evidence["result"])
             sequence += 1
         checks = {item["name"]: item for item in result["checks"]}
-        required = {"trace_time", "completeness", "complete_graph", "process_memory",
+        required = {"trace_time", "completeness", "complete_graph", "process_memory", "bounded_memory", "dictionary_identity_stable",
                     "example_page_1_records", "example_page_2_records"}
         for name in ["cell" + str(cell) for cell in CASES] + ["examples-page-2"]:
             required.update(name + "." + suffix for suffix in (

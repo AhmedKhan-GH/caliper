@@ -144,8 +144,10 @@ class GraphMCP:
     def __init__(self):
         self.calls = []
         self.trace = {"state": "done", "status": "done", "trace_id": "e" * 64, "seconds": .1, "step": 4,
-            "settings": dict(published.TRACE_REQUEST), "counts": {"nodes": 300, "edges": 300, "tokens": 11, "layers": 26},
-            "completeness": {"max_absolute_residual": .001}}
+            "settings": dict(published.TRACE_REQUEST, dtype="torch.bfloat16", objective="centered_pre_softcap_logit",
+                             source_projection="selected_features_without_bos_features_or_errors"),
+            "counts": {"nodes": 300, "edges": 300, "tokens": 11, "layers": 26},
+            "completeness": {"max_absolute_residual": .001, "source_scope": "full_sources_before_reference_projection"}}
         self.nodes = [{"index": i, "kind": "feature", "layer": 15, "feature": 4494 + i, "position": 4,
                        "effect": i, "label": str(i)} for i in range(300)]
         self.edges = [{"source": i, "target": (i + 1) % 300, "weight": .1} for i in range(300)]
@@ -154,7 +156,7 @@ class GraphMCP:
     def complete(self, method, **kwargs):
         assert method == "trace.read"
         self.calls.append(kwargs)
-        page = {**deepcopy(self.trace), "tokens": [], "nodes": [], "edges": []}
+        page = {**deepcopy(self.trace), "tokens": [{"position": i, "token_id": i} for i in range(11)], "nodes": [], "edges": []}
         for kind in ("node", "edge"):
             offset, limit = kwargs.get(kind + "_offset", 0), kwargs[kind + "_limit"]
             values = getattr(self, kind + "s")
@@ -264,3 +266,271 @@ def test_collection_completion_is_not_acceptance(tmp_path):
                "source_manifest_sha256": published.MANIFEST_SHA256, "collection_sha256": "0" * 64})
     with pytest.raises(Failure, match="another collection"):
         verify_review(tmp_path, "driver/collection.json", "review.json")
+
+
+@pytest.fixture
+def callback_boundary(evidence_factory):
+    root, prepared, make = evidence_factory
+    state = {"value": make(10, 0), "sequence": 0, "calls": [], "fail_cell": None}
+    state["value"]["inference"]["replication"].update(last_attempt=None, result=None)
+    session = driver.Session.__new__(driver.Session)
+    session.out, session.private_output_directory, session.run_id = root, root, "test-run"
+    pending = []
+    def body(method, **args):
+        if method == "run.action":
+            name = args["name"]
+            cell = next(cell for cell in published.CASES if published.action_name(cell) == name)
+            state["calls"].append(cell)
+            state["sequence"] += 1
+            candidate = make(cell, state["sequence"])
+            failed = cell == state["fail_cell"]
+            if failed:
+                state["value"]["inference"]["replication"]["last_attempt"] = {
+                    "case_id": name, "sequence": state["sequence"], "status": "error"}
+            else:
+                state["value"] = candidate
+            pending.append({"kind": "run", "change": "action", "name": name, "status": "error" if failed else "ok"})
+        elif method == "run.state":
+            return {"attached": True}
+        elif method != "state.set":
+            raise AssertionError(method)
+    session.mcp = SimpleNamespace(body=body)
+    session.events = SimpleNamespace(pending=pending, wait=lambda seconds: None,
+                                    until=lambda name, callback: callback(), complete=lambda method: deepcopy(state["value"]))
+    return root, prepared, session, state
+
+
+@pytest.mark.parametrize("failed", [None, 16, 29])
+def test_all_cases_execute_real_callback_route_from_fresh_baselines(callback_boundary, failed):
+    root, prepared, session, state = callback_boundary
+    initial = driver.published_action(session, 10, prepared["id"])
+    assert initial["completed"]
+    state["fail_cell"] = failed
+    records = list(driver.published_cases(session, prepared["id"]))
+    assert state["calls"] == [10, 10, 14, 10, 16, 10, 18, 10, 20, 10, 24, 10, 26, 10, 29]
+    for cell, baseline, case in records:
+        assert baseline["completed"]
+        assert case["completed"] is (cell != failed)
+        if cell == failed:
+            assert "action failed" in case["error"]
+    assert len(list(root.glob("action-*.json"))) == 15
+
+
+@pytest.fixture
+def reviewed_collection(callback_boundary):
+    from test_gemma_acceptance import gemma_reply
+    root, prepared, session, state = callback_boundary
+    actions = [driver.published_action(session, 10, prepared["id"])]
+    for cell, before, case in driver.published_cases(session, prepared["id"]):
+        actions.extend((before, case))
+    names = {"trace_time", "completeness", "complete_graph", "process_memory", "bounded_memory", "dictionary_identity_stable",
+             "example_page_1_records", "example_page_2_records"}
+    for name in ["cell" + str(cell) for cell in published.CASES] + ["examples-page-2"]:
+        names.update(name + "." + suffix for suffix in (
+            "capture_generation", "rendered_nodes", "host_labels", "example_page", "bar_height", "graph_composition",
+            "examples_composition", "output_composition", "graph_visible_nodes", "example_row_layout", "output_bar_layout"))
+        for program in ("attribution", "probabilities", "example_tokens"):
+            names.update(name + "." + program + "." + metric for metric in (
+                "derive_time_ms", "derive_memory_bytes", "draw_time_ms", "draw_memory_bytes"))
+    result = {"mode": "gemma", "replication_profile": published.PROFILE, "evidence_collection_complete": True,
+              "pixel_evidence_collected": True, "preparation_id": prepared["id"], "published_actions": actions,
+              "checks": [check(name, True, 0, "Synthetic external process receipt") for name in sorted(names)],
+              "trace": {"trace_id": "a" * 64, "counts": {"edges": 3}}, "dictionary_evidence": gemma_reply(),
+              "browser_assets": {name: {"status": 200} for name in ("caliper-views-loader.js", "caliper-views.js", "caliper-views.wasm")}}
+    out = root / "driver"
+    out.mkdir()
+    write_json(out / "result.json", result)
+    collection = write_collection(out, root, result)
+    receipt = root / "external-receipt.json"
+    write_json(receipt, {"source": "Synthetic external process boundary"})
+    evidence = [published.descriptor(root, receipt)]
+    cases = {int(action["case_id"].split("cell")[1]): action["evidence"]["result"] for action in reversed(actions)}
+    review = {"schema": "caliper.published-dallas.review.v1", "protocol": published.PROFILE,
+        "source_manifest_sha256": published.MANIFEST_SHA256, "collection_sha256": published.file_hash(out / "collection.json"),
+        "reference": {"producer": "circuit-tracer", "source_revision": published.SOURCE["source_revision"], "prompt": published.PROMPT,
+                      "dtype": "bfloat16", "trace_request": published.TRACE_REQUEST, "evidence": evidence},
+        "graph": {"caliper_trace_id": result["trace"]["trace_id"], "feature_node_jaccard": .9,
+                  "maximum_edge_tolerance_ratio": 1., "edge_absolute_tolerance": 1e-6, "edge_relative_tolerance": .001,
+                  "union_edges_compared": 3, "absent_edges_counted_as_zero": True},
+        "cases": [{"case_id": published.action_name(cell), "caliper_sequence": cases[cell]["sequence"],
+                   "caliper_npz_sha256": cases[cell]["evidence"]["sha256"], "reference_top_token_ids": cases[cell]["top_token_ids"],
+                   "reference_top_text": [row[0]["text"] for row in cases[cell]["top_five"]], "probabilities_compared": 10,
+                   "maximum_probability_absolute_error": .001, "published_outcome": {"reference": True, "caliper": True}}
+                  for cell in published.CASES], "british_columbia_ineffective": True,
+        "browser": {"program_views": True, "attached_before": True, "attached_after": True, "evidence": evidence},
+        "capture_inspection": {"native": True, "browser": True, "all_case_controls": True, "group_ids": True,
+                               "actual_outputs": True, "evidence": evidence},
+        "parity": {"interior_over": 0, "interior_id_mismatch": 0, "maximum_interior_difference": 2, "edge_share": .01, "evidence": evidence},
+        "memory": {"peak_process_bytes": 40_000_000_000, "bounded_peak_bytes": 40_000_000_000,
+                   "minimum_host_available_bytes": 8_000_000_000, "evidence": evidence}}
+    write_json(root / "review.json", review)
+    return root, review, result
+
+
+def test_review_cli_separates_complete_collection_from_acceptance(reviewed_collection):
+    from _replication_review import main
+    root, review, result = reviewed_collection
+    assert finish(result) == 1 and not result["accepted_replication"]
+    assert main(["--private-output-directory", str(root), "--collection", "driver/collection.json",
+                 "--review", "review.json", "--out", str(root / "verified.json")]) == 0
+    verified = json.loads((root / "verified.json").read_text())
+    assert verified["accepted_replication"] and verified["gemma_acceptance"] and not verified["qwen_acceptance"]
+    assert not json.loads((root / "driver/collection.json").read_text())["accepted_replication"]
+
+
+@pytest.mark.parametrize("fault", ["missing_reference", "missing_browser", "missing_parity", "missing_inspection", "memory_cap",
+                                  "reserve", "reference_prompt", "reference_settings", "case_coverage", "case_hash", "case_sequence",
+                                  "full_vocabulary", "probability_error", "top_id", "published_outcome", "british_columbia",
+                                  "node_overlap", "edge_tolerance", "edge_coverage", "artifact", "collection_file"])
+def test_required_external_evidence_cannot_be_missing_or_stale(reviewed_collection, fault):
+    root, review, result = reviewed_collection
+    if fault.startswith("missing_"):
+        review.pop({"missing_reference": "reference", "missing_browser": "browser", "missing_parity": "parity",
+                    "missing_inspection": "capture_inspection"}[fault])
+    elif fault == "memory_cap": review["memory"]["peak_process_bytes"] += 1
+    elif fault == "reserve": review["memory"]["minimum_host_available_bytes"] -= 1
+    elif fault == "reference_prompt": review["reference"]["prompt"] = published.SOURCE["published_graph_prompt"]
+    elif fault == "reference_settings": review["reference"]["trace_request"] = {**published.TRACE_REQUEST, "batch_size": 64}
+    elif fault == "case_coverage": review["cases"].pop()
+    elif fault == "case_hash": review["cases"][1]["caliper_npz_sha256"] = "b" * 64
+    elif fault == "case_sequence": review["cases"][1]["caliper_sequence"] += 1
+    elif fault == "full_vocabulary": review["cases"][1]["probabilities_compared"] = 5
+    elif fault == "probability_error": review["cases"][1]["maximum_probability_absolute_error"] = .00101
+    elif fault == "top_id": review["cases"][1]["reference_top_token_ids"] = [0, 0]
+    elif fault == "published_outcome": review["cases"][1]["published_outcome"]["reference"] = False
+    elif fault == "british_columbia": review["cases"][-1]["reference_top_text"][1] = " Victoria"
+    elif fault == "node_overlap": review["graph"]["feature_node_jaccard"] = .89
+    elif fault == "edge_tolerance": review["graph"]["maximum_edge_tolerance_ratio"] = 1.01
+    elif fault == "edge_coverage": review["graph"]["union_edges_compared"] = 2
+    elif fault == "artifact": (root / "external-receipt.json").write_text("changed")
+    elif fault == "collection_file": (root / "driver/result.json").write_text("{}")
+    write_json(root / "review.json", review)
+    with pytest.raises(Failure):
+        verify_review(root, "driver/collection.json", "review.json")
+
+
+def test_graph_prompt_identity_is_bound_to_preparation():
+    transport = GraphMCP()
+    with pytest.raises(Failure, match="prompt token sequence"):
+        published.read_graph(SimpleNamespace(events=transport), transport.trace, token_ids=[99] * 11)
+
+
+@pytest.mark.parametrize("show", [False, True])
+def test_missing_native_profile_retains_startup_and_owned_error_path(tmp_path, monkeypatch, show):
+    import sys
+    child = tmp_path / "owned-child"
+    child.write_text(f"#!{sys.executable}\n" + "\n".join([
+        "import json, os, pathlib, signal",
+        "folder = pathlib.Path(os.environ['CALIPER_DATA_DIR'])",
+        "(folder / 'api.json').write_text(json.dumps({'pid': os.getpid()}))",
+        "signal.pause()",
+    ]) + "\n")
+    child.chmod(0o700)
+    calls = []
+    class CommandBoundary:
+        def __init__(self, *args):
+            pass
+        def body(self, method, **args):
+            calls.append((method, args))
+            if method == "run.start":
+                raise Failure("Native replication_profile dependency is absent.")
+            return {}
+        def close(self):
+            pass
+    monkeypatch.setattr(driver, "executable", lambda *args: child)
+    monkeypatch.setattr(driver, "MCP", CommandBoundary)
+    monkeypatch.setattr(driver, "Events", lambda mcp: SimpleNamespace(history=[]))
+    args = SimpleNamespace(model="local-gemma", dictionary=str(tmp_path), prompt=published.PROMPT, family="gemma",
+                           replication_profile=published.PROFILE, private_output_directory=tmp_path)
+    with pytest.raises(driver.StartupFailure, match="dependency is absent") as raised:
+        driver.Session(args, tmp_path / "session", show=show, interactive=not show)
+    session = raised.value.session
+    try:
+        assert session.live()
+        methods = [method for method, _ in calls]
+        assert methods.index("applet.save") < methods.index("run.start")
+        request = next(args for method, args in calls if method == "run.start")
+        assert request["replication_profile"] == published.PROFILE
+        assert request["private_output_directory"] == str(tmp_path)
+        assert request["prompt"] == published.PROMPT
+        assert methods.count("run.start") == 1
+    finally:
+        session.close()
+    assert not session.live()
+
+
+@pytest.mark.parametrize("options", [[], ["--replication-profile", published.PROFILE],
+                                     ["--private-output-directory", "evidence"]])
+def test_cli_requires_explicit_profile_pair_before_app_launch(tmp_path, options):
+    model = tmp_path / "models--google--gemma-2-2b" / "snapshots" / driver.GEMMA_REVISION
+    if not options:
+        parsed = driver.parser().parse_args(["--model", str(model), "--dictionary", "dict", "--out", str(tmp_path)])
+        assert parsed.replication_profile is None and parsed.private_output_directory is None
+    else:
+        with pytest.raises(Failure, match="must appear together"):
+            driver.main(["--model", str(model), "--dictionary", "dict", "--out", str(tmp_path), *options])
+
+
+def test_published_live_dispatch_has_no_acceptance_loop():
+    import ast
+    source = ast.parse((ROOT / "demos/circuit_trace/run.py").read_text())
+    functions = {node.name: node for node in source.body if isinstance(node, ast.FunctionDef)}
+    for name, collect in (("live_demo", False), ("acceptance", True)):
+        calls = [node for node in ast.walk(functions[name]) if isinstance(node, ast.Call)
+                 and isinstance(node.func, ast.Name) and node.func.id == "published_demo"]
+        assert len(calls) == 1
+        assert next(arg.value.value for arg in calls[0].keywords if arg.arg == "collect") is collect
+
+
+def test_bounded_profile_callback_needs_no_instrument(callback_boundary):
+    root, prepared, session, state = callback_boundary
+    original = session.mcp.body
+    def body(method, **args):
+        assert method != "state.set"
+        return original(method, **args)
+    session.mcp.body = body
+    result = driver.published_action(session, 10, prepared["id"], display=False)
+    assert result["completed"] and state["calls"] == [10]
+
+
+@pytest.mark.parametrize("sequence", [1, 2])
+def test_live_case_requires_a_new_result(evidence_factory, sequence):
+    root, prepared, make = evidence_factory
+    status = make(14, sequence)
+    baseline_hash = published.validate_case(root, status, 14, previous_sequence=sequence - 1)["baseline_array_sha256"]
+    calls = []
+    session = SimpleNamespace(out=root, replication_profile=published.PROFILE, private_output_directory=root,
+                              published_last_sequence=1, published_preparation_id=prepared["id"],
+                              published_baseline_hash=baseline_hash, events=SimpleNamespace(complete=lambda method: status),
+                              mcp=SimpleNamespace(body=lambda method, **args: calls.append((method, args))))
+    event = {"kind": "run", "change": "action", "name": published.action_name(14), "status": "ok"}
+    if sequence == 1:
+        with pytest.raises(Failure, match="stale"):
+            driver.Bridge(session).handle(event)
+        assert not calls
+    else:
+        driver.Bridge(session).handle(event)
+        assert session.published_last_sequence == 2 and "Before:" in calls[-1][1]["value"]
+
+
+@pytest.mark.parametrize("field,value", [("dtype", "torch.float32"), ("objective", "centered_logit"),
+                                        ("source_projection", "all_sources")])
+def test_reference_trace_refuses_legacy_arithmetic(field, value):
+    transport = GraphMCP()
+    transport.trace["settings"][field] = value
+    with pytest.raises(Failure, match="published objective"):
+        published.read_graph(SimpleNamespace(events=transport), transport.trace)
+    assert not transport.calls
+
+
+def test_missing_case_readout_publication_is_not_complete(callback_boundary):
+    root, prepared, session, state = callback_boundary
+    original = session.mcp.body
+    def body(method, **args):
+        if method == "state.set":
+            raise Failure("The readout publication failed.")
+        return original(method, **args)
+    session.mcp.body = body
+    result = driver.published_action(session, 10, prepared["id"])
+    assert not result["completed"] and "readout publication" in result["error"]
+    assert not json.loads((root / "action-1.json").read_text())["completed"]
