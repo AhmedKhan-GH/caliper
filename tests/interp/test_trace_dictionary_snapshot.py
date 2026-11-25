@@ -9,6 +9,9 @@ import torch
 from caliper._controls import Controls
 from caliper.interp import _dictionary, _frozen, _intervene, _publish, _trace
 from caliper.interp._memory import CleanStop
+from .test_dictionary_snapshot import device_snapshot
+from .test_dictionary_snapshot_headroom import headroom_snapshot
+from .test_intervene import controlled
 from .test_memory_phases import process_guard
 from .test_trace_safety import resources
 
@@ -264,3 +267,112 @@ def test_snapshot_is_not_retained_by_tracer(case):
     del snapshot
     case.executor.close()
     assert reference() is None and tensor() is None
+
+
+@pytest.mark.parametrize("change", ["snapshot", "identifier", "dictionary", "owner"])
+def test_owner_change_during_comparison_prevents_reuse(case, monkeypatch, change):
+    snapshot = case.executor._dictionary_snapshot
+    matches = snapshot.matches
+
+    def compared(*args, **kwargs):
+        result = matches(*args, **kwargs)
+        if change == "snapshot":
+            case.executor._dictionary_snapshot = None
+        elif change == "identifier":
+            case.executor.dictionary_id = "expired"
+        elif change == "dictionary":
+            case.executor.dictionary = deepcopy(case.dictionary)
+        else:
+            monkeypatch.setattr(case.service, "model", object())
+        return result
+
+    monkeypatch.setattr(snapshot, "matches", compared)
+    calls = record_hash(monkeypatch)
+    assert case.tracer._dictionary_content(lambda stage: None) == snapshot.content
+    assert calls == [snapshot.content]
+
+
+@pytest.mark.parametrize("callback", ["prompt", "patch"])
+@pytest.mark.parametrize("cache", ["graph", "forward"])
+def test_tokenizer_mutation_precedes_fresh_snapshot_comparison(case, monkeypatch, callback, cache):
+    armed, mutations = False, []
+    tensor = case.dictionary.layers[-1].b_dec
+    version = tensor._version
+
+    class CallbackTokenizer(type(case.tokenizer)):
+        def __call__(self, text, **kwargs):
+            if armed and not mutations and text == ("CD" if callback == "patch" else "AB"):
+                tensor.data[-1] += .125
+                mutations.append(text)
+            return super().__call__(text, **kwargs)
+
+    case.executor.tokenizer = case.tracer.tokenizer = CallbackTokenizer()
+    if callback == "patch":
+        case.service.set({"kind": "patch", "point": "layers.0.resid_pre", "source_prompt": "CD"})
+        case.controls.step()
+    prior = case.tracer.trace("AB", max_targets=0)
+    path = case.tracer._forward_cache[1]
+    armed = True
+    calls = record_hash(monkeypatch)
+    graph = case.tracer.trace("AB", max_targets=0, max_nodes=511 if cache == "forward" else 512)
+    assert len(mutations) == 1 and tensor._version == version
+    assert calls == [_dictionary.weights_hash(case.dictionary)]
+    assert calls[0] != case.executor._dictionary_snapshot.content
+    assert graph.trace_id != prior.trace_id and case.tracer._forward_cache[1] is not path
+
+
+@pytest.mark.parametrize("fault", ["model", "nonfinite"])
+def test_snapshot_does_not_replace_current_source_admission(case, monkeypatch, fault):
+    case.tracer.trace("AB", max_targets=0)
+    published = dict(_publish._TENSORS)
+    tensor = case.model.embed_tokens.weight if fault == "model" else case.dictionary.layers[-1].b_dec
+    tensor.data.view(-1)[-1] = 7. if fault == "model" else float("nan")
+    monkeypatch.setattr(case.executor._dictionary_snapshot, "matches", forbid)
+    monkeypatch.setattr(case.model, "forward", forbid)
+    with pytest.raises(ValueError, match="identity mismatch" if fault == "model" else "must be finite"):
+        case.tracer.trace("AB", max_targets=0)
+    assert not case.tracer._cache and case.tracer._forward_cache is None
+    assert all(_publish._TENSORS[key] is value for key, value in published.items())
+
+
+@pytest.mark.parametrize("fault", [None, "deadline", "host", "limit"])
+def test_device_comparison_keeps_trace_guards_on_cpu_storage(headroom_snapshot, controlled, monkeypatch, fault):
+    # These fixtures use CPU storage with device labels. No GPU dispatch occurs.
+    device_case = headroom_snapshot()
+    device_case.executor._prepare_dictionary_identity()
+    expected = _dictionary.weights_hash(device_case.dictionary, memory=device_case.guard)
+    device_case.copies.clear()
+    device_case.comparisons.clear()
+    device_case.allocations.clear()
+    device_case.transfers.clear()
+    clock = SimpleNamespace(now=100.)
+    monkeypatch.setattr(_trace, "time", SimpleNamespace(monotonic=lambda: clock.now))
+    tracer = _trace.Tracer.__new__(_trace.Tracer)
+    tracer.model, _, tracer.controls, _ = controlled
+    tracer.dictionary = device_case.dictionary
+    tracer.guard = SimpleNamespace(_guard=device_case.guard, limit=device_case.guard.limit)
+    equal = torch.eq
+
+    def compared(*args, **kwargs):
+        result = equal(*args, **kwargs)
+        if fault == "deadline":
+            clock.now += 20
+        elif fault == "host":
+            device_case.available = 8_000_000_000 - 1
+        elif fault == "limit":
+            device_case.guard.limit = 1
+        return result
+
+    monkeypatch.setattr(torch, "eq", compared)
+    monkeypatch.setattr(_trace, "weights_hash", forbid)
+    if fault is None:
+        assert tracer._dictionary_content(_trace._Deadline()) == expected
+        assert sum(size for size, _ in device_case.comparisons) == device_case.total
+        assert all(size <= _intervene._SNAPSHOT_BATCH_BLOCKS for size, _ in device_case.transfers)
+    else:
+        with pytest.raises(_trace.TraceTimeout if fault == "deadline" else CleanStop):
+            tracer._dictionary_content(_trace._Deadline())
+        assert len(device_case.comparisons) == 1
+        assert not device_case.transfers
+    assert not device_case.copies and not device_case.scopes
+    assert all(reference() is None for reference in device_case.allocations)
