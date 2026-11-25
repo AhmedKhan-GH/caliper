@@ -25,6 +25,54 @@ def test_install_callback_lock_guard_fails_without_a_wait():
     assert_callback_unlocked(controls)
 
 
+def test_resource_stop_does_not_retain_a_speculative_source_in_attribution(monkeypatch):
+    import weakref
+    from caliper.interp._memory import CleanStop
+    from caliper.interp._service import InterpretationService, register_service, unregister_service
+    from .test_source_admission import patch_capacity
+
+    with patch_capacity(2) as (model, _, controls, service, specs):
+        interpretation = register_service(InterpretationService(model=model), controls=controls)
+        route = controls.attach(Transport())
+        cache = service.executor._cache
+        sources, identity, hooks = list(cache.items()), service.executor._cache_identity, hook_objects(model)
+        original = [(iv, iv.hook, iv.applied_spec) for iv in controls._ivs.values()]
+        service.set(dict(specs[0], source_prompt="b"))
+        controls.action("recover", lambda: pytest.fail("resource stop ran an action"))
+        route.on_control(None, _wire.Control(1, "run", name="recover").to_meta())
+        install, prepared = service.executor.install, []
+        failure = CleanStop("source registration resource stop")
+
+        def installed(spec, **kwargs):
+            if spec["point"] == specs[1]["point"]:
+                raise failure
+            hook = install(spec, **kwargs)
+            prepared.append(weakref.ref(cache[spec["source_prompt"], spec["point"]]))
+            return hook
+
+        try:
+            monkeypatch.setattr(service.executor, "install", installed)
+            with pytest.raises(CleanStop) as caught:
+                controls.step()
+            assert caught.value is failure and interpretation.failure is failure
+            assert len(prepared) == 1 and prepared[0]() is None
+            assert all(iv.hook is hook and iv.applied_spec is applied and not hook.removed
+                       for iv, hook, applied in original)
+            assert original[0][0].replace and all(iv.error is None for iv, _, _ in original)
+            assert hook_objects(model) == hooks
+            assert service.executor._cache is cache and service.executor._cache_identity is identity
+            assert list(cache) == [key for key, _ in sources]
+            assert all(cache[key] is tensor for key, tensor in sources)
+            reply, = route.transport.replies
+            assert reply.status == "error" and reply.error["code"] == "action_failed"
+            with pytest.raises(CleanStop) as repeated:
+                controls.step()
+            assert repeated.value is failure and len(route.transport.replies) == 1
+        finally:
+            route.detach()
+            unregister_service(interpretation, controls=controls)
+
+
 def test_source_capacity_refusal_preserves_an_independent_add_request(monkeypatch):
     from caliper._controls import Controls
     from caliper.interp import _intervene

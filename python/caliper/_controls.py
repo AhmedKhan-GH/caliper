@@ -2443,6 +2443,7 @@ class Controls:
                     source_sizes[key] = source.numel() * source.element_size()
                 else:
                     source_sizes[key] = 0
+                del source
         reports = []
         for key in list(records):
             iv = records[key]
@@ -2478,7 +2479,9 @@ class Controls:
                         causes[None] = key
                         if iv.op == "patch":
                             source = m.executor._cache[(iv.spec["source_prompt"], iv.point)]
-                            if source.numel() * source.element_size() > source_sizes.get(key, 0):
+                            size = source.numel() * source.element_size()
+                            del source
+                            if size > source_sizes.get(key, 0):
                                 causes["source_bytes"] = key
                             if key not in source_sizes:
                                 causes["source_entries"] = key
