@@ -794,10 +794,11 @@ def test_device_snapshot_enforces_decimal_process_cap(monkeypatch, limit, histor
 
 
 @pytest.mark.gpu
-def test_mps_snapshot_exact_bytes_across_bounded_batches(monkeypatch):
+@pytest.mark.parametrize("block_bytes", [16, 17])
+def test_mps_snapshot_exact_bytes_across_bounded_batches(monkeypatch, block_bytes):
     if not torch.backends.mps.is_available():
         pytest.skip("MPS is unavailable")
-    monkeypatch.setattr(_intervene, "_SNAPSHOT_COMPARE_BYTES", 17)
+    monkeypatch.setattr(_intervene, "_SNAPSHOT_COMPARE_BYTES", block_bytes)
     monkeypatch.setattr(_intervene, "_SNAPSHOT_BATCH_BLOCKS", 3)
     guard = IdentityGuard()
     guard.device = torch.device("mps")

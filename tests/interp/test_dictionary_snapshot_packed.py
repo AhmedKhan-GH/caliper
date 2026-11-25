@@ -1,4 +1,7 @@
 """Exact word comparisons through CPU seams for the bounded MPS snapshot path."""
+import traceback
+import weakref
+
 import pytest
 import torch
 
@@ -116,3 +119,79 @@ def test_packed_snapshot_keeps_odd_block_boundaries_without_padding(packed_snaps
     assert case.operands == [(torch.uint8, 17), (torch.uint8, 17), (torch.uint8, 6)]
     left[-1] ^= 128
     assert not snapshot.matches(case.dictionary, case.executor.dictionary_id, case.guard)
+
+
+@pytest.mark.parametrize("dtype,payload", [(torch.float16, 0x7E01), (torch.bfloat16, 0x7FC1)])
+@pytest.mark.parametrize("length", [3, 4])
+def test_packed_snapshot_preserves_half_precision_bits_and_odd_lengths(packed_snapshot, dtype, payload, length):
+    bits = torch.tensor([0, -32768, payload, -1], dtype=torch.int16)[:length]
+    case, snapshot = packed_snapshot({"weight": bits.view(dtype)})
+    assert snapshot.matches(case.dictionary, case.executor.dictionary_id, case.guard)
+    expected = (torch.uint8, 6) if length == 3 else (torch.int32, 2)
+    assert case.operands == [expected]
+    bits[2] ^= 1
+    assert torch.isnan(bits.view(dtype)[2])
+    assert not snapshot.matches(case.dictionary, case.executor.dictionary_id, case.guard)
+
+
+@pytest.mark.parametrize("byte", range(7))
+def test_packed_snapshot_fallback_checks_each_unaligned_byte(packed_snapshot, byte):
+    left = torch.arange(12, dtype=torch.uint8)[1:8]
+    right = torch.zeros(12, dtype=torch.uint8)[3:10]
+    right.copy_(left)
+    case, snapshot = packed_snapshot({"weight": left}, saved={"weight": right})
+    assert snapshot.matches(case.dictionary, case.executor.dictionary_id, case.guard)
+    assert case.operands == [(torch.uint8, 7)]
+    right[byte] ^= 128
+    assert not snapshot.matches(case.dictionary, case.executor.dictionary_id, case.guard)
+
+
+@pytest.mark.parametrize("phase", ["create", "compare"])
+@pytest.mark.parametrize("failure", ["view", "compare"])
+def test_packed_snapshot_failure_releases_views_with_retained_tracebacks(
+        device_snapshot, monkeypatch, phase, failure):
+    case = device_snapshot()
+    if phase == "compare":
+        case.executor._prepare_dictionary_identity()
+        case.allocations.clear()
+        case.word_views.clear()
+        case.drains.clear()
+    failure_error = RuntimeError("injected word comparison failure")
+    view = torch.Tensor.view
+    word_views = []
+
+    def tracked_view(tensor, *args, **kwargs):
+        result = view(tensor, *args, **kwargs)
+        if args == (torch.int32,):
+            word_views.append(weakref.ref(result))
+            # A completed pair and the current result must both be released.
+            if failure == "view" and len(word_views) == 3:
+                raise failure_error
+        return result
+
+    def failed_compare(left, right, *, out):
+        assert left.dtype == right.dtype == torch.int32
+        assert out.dtype == torch.bool
+        raise failure_error
+
+    monkeypatch.setattr(torch.Tensor, "view", tracked_view)
+    if failure == "compare":
+        monkeypatch.setattr(torch, "eq", failed_compare)
+    with pytest.raises(RuntimeError, match="injected word comparison failure") as caught:
+        if phase == "create":
+            case.executor._prepare_dictionary_identity()
+        else:
+            case.executor._dictionary_matches()
+    assert caught.value is failure_error
+    assert word_views and all(reference() is None for reference in word_views)
+    assert all(reference() is None for reference in case.allocations)
+    assert not case.scopes and case.drains and not case.executor._hooks
+    if phase == "create":
+        assert case.executor._dictionary_snapshot is None
+    else:
+        saved = weakref.ref(next(iter(case.executor._dictionary_snapshot.state.values())))
+        # Caller frames retain the configured snapshot through their self value.
+        # Temporary comparison storage must already be gone before this step.
+        traceback.clear_frames(caught.value.__traceback__)
+        case.executor.close()
+        assert saved() is None
