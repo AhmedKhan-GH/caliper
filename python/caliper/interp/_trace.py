@@ -317,6 +317,20 @@ class _DirectEffects:
         expected = torch.stack([target.expected for target in targets]).to(account_dtype)
         affine = torch.stack([(path.bias_final if target.layer == path.layers else path.bias_reads[target.layer])
                               [:, target.position] @ target.direction for target in targets]).to(account_dtype)
+        if self.reference:
+            # A separate rounded forward is not the adjoint of the source VJP.
+            # Contract recorded decoder biases at their actual write sites.
+            # Keep their sum wider than BF16, as for the incoming edge sum.
+            itemsize = torch.empty((), dtype=account_dtype).element_size()
+            path.guard.reserve("direct decoder bias accounting",
+                               (batch + 1) * path.tokens * path.width * itemsize + batch * itemsize)
+            affine[:, 0] = 0
+            for gradient, bias in zip(gradients[1:], path.decoder_biases):
+                if gradient is not None:
+                    with autorelease_scope(path.device):
+                        self.check("direct decoder bias contraction")
+                        affine[:, 0] += torch.einsum(
+                            "bpd,pd->b", gradient.to(account_dtype), bias[0].to(account_dtype))
         affine[:, 3] += torch.stack([target.intervention_bias for target in targets]).to(account_dtype)
         encoder = torch.stack([target.encoder_bias for target in targets]).to(account_dtype)
         unembedding = torch.stack([target.unembedding_bias for target in targets]).to(account_dtype)

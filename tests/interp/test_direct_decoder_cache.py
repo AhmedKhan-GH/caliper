@@ -33,6 +33,7 @@ class SumPath:
         self.layers, self.tokens, self.width, self.mixer_width = 2, 3, 4, 4
         self.embedding = torch.tensor([[SOURCE, DIRECTION, SOURCE]], dtype=dtype)
         self.errors = [self.embedding / 4, -self.embedding / 8]
+        self.decoder_biases = [torch.zeros_like(self.embedding) for _ in range(self.layers)]
         self.logits = torch.tensor([[1., 0.]], dtype=dtype)
         self.direction = torch.tensor(DIRECTION, dtype=dtype)
         self.bias_final = self.embedding.new_zeros(4, self.tokens, self.width)

@@ -24,6 +24,7 @@ class LinearPath:
     def __init__(self, embedding, error, direction, *, feature_value=None):
         self.embedding = torch.tensor([[embedding]], dtype=torch.bfloat16)
         self.errors = [self.embedding.new_tensor([[error]])]
+        self.decoder_biases = [torch.zeros_like(self.embedding)]
         self.direction = self.embedding.new_tensor(direction)
         self.tokens, self.layers, self.width, self.mixer_width = 1, 1, len(direction), len(direction)
         self.device, self.dtype = self.embedding.device, self.embedding.dtype
@@ -104,6 +105,7 @@ def test_completeness_preserves_residual_below_bf16_sum_spacing(account):
     if account == "bias_groups":
         path.embedding.zero_()
         path.bias_final[0, 0, 0] = 32.
+        path.decoder_biases[0][0, 0, 0] = 32.
         path.bias_final[1, 0, 0] = .125
     elif account == "intervention":
         path = LinearPath([0.], [0.], [1.], feature_value=32.)
