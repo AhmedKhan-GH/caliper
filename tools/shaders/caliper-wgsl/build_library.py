@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Build the runtime WGSL compiler, the static library caliper_wgsl, from source.
 
-    build_library.py --out DIR [--target-dir DIR] [--jobs N] [--cargo PATH] [--offline] [--archive] [--test-hooks]
+    build_library.py --out DIR [--target-dir DIR] [--jobs N] [--cargo PATH] [--linker PATH] [--offline] [--archive] [--test-hooks]
 
 It runs cargo on tools/shaders/caliper-wgsl with the locked, pinned Naga and copies the
 library to DIR/lib/. With --archive it also writes DIR/caliper_wgsl-<version>-<platform>.tar.gz,
@@ -72,6 +72,7 @@ def main(argv=None):
     ap.add_argument("--archive", action="store_true", help="also write the release archive and its hash")
     ap.add_argument("--test-hooks", action="store_true", help="build with the cargo feature test-hooks (developer and test builds only)")
     ap.add_argument("--cargo", type=pathlib.Path, help="path to the cargo executable (default: cargo on PATH)")
+    ap.add_argument("--linker", type=pathlib.Path, help="path to the MSVC link.exe executable on Windows")
     args = ap.parse_args(argv)
 
     if args.cargo is not None:
@@ -88,20 +89,43 @@ def main(argv=None):
     out = args.out.resolve()
     target_dir = (args.target_dir or out / "cargo-target").resolve()
 
-    env = dict(os.environ)
+    # Windows environment blocks commonly spell PATH as Path; keep one canonical key
+    # so subprocess never passes duplicate PATH/Path entries to CreateProcess.
+    path_key = next((k for k in os.environ if k.upper() == "PATH"), "PATH")
+    raw_path = os.environ.get(path_key, "")
+    env = {k: v for k, v in os.environ.items() if k.upper() != "PATH"}
+    path_entries = [p for p in raw_path.split(os.pathsep) if p]
+
     cargo_dir = os.path.dirname(cargo)
-    if cargo_dir:
-        path_entries = env.get("PATH", "").split(os.pathsep) if env.get("PATH") else []
-        if cargo_dir not in path_entries:
-            env["PATH"] = os.pathsep.join([cargo_dir] + path_entries)
-    rustc = env.get("RUSTC")
+    if cargo_dir and cargo_dir not in path_entries:
+        path_entries.insert(0, cargo_dir)
+
+    if sys.platform == "win32":
+        msvc_link = None
+        if args.linker is not None:
+            cand = os.path.abspath(str(args.linker))
+            if os.path.isfile(cand):
+                msvc_link = cand
+        if msvc_link is None:
+            cl_exe = shutil.which("cl", path=os.pathsep.join(path_entries))
+            if cl_exe:
+                cand = os.path.join(os.path.dirname(cl_exe), "link.exe")
+                if os.path.isfile(cand):
+                    msvc_link = cand
+        if msvc_link is not None:
+            msvc_dir = os.path.dirname(msvc_link)
+            path_entries = [msvc_dir] + [p for p in path_entries if os.path.normcase(p) != os.path.normcase(msvc_dir)]
+
+    env[path_key] = os.pathsep.join(path_entries)
+
+    rustc = next((v for k, v in env.items() if k.upper() == "RUSTC"), None)
     if not rustc:
         rustc_name = "rustc.exe" if sys.platform == "win32" else "rustc"
         sibling_rustc = os.path.join(cargo_dir, rustc_name) if cargo_dir else ""
         if sibling_rustc and os.path.isfile(sibling_rustc):
             rustc = sibling_rustc
         else:
-            rustc = shutil.which("rustc", path=env.get("PATH"))
+            rustc = shutil.which("rustc", path=env[path_key])
     if not rustc:
         print("build_library.py: rustc is not found beside cargo or on PATH", file=sys.stderr)
         return 1

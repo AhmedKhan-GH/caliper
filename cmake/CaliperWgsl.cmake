@@ -90,10 +90,14 @@ elseif(CALIPER_WGSL_FROM_SOURCE)
             "Install Rust, pass -DCALIPER_WGSL_LIBRARY=<file>, or disable it with -DCALIPER_WGSL_FROM_SOURCE=OFF.")
     endif()
     set(_wgsl_lib "${_wgsl_dir}/source/lib/${_wgsl_file}")
+    set(_wgsl_linker_args "")
+    if(MSVC AND CMAKE_LINKER AND EXISTS "${CMAKE_LINKER}")
+        set(_wgsl_linker_args --linker "${CMAKE_LINKER}")
+    endif()
     add_custom_command(
         OUTPUT "${_wgsl_lib}"
         COMMAND "${Python3_EXECUTABLE}" "${_wgsl_crate}/build_library.py"
-                --out "${_wgsl_dir}/source" --test-hooks --cargo "${CALIPER_CARGO}"
+                --out "${_wgsl_dir}/source" --test-hooks --cargo "${CALIPER_CARGO}" ${_wgsl_linker_args}
         DEPENDS "${_wgsl_crate}/Cargo.toml" "${_wgsl_crate}/Cargo.lock" "${_wgsl_crate}/src/lib.rs"
                 "${_wgsl_crate}/build_library.py"
         COMMENT "Building caliper_wgsl (Naga ${CALIPER_WGSL_NAGA_VERSION}) with cargo"
