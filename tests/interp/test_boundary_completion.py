@@ -92,22 +92,27 @@ def test_large_step_and_implicit_increment_remain_supported():
     encoded(ctl)
 
 
-def test_prospective_step_reserves_each_scheduled_start(controlled):
-    from python.tests.test_controls_budget import fill_budget
+def test_scheduled_start_reserve_preserves_valid_timestamp_endpoints(controlled):
+    from python.tests.test_controls_budget import encoded, fill_budget
 
     _, _, ctl, service = controlled
     ctl.step(1)
     service.set(add_spec(from_step=3))
     service.set(add_spec(point="layers.2.mlp_out", from_step=3))
     pad = fill_budget(ctl)
-    # Leave 150 bytes for growth. The run counter fits, but three counters do not.
+    # Keep the metadata near its cap while it reserves both valid timestamps.
     assert len(pad.value) > 25
     pad.set(pad.value[:-25])
     before, state = ctl.controls_meta(), service.state_dict()
-    with pytest.raises(ValueError, match="wire limit"):
+    with pytest.raises(ValueError, match="since_step"):
         ctl.step(10**100)
     assert ctl.n == 1 and ctl.controls_meta() == before
     assert service.state_dict() == state and service.specifications() == []
+
+    ctl.step(2**53 - 2)
+    assert len(service.specifications()) == 2
+    assert all(record.since_step == 2**53 - 1 for record in ctl._ivs.values())
+    encoded(ctl)
 
 
 def test_implicit_step_growth_is_admitted_before_counter_change():
