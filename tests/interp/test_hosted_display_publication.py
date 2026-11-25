@@ -1,4 +1,5 @@
 """CPU publication checks without model forwards or a device runtime."""
+from contextlib import nullcontext
 from copy import deepcopy
 from functools import wraps
 from types import SimpleNamespace
@@ -50,7 +51,11 @@ def publication_run(monkeypatch, tmp_path):
     run._clamp_version, run._selected_version = run.clamp._version, run.selected._version
     run._inference_ready = True
     run.interventions = SimpleNamespace(
-        executor=SimpleNamespace(_dictionary_status=lambda: None), specifications=lambda: [])
+        executor=SimpleNamespace(_dictionary_status=lambda: None, preparing_source=False,
+                                 dictionary=run.dictionary, tokenizer=run.tokenizer),
+        specifications=lambda: [], suspend=nullcontext, _ctl=controls, model=model, points=[],
+        _operation_owner=None, _readers=0, _retired=None)
+    controls._iv_model = run.interventions
     run.service = register_service(_hosted.HostedService(run), controls=controls)
     events, checkpoints, consumed, replies, sources = [], [], [], [], {}
     state = SimpleNamespace(change_prompt=False, stop_stage=None)

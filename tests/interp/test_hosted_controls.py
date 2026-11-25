@@ -188,7 +188,8 @@ def _queue_action(route, name, request_id):
 
 
 @pytest.mark.parametrize("continuation", ["reset", "restore", "fork"])
-def test_slider_registration_refusal_preserves_owner_and_reset(hosted_run, monkeypatch, tmp_path, continuation):
+@pytest.mark.parametrize("source", ["slider", "external", "cross_layer"])
+def test_slider_registration_refusal_preserves_owner_and_reset(hosted_run, monkeypatch, tmp_path, continuation, source):
     import caliper
     from caliper import _controls, _managed
     from caliper.interp import load_dictionary
@@ -199,14 +200,20 @@ def test_slider_registration_refusal_preserves_owner_and_reset(hosted_run, monke
     from .test_service import Transport
 
     run, route = hosted_run
-    run.selected.set(_feature_rows(run)[0])
+    rows = _feature_rows(run)
+    run.selected.set(rows[0])
     run.clamp.set(0.)
     run.boundary()
     record = run._owned_record()
     hook, applied = record.hook, record.applied_spec
     before, hooks = _resolve("output.probs").clone(), hook_objects(run.model)
     assert not torch.equal(before[0], before[1])
-    module = run.model.layers[run.selection["layer"]].mlp
+    layer = run.selection["layer"]
+    if source == "cross_layer":
+        row = next(row for row in rows if run.service.graph.nodes[row]["layer"] != layer)
+        layer = run.service.graph.nodes[row]["layer"]
+        assert route.on_control(None, _wire.Control(4, "set", name="selected_node", value=row).to_meta())["status"] == "ok"
+    module = run.model.layers[layer].mlp
     register, attempts = module.register_forward_hook, []
 
     def fail(callback, **kwargs):
@@ -215,7 +222,9 @@ def test_slider_registration_refusal_preserves_owner_and_reset(hosted_run, monke
             raise RuntimeError("slider hook registration refused")
         return register(callback, **kwargs)
 
-    reply = route.on_control(None, _wire.Control(1, "set", name="clamp", value=1.).to_meta())
+    command = (_wire.Control(1, "intervene", intervene={"set": dict(record.spec, value=1.)})
+               if source == "external" else _wire.Control(1, "set", name="clamp", value=1.))
+    reply = route.on_control(None, command.to_meta())
     assert reply["status"] == "ok"
     _queue_action(route, "reset", 2)
     with monkeypatch.context() as patch:
@@ -227,8 +236,9 @@ def test_slider_registration_refusal_preserves_owner_and_reset(hosted_run, monke
     assert hook_objects(run.model) == hooks
     assert run._owned_record() is record and run._owned_clamp is record.spec
     assert record.spec == applied and not record.replace
-    assert record.error == "RuntimeError: slider hook registration refused"
-    assert record.error_code == "intervene.hook_failed"
+    failed = run.controls._ivs[(run.dictionary.metadata["write_points"][layer], "clamp")]
+    assert failed.error == "RuntimeError: slider hook registration refused"
+    assert failed.error_code == "intervene.hook_failed"
     assert "Live slider clamp:" in run.clamp_status.value
     torch.testing.assert_close(_resolve("output.probs"), before, rtol=0, atol=0)
     checkpoint = run.managed.checkpoint(run.model, None)

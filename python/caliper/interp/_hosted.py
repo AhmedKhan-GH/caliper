@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import argparse
 from contextlib import contextmanager
-from copy import deepcopy
+from copy import copy, deepcopy
 import hashlib
 import json
 import math
@@ -579,6 +579,7 @@ class HostedInference:
         self._restore_generation(0)
         self.selection = None
         self._owned_clamp = None
+        self._owned_applied_spec = None
         self._clamp_selection = None
         self._selection_graph = None
         self.traced_prompt = None
@@ -696,17 +697,31 @@ class HostedInference:
                         dictionary_validation=identity)
 
     def _owned_record(self):
-        """Resolve the exact slider request while the Controls lock is held."""
-        if self._owned_clamp is None:
+        """Resolve slider ownership by request or retained effect identity under the lock."""
+        if self.interventions._ctl._iv_model is not self.interventions or self._owned_clamp is None:
             return None
         iv = self.interventions._ctl._ivs.get((self._owned_clamp["point"], "clamp"))
-        if iv is not None and iv.spec is self._owned_clamp and not iv.clear and iv.state != "ended":
-            return iv
-        return None
+        if iv is None or iv.clear or iv.state == "ended":
+            self._owned_clamp = self._owned_applied_spec = None
+            return None
+        if iv.spec is not self._owned_clamp:
+            # A refused external request can retain the exact slider effect.
+            # A pending or accepted external request still owns its specification.
+            if (not iv.replace and iv.hook is not None and iv.error_code == "intervene.hook_failed"
+                    and iv.applied_spec is self._owned_applied_spec and iv.spec == iv.applied_spec):
+                self._owned_clamp = iv.spec
+            else:
+                if not iv.replace:
+                    self._owned_clamp = self._owned_applied_spec = None
+                return None
+        if iv.hook is not None:
+            self._owned_applied_spec = iv.applied_spec
+        return iv
 
     def _restore_owned_clamp(self, owned):
         with self.controls.lock:
-            self._owned_clamp = None
+            self._check_watch()
+            self._owned_clamp = self._owned_applied_spec = None
             if owned is not None:
                 iv = self.controls._ivs.get((owned["point"], "clamp"))
                 if iv is not None and iv.spec == owned and not iv.clear and iv.state != "ended":
@@ -715,9 +730,9 @@ class HostedInference:
     def _discard_owned_clamp(self):
         """Mark only the owned record for removal with the Controls lock held."""
         iv = self._owned_record()
-        self._owned_clamp = None
         if iv is None:
             return
+        self._owned_clamp = self._owned_applied_spec = None
         iv.clear = True
         self.controls._iv_revision += 1
         self.controls._iv_due = True
@@ -777,12 +792,48 @@ class HostedInference:
             self.close()
             raise
 
+    def _check_watch(self):
+        """Require this watch and stable resources with the Controls lock held."""
+        service = self.interventions
+        if self.controls._iv_model is not service:
+            raise ValueError("the intervention service is no longer attached")
+        if (self.controls._iv_attaching or service._operation_owner is not None
+                and service._operation_owner[0] in ("configure", "watch")):
+            raise ValueError("an intervention lifecycle operation is in progress")
+        if (service.executor.dictionary is not self.dictionary
+                or service.executor.tokenizer is not self.tokenizer):
+            raise ValueError("the intervention resources no longer match the hosted resources")
+
+    @contextmanager
+    def _watch_resources(self):
+        """Pin this watch until hosted publication completes without the lock."""
+        service = self.interventions
+        with self.controls.lock:
+            self._check_watch()
+            service._readers += 1
+        try:
+            yield
+            with self.controls.lock:
+                self._check_watch()
+        finally:
+            with self.controls.lock:
+                service._readers -= 1
+                self.controls._finish_retired(service)
+
     def _apply(self):
         with self.controls.lock:
-            changed = self.controls._apply_interventions()
+            self._check_watch()
+            changed, ready = self.controls._intervention_boundary()
+            # The boundary releases the lock. Detachment must precede any hosted
+            # counter update or publication, including a deferred boundary.
+            self._check_watch()
+            if not ready:
+                self.controls._iv_boundary_failures += 1
+            self._owned_record()
             self.controls._update_busy()
         if changed:
-            self.controls._publish()
+            with self._watch_resources():
+                self.controls._publish()
 
     def _reconcile_selection(self, graph):
         """Keep the semantic feature selected only while its displayed row exists."""
@@ -815,6 +866,8 @@ class HostedInference:
             self.selection = {k: record[k] for k in ("layer", "feature", "position")}
 
     def update_controls(self):
+        with self.controls.lock:
+            self._check_watch()
         clamp_changed = self.clamp._version != self._clamp_version
         # Consume the edit even when prompt, selection, or clamp validation fails.
         self._clamp_version = self.clamp._version
@@ -824,11 +877,39 @@ class HostedInference:
             self.checkpoint_prompt = prompt
             self._update_selection()
             if clamp_changed:
-                self._set_clamp()
+                if not self._set_clamp():
+                    self.status.set("The selected feature clamp did not commit. Retry the edit.")
         finally:
             self._sync_clamp_control(preserve_edit=clamp_changed)
 
-    def _set_clamp(self):
+    def _cancel_clamp_request(self, record, request, previous):
+        """Cancel only an uncommitted hosted request, with the Controls lock held."""
+        key = (record.point, record.op)
+        if (self.controls._iv_model is not self.interventions
+                or self.controls._ivs.get(key) is not record or record.spec is not request
+                or record.clear or record.error is not None):
+            return
+        hook = None if previous is None else previous.hook
+        applied = None if previous is None else previous.applied_spec
+        if record.hook is not hook or record.applied_spec is not applied:
+            return
+        if previous is None:
+            del self.controls._ivs[key]
+        else:
+            for field in record.__slots__:
+                setattr(record, field, getattr(previous, field))
+        self.controls._iv_revision += 1
+        self.controls._iv_due = True
+        self.controls._update_busy()
+        self.controls.cond.notify_all()
+
+    def _set_clamp(self, *, require_commit=False):
+        """Retain the old slider effect until its replacement commits.
+
+        A cross-layer request cannot wait beyond this call because checkpoints
+        identify one slider owner. Cancel its exact uncommitted request on deferral.
+        Explicit actions also require a committed effect before output publication.
+        """
         self._check_stop()
         if self.selection is None:
             raise ValueError("clamp requires a selected feature")
@@ -838,6 +919,9 @@ class HostedInference:
             raise ValueError("selected feature has no positive indexed maximum")
         point = self.dictionary.metadata["write_points"][layer]
         with self.controls.lock:
+            # All submissions, including changed clamps, belong to this watch.
+            # Check before request construction can inspect detached resources.
+            self._check_watch()
             spec = self.interventions.executor.validate({"kind": "clamp", "point": point, "feature": feature,
                 "positions": [position], "value": self.clamp.value * maximum,
                 "dictionary": self.interventions.executor.dictionary_id}, resources=False)
@@ -846,10 +930,6 @@ class HostedInference:
                     and not owned.replace and owned.spec == owned.applied_spec == spec):
                 # Pin resources while the unchanged clamp verifies dictionary content.
                 service = self.interventions
-                if (self.controls._iv_model is not service or
-                        service._operation_owner is not None and
-                        service._operation_owner[0] in ("configure", "watch")):
-                    raise ValueError("intervention resources changed during clamp validation")
                 service._readers += 1
                 try:
                     with self.controls._outside_lock():
@@ -862,18 +942,67 @@ class HostedInference:
                         or owned.state != "active" or owned.hook is None or owned.replace
                         or owned.spec != spec or owned.applied_spec != spec):
                     raise ValueError("intervention state changed during clamp validation")
-                return
+                return True
             # Admission and installation each validate resources. Do not hash the
             # same dictionary a third time merely to construct the request.
+            previous = self.controls._ivs.get((point, "clamp"))
+            previous = copy(previous) if previous is not None else None
+            owner, applied = self._owned_clamp, self._owned_applied_spec
+            cross_layer = owner is not None and owner["point"] != point
             refused = self.controls._intervene({"set": spec})
             if refused is not None:
                 raise ValueError(refused[1])
-            self._discard_owned_clamp()
+            record = self.controls._ivs[(point, "clamp")]
+            request = record.spec
+            failures = self.controls._iv_boundary_failures
             self.controls._update_busy()
-            self._owned_clamp = self.controls._ivs[(point, "clamp")].spec
-        self._apply()
+            if not cross_layer:
+                self._owned_clamp = request
+        try:
+            self._apply()
+        except BaseException:
+            if cross_layer:
+                with self.controls.lock:
+                    self._cancel_clamp_request(record, request, previous)
+            raise
+        with self.controls.lock:
+            self._check_watch()
+            committed = (self.controls._ivs.get((point, "clamp")) is record and record.spec is request
+                         and record.state == "active" and record.hook is not None and not record.clear
+                         and not getattr(record.hook, "removed", False)
+                         and not record.replace and record.applied_spec == spec)
+            if committed:
+                if cross_layer:
+                    self._discard_owned_clamp()
+                self._owned_clamp, self._owned_applied_spec = request, record.applied_spec
+            else:
+                if self.controls._iv_boundary_failures == failures:
+                    self.controls._iv_boundary_failures += 1
+                if cross_layer or require_commit:
+                    self._cancel_clamp_request(record, request, previous)
+                if cross_layer or require_commit or record.error is not None:
+                    self._owned_clamp, self._owned_applied_spec = owner, applied
+                if require_commit:
+                    raise ValueError(record.error or "The selected feature clamp did not commit. Retry the action.")
+                return False
+        if cross_layer:
+            self._apply()
+            with self.controls.lock:
+                self._check_watch()
+                if require_commit and (self.controls._ivs.get((point, "clamp")) is not record
+                        or record.hook is None or getattr(record.hook, "removed", False)
+                        or record.clear or record.applied_spec != spec):
+                    raise ValueError("The selected feature clamp changed before completion. Retry the action.")
+        return True
 
     def _sync_clamp_control(self, *, preserve_edit=False):
+        with self.controls.lock:
+            if self.controls._iv_model is not self.interventions:
+                return
+        with self._watch_resources():
+            self._sync_clamp_status(preserve_edit=preserve_edit)
+
+    def _sync_clamp_status(self, *, preserve_edit):
         reset_input = False
         if self.selection != self._clamp_selection:
             self._clamp_selection = deepcopy(self.selection)
@@ -894,8 +1023,8 @@ class HostedInference:
         live = "No slider clamp."
         with self.controls.lock:
             owned = self._owned_record()
-            if owned is not None:
-                spec = owned.spec
+            if owned is not None and owned.hook is not None and owned.applied_spec is not None:
+                spec = owned.applied_spec
                 live = (f"Live slider clamp: {spec['point']}, feature {spec['feature']}, "
                         f"position {spec['positions'][0]}, value {spec['value']:g}.")
         text = bounded_text(f"{selected} Clamp input: {self.clamp.value:g} times the indexed maximum. {live}")
@@ -907,7 +1036,7 @@ class HostedInference:
         with internal_forward():
             self.update_controls()
             try:
-                self._set_clamp()
+                self._set_clamp(require_commit=True)
             finally:
                 self._sync_clamp_control()
             with self.controls.lock:
@@ -917,6 +1046,10 @@ class HostedInference:
         return "The selected feature clamp is applied."
 
     def update_output(self, *, force=False):
+        with self._watch_resources():
+            self._publish_output(force=force)
+
+    def _publish_output(self, *, force):
         try:
             self._update_output(force=force)
         except ValueError:
@@ -956,6 +1089,10 @@ class HostedInference:
 
     def generate(self):
         self._check_stop()
+        with self._watch_resources():
+            return self._generate()
+
+    def _generate(self):
         state = self._input_state()
         with self._inference_lock:
             generation_id = self._generation["id"] + 1

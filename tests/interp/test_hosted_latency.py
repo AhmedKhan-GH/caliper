@@ -1,5 +1,6 @@
 """CPU regressions for hosted latency without weaker content or memory checks."""
 from types import SimpleNamespace
+import time
 
 import pytest
 import torch
@@ -142,3 +143,31 @@ def test_clamp_diagnostics_retain_completion_and_do_not_validate_on_status(hoste
     assert run.inference_status() == after
     identity["checks"] = -1
     assert run.inference_status()["dictionary_validation"]["checks"] >= 3
+
+
+def test_cross_layer_action_meets_cpu_steering_deadline(hosted_run, record_property):
+    from caliper import _wire
+    from .test_hosted_controls import _feature_rows, _queue_action
+
+    run, route = hosted_run
+    rows = _feature_rows(run)
+    run.selected.set(rows[0])
+    run.clamp.set(0.)
+    run.boundary()
+    old = run._owned_record()
+    row = next(row for row in rows if run.service.graph.nodes[row]["layer"] != run.selection["layer"])
+    before = run.inference_status()["dictionary_validation"]["checks"]
+    started = time.perf_counter()
+    reply = route.on_control(None, _wire.Control(1, "set", name="selected_node", value=row).to_meta())
+    assert reply["status"] == "ok"
+    _queue_action(route, "apply_clamp", 2)
+    run.boundary()
+    elapsed = time.perf_counter() - started
+    record_property("steering_seconds", elapsed)
+    reply, = [reply for reply in route.transport.replies if reply.request_id == 2]
+    assert reply.status == "ok" and elapsed < 1.
+    assert old.hook.removed and len(run.interventions.specifications()) == 1
+    status = run.inference_status()
+    assert status["comparison"]["completed_step"] == run.controls.n
+    assert status["comparison"]["interventions_hash"] == status["interventions_hash"]
+    assert status["dictionary_validation"]["checks"] - before == 2
