@@ -87,8 +87,8 @@ def test_cached_verification_keeps_lower_budget_and_historical_stop(tmp_path, mo
     with pytest.raises(CleanStop, match="memory limit"):
         _dictionary.model_identity(model, memory_limit_gb=28, memory=later)
     verified = _dictionary._VERIFIED_MODELS[model]
-    assert verified.memory is guard and guard.limit == 12_000_000_000
-    assert guard.peak == 18_000_000_000
+    assert verified.memory.limit == guard.limit == 12_000_000_000
+    assert verified.memory.peak == guard.peak == 18_000_000_000
 
 
 @pytest.mark.parametrize("model_id", [model_load.MODEL_ID, model_load.GEMMA_ID])

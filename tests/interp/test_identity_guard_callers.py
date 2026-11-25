@@ -17,17 +17,22 @@ from .test_trace_safety import resources
 
 @pytest.fixture
 def cpu_memory(monkeypatch):
+    readings = []
     def create(limit, device, **kwargs):
         assert torch.device(device).type == "cpu"
-        return process_guard(int(limit * 1e9), {"current": 1_000, "peak": 1_000})
+        sample = {"current": 1_000, "peak": 1_000}
+        readings.append(sample)
+        return process_guard(int(limit * 1e9), sample)
     monkeypatch.setattr(_frozen, "ProcessMemoryGuard", create)
     monkeypatch.setattr(_dictionary, "MemoryGuard", create)
+    return readings
 
 
 def hosted(model, guard):
     run = _hosted.HostedInference.__new__(_hosted.HostedInference)
     run.model, run.guard = model, guard
     run._failure = run._verified_bindings = run.service = None
+    run.replication_profile = None
     run.model_name, run.dictionary_path = "cpu-fixture", "fixture"
     run.index = SimpleNamespace(metadata={"dictionary_hash": "fixture", "tokenizer_hash": "fixture"})
     return run
@@ -66,6 +71,9 @@ def test_identity_callers_refuse_before_tensor_reads(tmp_path, monkeypatch, cpu_
     service = InterventionService(model)
     run = hosted(model, _hosted._RunGuard(memory))
     forbid_work(monkeypatch, model)
+    if route == "import":
+        monkeypatch.setattr(_gemma_import_identity, "model_identity",
+                            lambda *a, **kw: pytest.fail("import admission reached model identity"))
     with pytest.raises(CleanStop) as caught:
         if route == "configure":
             service.configure(dictionary=dictionary, dictionary_id="caller-owned", resource_guard=memory)
@@ -77,7 +85,11 @@ def test_identity_callers_refuse_before_tensor_reads(tmp_path, monkeypatch, cpu_
             _gemma_import_identity.verified_import_binding(tmp_path, dictionary.metadata, model=model, memory=memory)
     if fault == "stop":
         assert caught.value is stopped
-    assert memory.stages == ["model_identity"]
+    else:
+        assert "memory limit" in str(caught.value)
+    assert len(memory.stages) == 1
+    if route != "import":
+        assert memory.stages == ["model_identity"]
     assert service.dictionary is service.resource_guard is None
     assert run._verified_bindings is None
     if route == "hosted":
@@ -168,11 +180,17 @@ def test_verified_cpu_identity_retains_loader_stop(tmp_path, monkeypatch, cpu_me
     _dictionary.verify_hf_model(model, local_gemma(tmp_path, model), memory_limit_gb=40)
     dictionary = random_dictionary(model, latents=8, k=2)
     loader_memory = _dictionary._VERIFIED_MODELS[model].memory
-    loader_memory.peak = loader_memory.limit + 1
+    loader_readings, = cpu_memory
+    loader_readings["peak"] = loader_memory.limit + 1
+    service = InterventionService(model)
     forbid_work(monkeypatch, model)
     with pytest.raises(CleanStop, match="memory limit"):
-        InterventionService(model).configure(dictionary=dictionary, dictionary_id="caller-owned",
-                                             resource_guard=RequestGuard())
+        service.configure(dictionary=dictionary, dictionary_id="caller-owned", resource_guard=RequestGuard())
+    assert loader_memory.peak == loader_memory.limit + 1
+    loader_readings["peak"] = 1_000
+    with pytest.raises(CleanStop, match="memory limit"):
+        service.configure(dictionary=dictionary, dictionary_id="caller-owned", resource_guard=RequestGuard())
+    assert service.dictionary is service.resource_guard is None
 
 
 def test_verified_cpu_identity_retains_loader_budget_without_extra_guard(tmp_path, cpu_memory):
@@ -180,13 +198,16 @@ def test_verified_cpu_identity_retains_loader_budget_without_extra_guard(tmp_pat
     _dictionary.verify_hf_model(model, local_gemma(tmp_path, model), memory_limit_gb=40)
     dictionary = random_dictionary(model, latents=8, k=2)
     loader_memory = _dictionary._VERIFIED_MODELS[model].memory
+    loader_readings, = cpu_memory
     # This scalar tests budget precedence. The model and all tensors remain small CPU fixtures.
-    loader_memory.peak = 13_000_000_000
+    loader_readings["peak"] = 13_000_000_000
     service = InterventionService(model)
     service.configure(dictionary=dictionary, dictionary_id="caller-owned")
     assert service.dictionary is dictionary
     assert hosted(model, None)._bindings()["model_hash"] == dictionary.metadata["model_hash"]
     _frozen._validate_dictionary(model, dictionary)
+    assert loader_memory.limit == 40_000_000_000 and loader_memory.peak == 13_000_000_000
+    assert len(cpu_memory) == 1
 
 
 def test_identity_caller_caps_supplied_budget_at_family_limit(monkeypatch):
