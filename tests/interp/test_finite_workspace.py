@@ -8,6 +8,7 @@ import torch
 from caliper.interp import _frozen
 from caliper.interp._memory import BudgetMemory, CleanStop
 from caliper.interp._trace import TraceTimeout
+from .test_mps_allocator_admission import metrics
 
 
 class Guard:
@@ -236,3 +237,24 @@ def test_deadline_after_bad_readback_precedes_value_error(monkeypatch):
     with pytest.raises(TraceTimeout) as error:
         _frozen._require_finite(torch.tensor(float("nan")), "fixture", check)
     assert error.value is failure
+
+
+@pytest.mark.parametrize("late", [False, True])
+def test_finite_scan_retains_owned_allocator_admission(metrics, monkeypatch, late):
+    guard = metrics.trace()
+    value = torch.ones(9, dtype=torch.float32)
+    workspace = value.numel() * 24 + 3
+    metrics.driver = 32_000_000_000 - workspace + int(not late)
+    calls = []
+
+    def evaluate(block):
+        calls.append(block.numel())
+        assert late and len(calls) == 1
+        metrics.driver += 1
+        return torch.isfinite(block)
+
+    monkeypatch.setattr(_frozen.torch, "isfinite", evaluate, raising=False)
+    with pytest.raises(CleanStop, match="MPS allocator limit"):
+        _frozen._require_finite(value, "fixture", memory=guard)
+    assert calls == ([9] if late else [])
+    assert metrics.fractions == [.5]

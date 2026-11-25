@@ -48,6 +48,10 @@ def _require_finite(value, name, check=_no_check, memory=None):
             if allocation_bytes(budget) + workspace > budget.limit:
                 raise CleanStop("finite validation allocation exceeds the process memory limit")
             _host_reserve(workspace, stage, memory=budget)
+            # Keep any allocator-specific admission from the supplied owner.
+            reserve = getattr(memory, "reserve", None)
+            if reserve is not None:
+                reserve(stage, workspace)
 
     pending = [value.detach()]
     while pending:
