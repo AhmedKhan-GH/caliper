@@ -489,19 +489,34 @@ def load_resources(model_name, dictionary_path, *, replication_profile=None):
     from ._dictionary import load_dictionary, _record_verified_hf_load
     from ._index import FeatureIndex
     from ._memory import MemoryGuard
+    if replication_profile not in (None, "published_dallas_v1"):
+        raise ValueError("unknown replication profile")
+    reference = replication_profile == "published_dallas_v1"
+    if reference:
+        from ._reference_snapshots import model_snapshot, remember_model_snapshot, scope_snapshot
+        snapshot = model_snapshot(model_name)
     folder = Path(dictionary_path).resolve(strict=True)
     if not folder.is_dir():
         raise ValueError("dictionary must name a local resource folder")
     guard = None
     if model_name == "tiny-lm":
         model, tokenizer = TinyLM(), TinyTokenizer()
-    elif Path(model_name).name == GEMMA_REVISION:
+    elif reference or Path(model_name).name == GEMMA_REVISION:
         from transformers import AutoTokenizer
         snapshot = Path(model_name).resolve(strict=True)
         device = "mps" if torch.backends.mps.is_available() else "cpu"
         guard = MemoryGuard(40, device)
-        options = {"dtype": torch.bfloat16} if replication_profile == "published_dallas_v1" else {}
+        if reference:
+            from ._dictionary import _read_metadata
+            from ._gemma_import_identity import _REFERENCE_INPUT, _REFERENCE_PROFILE
+            metadata, _ = _read_metadata(folder / "dictionary.json", guard)
+            if metadata.get("reference_input") != _REFERENCE_INPUT:
+                raise ValueError("published replication requires the BF16 original-coordinate artifact")
+            scope_snapshot()
+        options = {"dtype": torch.bfloat16, "reference_profile": _REFERENCE_PROFILE} if reference else {}
         model = _load_gemma_model(snapshot, device=device, memory=guard, **options)
+        if reference:
+            remember_model_snapshot(model, snapshot)
         tokenizer = AutoTokenizer.from_pretrained(snapshot, local_files_only=True, trust_remote_code=False)
     else:
         from ._qwen_family import load_hosted_model
@@ -513,8 +528,17 @@ def load_resources(model_name, dictionary_path, *, replication_profile=None):
                                  dtype=next(model.parameters()).dtype, memory=guard, **options)
     if guard is not None:
         guard.check("inference dictionary load")
+    if reference:
+        from ._qualification import qualify_import, require_reference_index
+        qualify_import(folder, dictionary.metadata, model=model, memory=guard)
     index = FeatureIndex(folder, model=model, tokenizer=tokenizer, dictionary=dictionary,
                          memory=guard, **options)
+    if reference:
+        try:
+            require_reference_index(index.metadata)
+        except BaseException:
+            index.close()
+            raise
     return model, tokenizer, dictionary, index, guard
 
 
@@ -893,7 +917,8 @@ class HostedInference:
             self.prompt = param("prompt", self.initial_prompt)
             prompt_inputs(self.model, self.tokenizer, self.prompt.value)
             self.checkpoint_prompt = self.prompt.value
-            self.selected = param("selected_node", -1, min=-1, max=511)
+            self.selected = param("selected_node", -1, min=-1,
+                                  max=8191 if self.replication_profile == "published_dallas_v1" else 511)
             self.clamp = param("clamp", 0., min=-4., max=4.)
             self.clamp_status = param("clamp.status", "No feature selected. No slider clamp.")
             self.retrace = param("retrace", False)

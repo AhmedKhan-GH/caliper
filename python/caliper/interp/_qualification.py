@@ -6,10 +6,24 @@ import json
 from ._context import context_policy
 from ._dictionary import dictionary_fingerprint, model_identity
 from ._evaluation_identity import evaluation_dictionary_evidence, evaluation_model_evidence
-from ._gemma_import_identity import verified_import_binding
-from ._index import FeatureIndex, WINDOW_TOKENS, _FILES, _dictionary_hash, _hash_file, _json, _source_hash, _tokenizer_hash
+from ._gemma_import_identity import _REFERENCE_INPUT, verified_import_binding
+from ._index import (FeatureIndex, WINDOW_TOKENS, _FILES, _dictionary_hash, _encoding_policy,
+                     _hash_file, _json, _source_hash, _tokenizer_hash)
 from ._memory import family_memory_limit
+from ._reference_snapshots import reference_import_arguments
 from ._research_evidence import research_evidence
+
+
+def qualify_import(folder, metadata, *, model, memory):
+    """Select reference evidence only from the current qualified model profile."""
+    arguments = reference_import_arguments(model)
+    return verified_import_binding(folder, metadata, model=model, memory=memory, **arguments)
+
+
+def require_reference_index(manifest):
+    if (manifest.get("format_version") != 2 or manifest.get("encoder_policy") != "gemma_scope_pre_gain_v1"
+            or manifest.get("reference_input") != _REFERENCE_INPUT):
+        raise ValueError("reference qualification requires an original-coordinate index")
 
 
 def dictionary_response(dictionary, index=None, *, model=None, tokenizer=None):
@@ -26,13 +40,17 @@ def dictionary_response(dictionary, index=None, *, model=None, tokenizer=None):
     if identity != metadata["model_hash"]:
         raise ValueError("dictionary qualification model identity mismatch")
     model_binding = evaluation_model_evidence(model, identity, memory=memory)
-    import_binding = verified_import_binding(index.root, metadata, model=model, memory=memory)
+    import_binding = qualify_import(index.root, metadata, model=model, memory=memory)
     manifest_file = index.root / "index" / "index.json"
     if manifest_file.stat().st_size > 1024 * 1024:
         raise ValueError("index qualification manifest exceeds its bound")
     manifest = json.loads(manifest_file.read_text(encoding="utf-8"))
     if manifest != index.metadata:
         raise ValueError("index qualification manifest changed")
+    reference = import_binding is not None and import_binding.get("version") == 2
+    if reference:
+        require_reference_index(manifest)
+        _encoding_policy(manifest, model, dictionary, memory)
     policy = context_policy(model, manifest["context_length"], tokenizer=tokenizer)
     example_policy = context_policy(model, WINDOW_TOKENS + 1, tokenizer=tokenizer)
     if (_json(manifest.get("context_policy")) != _json(policy)
@@ -55,6 +73,8 @@ def dictionary_response(dictionary, index=None, *, model=None, tokenizer=None):
         if path.stat().st_size != record["bytes"] or _hash_file(path) != record["sha256"]:
             raise ValueError("index qualification file changed")
     fingerprint = dictionary_fingerprint(index.root, metadata, memory=memory)
+    if reference and manifest.get("dictionary_fingerprint") != fingerprint:
+        raise ValueError("reference qualification dictionary fingerprint changed")
     tensor_binding = evaluation_dictionary_evidence(dictionary, memory=memory)
     result.update(index=deepcopy(manifest), model_binding=model_binding, tensor_binding=tensor_binding, identity={
         "model_hash": identity, "dictionary_hash": content, "dictionary_fingerprint": fingerprint,
