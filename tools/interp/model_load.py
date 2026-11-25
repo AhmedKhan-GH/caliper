@@ -62,10 +62,14 @@ def load_text_model(*, device="mps", memory=None, model_id=MODEL_ID, mode="infer
 
 def hidden_forward(model, input_ids, attention_mask=None):
     """Return final normalized hidden states without a vocabulary projection."""
+    from caliper.interp._index import _reference_runtime
+    _reference_runtime(model)
     if getattr(model.config, "model_type", None) == "caliper_tiny":
         x = model.embed_tokens(input_ids)
         for layer in model.layers:
             x = layer(x)
         return model.norm(x)
     options = {"attention_mask": attention_mask} if attention_mask is not None else {}
-    return model.model(input_ids=input_ids, use_cache=False, return_dict=True, **options).last_hidden_state
+    result = model.model(input_ids=input_ids, use_cache=False, return_dict=True, **options).last_hidden_state
+    _reference_runtime(model)
+    return result

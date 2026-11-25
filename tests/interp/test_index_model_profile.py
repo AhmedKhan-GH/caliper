@@ -71,7 +71,11 @@ def test_cli_default_and_invalid_reference_model(tmp_path):
 @pytest.mark.parametrize("query", [False, True])
 @pytest.mark.parametrize("profile", ["caliper", PROFILE])
 def test_cli_passes_reference_selection_to_loader(tmp_path, monkeypatch, query, profile):
-    (tmp_path / "dictionary.json").write_text(json.dumps({"layers": 2, "latents": 4}))
+    metadata = {"layers": 2, "latents": 4, "activation": "jumprelu"}
+    if profile == PROFILE:
+        metadata["reference_input"] = {"coordinate": "gemma_scope_pre_gain",
+                                       "encoder": "W_enc_original", "dtype": "bfloat16"}
+    (tmp_path / "dictionary.json").write_text(json.dumps(metadata))
     monkeypatch.setattr(command, "validate_partitions", lambda data: {"partition": "index"})
     monkeypatch.setattr(command, "_index_stream", lambda *args, **kwargs: object())
     monkeypatch.setattr(command, "MemoryGuard", lambda limit, device: logical_guard(limit, {"current": 0, "peak": 0}))
@@ -95,3 +99,17 @@ def test_cli_passes_reference_selection_to_loader(tmp_path, monkeypatch, query, 
     options = {key: value for key, value in calls[0].items() if key != "memory"}
     assert options == {"device": "cpu", "model_id": model_load.GEMMA_ID,
                        **({"reference_profile": PROFILE} if profile == PROFILE else {})}
+
+
+@pytest.mark.parametrize("profile,coordinate", [("caliper", "bfloat16"), (PROFILE, None), (PROFILE, "float32")])
+def test_cli_refuses_artifact_profile_mismatch_before_source(tmp_path, monkeypatch, profile, coordinate):
+    metadata = {"activation": "jumprelu"}
+    if coordinate is not None:
+        metadata["reference_input"] = {"coordinate": "gemma_scope_pre_gain", "encoder": "W_enc_original",
+                                       "dtype": coordinate}
+    (tmp_path / "dictionary.json").write_text(json.dumps(metadata))
+    monkeypatch.setattr(command, "validate_partitions", lambda data: {"partition": "index"})
+    monkeypatch.setattr(command, "_index_stream", lambda *args, **kwargs: pytest.fail("source admission ran"))
+    monkeypatch.setattr(command, "load_text_model", lambda **kwargs: pytest.fail("model load ran"))
+    with pytest.raises(ValueError, match="artifact"):
+        command.main(["--dictionary", str(tmp_path), "--model", model_load.GEMMA_ID, "--profile", profile])

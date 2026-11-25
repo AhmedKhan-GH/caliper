@@ -21,6 +21,7 @@ from pathlib import Path
 import torch
 
 from caliper.interp import load_dictionary
+from caliper.interp._dictionary import _reference_coordinates
 from caliper.interp._index import FeatureIndex, MAX_TOKENS, _hash_file, build_index
 from .memory_limits import CleanStop, MemoryGuard, StopControl
 from .model_load import GEMMA_ID, MODEL_ID, load_text_model
@@ -186,6 +187,11 @@ def main(argv=None):
     # Refuse provenance and output errors before a real model enters memory.
     metadata = json.loads((args.dictionary / "dictionary.json").read_text(encoding="utf-8"))
     provenance = validate_partitions(metadata)
+    reference = _reference_coordinates(metadata)
+    if (args.profile != "caliper") != (reference is not None):
+        raise ValueError("index profile and original encoder artifact differ")
+    if reference is not None and reference["dtype"] != "bfloat16":
+        raise ValueError("the reference index requires a bfloat16 original encoder artifact")
     if args.query is None and (args.dictionary / "index").exists():
         raise ValueError("the dictionary already has an index folder")
     if args.query is not None and not (0 <= args.query[0] < metadata["layers"] and

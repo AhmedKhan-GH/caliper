@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from collections import Counter, OrderedDict
+from contextlib import contextmanager
 from copy import deepcopy
 import hashlib
 import json
@@ -12,7 +13,8 @@ import torch
 
 from ._context import context_policy, prepare_contexts
 from ._dictionary import (_canonical_device, _encoder_matches_dtype, _memory_limit,
-                          load_dictionary, model_identity, weights_hash)
+                          _reference_coordinates, dictionary_fingerprint, load_dictionary,
+                          model_identity, weights_hash)
 from ._memory import (BudgetMemory, CleanStop, MemoryGuard, allocation_bytes, family_memory_limit,
                       autorelease_scope as _device_scope)
 from ._points import capture
@@ -21,6 +23,7 @@ from ._labels import bounded_label
 
 INDEX_VERSION = 2
 ENCODER_POLICY = "live_input_v1"
+REFERENCE_ENCODER_POLICY = "gemma_scope_pre_gain_v1"
 TOP_EXAMPLES = 16
 WINDOW_TOKENS = 33
 CACHE_FEATURES = 256
@@ -37,27 +40,109 @@ def _json(value):
     return json.dumps(value, sort_keys=True, separators=(",", ":"), allow_nan=False)
 
 
+def _reference_runtime(model):
+    """Check reference execution even when a caller invokes the decoder directly."""
+    if (getattr(model.config, "model_type", None) != "gemma2"
+            and getattr(model, "_caliper_reference_profile", None) is None):
+        return None
+    from ._gemma_reference import profile_metadata
+    profile = profile_metadata(model)
+    if profile is not None:
+        devices = {"cpu", *(parameter.device.type for parameter in model.parameters())}
+        if (any(torch.is_autocast_enabled(device) for device in devices)
+                or torch.get_float32_matmul_precision() != "highest"):
+            raise ValueError("Gemma reference arithmetic requires disabled autocast and highest matmul precision")
+    return profile
+
+
+def _reference_policy(model, dictionary):
+    reference = _reference_coordinates(dictionary.metadata)
+    profile = _reference_runtime(model)
+    if reference is None:
+        if profile is not None or any(hasattr(layer, "W_enc_original") for layer in dictionary.layers):
+            raise ValueError("reference index requires an explicit original encoder artifact")
+        return None
+    if reference["dtype"] != "bfloat16" or profile is None or profile["dtype"] != reference["dtype"]:
+        raise ValueError("original encoder index requires the bfloat16 Gemma reference profile")
+    for layer in dictionary.layers:
+        original = getattr(layer, "W_enc_original", None)
+        if original is None or original.shape != layer.W_enc.shape:
+            raise ValueError("index original encoder dimensions mismatch")
+        if any(value.dtype != torch.bfloat16 for value in layer.parameters()):
+            raise ValueError("index original encoder tensor dtype differs from its coordinate contract")
+    return reference
+
+
+@contextmanager
+def _capture_inputs(model, dictionary, points, ids, memory):
+    if _reference_coordinates(dictionary.metadata) is None:
+        with capture(model, points) as values:
+            yield values
+        return
+    from ._gemma_reference import capture_reference_inputs
+    _reference_runtime(model)
+    # The qualified helper retains one input per layer, including query layers
+    # outside the selected feature. Admit that storage before the forward.
+    retained = ids.numel() * dictionary.metadata["width"] * len(dictionary.layers) * 2
+    memory.check("reference capture admission", force=False)
+    if allocation_bytes(memory) + retained > memory.limit:
+        raise CleanStop("reference capture allocation exceeds the process memory limit")
+    with capture_reference_inputs(model) as values:
+        try:
+            yield values
+        except BaseException:
+            # Decoder-only forwards bypass the helper's outer model exit hook.
+            values.clear()
+            raise
+
+
+def _index_features(dictionary, layer, x, *, memory, check=lambda stage: None, refresh=True):
+    weights = dictionary.layers[layer]
+    if _reference_coordinates(dictionary.metadata) is None:
+        return _trace_features(weights, x, guard=memory, check=check, refresh=refresh)
+    if x.dtype != weights.W_enc_original.dtype or x.dtype != torch.bfloat16:
+        raise ValueError("index original encoder input dtype differs from its coordinate contract")
+    check("dictionary encoder admission")
+    memory.check("dictionary encoder admission", force=refresh)
+    # Reserve linear output, the threshold mask, and activation temporaries.
+    workspace = (x.numel() // x.shape[-1]) * weights.W_enc_original.shape[0] * (4 * x.element_size() + 1)
+    if allocation_bytes(memory) + workspace > memory.limit:
+        raise CleanStop("dictionary encoder allocation exceeds the process memory limit")
+    values = torch.nn.functional.linear(x, weights.W_enc_original, weights.b_enc)
+    return weights.activate(values)
+
+
 def _model_encoding(model, memory):
     from ._evaluation_identity import _evaluation_settings, _settings_digest
     device = next(model.parameters()).device.type
     autocast = torch.is_autocast_enabled(device)
     tensors = [("parameter:" + name, value) for name, value in model.named_parameters()]
     tensors.extend(("buffer:" + name, value) for name, value in model.named_buffers())
-    return {"version": 1, "autocast_dtype": str(torch.get_autocast_dtype(device)) if autocast else None,
+    encoding = {"version": 1, "autocast_dtype": str(torch.get_autocast_dtype(device)) if autocast else None,
             "float32_matmul_precision": torch.get_float32_matmul_precision(),
             "tensors": [[name, str(value.dtype), str(_canonical_device(value.device))] for name, value in tensors],
             "forward_settings_hash": _settings_digest(model, _evaluation_settings(model, memory)),
             "attention_backends": [[name, module.config._attn_implementation]
                                    for name, module in model.named_modules()
                                    if hasattr(getattr(module, "config", None), "_attn_implementation")]}
+    profile = _reference_runtime(model)
+    if profile is not None:
+        encoding["reference_profile"] = profile
+    return encoding
 
 
 def _encoding_policy(manifest, model, dictionary, memory):
+    reference = _reference_coordinates(dictionary.metadata)
+    expected = ENCODER_POLICY if reference is None else REFERENCE_ENCODER_POLICY
     version = manifest["format_version"]
     if type(version) is not int or version not in (1, INDEX_VERSION):
         raise ValueError("incomplete or unsupported index")
+    if reference is not None and version != INDEX_VERSION:
+        raise ValueError("legacy index lacks original encoder coordinates; rebuild the index")
+    if _json(manifest.get("reference_input")) != _json(reference):
+        raise ValueError("index encoder coordinates differ; rebuild the index")
     if version == INDEX_VERSION:
-        if manifest.get("encoder_policy") != ENCODER_POLICY:
+        if manifest.get("encoder_policy") != expected:
             raise ValueError("unsupported index encoder policy; rebuild the index")
         encoding = _model_encoding(model, memory)
         if manifest.get("model_encoding") != encoding:
@@ -153,6 +238,7 @@ def _compatible(model, dictionary, *, memory_limit_gb=None, memory=None):
                 raise ValueError("index dictionary JumpReLU mismatch")
         elif activation != "topk" or type(layer.k) is not int or layer.k != data["k"]:
             raise ValueError("index dictionary TopK mismatch")
+    _reference_policy(model, dictionary)
     return data
 
 
@@ -236,10 +322,14 @@ class _TopTable:
 
 
 def _forward(model, input_ids, attention_mask):
+    _reference_runtime(model)
     if model.config.model_type in ("qwen3_5_text", "gemma2"):
         # The decoder supplies MLP probes without a vocabulary-sized logit tensor.
-        return model.model(input_ids=input_ids, attention_mask=attention_mask, use_cache=False)
-    return model(input_ids=input_ids, attention_mask=attention_mask, use_cache=False)
+        result = model.model(input_ids=input_ids, attention_mask=attention_mask, use_cache=False)
+    else:
+        result = model(input_ids=input_ids, attention_mask=attention_mask, use_cache=False)
+    _reference_runtime(model)
+    return result
 
 
 def build_index(dictionary_path, documents, *, model, tokenizer, provenance,
@@ -316,7 +406,8 @@ def build_index(dictionary_path, documents, *, model, tokenizer, provenance,
                 content = tokens[begin:begin + content_context].astype(np.int64)
                 prepared = None if policy is None else prepare_contexts([content], policy, device=device)
                 ids = torch.tensor(content, device=device).unsqueeze(0) if prepared is None else prepared.input_ids
-                with _device_scope(device), torch.inference_mode(), capture(model, data["read_points"]) as saved:
+                with _device_scope(device), torch.inference_mode(), _capture_inputs(
+                        model, dictionary, data["read_points"], ids, memory) as saved:
                     _forward(model, ids, torch.ones_like(ids) if prepared is None else prepared.attention_mask)
                     check("model batch")
                     for layer, point in enumerate(data["read_points"]):
@@ -325,7 +416,7 @@ def build_index(dictionary_path, documents, *, model, tokenizer, provenance,
                         if prepared is not None:
                             x = x[prepared.content_mask]
                         # The model batch just refreshed the process reading.
-                        activations = _trace_features(dictionary.layers[layer], x, guard=memory,
+                        activations = _index_features(dictionary, layer, x, memory=memory,
                                                       check=check, refresh=False)
                         table.update(layer, activations, total + begin)
                         del x, activations
@@ -354,6 +445,10 @@ def build_index(dictionary_path, documents, *, model, tokenizer, provenance,
     }
     if any(hasattr(layer, "threshold") for layer in dictionary.layers):
         manifest["threshold_policy"] = ENCODER_POLICY
+    reference = _reference_coordinates(data)
+    if reference is not None:
+        manifest.update(encoder_policy=REFERENCE_ENCODER_POLICY, reference_input=dict(reference),
+                        dictionary_fingerprint=dictionary_fingerprint(root, data, memory=memory))
     if policy is not None:
         manifest.update(context_policy=policy,
                         example_context_policy=context_policy(model, WINDOW_TOKENS + 1, tokenizer=tokenizer))
@@ -416,6 +511,9 @@ class FeatureIndex:
                     manifest["dictionary_hash"] != _dictionary_hash(self.dictionary, memory=self.memory) or
                     manifest["model_hash"] != data["model_hash"]):
                 raise ValueError("index dictionary identity mismatch")
+            if (_reference_coordinates(data) is not None and manifest.get("dictionary_fingerprint") !=
+                    dictionary_fingerprint(self.root, data, memory=self.memory)):
+                raise ValueError("index dictionary fingerprint differs; rebuild the index")
             vocab = model.get_output_embeddings().weight.shape[0]
             if manifest["vocab_size"] != vocab or manifest["tokenizer_hash"] != _tokenizer_hash(tokenizer, vocab):
                 raise ValueError("index tokenizer identity mismatch")
@@ -487,6 +585,7 @@ class FeatureIndex:
             raise ValueError("feature index is closed")
         if self.model.training:
             raise ValueError("index requires a model in eval mode")
+        _reference_runtime(self.model)
 
     def _feature_key(self, layer, feature):
         self._check_open()
@@ -665,6 +764,8 @@ class FeatureIndex:
         tokens = rows * context
         mixer = max(width, heads * head_dim, key_heads * key_dim, value_heads * value_dim)
         workspace = tokens * (32 * width + 8 * intermediate + 8 * mixer + 4 * latents)
+        if _reference_coordinates(self.dictionary.metadata) is not None:
+            workspace += tokens * width * len(self.dictionary.layers)
         # Attention patterns can remain on fixture modules after each layer.
         patterns = 4 * rows * heads * context**2 * len(self.dictionary.layers)
         recurrent = 4 * rows * value_heads * key_dim * value_dim
@@ -687,11 +788,12 @@ class FeatureIndex:
             prepared = prepare_contexts(content, self.example_context_policy, device=device,
                                         pad_to=WINDOW_TOKENS + 1)
             point = self.dictionary.metadata["read_points"][layer]
-            with torch.inference_mode(), capture(self.model, [point]) as saved:
+            with torch.inference_mode(), _capture_inputs(
+                    self.model, self.dictionary, [point], prepared.input_ids, self.memory) as saved:
                 _forward(self.model, prepared.input_ids, prepared.attention_mask)
                 weights = self.dictionary.layers[layer].W_enc
                 x = saved[point][prepared.content_mask].to(device=weights.device)
-                values = _trace_features(self.dictionary.layers[layer], x, guard=self.memory)
+                values = _index_features(self.dictionary, layer, x, memory=self.memory)
                 if not torch.isfinite(values).all().item():
                     raise ValueError("index window activations must be finite")
                 selected = values[..., feature].cpu().split([len(row) for row in content])
@@ -707,11 +809,12 @@ class FeatureIndex:
             ids[row_number, :len(valid)] = torch.tensor(valid, device=device)
             mask[row_number, :len(valid)] = 1
         point = self.dictionary.metadata["read_points"][layer]
-        with torch.inference_mode(), capture(self.model, [point]) as saved:
+        with torch.inference_mode(), _capture_inputs(
+                self.model, self.dictionary, [point], ids, self.memory) as saved:
             _forward(self.model, ids, mask)
             weights = self.dictionary.layers[layer].W_enc
-            values = _trace_features(self.dictionary.layers[layer], saved[point].to(device=weights.device),
-                                     guard=self.memory)
+            values = _index_features(self.dictionary, layer, saved[point].to(device=weights.device),
+                                     memory=self.memory)
             if not torch.isfinite(values).all().item():
                 raise ValueError("index window activations must be finite")
             result = values[..., feature].cpu().tolist()
