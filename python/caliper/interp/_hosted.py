@@ -582,11 +582,13 @@ class HostedInference:
 
     def _bindings(self):
         from ._dictionary import model_identity
-        from ._memory import CleanStop
+        from ._memory import CleanStop, family_memory_limit
         if self._failure is not None and self._verified_bindings is not None:
             return deepcopy(self._verified_bindings)
         try:
-            identity = model_identity(self.model)
+            limit = None if self.guard is None else family_memory_limit(self.model, memory=self.guard)
+            identity = model_identity(self.model, memory=self.guard,
+                                      memory_limit_gb=limit)
         except CleanStop as exc:
             self._latch_failure(exc)
             raise self._failure

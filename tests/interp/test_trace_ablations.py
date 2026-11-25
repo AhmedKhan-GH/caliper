@@ -1,4 +1,6 @@
 """Supported frozen ablations and refusal before model execution."""
+from types import SimpleNamespace
+
 import pytest
 import torch
 
@@ -68,6 +70,7 @@ def test_valid_untraced_ablation_refuses_before_model_work(point, monkeypatch):
 def test_qwen_submodule_ablation_preflight_without_model_execution(point, monkeypatch):
     from caliper.interp import _frozen
     model = torch.nn.Module()
+    model.config = SimpleNamespace(model_type="qwen3_5_text")
     model.model = torch.nn.Module()
     model.model.layers = torch.nn.ModuleList([torch.nn.Module(), torch.nn.Module()])
     for index, block in enumerate(model.model.layers):

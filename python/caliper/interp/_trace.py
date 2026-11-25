@@ -434,7 +434,7 @@ class Tracer:
         self.memory_limit_gb = family_memory_limit(model, memory_limit_gb, memory)
         self._memory = memory
         self.guard = self._new_guard(next(model.parameters()).device)
-        _validate_dictionary(model, dictionary, self._dictionary_check)
+        _validate_dictionary(model, dictionary, self._dictionary_check, memory=self.guard)
         if controls is None:
             from .._controls import CONTROLS
             controls = CONTROLS

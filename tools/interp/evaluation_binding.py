@@ -12,6 +12,7 @@ from caliper.interp._evaluation_identity import (
     _evaluation_settings, evaluation_dictionary_evidence, evaluation_model_evidence,
 )
 from caliper.interp._gemma_import_identity import verified_import_binding
+from caliper.interp._memory import family_memory_limit
 
 
 _CHANGED = "evaluation dictionary or settings changed: artifact binding differs"
@@ -53,8 +54,8 @@ class EvaluationBinding:
         self.check()
 
     def _check_model_identity(self):
-        limit = self.memory.limit / 1e9 if self.memory else None
-        if model_identity(self.model, memory_limit_gb=limit) != self.model_hash:
+        limit = None if self.memory is None else family_memory_limit(self.model, memory=self.memory)
+        if model_identity(self.model, memory=self.memory, memory_limit_gb=limit) != self.model_hash:
             raise ValueError(_MODEL_CHANGED)
 
     def _model_tensors(self):

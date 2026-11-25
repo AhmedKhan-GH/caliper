@@ -10,7 +10,7 @@ import stat
 import torch
 
 from ._dictionary import _GEMMA_IDENTITY, _hash_admission, _state_hash, model_identity
-from ._memory import autorelease_scope
+from ._memory import autorelease_scope, family_memory_limit
 
 
 _WIDTH, _LATENTS = 2304, 16384
@@ -70,7 +70,8 @@ def verified_import_binding(folder, metadata, *, model, memory=None):
     if family != "gemma2" and metadata.get("model_hash") != _GEMMA_IDENTITY and "import_source" not in metadata:
         return None
     _require(family == "gemma2")
-    identity = model_identity(model, memory_limit_gb=memory.limit / 1e9 if memory else None)
+    limit = None if memory is None else family_memory_limit(model, memory=memory)
+    identity = model_identity(model, memory=memory, memory_limit_gb=limit)
     if identity != _GEMMA_IDENTITY and metadata.get("model_hash") != _GEMMA_IDENTITY and "import_source" not in metadata:
         return None
     _require(identity == metadata.get("model_hash") == _GEMMA_IDENTITY)

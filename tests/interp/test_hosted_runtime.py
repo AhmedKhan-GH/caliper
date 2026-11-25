@@ -357,7 +357,7 @@ def test_periodic_checkpoint_cannot_swallow_a_separate_identity_stop(hosted_run,
     failure = CleanStop("identity admission stop")
     checks, checkpoints = [], []
     checkpoint = run.managed.checkpoint
-    def identity(model):
+    def identity(model, **kwargs):
         checks.append(1)
         raise failure
     def save(*args):

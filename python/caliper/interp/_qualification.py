@@ -8,6 +8,7 @@ from ._dictionary import dictionary_fingerprint, model_identity
 from ._evaluation_identity import evaluation_dictionary_evidence, evaluation_model_evidence
 from ._gemma_import_identity import verified_import_binding
 from ._index import FeatureIndex, WINDOW_TOKENS, _FILES, _dictionary_hash, _hash_file, _json, _source_hash, _tokenizer_hash
+from ._memory import family_memory_limit
 from ._research_evidence import research_evidence
 
 
@@ -21,8 +22,7 @@ def dictionary_response(dictionary, index=None, *, model=None, tokenizer=None):
     memory = index.memory
     memory.check("dictionary qualification")
     metadata = dictionary.metadata
-    ceiling = 40 if getattr(model.config, "model_type", None) == "gemma2" else 12
-    identity = model_identity(model, memory_limit_gb=min(ceiling, memory.limit / 1e9))
+    identity = model_identity(model, memory=memory, memory_limit_gb=family_memory_limit(model, memory=memory))
     if identity != metadata["model_hash"]:
         raise ValueError("dictionary qualification model identity mismatch")
     model_binding = evaluation_model_evidence(model, identity, memory=memory)

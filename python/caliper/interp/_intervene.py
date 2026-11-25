@@ -18,7 +18,7 @@ import torch
 
 from .. import _intervention_protocol as metadata
 from ._frozen import _trace_features
-from ._memory import CleanStop, allocation_bytes
+from ._memory import CleanStop, allocation_bytes, family_memory_limit
 from ._points import _architecture, _input, capture
 
 MAX_POSITIONS = 32
@@ -433,7 +433,8 @@ class InterventionService:
             if not isinstance(dictionary, Dictionary):
                 raise InterventionError("dictionary must be a loaded Dictionary", "intervene.unknown_dictionary")
             meta = dictionary.metadata
-            if meta.get("model_hash") != model_identity(self.model):
+            limit = None if resource_guard is None else family_memory_limit(self.model, memory=resource_guard)
+            if meta.get("model_hash") != model_identity(self.model, memory=resource_guard, memory_limit_gb=limit):
                 raise InterventionError("dictionary model identity mismatch", "intervene.unknown_dictionary")
             probes = _architecture(self.model)
             reads = [p.point for p in probes.values() if p.point.endswith(".mlp_in")]

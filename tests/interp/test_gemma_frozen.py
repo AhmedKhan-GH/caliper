@@ -225,12 +225,35 @@ def test_jump_dictionary_admission_rejects_invalid_threshold_and_metadata(defect
         _validate_dictionary(model, dictionary)
 
 
-@pytest.mark.parametrize("kind", ["ablate", "add", "patch"])
+@pytest.mark.parametrize("kind", ["add", "patch"])
 def test_raw_gemma_mlp_interventions_refuse_before_forward(kind, monkeypatch):
     model, dictionary, ids = setup()
     monkeypatch.setattr(model, "forward", lambda **kwargs: pytest.fail("unexpected forward"))
     with pytest.raises(NotImplementedError, match="no exact affine intervention path"):
         FrozenPath(model, ids, dictionary, interventions=[{"point": "model.layers.0.mlp", "kind": kind}])
+
+
+@pytest.mark.parametrize("key", ["op", "kind"])
+def test_raw_gemma_mlp_ablation_refuses_before_identity(key, monkeypatch):
+    from caliper.interp import _frozen, _trace
+    model, dictionary, ids = setup()
+    tracer = Tracer(model, Tokenizer(), dictionary)
+    spec = {"point": "model.layers.0.mlp", key: "ablate"}
+    monkeypatch.setattr(tracer, "_intervention_state", lambda *_: [spec])
+
+    def refuse(*args, **kwargs):
+        pytest.fail("raw Gemma MLP ablation reached identity or model work")
+
+    monkeypatch.setattr(_frozen, "_validate_dictionary", refuse)
+    monkeypatch.setattr(_trace, "_validate_dictionary", refuse)
+    monkeypatch.setattr(torch.Tensor, "to", refuse)
+    monkeypatch.setattr(model, "forward", refuse)
+    with pytest.raises(ValueError, match="trace does not support ablation point"):
+        tracer.trace("fixture", max_targets=0)
+    with pytest.raises(ValueError, match="trace does not support ablation point"):
+        FrozenPath(model, ids, dictionary, interventions=[spec])
+    assert not tracer._cache and tracer._forward_cache is None
+    assert not any(module._forward_hooks or module._forward_pre_hooks for module in model.modules())
 
 
 def test_gemma_trace_and_forward_settings_admission():

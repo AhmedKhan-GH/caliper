@@ -115,7 +115,8 @@ def test_legacy_model_identifier_requires_explicit_alias(controlled):
     assert service.state_dict() == state
 
 
-def test_default_identifier_guard_refusal_preserves_configuration(controlled):
+@pytest.mark.parametrize("dictionary_id", [None, "caller-owned"])
+def test_identifier_guard_refusal_preserves_configuration(controlled, monkeypatch, dictionary_id):
     from caliper.interp._memory import CleanStop
     from .test_intervention_identity import IdentityGuard
     model, tokenizer, ctl, service = controlled
@@ -123,9 +124,13 @@ def test_default_identifier_guard_refusal_preserves_configuration(controlled):
     ctl.step()
     before, hooks = service.state_dict(), hook_objects(model)
     dictionary = service.dictionary
+    replacement = dictionary_for(model)
     guard = IdentityGuard(limit=1)
+    monkeypatch.setattr(torch.Tensor, "to", lambda *a, **kw: pytest.fail("readback preceded guard refusal"))
+    monkeypatch.setattr(model, "forward", lambda *a, **kw: pytest.fail("guard refusal reached forward"))
     with pytest.raises(CleanStop, match="allocation exceeds"):
-        service.configure(dictionary=dictionary_for(model), tokenizer=tokenizer, resource_guard=guard)
+        service.configure(dictionary=replacement, tokenizer=tokenizer, resource_guard=guard,
+                          dictionary_id=dictionary_id)
     assert guard.stages == ["model_identity"]
     assert service.dictionary is dictionary and service.executor.dictionary_id == "fixture"
     assert service.state_dict() == before and hook_objects(model) == hooks

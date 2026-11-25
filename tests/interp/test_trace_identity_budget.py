@@ -110,7 +110,7 @@ def test_model_hash_chunks_keep_deadline_callbacks_without_forced_process_reads(
         def check(stage):
             stages.append(stage)
             tracer._dictionary_check(stage)
-        _frozen._validate_dictionary(model, dictionary, check)
+        _frozen._validate_dictionary(model, dictionary, check, memory=tracer.guard)
         results.append((state.reads, stages.count("model_identity")))
     assert results[0][0] == results[1][0] > 0
     assert results[0][1] > results[1][1] > 2

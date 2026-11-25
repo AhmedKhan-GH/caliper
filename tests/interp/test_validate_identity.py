@@ -127,13 +127,19 @@ def test_alias_write_between_measurements_is_refused_without_live_state_changes(
     assert hooks(model) == before and service.state_dict() == state and controls.n == 0
 
 
-def test_snapshot_checks_keep_explicit_lower_guard_and_stop(case):
+def test_snapshot_checks_keep_explicit_lower_guard_and_stop(case, monkeypatch):
     model, tokenizer, dictionary, _, service, graph = case
     service.executor._prepare_dictionary_identity()
     before, snapshot = hooks(model), service.executor._dictionary_snapshot
     stages = []
     guard = SimpleNamespace(device=torch.device("cpu"), limit=1, peak=0,
                             check=lambda stage, **kwargs: stages.append(stage))
+    convert = torch.Tensor.to
+    def readback(value, *args, **kwargs):
+        assert not value.is_floating_point(), "identity readback preceded the validation guard"
+        return convert(value, *args, **kwargs)
+    monkeypatch.setattr(torch.Tensor, "to", readback)
+    monkeypatch.setattr(model, "forward", lambda *a, **kw: pytest.fail("validation refusal reached forward"))
     with pytest.raises(CleanStop, match="allocation exceeds"):
         _validate.validate_trace(model, tokenizer, dictionary, service, graph, prompt="AB", guard=guard)
     assert stages and hooks(model) == before

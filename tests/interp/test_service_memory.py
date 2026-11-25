@@ -175,6 +175,7 @@ def test_request_reserves_enforce_service_cap(resources, source, method, limit, 
 @pytest.mark.parametrize("method,stage,limit", [
     ("feature.examples", "example windows admission", 500_000_000),
     ("feature.show", "feature labels admission", 60_000_000),
+    ("feature.dictionary", "model_identity", 4_000_000),
     ("trace.run", "target batch admission", 500_000_000),
 ])
 def test_dynamic_lower_guard_controls_real_allocation_reserves(resources, method, stage, limit):
@@ -191,6 +192,44 @@ def test_dynamic_lower_guard_controls_real_allocation_reserves(resources, method
         with pytest.raises(CleanStop):
             service.step()
         assert stage in lower.stages and replies[0][2]["code"] == "interpret.stopped"
+        restored(case)
+    finally:
+        unregister_service(service, controls=case.controls)
+
+
+@pytest.mark.parametrize("failure", ["stop", "lower", "historical"])
+def test_dictionary_identity_request_guard_precedes_readback_and_publication(resources, monkeypatch, failure):
+    from caliper.interp import _publish
+    case, lower = resources, RequestGuard()
+    stopped = CleanStop("dictionary identity request stop")
+
+    def stop(stage):
+        if stage == "model_identity":
+            if failure == "stop":
+                raise stopped
+            if failure == "lower":
+                lower._guard.limit = 4_000_000
+            else:
+                lower.readings["peak"] = lower.limit + 1
+
+    lower.at_stage = stop
+    published = dict(_publish._TENSORS)
+    service = service_for(case, "supplied", memory=lower)
+    replies = submit(service, case, "feature.dictionary")
+    queued = submit(service, case, "feature.dictionary")
+    monkeypatch.setattr(torch.Tensor, "to", lambda *a, **kw: pytest.fail("identity readback preceded request guard"))
+    monkeypatch.setattr(case.model, "forward", lambda *a, **kw: pytest.fail("dictionary request reached forward"))
+    try:
+        with pytest.raises(CleanStop) as caught:
+            service.step()
+        assert "model_identity" in lower.stages
+        assert service.failure is caught.value
+        if failure == "stop":
+            assert caught.value is stopped
+        assert replies[0][2]["code"] == queued[0][2]["code"] == "interpret.stopped"
+        assert not service.queue
+        assert _publish._TENSORS.keys() == published.keys()
+        assert all(_publish._TENSORS[key] is value for key, value in published.items())
         restored(case)
     finally:
         unregister_service(service, controls=case.controls)

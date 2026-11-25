@@ -110,9 +110,17 @@ def test_each_request_checks_content_once_before_both_caches(monkeypatch):
     counts = dict(identity=0, finite=0, content=0, forwards=0)
     identity, finite, content = _frozen.model_identity, _frozen._require_finite, _trace.weights_hash
     forward = model.forward
+    standalone = False
 
     def checked_identity(value, **kwargs):
-        assert value is model and kwargs["memory"] is tracer.guard
+        assert value is model
+        active = kwargs["memory"]
+        if standalone:
+            from caliper.interp._memory import BudgetMemory
+            assert isinstance(active, BudgetMemory)
+            assert active.memory is tracer.guard and active.limit == tracer.guard.limit
+        else:
+            assert active is tracer.guard
         counts["identity"] += 1
         return identity(value, **kwargs)
 
@@ -144,6 +152,7 @@ def test_each_request_checks_content_once_before_both_caches(monkeypatch):
     assert counts == dict(identity=3, finite=24, content=3, forwards=1)
     tracer.trace("CD", max_targets=4)
     assert counts == dict(identity=4, finite=32, content=4, forwards=2)
+    standalone = True
     _frozen.FrozenPath(model, tokenizer("AB")["input_ids"], dictionary, guard=tracer.guard)
     assert counts == dict(identity=5, finite=40, content=4, forwards=3)
 

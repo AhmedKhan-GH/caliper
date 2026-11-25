@@ -16,7 +16,7 @@ from ._families import model_family
 from . import _qwen_family
 from ._points import _architecture, capture
 from ._memory import (MemoryGuard as ProcessMemoryGuard, BudgetMemory, CleanStop,
-                      allocation_bytes, free_percent, autorelease_scope)
+                      allocation_bytes, free_percent, autorelease_scope, family_memory_limit)
 
 
 # Mixed storage precision needs at most this many converted encoder elements,
@@ -151,7 +151,9 @@ def _validate_dictionary(model, dictionary, check=_no_check, *, memory=None):
         # The caller reserves hash scratch and checks its deadline at each chunk.
         check("model_identity")
     data = dictionary.metadata
-    if not isinstance(data, dict) or data.get("model_hash") != model_identity(model, memory=memory, check=identity_check):
+    limit = None if memory is None else family_memory_limit(model, memory=memory)
+    if not isinstance(data, dict) or data.get("model_hash") != model_identity(
+            model, memory=memory, memory_limit_gb=limit, check=identity_check):
         raise ValueError("dictionary model identity mismatch")
     check("dictionary identity")
     config = model.config
@@ -228,7 +230,7 @@ class _DictionaryAdmission:
 class MemoryGuard:
     """Keep recent stage records and the process peak, and enforce the demo limit."""
 
-    limit = 12_000_000_000
+    _limit = 12_000_000_000
     record_limit = 128
 
     def __init__(self, device, *, memory_limit_gb=12):
@@ -242,6 +244,14 @@ class MemoryGuard:
         self._pressure_value = 100.
         self._guard = ProcessMemoryGuard(memory_limit_gb, self.device, pressure=self._pressure)
         self.check("trace start")
+
+    @property
+    def limit(self):
+        return min(self._limit, getattr(getattr(self, "_guard", None), "limit", self._limit))
+
+    @limit.setter
+    def limit(self, value):
+        self._limit = value
 
     def _pressure(self):
         now = time.monotonic()
@@ -291,6 +301,19 @@ class MemoryGuard:
         if admitted < 1:
             raise CleanStop("no target batch fits the process memory limit")
         return admitted
+
+
+class _CappedMemoryGuard(MemoryGuard):
+    """Keep a private path cap and all supplied guard checks and history."""
+
+    def __init__(self, device, *, memory_limit_gb, memory):
+        memory.check("frozen supplied guard")
+        super().__init__(device, memory_limit_gb=memory_limit_gb)
+        self._guard = BudgetMemory(self._guard, memory_limit_gb, extra=memory)
+        self.check("frozen supplied budget")
+
+    def check(self, stage):
+        return max(super().check(stage), allocation_bytes(self._guard))
 
 
 def _tensor_input(args, kwargs):
@@ -380,6 +403,7 @@ def _validate_ablation_points(model, interventions):
         return
     from .._ablate import _find
     probes = _architecture(model)
+    family = model_family(model)
     supported, attention = set(), {}
     for point in probes:
         if not point.endswith(".mlp_in"):
@@ -389,8 +413,10 @@ def _validate_ablation_points(model, interventions):
         delta = getattr(block, "block_type", None) == "linear_attention"
         name = f"{base}.linear_attn" if delta else f"{base}.self_attn"
         projection = "out_proj" if delta else "o_proj"
-        supported.update((f"{base}.mlp", f"{base}.mlp_out", f"{base}.mlp_in",
+        supported.update((f"{base}.mlp_out", f"{base}.mlp_in",
                           f"{base}.resid_pre", name, f"{name}.{projection}"))
+        if family.mlp_write_module == "mlp":
+            supported.add(f"{base}.mlp")
         attention[name] = getattr(model.get_submodule(name), projection)
     for point in ablations:
         if point in supported:
@@ -551,20 +577,28 @@ class FrozenPath:
     """
 
     def __init__(self, model, input_ids, dictionary, *, guard=None, interventions=(), check=_no_check,
-                 memory_limit_gb=12, _admission=None):
+                 memory_limit_gb=None, _admission=None):
         _validate_ablation_points(model, interventions)
         _validate_intervention_positions(input_ids.shape[1], interventions)
+        parameter = next(model.parameters())
+        self.device, self.dtype = parameter.device, parameter.dtype
+        self.family = model_family(model)
+        memory_limit_gb = family_memory_limit(model, memory_limit_gb, guard)
+        self.guard = guard if guard is not None else MemoryGuard(self.device, memory_limit_gb=memory_limit_gb)
+        if guard is not None and int(memory_limit_gb * 1e9) < guard.limit:
+            self.guard = _CappedMemoryGuard(self.device, memory_limit_gb=memory_limit_gb, memory=guard)
+
+        def memory_check(stage):
+            check(stage)
+            getattr(self.guard, "_check_interval", self.guard.check)(stage)
+
         if _admission is None:
-            probes = _validate_dictionary(model, dictionary, check, memory=guard)
+            probes = _validate_dictionary(model, dictionary, memory_check,
+                                          memory=BudgetMemory(self.guard, memory_limit_gb))
         else:
             if not isinstance(_admission, _DictionaryAdmission):
                 raise TypeError("trace requires a private dictionary admission")
             probes = _admission.consume(model, dictionary)
-        parameter = next(model.parameters())
-        self.device, self.dtype = parameter.device, parameter.dtype
-        self.family = model_family(model)
-        memory_limit_gb = self.family.memory_limit(memory_limit_gb)
-        self.guard = guard or MemoryGuard(self.device, memory_limit_gb=memory_limit_gb)
         if model.training:
             raise ValueError("trace requires an evaluation model")
         if self.dtype not in (torch.float32, torch.float64):
@@ -644,6 +678,7 @@ class FrozenPath:
                 install(block.register_forward_hook(stage_hook))
             with torch.no_grad():
                 check("record admission")
+                self.guard.check("record admission")
                 kwargs = {"use_cache": False, "logits_to_keep": 1} if self.family.name != "caliper_tiny" else {}
                 self.logits = model(input_ids=input_ids, **kwargs).logits[:, -1].detach()
         self.guard.check("record complete")
@@ -660,7 +695,8 @@ class FrozenPath:
                     y = values[f"{base}.mlp_out"]
                     layer = dictionary.layers[i]
                     check(f"freeze layer {i} admission")
-                    a = _trace_features(layer, x, self.guard, check)
+                    self.guard.check(f"freeze layer {i} admission")
+                    a = _trace_features(layer, x, self.guard, memory_check)
                     raw = recorded[f"{i}.mlp_raw"]
                     output_specs = [s for s in interventions
                                     if s["point"] in (f"{base}.mlp", f"{base}.mlp_out")
@@ -673,7 +709,7 @@ class FrozenPath:
                     error = output.scale * (raw - reconstruction)
                     decoder_bias = output.scale * layer.b_dec.detach().to(self.dtype)
                     # Explicit edits can add signed features outside the recorded region.
-                    decoded = _decode_selected(layer, output.indices, output.activations, check=check)[None]
+                    decoded = _decode_selected(layer, output.indices, output.activations, check=memory_check)[None]
                     # Only external vector writes need an output constant. Feature edits
                     # already have affine coefficients and constants in FrozenFeatures.
                     external = any(s["op"] in ("add", "patch") for s in output_specs)
@@ -682,8 +718,8 @@ class FrozenPath:
                     self.outputs.append(y)
                     self.features.append(transformed)
                     self.errors.append(error.detach())
-                    _require_finite(self.features[-1], f"layer {i} features", check)
-                    _require_finite(self.errors[-1], f"layer {i} reconstruction residual", check)
+                    _require_finite(self.features[-1], f"layer {i} features", memory_check)
+                    _require_finite(self.errors[-1], f"layer {i} reconstruction residual", memory_check)
                     self.decoder_biases.append(decoder_bias)
                     self.output_offsets.append(offset.detach())
                     self.norms.append(FrozenNorm(block.input_layernorm, recorded[f"{i}.input_norm"], qwen=self.family.unit_offset_norm))
@@ -719,7 +755,7 @@ class FrozenPath:
                 self.writes = [(y - b - c).detach() for y, b, c in
                                zip(self.outputs, self.decoder_biases, self.output_offsets)]
                 reads, final = self.run(self.embedding, self.writes, check=check)
-                self._freeze_logits(model, self.final_norm(recorded["final_norm"])[:, -1], check)
+                self._freeze_logits(model, self.final_norm(recorded["final_norm"])[:, -1], memory_check)
                 # Compare every read and all next-token logits, before any edge calculation.
                 self.forward_residual = _finite_max([float((a - b).abs().max()) for a, b in zip(reads, self.inputs)] +
                                             [float((self.logits_from_final(final[:, -1]) - self.logits).abs().max())],
@@ -770,6 +806,7 @@ class FrozenPath:
 
     def logits_from_final(self, final):
         """Apply the affine prompt-local logit map to normalized residuals."""
+        self.guard.check("frozen logits admission")
         logits = F.linear(final, self.unembedding, self.unembedding_bias)
         if self.logit_scale is not None:
             logits = logits * self.logit_scale + self.logit_offset
@@ -777,6 +814,7 @@ class FrozenPath:
 
     def logit_target(self, token):
         """Return the centered logit derivative and explicit target bias."""
+        self.guard.check("logit target admission")
         direction = self.unembedding[token]
         bias = self.unembedding_bias
         if self.logit_scale is not None:
@@ -791,6 +829,7 @@ class FrozenPath:
         Bias mask rows are decoder, normalization, attention, and intervention contributions.
         A zero mask gives the strictly linear residual path.
         """
+        self.guard.check("frozen path admission")
         masks = (1., 1., 1., 1.) if bias_masks is None else bias_masks
         decoder, norm, attention = masks[:3]
         intervention = masks[3] if len(masks) == 4 else 0.
@@ -816,6 +855,7 @@ class FrozenPath:
         This affine forward verifies the complete local replacement. Direct
         edges use ``run`` with independent writes and never differentiate here.
         """
+        self.guard.check("replacement path admission")
         x = embedding
         reads = []
         for i, (input_norm, post_norm, mixer) in enumerate(zip(self.norms, self.post_norms, self.mixers)):
