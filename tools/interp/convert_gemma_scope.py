@@ -24,6 +24,10 @@ from caliper.interp._dictionary import (
     _positive, _state_hash, model_identity,
 )
 from caliper.interp._memory import MemoryGuard
+from caliper.interp._gemma_import_identity import (
+    _REFERENCE_CONVERSION, _REFERENCE_INPUT, _REFERENCE_INPUT_CONVERSION,
+    _REFERENCE_OUTPUT_CONVERSION, _REFERENCE_PROFILE, _reference_gain,
+)
 
 
 MODEL_ID = "google/gemma-2-2b"
@@ -52,13 +56,21 @@ def _array_type(dtype):
     return dtype in (np.dtype("float16"), np.dtype("float32"), np.dtype("float64"))
 
 
-def convert_arrays(arrays, gain, *, width, latents):
+def _reference_profile(profile):
+    if profile not in ("caliper", _REFERENCE_PROFILE):
+        raise ValueError("unsupported Gemma Scope conversion profile")
+    return profile == _REFERENCE_PROFILE
+
+
+def convert_arrays(arrays, gain, *, width, latents, profile="caliper"):
     """Convert one layer in memory, with explicit dimensions for synthetic tests.
 
     The caller admits array storage before this pure operation. The encoder uses
     feature rows and divides each input column by the learned RMSNorm gain.
-    Other tensors retain their source values and dtype. No output norm applies.
+    The reference profile also preserves direct source encoder rows. Its output
+    tensors use bfloat16. The default retains source values and dtype elsewhere.
     """
+    reference = _reference_profile(profile)
     shapes = _shapes(width, latents)
     if set(arrays) != set(_NAMES):
         raise ValueError("Gemma Scope arrays have unexpected names")
@@ -78,13 +90,23 @@ def convert_arrays(arrays, gain, *, width, latents):
             or gain.shape != (width,) or not gain.is_floating_point()
             or not _finite(gain) or bool((gain == 0).any())):
         raise ValueError("Gemma Scope conversion requires finite nonzero CPU gain")
+    if reference and gain.dtype != torch.bfloat16:
+        raise ValueError("reference conversion requires the rounded bfloat16 gain")
     # The division uses at least float32 precision, then returns to the source dtype.
     dtype = tensors["W_enc"].dtype
     working = torch.promote_types(torch.float32, torch.promote_types(dtype, gain.dtype))
     encoder = tensors["W_enc"].T.to(working) / gain.detach().to(working).unsqueeze(0)
+    if reference:
+        # Preserve source bytes before any gain division. Inversion loses bits.
+        tensors["W_enc_original"] = tensors["W_enc"].T.to(torch.bfloat16).contiguous()
+        dtype = torch.bfloat16
     tensors["W_enc"] = encoder.to(dtype).contiguous()
-    if not _finite(tensors["W_enc"]):
+    if reference:
+        tensors = {name: value.to(dtype).contiguous() for name, value in tensors.items()}
+    if any(not _finite(value) for value in tensors.values()):
         raise ValueError("Gemma Scope encoder conversion overflows its dtype")
+    if not _positive(tensors["threshold"]):
+        raise ValueError("Gemma Scope thresholds must remain positive after conversion")
     return tensors
 
 
@@ -194,8 +216,9 @@ def _stamp(source):
     return info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns
 
 
-def load_scope_layer(path, gain, *, width, latents, memory):
+def load_scope_layer(path, gain, *, width, latents, memory, profile="caliper", evidence=None):
     """Admit and convert a local NPZ layer with no pickle or retained file map."""
+    reference = _reference_profile(profile)
     path = Path(path)
     shapes = _shapes(width, latents)
     if not stat.S_ISREG(path.stat().st_mode):
@@ -212,14 +235,17 @@ def load_scope_layer(path, gain, *, width, latents, memory):
         # Source arrays, copies, transpose/division, validation, and serialization.
         # Eight-byte arithmetic also covers a float64 gain on float16 arrays.
         working_bytes = sum(math.prod(shape) * 8 for shape in shapes.values())
-        _admit(memory, 3 * raw_bytes + 3 * working_bytes + 4 * _CHUNK_BYTES,
+        companion_bytes = 2 * width * latents if reference else 0
+        _admit(memory, 3 * raw_bytes + 3 * working_bytes + 3 * companion_bytes + 4 * _CHUNK_BYTES,
                "scope_layer_admission")
         original_hash = _hash_file(source, memory)
         arrays = _arrays(source, headers)
-        converted = convert_arrays(arrays, gain, width=width, latents=latents)
+        converted = convert_arrays(arrays, gain, width=width, latents=latents, profile=profile)
         del arrays
         if _stamp(source) != before or _hash_file(source, memory) != original_hash:
             raise ValueError("Gemma Scope source changed during conversion")
+        if evidence is not None:
+            evidence["original_dtype"] = str(headers["W_enc"][2])
     return converted, original_hash
 
 
@@ -259,7 +285,8 @@ def _evaluation_source(record):
     return json.loads(encoded)
 
 
-def _metadata(rows, evaluation_source=None):
+def _metadata(rows, evaluation_source=None, *, profile="caliper"):
+    reference = _reference_profile(profile)
     metadata = _manifest({
         "format_version": 1, "model_id": MODEL_ID, "model_hash": _GEMMA_IDENTITY,
         "revision": MODEL_REVISION, "layers": len(L0), "width": WIDTH, "latents": LATENTS,
@@ -284,19 +311,29 @@ def _metadata(rows, evaluation_source=None):
             "layers": rows,
         },
     })
+    if reference:
+        metadata["reference_input"] = dict(_REFERENCE_INPUT)
+        metadata["import_source"].update(
+            input_conversion=_REFERENCE_INPUT_CONVERSION,
+            output_conversion=_REFERENCE_OUTPUT_CONVERSION,
+            reference_conversion=json.loads(json.dumps(_REFERENCE_CONVERSION)))
     if evaluation_source is not None:
         metadata["evaluation_source"] = _evaluation_source(evaluation_source)
     return metadata
 
 
-def convert_gemma_scope(source, output, *, model, memory_limit_gb=40, evaluation_source=None):
+def convert_gemma_scope(source, output, *, model, memory_limit_gb=40, evaluation_source=None,
+                        profile="caliper", model_snapshot=None):
     """Publish a complete dictionary from the selected local snapshot atomically.
 
     The model must pass the established HF verification before this call. Source
     paths identify the pinned trusted local snapshot. Hashes record local bytes,
     and do not authenticate those bytes against a remote service.
     """
+    reference = _reference_profile(profile)
     source, output = Path(source), Path(output)
+    if reference and (model_snapshot is None or _snapshot_identity(model_snapshot) != _GEMMA_IDENTITY):
+        raise ValueError("reference conversion requires the pinned local Gemma model snapshot")
     evaluation_source = _evaluation_source(evaluation_source)
     if _snapshot_identity(source) != f"hf:{SOURCE_ID}@{SOURCE_REVISION}":
         raise ValueError("Gemma Scope source snapshot revision differs")
@@ -318,9 +355,20 @@ def convert_gemma_scope(source, output, *, model, memory_limit_gb=40, evaluation
             weight = blocks[index].pre_feedforward_layernorm.weight.detach()
             if weight.dtype != torch.float32 or weight.shape != (WIDTH,):
                 raise ValueError("Gemma Scope conversion requires float32 model norm weights")
-            gain = 1 + weight.to(device="cpu")
-            tensors, original_hash = load_scope_layer(source / relative, gain, width=WIDTH, latents=LATENTS, memory=memory)
+            extra = {}
+            if reference:
+                gain, extra = _reference_gain(model_snapshot, index, weight, memory)
+            else:
+                gain = 1 + weight.to(device="cpu")
+            tensors, original_hash = load_scope_layer(
+                source / relative, gain, width=WIDTH, latents=LATENTS, memory=memory,
+                profile=profile, evidence=extra if reference else None)
             destination = staging / f"layer_{index:02d}.safetensors"
+            _admit(memory, 2 * sum(value.numel() * value.element_size() for value in tensors.values())
+                   + 4 * _CHUNK_BYTES, "scope_save_admission")
+            if reference:
+                extra["tensor_hashes"] = {name: _state_hash({name: value}, memory=memory)
+                                          for name, value in tensors.items()}
             save_file(tensors, destination)
             del tensors
             # Windows requires a writable descriptor for fsync.
@@ -330,10 +378,11 @@ def convert_gemma_scope(source, output, *, model, memory_limit_gb=40, evaluation
             rows.append({"layer": index, "width": WIDTH, "latents": LATENTS, "average_l0": L0[index],
                          "source_file": relative, "source_sha256": original_hash,
                          "file": destination.name, "sha256": converted_hash,
-                         "input_gain_hash": _state_hash({"gain": gain}, memory=memory)})
+                         "input_gain_hash": _state_hash({"gain": gain}, memory=memory), **extra})
             del gain
             memory.check("scope_layer_saved")
-        metadata = _metadata(rows, evaluation_source)
+        _admit(memory, 64 * _HEADER_BYTES, "scope_metadata_admission")
+        metadata = _metadata(rows, evaluation_source, profile=profile)
         with (staging / "dictionary.json").open("w", encoding="utf-8") as target:
             json.dump(metadata, target, sort_keys=True, indent=2, allow_nan=False)
             target.write("\n")
@@ -357,6 +406,8 @@ def main(argv=None):
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--model-snapshot", required=True, type=Path)
     parser.add_argument("--memory-limit-gb", type=float, default=40)
+    parser.add_argument("--profile", choices=("caliper", _REFERENCE_PROFILE), default="caliper",
+                        help="Explicit original-coordinate bfloat16 reference artifact")
     parser.add_argument("--evaluation-source", type=Path,
                         help="Pinned local evaluation and index source JSON, separate from publisher training")
     args = parser.parse_args(argv)
@@ -376,7 +427,7 @@ def main(argv=None):
     memory = MemoryGuard(args.memory_limit_gb, "cpu")
     model = _load_gemma_model(args.model_snapshot, device="cpu", memory=memory)
     convert_gemma_scope(args.source, args.output, model=model, memory_limit_gb=args.memory_limit_gb,
-                        evaluation_source=evaluation_source)
+                        evaluation_source=evaluation_source, profile=args.profile, model_snapshot=args.model_snapshot)
 
 
 if __name__ == "__main__":
