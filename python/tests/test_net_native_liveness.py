@@ -16,6 +16,7 @@ from caliper import _controls, _wire as w
 nio_module = pytest.importorskip("caliper._netio")
 pytest.importorskip("websockets")
 from websockets.asyncio.server import serve
+from websockets.asyncio.client import connect
 from websockets.exceptions import ConnectionClosed
 
 
@@ -167,6 +168,61 @@ def test_native_close_code_and_direction_survive_reconnect(local):
         nio.close()
 
 
+@pytest.mark.parametrize("local", [False, True], ids=["viewer-close", "producer-idle"])
+def test_native_direct_viewer_close_evidence(monkeypatch, local):
+    from caliper._net_native import NativeServer
+
+    monkeypatch.setenv("CALIPER_SESSION", "0")
+    monkeypatch.setattr(_controls, "CONTROLS", _controls.Controls())
+    monkeypatch.setattr(w, "PING_INTERVAL_MS", 100)
+    monkeypatch.setattr(w, "IDLE_TIMEOUT_MS", 300)
+    producer = NativeServer(port=0)
+    closed = threading.Event()
+    on_control = producer._on_control
+
+    def record(kind, conn, frame):
+        on_control(kind, conn, frame)
+        if kind == "closed":
+            closed.set()
+
+    monkeypatch.setattr(producer, "_on_control", record)
+
+    async def check():
+        async with connect(producer.stream_url, ping_interval=None) as ws:
+            await ws.send(w.encode(w.Hello("viewer", CAPS)))
+            await receive(ws, w.Controls)
+            if local:
+                try:
+                    while True:
+                        await ws.recv()
+                except ConnectionClosed as exc:
+                    assert exc.rcvd.code == w.CLOSE_IDLE_TIMEOUT
+            else:
+                await ws.close(1000, "private-close-marker")
+        assert await asyncio.to_thread(closed.wait, 5)
+        history = producer.stats()["server"]["recent_closes"]
+        assert len(history) == 1
+        assert history[0]["code"] == (w.CLOSE_IDLE_TIMEOUT if local else 1000)
+        assert history[0]["local"] is local
+        assert history[0]["upstream"] is False
+        assert history[0]["conn"] > 0 and history[0]["time_ms"] > 0
+        assert "private-close-marker" not in json.dumps(history)
+
+    try:
+        asyncio.run(asyncio.wait_for(check(), 5))
+    finally:
+        producer.close()
+
+
+async def gil_probe(ws):
+    await ws.send(w.encode(w.Control(1, "pause")))
+    for nonce in range(6):
+        ping = await receive(ws, w.Ping)
+        await ws.send(w.encode(w.Pong(ping.nonce)))
+        await ws.send(w.encode(w.Ping(100 + nonce)))
+        await receive(ws, w.Pong, lambda message: message.nonce == 100 + nonce)
+
+
 async def gil_probe_hub():
     """A separate process answers heartbeats while the parent holds the GIL."""
     done = asyncio.get_running_loop().create_future()
@@ -175,12 +231,7 @@ async def gil_probe_hub():
         try:
             await welcome(ws)
             await receive(ws, w.Views)
-            await ws.send(w.encode(w.Control(1, "pause")))
-            for nonce in range(6):
-                ping = await receive(ws, w.Ping)
-                await ws.send(w.encode(w.Pong(ping.nonce)))
-                await ws.send(w.encode(w.Ping(100 + nonce)))
-                await receive(ws, w.Pong, lambda message: message.nonce == 100 + nonce)
+            await gil_probe(ws)
             done.set_result(None)
         except Exception as exc:
             if not done.done():
@@ -191,30 +242,43 @@ async def gil_probe_hub():
         await asyncio.wait_for(done, 5)
 
 
+async def gil_probe_viewer(url):
+    async with connect(url, ping_interval=None, close_timeout=1) as ws:
+        await ws.send(w.encode(w.Hello("viewer", CAPS)))
+        await receive(ws, w.Views)
+        print("ready", flush=True)
+        await gil_probe(ws)
+
+
 @pytest.mark.skipif(os.name != "posix", reason="The GIL probe uses POSIX waitpid.")
-def test_native_heartbeats_do_not_need_the_gil():
-    nio = nio_module.Server(-1, "t" * 32, json.dumps(IDENTITY), "{}", [], 4, 16,
+@pytest.mark.parametrize("upstream", [False, True], ids=["direct-viewer", "hub"])
+def test_native_heartbeats_do_not_need_the_gil(upstream):
+    nio = nio_module.Server(-1 if upstream else 0, "t" * 32, json.dumps(IDENTITY), "{}", [], 4, 16,
                             1000, 100, 500)
     nio.enable_controls(True)
-    child = subprocess.Popen([sys.executable, __file__, "--gil-probe"],
+    args = ["--gil-probe"] if upstream else [
+        "--gil-probe-viewer", f"ws://127.0.0.1:{nio.port}/v3/stream?token={'t' * 32}"]
+    child = subprocess.Popen([sys.executable, __file__, *args],
                              stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                              stderr=subprocess.PIPE, text=True)
     try:
         port = child.stdout.readline().strip()
-        assert port.isdecimal(), child.stderr.read()
+        assert (port.isdecimal() if upstream else port == "ready"), child.stderr.read()
         # PyDLL retains the GIL for the whole wait. The child bounds its own run.
         waitpid = ctypes.PyDLL(None).waitpid
         waitpid.argtypes = [ctypes.c_int, ctypes.POINTER(ctypes.c_int), ctypes.c_int]
         waitpid.restype = ctypes.c_int
         status = ctypes.c_int()
-        nio.connect_upstream(f"ws://127.0.0.1:{port}/stream", json.dumps(IDENTITY))
+        if upstream:
+            nio.connect_upstream(f"ws://127.0.0.1:{port}/stream", json.dumps(IDENTITY))
         assert waitpid(child.pid, ctypes.byref(status), 0) == child.pid
         child.returncode = os.waitstatus_to_exitcode(status.value)
         assert child.returncode == 0, child.stderr.read()
         messages = nio.control(0)
         requests = [w.decode(frame) for kind, _, frame in messages if kind == "msg"]
         assert len(requests) == 1 and requests[0].request_id == 1
-        assert nio.upstream()["connects"] == 1
+        if upstream:
+            assert nio.upstream()["connects"] == 1
     finally:
         if child.poll() is None:
             child.terminate()
@@ -224,3 +288,5 @@ def test_native_heartbeats_do_not_need_the_gil():
 
 if __name__ == "__main__" and sys.argv[1:] == ["--gil-probe"]:
     asyncio.run(gil_probe_hub())
+elif __name__ == "__main__" and sys.argv[1:2] == ["--gil-probe-viewer"]:
+    asyncio.run(asyncio.wait_for(gil_probe_viewer(sys.argv[2]), 5))

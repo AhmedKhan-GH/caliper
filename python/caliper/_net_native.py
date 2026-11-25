@@ -406,6 +406,11 @@ class NativeServer(NetServer):
 
     # -- inspection ---------------------------------------------------------------------
     def stats(self) -> dict:
+        """Return counters and the last 16 native close events, without peer text.
+
+        ``server.recent_closes`` records the connection ID, monotonic milliseconds,
+        close code, local handshake flag, and upstream flag for each event.
+        """
         n = self.nio.stats()
         with self.ring.lock:
             views = {name: {"id": v.id, "kind": v.kind, "groups": len(v.groups), "seq": v.seq}
@@ -414,7 +419,7 @@ class NativeServer(NetServer):
                 "closed": self.closed, "attached": self.transport.n_attached,
                 "connections": n["connections"], "views": views, "ring": dict(self.ring.counters),
                 "server": {**dict(self.counters), "http_requests": n["http_requests"],
-                           "refused": n["refused"]},
+                           "refused": n["refused"], "recent_closes": n.get("recent_closes", [])},
                 "producer": {**dict(self.producer.counters), "native_published": n["published"],
                              "overflow_closed": n["overflow_closed"], "encode_failed": n["encode_failed"]},
                 "series": n["series"]}

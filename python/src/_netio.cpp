@@ -720,11 +720,18 @@ public:
         wake_all();
     }
 
+    struct CloseRecord {
+        ConnId conn;
+        uint64_t time_ms;
+        uint16_t code;
+        bool local, upstream;
+    };
     struct Stats {
         std::vector<std::tuple<uint64_t, bool, size_t, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t>> ls;
         std::vector<std::pair<size_t, size_t>> queued;    // per connection: control frames and bytes
         uint64_t published = 0, http = 0, refused = 0, values = 0, overflow = 0;
         std::map<std::string, uint64_t> totals;
+        std::vector<CloseRecord> recent_closes;
     };
     // Called with the GIL released; to_dict() runs with it.
     Stats collect() {
@@ -741,6 +748,7 @@ public:
         st.http = http_requests_;
         st.refused = refused_;
         st.values = series_values_;
+        st.recent_closes.assign(recent_closes_.begin(), recent_closes_.end());
         for (auto& [v, h] : histories_) st.totals[v] = h.total;
         return st;
     }
@@ -767,6 +775,17 @@ public:
             conns.append(c);
         }
         d["connections"] = conns;
+        nb::list closes;
+        for (const auto& record : st.recent_closes) {
+            nb::dict c;
+            c["conn"] = record.conn;
+            c["time_ms"] = record.time_ms;
+            c["code"] = record.code;
+            c["local"] = record.local;
+            c["upstream"] = record.upstream;
+            closes.append(c);
+        }
+        d["recent_closes"] = closes;
         d["published"] = published;
         d["http_requests"] = http;
         d["refused"] = refused;
@@ -780,6 +799,16 @@ public:
     }
 
 private:
+    // Under mu_: retain numeric close evidence for direct viewers and hubs.
+    void remember_close(ConnId conn, bool upstream, const caliper_net::Event& e) {
+        if (recent_closes_.size() == 16) recent_closes_.pop_front();
+        recent_closes_.push_back({conn, caliper_net::monotonic_ms(), e.code, e.initiated_here, upstream});
+        if (upstream) {
+            up_last_close_code_ = e.code;
+            up_last_close_local_ = e.initiated_here;
+        }
+    }
+
     // ---- the native thread ------------------------------------------------------------
     void loop() {
         while (!stop_.load()) {
@@ -1074,6 +1103,7 @@ private:
                 auto it = links_.find(e.conn);
                 if (it != links_.end()) {
                     Link& l = it->second;
+                    remember_close(l.id, false, e);
                     for (auto sub = l.subs.begin(); sub != l.subs.end();) drop_sub(l, (sub++)->first);
                     if (l.attached) attached_.fetch_sub(1);
                     if (l.helloed) push_ctl("closed", l.id);
@@ -1489,8 +1519,7 @@ private:
                         closed = true;
                         // Retain the code across reconnects. The reason alone cannot
                         // distinguish an idle timeout from a normal peer close.
-                        up_last_close_code_ = e.code;
-                        up_last_close_local_ = e.initiated_here;
+                        remember_close(cid, true, e);
                         err = e.reason.empty() ? "closed with " + std::to_string(e.code) : e.reason;
                     }
                 }
@@ -1524,8 +1553,7 @@ private:
                     for (const auto& e : client_->poll(20)) {
                         if (e.type == caliper_net::Event::Type::Closed) {
                             std::lock_guard<std::mutex> g(mu_);
-                            up_last_close_code_ = e.code;
-                            up_last_close_local_ = e.initiated_here;
+                            remember_close(cid, true, e);
                         }
                     }
                 }
@@ -1596,6 +1624,7 @@ private:
     std::vector<float> scratch_;
     uint64_t published_ = 0, http_requests_ = 0, refused_ = 0, series_values_ = 0;
     uint64_t overflow_closed_ = 0;            // connections closed for a full control queue
+    std::deque<CloseRecord> recent_closes_;
 
     std::mutex cmu_;                          // the queue to Python
     std::condition_variable ccv_;
