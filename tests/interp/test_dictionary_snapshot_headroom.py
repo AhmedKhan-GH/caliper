@@ -375,3 +375,120 @@ def test_device_snapshot_finishes_cpu_blocks_after_a_mismatch(headroom_snapshot,
     assert not case.executor._dictionary_matches()
     assert case.batches == [[16], [1]]
     assert sizes == [16, 16, 1, 7]
+
+
+@pytest.fixture
+def guarded_snapshot(headroom_snapshot, monkeypatch):
+    """Use real process, trace, and owner guards with small CPU storage."""
+    from caliper.interp import _frozen
+    from caliper.interp._hosted import _RunGuard
+    from caliper.interp._memory import MemoryGuard
+
+    case = headroom_snapshot()
+    case.now, case.process_bytes = 0, 1_000_000
+    case.samples = []
+
+    def resident():
+        case.samples.append(len(case.comparisons))
+        return case.process_bytes
+
+    def process_guard(limit, device, **kwargs):
+        return MemoryGuard(limit, device, clock=lambda: case.now, pressure=lambda: 50,
+                           resident=resident, footprint=lambda: case.process_bytes,
+                           peak=lambda: case.process_bytes, driver=lambda: 0)
+
+    monkeypatch.setattr(_frozen, "ProcessMemoryGuard", process_guard)
+    case.trace_guard = _frozen.MemoryGuard("cpu", memory_limit_gb=40)
+    case.owner = _RunGuard(case.guard, extra=case.trace_guard)
+    case.executor.resource_guard = case.owner
+    case.executor._prepare_dictionary_identity()
+    case.samples.clear()
+    case.batches.clear()
+    case.allocations.clear()
+    case.comparisons.clear()
+    case.copies.clear()
+    case.drains.clear()
+    return case
+
+
+@pytest.mark.parametrize("capacity", [64, 3])
+@pytest.mark.parametrize("mismatch", [False, True])
+def test_snapshot_comparison_reads_process_at_entry_and_each_completed_batch(guarded_snapshot, capacity, mismatch):
+    case = guarded_snapshot
+    case.available = 8_000_000_000 + _intervene._snapshot_workspace(16, capacity)
+    if mismatch:
+        case.state["weight"][0] ^= 128
+    assert case.executor._dictionary_matches() is not mismatch
+    completed = list(range(capacity, 65, capacity)) + [65]
+    # The trace guard reads RSS through its process guard and its own record.
+    assert case.samples == [count for count in [0, *completed] for _ in range(2)]
+    assert sum(map(sum, case.batches)) == case.total
+    assert max(map(len, case.batches)) == capacity
+    assert not case.scopes
+
+
+@pytest.mark.parametrize("change", ["host", "limit", "latch", "interval"])
+def test_snapshot_comparison_admission_preserves_live_stops(guarded_snapshot, monkeypatch, change):
+    case = guarded_snapshot
+    compare = _intervene._DictionarySnapshot._device_equal
+    failure = CleanStop("owner stop after readback")
+
+    def compared(snapshot, blocks, memory):
+        equal = compare(snapshot, blocks, memory)
+        if change == "host":
+            case.available = 8_000_000_000 + _intervene._snapshot_workspace(13, 1) - 1
+        elif change == "limit":
+            case.trace_guard.limit = case.process_bytes + _intervene._snapshot_workspace(13, 1) - 1
+        elif change == "latch":
+            case.owner.failure = failure
+        else:
+            case.now += 15
+            case.process_bytes = 40_000_000_001
+        return equal
+
+    monkeypatch.setattr(_intervene._DictionarySnapshot, "_device_equal", compared)
+    with pytest.raises(CleanStop) as caught:
+        case.executor._dictionary_matches()
+    assert len(case.comparisons) == 64
+    assert all(reference() is None for reference in case.allocations)
+    assert not case.scopes and not case.executor._hooks
+    if change == "latch":
+        assert caught.value is failure
+    elif change == "interval":
+        assert caught.value is case.owner.failure
+
+
+def test_snapshot_completed_batch_forces_a_process_stop_within_the_interval(guarded_snapshot, monkeypatch):
+    case = guarded_snapshot
+    reduce = torch.all
+
+    def reduced(*args, **kwargs):
+        result = reduce(*args, **kwargs)
+        case.process_bytes = 40_000_000_001
+        return result
+
+    monkeypatch.setattr(torch, "all", reduced)
+    with pytest.raises(CleanStop) as caught:
+        case.executor._dictionary_matches()
+    assert caught.value is case.owner.failure
+    assert case.now == 0 and len(case.comparisons) == 64
+    assert all(reference() is None for reference in case.allocations)
+    assert case.readback() is None and not case.scopes and not case.executor._hooks
+
+
+def test_snapshot_copy_admission_keeps_forced_process_reads(guarded_snapshot, monkeypatch):
+    case = guarded_snapshot
+    drain = torch.mps.synchronize
+
+    def drained():
+        drain()
+        case.process_bytes = 40_000_000_001
+
+    monkeypatch.setattr(torch.mps, "synchronize", drained)
+    with pytest.raises(CleanStop) as caught:
+        case.executor._prepare_dictionary_identity()
+    assert caught.value is case.owner.failure
+    assert case.now == 0 and len(case.copies) == 64
+    assert not case.comparisons and not case.scopes
+    assert case.executor._dictionary_snapshot is None
+    assert all(reference() is None for reference in case.allocations)

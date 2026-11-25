@@ -260,14 +260,14 @@ class _DictionarySnapshot:
                 raise CleanStop("dictionary identity allocation exceeds the process memory limit")
 
     @classmethod
-    def _admit_batch(cls, memory, sizes, *, retained=0, minimum=0, floor=0):
+    def _admit_batch(cls, memory, sizes, *, retained=0, minimum=0, floor=0, force=True):
         """Admit the largest bounded prefix that fits both prospective budgets."""
         sizes = sizes[:_SNAPSHOT_BATCH_BLOCKS]
         largest = sizes[0] if sizes else 0
         count = 1 if sizes else 0
         reserve = max(minimum, _snapshot_workspace(largest, count))
         # Check only the minimum first. A real guard stop must propagate.
-        cls._admit(memory, retained + reserve, force=True, floor=floor)
+        cls._admit(memory, retained + reserve, force=force, floor=floor)
         budget = min(memory.headroom, memory.limit - allocation_bytes(memory, floor=floor)) - retained
         for blocks, size in enumerate(sizes[1:], 2):
             largest = max(largest, size)
@@ -417,7 +417,10 @@ class _DictionarySnapshot:
                 batch.extend(islice(pending, _SNAPSHOT_BATCH_BLOCKS - len(batch)))
                 if not batch:
                     return equal
-                count, _ = self._admit_batch(memory, [left.numel() for left, _ in batch])
+                # Lookup entry and each completed comparison force a process read.
+                # These views add no tensor storage. Keep owner interval checks
+                # and fresh host headroom at every prospective admission.
+                count, _ = self._admit_batch(memory, [left.numel() for left, _ in batch], force=False)
                 selected = batch[:count]
                 del batch[:count]
                 # Do not short-circuit later batches after a content mismatch.
