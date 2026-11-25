@@ -11,6 +11,7 @@ from torch import nn
 
 import caliper
 from caliper import _controls, _managed, _wire
+from caliper._intervention_protocol import specification
 from caliper.interp._hosted import (
     CHECKPOINT_BYTES, CHECKPOINT_VALUES, HostedInference, HostedService, TinyTokenizer,
     _check_checkpoint_interventions, checkpoint_metadata,
@@ -99,7 +100,7 @@ def _read_checkpoint(run):
 @pytest.mark.parametrize(("width", "requested", "accepted"), [(2304, 57, 56), (1920, 64, 64)])
 def test_full_active_snapshot_and_automatic_checkpoints(wide_run, width, requested, accepted):
     run = wide_run(width)
-    service, controls = run.interventions, run.controls
+    service = run.interventions
     for point in _points()[:accepted]:
         service.set(_add(point, width))
     if requested > accepted:
@@ -126,13 +127,28 @@ def test_full_active_snapshot_and_automatic_checkpoints(wide_run, width, request
     kept = Path(run.managed.dir) / "kept" / "checkpoint-1.json"
     assert json.loads(kept.read_bytes()) == active
 
+    if width == 2304:
+        # This replacement fits now, but its second copy cannot fit after application.
+        future = deepcopy(active)
+        for record in future["interventions"]["interventions"]:
+            record["specification"]["positions"] = list(range(32))
+        assert checkpoint_metadata(future)
+        hooks = set(service.executor._hooks)
+        with pytest.raises(InterventionError, match="checkpoint metadata") as refused:
+            service.load_state_dict(future["interventions"], restore_active=True)
+        assert refused.value.code == _wire.ERR_LIMIT
+        assert set(service.executor._hooks) == hooks
+        assert service.state_dict() == active["interventions"]
+
     # Distinct pending replacements retain all old applied vectors until the boundary.
-    replacement = _add(_points()[0], width, .25, from_step=5)
+    replacement = _add(_points()[0], width, .5, from_step=5)
     service.set(replacement)
     queued = _read_checkpoint(run)
     first = queued["interventions"]["interventions"][0]
-    assert first["specification"]["vector"][0] == .25
+    assert first["specification"]["vector"][0] == .5
     assert first["applied_specification"]["vector"][0] == 0.
+    for record in queued["interventions"]["interventions"]:
+        record["specification"].update(vector=[.5] * width, from_step=5)
     run.load_checkpoint(queued)
     assert run.restored == queued
     service.load_state_dict(queued["interventions"], restore_active=True)
@@ -173,6 +189,7 @@ def test_checkpoint_admission_bounds_bytes_and_both_replacement_outcomes():
     records = {}
     for point in _points()[:10]:
         spec = _add(point, 8192, -1.7976931348623157e308)
+        assert specification(spec)
         iv = _controls._Intervention(point, "add", None, None, spec)
         records[(point, "add")] = iv
     # Both copies have fewer than the maximum values, but their bytes exceed the budget.
@@ -181,7 +198,7 @@ def test_checkpoint_admission_bounds_bytes_and_both_replacement_outcomes():
         _check_checkpoint_interventions(records)
     for iv in records.values():
         iv.applied_spec = iv.spec
-        iv.spec = _add(iv.point, 8192)
+        iv.spec = dict(_add(iv.point, 8192), positions=list(range(32)))
     # A smaller request must reserve the larger retained effect and a possible rollback.
     with pytest.raises(ValueError, match="checkpoint metadata"):
         _check_checkpoint_interventions(records)
@@ -208,6 +225,14 @@ def test_checkpoint_preserves_structural_and_byte_limits():
     too_many_bytes = {str(i): ["\x01" * 4096] * 3 for i in range(64)}
     assert len(json.dumps(too_many_bytes).encode("utf-8")) > CHECKPOINT_BYTES
     assert not checkpoint_metadata(too_many_bytes)
+
+
+def test_checkpoint_value_count_retains_its_exact_boundary():
+    value = {str(i): [0] * 16384 for i in range(15)}
+    value["last"] = [0] * (CHECKPOINT_VALUES - 15 * 16384 - 17)
+    assert checkpoint_metadata(value)
+    value["last"].append(0)
+    assert not checkpoint_metadata(value)
 
 
 def test_version_one_records_without_applied_copy_remain_loadable(wide_run):
