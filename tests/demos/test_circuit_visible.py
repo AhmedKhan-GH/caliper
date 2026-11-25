@@ -65,9 +65,9 @@ def test_actual_browser_routes_require_all_modules(tmp_path, missing):
         thread.join()
 
 
-@pytest.mark.parametrize("existing", [False, True])
-def test_error_panel_is_valid_before_and_after_instrument_creation(tmp_path, existing):
-    spec = {"caliper_spec": 1, "applet": {"id": "circuit-trace", "title": "Circuit Trace"}}
+@pytest.mark.parametrize("existing,version", [(False, 0), (False, 1), (True, 1)])
+def test_error_panel_is_valid_before_and_after_instrument_creation(tmp_path, existing, version):
+    spec = {"caliper_spec": version, "applet": {"id": "circuit-trace", "title": "Circuit Trace"}}
     if existing:
         spec.update(panel=[{"id": "graph", "primitive": "text", "options": {"text": "Existing Graph"}}],
                     control=[{"id": "prompt", "kind": "text", "title": "Prompt", "bind": "param:prompt"},
@@ -80,6 +80,7 @@ def test_error_panel_is_valid_before_and_after_instrument_creation(tmp_path, exi
         if method == "spec.get":
             return {"json": spec}
         if method == "applet.save":
+            assert args == {"overwrite": True}
             return {}
         assert method == "spec.set_text"
         changed.append(tomllib.loads(args["text"]))
@@ -87,7 +88,7 @@ def test_error_panel_is_valid_before_and_after_instrument_creation(tmp_path, exi
     assert not (tmp_path / "demo-error-display.json").exists()
     assert spec == original
     document = changed[0]
-    schema = json.loads((ROOT / "src/builder/spec/schema/caliper-spec-v1.schema.json").read_text())
+    schema = json.loads((ROOT / f"src/builder/spec/schema/caliper-spec-v{version}.schema.json").read_text())
     jsonschema.validate(document, schema)
     error = next(p for p in document["panel"] if p["id"] == "demo_error")
     assert error["options"]["text"] == "Dictionary {request} failed."
@@ -95,7 +96,7 @@ def test_error_panel_is_valid_before_and_after_instrument_creation(tmp_path, exi
         assert document["panel"][0] == spec["panel"][0]
         assert document["layout"]["children"][0]["children"] == ["prompt", "demo_error"]
     else:
-        assert document["layout"] == {"panel": "demo_error"}
+        assert document["layout"] == "demo_error"
 
 
 @pytest.mark.parametrize("bridge", [False, True])

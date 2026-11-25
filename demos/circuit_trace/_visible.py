@@ -83,10 +83,10 @@ def show_error(session, error):
                             found = replace_status(child) or found
             return found
         if not replace_status(spec.get("layout")):
-            spec["layout"] = {"panel": "demo_error"}
+            spec["layout"] = "demo_error"
         session.mcp.body("spec.set_text", text="\n".join(
             toml_value(key) + " = " + toml_value(value) for key, value in spec.items()) + "\n")
-        session.mcp.body("applet.save")
+        session.mcp.body("applet.save", overwrite=True)
     except Exception as exc:
         # A broken command connection must not close the app either.
         (session.out / "demo-error-display.json").write_text(json.dumps({"error": str(exc)}) + "\n")
