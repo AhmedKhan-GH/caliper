@@ -9,7 +9,7 @@ import pytest
 import torch
 
 from caliper import _wire
-from caliper.interp import _memory, _publish, capture
+from caliper.interp import _publish, capture
 from caliper.interp._output import internal_forward
 from .concurrency_isolation import isolated_test
 from .test_controls_concurrency import Job, other_thread
@@ -21,14 +21,6 @@ from .test_service import call
 @pytest.fixture(autouse=True)
 def local_resources(monkeypatch):
     monkeypatch.setattr("caliper.serve", lambda: SimpleNamespace(url="in-process"))
-    initialize = _memory.MemoryGuard.__init__
-
-    def initialize_cpu(self, limit_gb, device, **kwargs):
-        assert torch.device(device).type == "cpu"
-        kwargs["pressure"] = lambda: 80.
-        initialize(self, limit_gb, device, **kwargs)
-
-    monkeypatch.setattr(_memory.MemoryGuard, "__init__", initialize_cpu)
 
 
 def checkpoint(run):
