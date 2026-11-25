@@ -13,6 +13,7 @@ from tools.interp import eval_dictionary as evaluation
 from tools.interp.memory_limits import CleanStop
 from tools.interp.model_load import hidden_forward
 from tools.interp.text_stream import TextStream, document_identity
+from .cpu_pressure import deterministic_cpu_pressure
 from .test_gemma_import_binding import artifact
 from .test_gemma_runtime import gemma_model, runtime_dictionary
 from .test_training_stream import documents

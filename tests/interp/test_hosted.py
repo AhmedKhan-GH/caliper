@@ -16,12 +16,14 @@ import torch
 from caliper import _controls, _managed, _wire as wire
 from caliper.interp._hosted import HostedInference, TinyLM, TinyTokenizer, fixture_resources, load_resources
 from caliper.interp._output import internal_forward
+from .cpu_pressure import cpu_fixture_pressure, deterministic_cpu_pressure, hosted_fixture_command
 from .fixture import TinyLM as ReferenceLM, TinyTokenizer as ReferenceTokenizer, forward_logits
 
 
 @pytest.fixture(scope="module")
 def resource_folder(tmp_path_factory):
-    return fixture_resources(tmp_path_factory.mktemp("hosted-dictionary"))
+    with cpu_fixture_pressure():
+        return fixture_resources(tmp_path_factory.mktemp("hosted-dictionary"))
 
 
 def test_installed_fixture_has_the_reference_identity():
@@ -57,7 +59,7 @@ def test_module_fixture_creation_preserves_imported_resource_identity(tmp_path):
     env = os.environ.copy()
     source = str(Path(__file__).resolve().parents[2] / "python")
     env["PYTHONPATH"] = os.pathsep.join([source, env.get("PYTHONPATH", "")])
-    subprocess.run([sys.executable, "-m", "caliper.interp._hosted", "--fixture-dir", str(folder)],
+    subprocess.run(hosted_fixture_command("--fixture-dir", str(folder)),
                    cwd=tmp_path, env=env, check=True, capture_output=True, text=True, timeout=30)
     model, _, dictionary, index, _ = load_resources("tiny-lm", folder)
     try:
@@ -245,8 +247,8 @@ class HostedChild:
                    CALIPER_NETIO="0", CALIPER_SESSION="0", PYTHONUNBUFFERED="1")
         if resume is not None:
             env.update(CALIPER_RUN_RESUME=str(resume), CALIPER_RUN_PARENT="parent")
-        self.process = subprocess.Popen([sys.executable, "-m", "caliper.interp._hosted", "--model=tiny-lm",
-                                         "--dictionary=" + str(dictionary), "--prompt=AB"],
+        self.process = subprocess.Popen(hosted_fixture_command("--model=tiny-lm",
+                                         "--dictionary=" + str(dictionary), "--prompt=AB"),
                                         env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
         def read_output():
             with (self.folder / "output.log").open("w") as log:
@@ -614,6 +616,12 @@ def test_hosted_service_exists_before_watch_starts_stream(monkeypatch, request):
 
 @pytest.fixture
 def hosted_run(tmp_path, monkeypatch, request):
+    # Importers retain this context through test execution and resource cleanup.
+    with cpu_fixture_pressure():
+        yield from _hosted_run(tmp_path, monkeypatch, request)
+
+
+def _hosted_run(tmp_path, monkeypatch, request):
     import caliper
     from caliper import _net
     from caliper.interp import load_dictionary

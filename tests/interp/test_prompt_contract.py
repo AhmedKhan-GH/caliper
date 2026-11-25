@@ -9,6 +9,7 @@ import pytest
 from caliper import _controls, _managed, _wire as wire
 from caliper.interp._hosted import HostedInference, TinyTokenizer, fixture_resources, load_resources
 from caliper.interp._output import prompt_inputs
+from .cpu_pressure import cpu_fixture_pressure
 from .test_service import Transport
 
 
@@ -28,6 +29,11 @@ TOKEN_OVERFLOW = " ".join(["token"] * 32)  # BOS plus 32 words gives 33 tokens.
 
 @pytest.fixture
 def prompt_run(tmp_path, monkeypatch):
+    with cpu_fixture_pressure():
+        yield _prompt_run(tmp_path, monkeypatch)
+
+
+def _prompt_run(tmp_path, monkeypatch):
     import caliper
     from caliper import _net
     folder = fixture_resources(tmp_path / "dictionary")

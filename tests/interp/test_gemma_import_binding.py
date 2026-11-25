@@ -19,6 +19,7 @@ from demos.circuit_trace._qualification import dictionary_qualification
 from tools.interp import convert_gemma_scope, eval_dictionary
 from tools.interp.evaluation_binding import EvaluationBinding
 from tools.interp.text_stream import TextStream
+from .cpu_pressure import cpu_fixture_pressure
 from .test_gemma_evaluation import imported_metadata
 from .test_gemma_runtime import gemma_model, local_gemma, runtime_dictionary
 from .test_training_stream import documents
@@ -26,6 +27,11 @@ from .test_training_stream import documents
 
 @pytest.fixture
 def artifact(tmp_path, monkeypatch):
+    with cpu_fixture_pressure():
+        yield _artifact(tmp_path, monkeypatch)
+
+
+def _artifact(tmp_path, monkeypatch):
     # Only the dimensions shrink. Model verification uses actual checkpoint bytes.
     monkeypatch.setattr(imported, "_WIDTH", 16)
     monkeypatch.setattr(imported, "_LATENTS", 20)
@@ -68,6 +74,11 @@ def test_import_evidence_uses_actual_files_and_one_plus_verified_gain(artifact):
 
 @pytest.fixture
 def random_artifact(tmp_path):
+    with cpu_fixture_pressure():
+        yield _random_artifact(tmp_path)
+
+
+def _random_artifact(tmp_path):
     # No checkpoint verification or pinned import dimension overrides apply here.
     model = gemma_model()
     dictionary = runtime_dictionary(model)
