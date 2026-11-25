@@ -164,6 +164,43 @@ class MainTest(unittest.TestCase):
             finally:
                 sys.argv = argv
 
+    def test_repo_default_scan_passes(self):
+        repo = HERE.parent
+        argv = sys.argv
+        sys.argv = ["check_theme_colors.py", "--root", str(repo)]
+        try:
+            self.assertEqual(chk.main(), 0)
+        finally:
+            sys.argv = argv
+
+    def test_repo_default_scan_fails_on_shared_color_drift(self):
+        import shutil
+        import shared_colors  # noqa: E402
+
+        repo = HERE.parent
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            copy_rels = [
+                *chk.THEME_FILES,
+                shared_colors.SOURCE_REL,
+                shared_colors.STERNBILD_CMAKE_REL,
+                *(rel for rel, _ in shared_colors.FULL_TARGETS),
+                *(rel for rel, _, _, _ in shared_colors.BLOCK_TARGETS),
+            ]
+            for rel in copy_rels:
+                dst = root / rel
+                dst.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(repo / rel, dst)
+            # Drift a generated copy and verify default check_theme_colors fails.
+            drifted = root / "python/caliper/_colors_gen.py"
+            drifted.write_text(drifted.read_text(encoding="utf-8") + "# drifted\n", encoding="utf-8")
+            argv = sys.argv
+            sys.argv = ["check_theme_colors.py", "--root", str(root)]
+            try:
+                self.assertEqual(chk.main(), 1)
+            finally:
+                sys.argv = argv
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -47,24 +47,22 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from . import _wire
+from ._colors_gen import CATEGORICAL_PALETTE, LIVE_COLORMAPS
 from ._convert import check_range, cmap_index
 
 __all__ = ["scene", "Scene", "SceneState", "Batch", "Transform", "Classes", "Clear", "SCENES",
            "forget"]
 
 KIND_SCENE = int(_wire.Kind.SCENE)
-_CMAPS = {"viridis": 0, "magma": 1, "rdbu": 2}
+_CMAPS = dict(LIVE_COLORMAPS)
 DEFAULT_RATE_HZ = 60.0
 META_MARGIN = 4096                       # bytes of metadata a batch frame may need, at most
 PART_ORDER = {p: i for i, p in enumerate(_wire.PARTS)}
 PRIMITIVES = tuple(p for p in _wire.PARTS if p != _wire.PART_CAMERA)
 IMAGE_FORMS = {b"\x89PNG\r\n\x1a\n": _wire.FORMAT_PNG, b"\xff\xd8\xff": _wire.FORMAT_JPEG}
-# The 16 colours that categorical points draw with (src/host/live/live_views_draw.cpp,
-# kPalette): a class id without a colour of its own takes colour id mod 16.
-PALETTE = ((31, 119, 180), (255, 127, 14), (44, 160, 44), (214, 39, 40), (148, 103, 189),
-           (140, 86, 75), (227, 119, 194), (127, 127, 127), (188, 189, 34), (23, 190, 207),
-           (174, 199, 232), (255, 187, 120), (152, 223, 138), (255, 152, 150), (197, 176, 213),
-           (196, 156, 148))
+# The 16 colours that categorical points draw with (caliper_scene::kPalette):
+# a class id without a colour of its own takes colour id mod 16.
+PALETTE = CATEGORICAL_PALETTE
 
 
 def _not_built(call: str, what: str) -> NotImplementedError:

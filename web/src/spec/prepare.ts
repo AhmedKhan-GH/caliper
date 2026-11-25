@@ -5,8 +5,8 @@
 // header's info string, the colours of grids and points, the class-label rule,
 // the table's formats and the states are made with the same rules.
 
-import { colormapLut, lutIndex } from '../render/colormap.js';
-import type { ColormapName } from '../protocol/messages.js';
+import { lutIndex } from '../render/colormap.js';
+import { isSpecColormapName, specColormapLut, type SpecColormapName } from '../render/colormaps.gen.js';
 import { cellText, columnFormat, fmt4, numericType, withCommas } from './format.js';
 import { bindingName, panelTitle } from './layout.js';
 import { classRgb } from './look.js';
@@ -122,15 +122,12 @@ function settle(lo: number, hi: number): [number, number] {
   return [lo, hi];
 }
 
-const cmapName = (name: string | undefined, fallback: string): string =>
-  name === 'viridis' || name === 'magma' || name === 'rdbu' || name === 'greys' ? name : fallback;
+const cmapName = (name: string | undefined, fallback: SpecColormapName): SpecColormapName =>
+  isSpecColormapName(name) ? name : fallback;
 
-/** The 256-entry table of a colormap, greys included. */
+/** The 256-entry table of a spec colormap (all 16 built-in maps). */
 export function lut(name: string): Uint8Array {
-  if (name !== 'greys') return colormapLut(name as ColormapName);
-  const t = new Uint8Array(1024);
-  for (let i = 0; i < 256; i++) t.set([i, i, i, 255], i * 4);
-  return t;
+  return specColormapLut(isSpecColormapName(name) ? name : 'viridis');
 }
 
 const f32 = Math.fround;
