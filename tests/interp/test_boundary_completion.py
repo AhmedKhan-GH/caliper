@@ -336,7 +336,16 @@ def test_scheduled_reorder_failure_retains_old_hooks_without_retry(controlled, m
     ctl.action("inspect", lambda: observed.append(model(**tokenizer("abc")).logits))
     route.on_control(None, _wire.Control(1, "run", name="inspect").to_meta())
 
-    def fail(*args, **kwargs):
+    install = service.executor.install
+    prepared = []
+
+    def fail(spec, **kwargs):
+        # Refuse the retained add reinstall after the scheduled ablation installs.
+        if spec["op"] == "ablate":
+            hook = install(spec, **kwargs)
+            prepared.append(hook)
+            return hook
+        assert spec["op"] == "add"
         calls.append(True)
         raise RuntimeError("reorder installation refused")
 
@@ -345,6 +354,7 @@ def test_scheduled_reorder_failure_retains_old_hooks_without_retry(controlled, m
         with pytest.warns(RuntimeWarning, match="reorder installation refused"):
             ctl.step(2)
         assert calls == [True] and not observed and not route.transport.replies
+        assert len(prepared) == 1 and prepared[0].removed
         assert scheduled.state == "ended" and scheduled.hook is None
         assert scheduled.applied_spec is None and not scheduled.replace
         assert scheduled.error_code == "intervene.hook_failed"
