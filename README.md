@@ -60,7 +60,7 @@ cmake --build --preset release
 .\cmake-build-release\caliper.exe        # Windows
 ```
 
-Run `./init-submodules.sh`, not `git submodule update`, because some submodule pins need the script fallbacks. On Windows without Git Bash, run `init-submodules.bat` in Command Prompt.
+Run `./init-submodules.sh`, not `git submodule update`, because some submodule pins need the script fallbacks. On Windows without Git Bash, run `init-submodules.bat` in Command Prompt. Run either script once on a fresh clone, because both scripts delete `third_party/` and local build folders (`cmake-build-*`, `build/`) before they initialize submodules.
 
 The core build compiles no applets. Applets build against the installed SDK (`cmake --install cmake-build-release --prefix <prefix> --component sdk`), each in its own folder. [First Applet](docs/applets/first-applet.md) describes the build steps, and [SDK Package](docs/applets/sdk-package.md) describes the package.
 
