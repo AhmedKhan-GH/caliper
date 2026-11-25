@@ -216,6 +216,49 @@ Json pick_at(float x, float y, unsigned item) {
 }
 }
 
+TEST_CASE("reference graph capacities retain nodes and edges beyond the legacy limits") {
+    @autoreleasepool {
+        mr::Metal metal;
+        if (!metal.backend) CALIPER_SKIP_NO_GPU(metal.why);
+        const auto piece = ip::load("attribution_graph");
+        constexpr unsigned nodes = 513, edges = 8193;
+        std::vector<std::int32_t> ni(8192 * 4), ei(262144 * 2), counts{nodes, edges, 32, 24};
+        std::vector<float> nf(8192 * 4), ef(262144 * 2);
+        for (unsigned i = 0; i < nodes; ++i) {
+            ni[4 * i] = 1;
+            ni[4 * i + 1] = i % 24;
+            ni[4 * i + 2] = i % 32;
+            ni[4 * i + 3] = i;
+            nf[4 * i + 1] = 1.0f / (i + 1);
+        }
+        for (unsigned i = 0; i < edges; ++i) {
+            ei[2 * i] = i % nodes;
+            ei[2 * i + 1] = (i + 1) % nodes;
+            ef[2 * i] = -0.25f;
+            ef[2 * i + 1] = -1.0f;
+        }
+        std::vector<HostTensor> tensors{
+            HostTensor::of("graph_counts", "i32", {4}, counts),
+            HostTensor::of("node_i", "i32", {8192, 4}, ni),
+            HostTensor::of("node_f", "f32", {8192, 4}, nf),
+            HostTensor::of("edge_i", "i32", {262144, 2}, ei),
+            HostTensor::of("edge_f", "f32", {262144, 2}, ef), text_tensor(8224, "reference ")};
+        const auto data = mr::run_derive(metal.device, piece, tensors, {});
+        REQUIRE(resource(data, "nodes").count == nodes);
+        REQUIRE(resource(data, "curves").count == edges);
+        CHECK(scalar<std::uint32_t>(resource(data, "nodes"), nodes - 1, 16, 48) == nodes - 1);
+        CHECK(scalar<float>(resource(data, "nodes"), nodes - 1, 12, 48) > 0.0f);
+        CHECK(scalar<float>(resource(data, "curves"), edges - 1, 32, 48) == -0.25f);
+        CHECK(scalar<std::uint32_t>(resource(data, "curves"), edges - 1, 40, 48) == (edges - 1) % nodes);
+        CHECK(scalar<std::uint32_t>(resource(data, "strings"), 32 + nodes - 1, 0, 64) == 0x65666572u);
+        counts[0] = 8193;
+        tensors[0] = HostTensor::of("graph_counts", "i32", {4}, counts);
+        const auto refused = mr::run_derive(metal.device, piece, tensors, {});
+        CHECK(resource(refused, "nodes").count == 0);
+        CHECK(resource(refused, "curves").count == 0);
+    }
+}
+
 TEST_CASE("small graph density markers retain distinct center pixels for every kind") {
     @autoreleasepool {
         mr::Metal metal;

@@ -12757,7 +12757,7 @@
                         "type": "array"
                       },
                       "strings_from": {
-                        "description": "In place of strings: a published buffer resource or buffer input of at most 4096 elements whose stride is at most 64 bytes of u32 fields; each valid element is one string of UTF-8 bytes, ended by its stride or its first zero byte. A string that is not UTF-8 leaves its labels out.",
+                        "description": "A published buffer with at most 8224 strings, each with at most 64 bytes of u32 fields. Its stride or first zero byte ends each UTF-8 string. Invalid UTF-8 hides the label.",
                         "pattern": "^[a-z][a-z0-9_]{0,31}$",
                         "type": "string"
                       }
@@ -15170,7 +15170,7 @@
                         "type": "array"
                       },
                       "strings_from": {
-                        "description": "In place of strings: a published buffer resource or buffer input of at most 4096 elements whose stride is at most 64 bytes of u32 fields; each valid element is one string of UTF-8 bytes, ended by its stride or its first zero byte. A string that is not UTF-8 leaves its labels out.",
+                        "description": "A published buffer with at most 8224 strings, each with at most 64 bytes of u32 fields. Its stride or first zero byte ends each UTF-8 string. Invalid UTF-8 hides the label.",
                         "pattern": "^[a-z][a-z0-9_]{0,31}$",
                         "type": "string"
                       }
@@ -16340,7 +16340,7 @@
                         "type": "array"
                       },
                       "strings_from": {
-                        "description": "In place of strings: a published buffer resource or buffer input of at most 4096 elements whose stride is at most 64 bytes of u32 fields; each valid element is one string of UTF-8 bytes, ended by its stride or its first zero byte. A string that is not UTF-8 leaves its labels out.",
+                        "description": "A published buffer with at most 8224 strings, each with at most 64 bytes of u32 fields. Its stride or first zero byte ends each UTF-8 string. Invalid UTF-8 hides the label.",
                         "pattern": "^[a-z][a-z0-9_]{0,31}$",
                         "type": "string"
                       }
@@ -17384,7 +17384,7 @@
                         "type": "array"
                       },
                       "strings_from": {
-                        "description": "In place of strings: a published buffer resource or buffer input of at most 4096 elements whose stride is at most 64 bytes of u32 fields; each valid element is one string of UTF-8 bytes, ended by its stride or its first zero byte. A string that is not UTF-8 leaves its labels out.",
+                        "description": "A published buffer with at most 8224 strings, each with at most 64 bytes of u32 fields. Its stride or first zero byte ends each UTF-8 string. Invalid UTF-8 hides the label.",
                         "pattern": "^[a-z][a-z0-9_]{0,31}$",
                         "type": "string"
                       }

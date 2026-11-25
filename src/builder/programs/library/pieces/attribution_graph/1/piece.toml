@@ -18,7 +18,7 @@ kind = "tensor"
 dtype = "i32"
 rank_min = 2
 rank_max = 2
-title = "Node Integers (512, 4)"
+title = "Node Integers"
 optional = false
 
 [[inputs]]
@@ -27,7 +27,7 @@ kind = "tensor"
 dtype = "f32"
 rank_min = 2
 rank_max = 2
-title = "Node Values (512, 4)"
+title = "Node Values"
 optional = false
 
 [[inputs]]
@@ -36,7 +36,7 @@ kind = "tensor"
 dtype = "i32"
 rank_min = 2
 rank_max = 2
-title = "Edge Indices (8192, 2)"
+title = "Edge Indices"
 optional = false
 
 [[inputs]]
@@ -45,7 +45,7 @@ kind = "tensor"
 dtype = "f32"
 rank_min = 2
 rank_max = 2
-title = "Edge Values (8192, 2)"
+title = "Edge Values"
 optional = false
 
 [[inputs]]
@@ -54,7 +54,7 @@ kind = "tensor"
 dtype = "u32"
 rank_min = 2
 rank_max = 2
-title = "Packed UTF-8 Labels (544, 16)"
+title = "Packed UTF-8 Labels"
 optional = true
 
 [[params]]
@@ -62,7 +62,7 @@ name = "selected_node"
 type = "i32"
 default = -1
 min = -1
-max = 511
+max = 8191
 title = "Selected Node"
 
 [[resources]]
@@ -70,7 +70,7 @@ id = "nodes"
 kind = "buffer"
 struct = "Node"
 fields = ["position: vec4<f32>", "index: u32", "kind: u32", "layer: i32", "token_position: i32", "feature: i32", "influence: f32"]
-count = 512
+count = 8192
 counted = true
 publish = true
 
@@ -79,7 +79,7 @@ id = "curves"
 kind = "buffer"
 struct = "Curve"
 fields = ["start_control: vec4<f32>", "control_end: vec4<f32>", "weight: f32", "normalized: f32", "source_node: u32", "target_node: u32"]
-count = 8192
+count = 262144
 counted = true
 publish = true
 
@@ -97,7 +97,7 @@ id = "strings"
 kind = "buffer"
 struct = "Text"
 fields = ["a: vec4<u32>", "b: vec4<u32>", "c: vec4<u32>", "d: vec4<u32>"]
-count = 544
+count = 8224
 counted = false
 publish = true
 
@@ -106,7 +106,7 @@ id = "cells"
 kind = "buffer"
 struct = "Cell"
 fields = ["center: vec2<f32>", "width: f32", "influence: f32", "key: u32"]
-count = 512
+count = 8192
 counted = false
 publish = false
 
@@ -114,14 +114,14 @@ publish = false
 id = "offset_a"
 kind = "buffer"
 element = "vec4<f32>"
-count = 512
+count = 8192
 publish = false
 
 [[resources]]
 id = "offset_b"
 kind = "buffer"
 element = "vec4<f32>"
-count = 512
+count = 8192
 publish = false
 
 [derive]
@@ -130,37 +130,37 @@ memory_mb = 64
 
 [[derive.passes]]
 entry = "assign_cells"
-workgroups = [8, 1, 1]
+workgroups = [128, 1, 1]
 writes = ["nodes", "cells"]
 
 [[derive.passes]]
 entry = "order_influence"
-workgroups = [8, 1, 1]
+workgroups = [128, 1, 1]
 writes = ["offset_a", "nodes", "strings", "labels"]
 
 [[derive.passes]]
 entry = "relax_one"
-workgroups = [8, 1, 1]
+workgroups = [128, 1, 1]
 writes = ["offset_b"]
 
 [[derive.passes]]
 entry = "relax_two"
-workgroups = [8, 1, 1]
+workgroups = [128, 1, 1]
 writes = ["offset_a"]
 
 [[derive.passes]]
 entry = "relax_three"
-workgroups = [8, 1, 1]
+workgroups = [128, 1, 1]
 writes = ["offset_b"]
 
 [[derive.passes]]
 entry = "relax_four"
-workgroups = [8, 1, 1]
+workgroups = [128, 1, 1]
 writes = ["offset_a", "nodes"]
 
 [[derive.passes]]
 entry = "edge_curves"
-workgroups = [128, 1, 1]
+workgroups = [4096, 1, 1]
 writes = ["curves"]
 
 [draw]

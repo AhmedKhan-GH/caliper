@@ -250,3 +250,27 @@ TEST_CASE("a node replacement at the same step changes the hover version identit
     REQUIRE(cd::DrawRuntime::pick_shown(1, first));
     CHECK_FALSE(cd::DrawRuntime::pick_shown(1, second));
 }
+
+
+TEST_CASE("reference graph labels retain the last node in native and browser composition") {
+    bool webgpu = true;
+    SUBCASE("browser composition") {}
+    SUBCASE("native composition") { webgpu = false; }
+    Graph graph(33, 32, {}, webgpu);
+    graph.strings.resize(8224 * 64);
+    graph.put_text(8223, "Last Reference Feature");
+    graph.set("strings", graph.strings, 8224, 1);
+    std::vector<std::uint8_t> nodes(8192 * 48);
+    const std::uint32_t last = 8191;
+    std::memcpy(nodes.data() + last * 48 + 16, &last, 4);
+    graph.set("nodes", nodes, 8192, 1);
+    graph.draw(last);
+    const auto selected = graph.runtime.labels();
+    REQUIRE(selected.size() == 2);
+    CHECK(selected[1].text == "Last Reference Feature");
+    const auto picked = graph.runtime.pick(last);
+    REQUIRE(picked);
+    const auto hovered = graph.runtime.labels(&*picked);
+    REQUIRE(hovered.size() == 3);
+    CHECK(hovered[2].text == "Last Reference Feature");
+}

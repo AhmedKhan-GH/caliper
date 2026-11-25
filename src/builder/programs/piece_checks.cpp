@@ -724,8 +724,9 @@ private:
                                 "The strings of " + quote(*t.strings_from) +
                                     " need elements of u32, vec2<u32> or vec4<u32> fields, at most 64 bytes each.",
                                 "draw.text.strings_from");
-                if (sr && sr->count > pl::kStrings)
-                    return fail(kProgramBadText, "The strings of " + quote(*t.strings_from) + " are at most 4096.",
+                if (sr && sr->count > pl::kBufferStrings)
+                    return fail(kProgramBadText, "The strings of " + quote(*t.strings_from) + " are at most " +
+                                std::to_string(pl::kBufferStrings) + ".",
                                 "draw.text.strings_from");
             }
             for (std::size_t k = 0; k < t.strings.size(); ++k)

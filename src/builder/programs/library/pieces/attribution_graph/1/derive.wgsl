@@ -1,11 +1,22 @@
-// Fixed trace shapes and valid counts gate every pass. Padding never becomes a node.
-fn node_count() -> u32 {
-    if (shapes.graph_counts.w != 4u || shapes.node_i.z != 512u || shapes.node_i.w != 4u ||
-        shapes.node_f.z != 512u || shapes.node_f.w != 4u || shapes.edge_i.z != 8192u ||
-        shapes.edge_i.w != 2u || shapes.edge_f.z != 8192u || shapes.edge_f.w != 2u) { return 0u; }
-    return u32(clamp(graph_counts[0], 0, 512));
+// Legacy and reference tensors retain their own capacities. Counts drive the work.
+fn valid_graph() -> bool {
+    let legacy = shapes.node_i.z == 512u && shapes.edge_i.z == 8192u;
+    let reference = shapes.node_i.z == 8192u && shapes.edge_i.z == 262144u;
+    if ((!legacy && !reference) || shapes.graph_counts.w != 4u || shapes.node_i.w != 4u ||
+        shapes.node_f.z != shapes.node_i.z || shapes.node_f.w != 4u ||
+        shapes.edge_i.w != 2u || shapes.edge_f.z != shapes.edge_i.z || shapes.edge_f.w != 2u) { return false; }
+    // Reject inconsistent counts instead of a partial graph.
+    return graph_counts[0] >= 0 && graph_counts[0] <= i32(shapes.node_i.z) &&
+        graph_counts[1] >= 0 && graph_counts[1] <= i32(shapes.edge_i.z);
 }
-fn edge_count() -> u32 { return u32(clamp(graph_counts[1], 0, 8192)); }
+fn node_count() -> u32 {
+    if (!valid_graph()) { return 0u; }
+    return u32(graph_counts[0]);
+}
+fn edge_count() -> u32 {
+    if (!valid_graph()) { return 0u; }
+    return u32(graph_counts[1]);
+}
 fn token_count() -> u32 { return u32(clamp(graph_counts[2], 1, 32)); }
 fn layer_count() -> u32 { return u32(clamp(graph_counts[3], 1, 512)); }
 fn finite_value(v: f32) -> f32 { return select(0.0, v, abs(v) <= 3.402823e38); }
@@ -32,7 +43,7 @@ fn assign_cells(@builtin(global_invocation_id) id: vec3<u32>) {
 // Each row owns its full text element. An absent text tensor uses a numeric label.
 fn copy_text(row: u32, number: u32, prefix: u32) {
     var words: array<u32, 16>;
-    if (shapes.label_text.z == 544u && shapes.label_text.w == 16u) {
+    if (shapes.label_text.z == shapes.node_i.z + 32u && shapes.label_text.w == 16u) {
         for (var w = 0u; w < 16u; w++) { words[w] = label_text[row*16u+w]; }
     } else {
         words[0] = prefix;
