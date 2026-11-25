@@ -159,6 +159,10 @@ def _settings(model, *, tensor_hash, source):
             value = {"tensor": tensor_hash({name: value})}
         settings[name] = json.dumps(value, sort_keys=True, allow_nan=False)
 
+    profile = _reference_profile(model)
+    if profile is not None:
+        record("__gemma_reference__", profile)
+
     for name, module in model.named_modules():
         prefix = name + "." if name else ""
         record(prefix + "type", _type_name(module))
@@ -193,6 +197,16 @@ def _settings(model, *, tensor_hash, source):
             if hasattr(config, field):
                 record(prefix + "config." + field, getattr(config, field))
     return settings
+
+
+def _reference_profile(model):
+    # Preserve optional Transformers imports and all default identity fields.
+    if (hasattr(model, "_caliper_reference_profile")
+            or any(type(module).__module__ == "caliper.interp._gemma_reference"
+                   for module in model.modules())):
+        from ._gemma_reference import profile_metadata
+        return profile_metadata(model)
+    return None
 
 
 def nonpersistent_buffers(model):
@@ -240,7 +254,11 @@ def _checkpoint_buffers(reference, model, *, admit):
             buffers[full_name] = torch.tensor(module.scalar_embed_scale, dtype=torch.float32,
                                                device="cpu").to(dtype=actual[full_name].dtype)
             continue
-        if (type(module) not in (qwen_rotary, Gemma2RotaryEmbedding) or module.rope_type != "default"
+        rotary_types = (qwen_rotary, Gemma2RotaryEmbedding)
+        if _reference_profile(model) is not None:
+            from ._gemma_reference import ReferenceRotaryEmbedding
+            rotary_types += (ReferenceRotaryEmbedding,)
+        if (type(module) not in rotary_types or module.rope_type != "default"
                 or keys != {"inv_freq", "original_inv_freq"}):
             raise ValueError("unsupported checkpoint nonpersistent buffers")
         with torch.device("cpu"):
@@ -262,7 +280,14 @@ def checkpoint_settings(model, data, *, tensor_hash, admit_buffers):
     config = factory(data)
     # Reference construction must not select a backend from runtime configuration.
     config._attn_implementation = "eager"
+    profile = _reference_profile(model)
     with torch.random.fork_rng(devices=[]), torch.device("meta"):
-        reference = type(model)(config).eval()
+        if profile is None:
+            reference = type(model)(config).eval()
+        else:
+            from transformers import Gemma2ForCausalLM
+            from ._gemma_reference import install_reference_profile
+            reference = Gemma2ForCausalLM(config).eval().to(dtype=getattr(torch, profile["dtype"]))
+            install_reference_profile(reference, profile["profile"])
     settings = forward_settings(reference, tensor_hash=tensor_hash)
     return settings, tensor_hash(_checkpoint_buffers(reference, model, admit=admit_buffers))

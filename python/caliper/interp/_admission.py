@@ -85,12 +85,14 @@ def _admit_model_transfer(memory, estimate, device, *, staged=False):
     _admit_load(memory, required + 512_000_000, "model device admission", staged=staged)
 
 
-def _load_gemma_model(snapshot, *, device, memory, dtype=torch.float32):
+def _load_gemma_model(snapshot, *, device, memory, dtype=torch.float32, reference_profile=None):
     """Load and verify the exact local Gemma snapshot before device transfer."""
     from transformers import Gemma2Config, Gemma2ForCausalLM
     from dataclasses import replace
     from ._dictionary import _VERIFIED_MODELS, _verification_memory, model_identity, verify_hf_model
+    from ._gemma_reference import install_reference_profile, validate_profile
 
+    validate_profile(reference_profile)
     if dtype not in (torch.float32, torch.bfloat16):
         raise ValueError("Gemma load dtype must be float32 or bfloat16")
     snapshot = Path(snapshot).resolve(strict=True)
@@ -111,6 +113,7 @@ def _load_gemma_model(snapshot, *, device, memory, dtype=torch.float32):
         raise ValueError("local model weights do not match the pinned Gemma architecture")
     model.config._name_or_path, model.config._commit_hash = GEMMA_ID, GEMMA_REVISION
     model.requires_grad_(False).eval()
+    install_reference_profile(model, reference_profile)
     memory.check("inference model CPU load")
     # Verify bytes, tied parameters, settings, and reconstructed buffers before
     # the trusted identity enters the cache. Loading information alone is insufficient.
