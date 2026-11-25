@@ -160,18 +160,12 @@ Both tools select a 40 GB limit by default for that explicit model choice.
 Evaluation must replace the semantic residual write and apply the actual final softcap during cross-entropy computation.
 The local affine tangent belongs only to attribution.
 
-## Context Policy
+## Legacy Context Policy
 
 The pinned Gemma tokenizer adds BOS by default, and the pinned reference prepends a special token before attribution.
-The independent BOS control on 2,048 content tokens reduces reference mean FVU from 0.73672165 to 0.42086141.
-The original comparison without BOS gives Caliper mean FVU 0.73672177.
-The BOS control uses 256 content positions plus one prefix position and excludes BOS from statistics.
-These diagnostic results do not establish a quality pass or a result for the production adapter.
 The Gemma FVU gate remains 0.30.
 
-The separate diagnostic with 255 content positions and one BOS gives Caliper mean FVU 0.4208069904 and reference mean FVU 0.4208069786.
-
-Quality evaluation and the feature index use one shared context adapter for Gemma.
+Legacy quality evaluation and the feature index use one shared context adapter for Gemma.
 The source stream still excludes tokenizer special tokens and appends EOS to each document.
 The adapter retains those source IDs, document partitions, and content token budgets.
 It prepends BOS ID 2 to each context and reserves one model position for that prefix.
@@ -188,8 +182,8 @@ Cross-entropy includes BOS-to-first-content prediction and excludes pairs across
 Evaluation settings and quality metadata record `context_policy`.
 The cursor records exact `[document_id, source_position, content_length]` rows in `evaluation/state.json` under `content_segments`.
 Quality metadata records their count and SHA256 under `content_segmentation`.
-The digest covers compact ASCII JSON rows, each with a final newline, in evaluation order.
-Resume refuses a missing or changed policy before statistics load and retains the existing tensor, model, and source checks.
+The digest covers rows in compact ASCII JSON, each with a final newline, in evaluation order.
+Resume refuses an absent or changed policy before statistics load and retains the tensor, model, and source checks.
 
 Index files retain source tokens and offsets without synthetic prefixes.
 The manifest records `context_policy` and `example_context_policy`, and both records enter the index identity.
@@ -201,9 +195,80 @@ The index excludes prefix and padding positions from feature counts, offsets, an
 An older Gemma index without these policies requires a rebuild.
 Release qualification requires the corrected policy in both quality and index evidence.
 The live response also checks both index policies against the current model and tokenizer.
-Example admission includes the additional prefix position and retains supplied lower memory limits.
-Default public Gemma tokenization and index windows both place BOS before content.
-Qwen retains its existing context preparation, replacement behavior, metric targets, and index format.
+Example admission includes the additional prefix position and retains a lower memory limit when supplied.
+The public Gemma tokenizer and index windows both place BOS before content.
+Legacy Qwen evaluation retains its existing context preparation, replacement behavior, and metric targets.
+The Qwen index format remains unchanged.
+
+## Research Evaluation Protocol
+
+The explicit `research_v1` protocol applies the same aggregation and context limits to Gemma and Qwen.
+Use `--protocol research_v1` with `tools.interp.eval_dictionary`, or pass `protocol="research_v1"` to `evaluate`.
+This mode defaults to 1,024 model positions and a batch limit of 1,024 positions.
+An explicit context can contain 2 through 1,024 model positions.
+The batch limit must include all prefixes and right padding.
+A smaller context remains an explicit, recorded protocol setting.
+
+The supplied [Gemma Scope report](https://storage.googleapis.com/gemma-scope/gemma-scope-report.pdf), Section 4.1, pages 5–6, specifies 2,048 sequences of length 1,024.
+It excludes BOS, EOS, and padding from evaluation.
+Caliper retains the held-out FineWeb-Edu source, its pinned revision, and the 200,000-source-token budget.
+Source EOS counts toward that budget, but it does not count as a metric observation or CE target.
+Contexts also end at document boundaries and the source budget, and thus can contain fewer than 1,024 positions.
+The dataset and sample differ from the paper, and these results do not reproduce its exact evaluation.
+
+Each Gemma context starts with genuine BOS ID 2.
+EOS ID 1, BOS ID 2, and padding ID 0 do not enter FVU or activity statistics.
+A full Gemma context has one prefix position and at most 1,023 source positions.
+The pinned Qwen tokenizer declares no BOS, and its text configuration declares no BOS ID.
+Qwen records `bos_policy="native_no_bos"` and uses no prefix or substitute token.
+A full Qwen context can contain 1,024 source positions.
+
+The metric mask selects source positions whose IDs are not genuine BOS, EOS, or padding.
+The CE mask selects an attended predictor whose next position is a nonspecial source target in the same context row.
+Thus, Gemma can use BOS to predict its first nonspecial source token.
+Qwen has no first-position target because that position has no predictor.
+A special predictor remains eligible when its next target satisfies the mask.
+No loss pair crosses a document or context boundary.
+
+For each layer, FVU equals total squared reconstruction error divided by total squared deviation from the dataset mean vector.
+The denominator uses one mean vector over all metric observations in that layer.
+It does not average context FVU ratios or normalize by the uncentered activation norm.
+CPU float64 statistics merge the mean shifts between chunks and batches.
+Each layer also reports mean L0 and the fraction of features without a positive activation.
+Inactive fallback layers retain null metric entries.
+
+The baseline forward supplies the reconstruction observations once per batch attempt.
+Separate forwards replace each active MLP alone, then all active MLPs together.
+`per_layer_cross_entropy` and `per_layer_cross_entropy_delta` report the isolated interventions.
+`replaced_cross_entropy` and `cross_entropy_delta` retain the all-active result.
+Every condition uses the same source sample, CE mask, and target denominator.
+Special positions retain their actual MLP outputs, and Gemma retains its nonlinear final-logit softcap.
+
+Research reports reside in `evaluation-research-v1/quality.json` and use `protocol="research_v1"` with `protocol_version=1`.
+The separate cursor is `evaluation-research-v1/state.json`, with state schema version 2.
+`source_tokens` and its `evaluated_tokens` alias count committed source positions.
+`metric_observations` counts nonspecial source positions, and `cross_entropy_tokens` counts CE targets.
+`source_budget_complete` becomes true only at 200,000 committed source positions.
+The existing numeric thresholds remain historical measurements, and a failed result remains failed.
+
+Research mode leaves the legacy `dictionary.json:quality` report and `evaluation/` cursor intact.
+The default `legacy` selector retains the historical contexts, masks, and resume behavior.
+Research settings bind the protocol, source, model, dictionary, context policy, masks, dimensions, and aggregation.
+Resume rejects a changed setting before it loads statistics.
+The report includes the committed cursor digest for consumers that require a consistent report and cursor.
+
+A batch commits only after the baseline, isolated interventions, and all-active intervention succeed.
+Cooperative checkpoints run every 120 seconds, including during a layer sweep, and retain the prior complete statistics plus pending source coordinates.
+Resume replays an incomplete batch without a second contribution from any partial observation.
+A native operation that blocks Python must return before a checkpoint can occur.
+All temporary hooks are removed on success or exception.
+
+Prospective admission includes baseline captures, attention, MLP workspace, feature chunks, head chunks, and statistics.
+The process limit, supplied lower guard, historical peak limit, and 8 GB host reserve remain active.
+Features and head projections use bounded token chunks, and each model pass releases its intermediates within an autorelease scope.
+No full feature matrix or sequence-wide vocabulary logits remain between passes.
+The 1,024-position setting requires a measured preflight under 40 GB before a full Gemma run.
+CPU tests establish protocol behavior, not pretrained quality or measured device memory.
 
 ## Resource And Acceptance Limits
 

@@ -101,16 +101,18 @@ def cross_entropy_sum(model, hidden, input_ids, count, *, chunk_tokens=64, healt
     for start in range(0, len(positions), chunk_tokens):
         if health:
             health()
-        selected = positions[start:start + chunk_tokens]
-        logits = head(states[selected]).float()
-        if getattr(model.config, "model_type", None) == "gemma2":
-            cap = model.config.final_logit_softcapping
-            if cap is not None:
-                if isinstance(cap, bool) or not math.isfinite(cap) or cap <= 0:
-                    raise ValueError("invalid Gemma final logit softcap")
-                logits = (logits / cap).tanh() * cap
-        loss = F.cross_entropy(logits, ids[selected + 1], reduction="sum")
-        total += float(loss.item())
+        with autorelease_scope(hidden.device):
+            selected = positions[start:start + chunk_tokens]
+            logits = head(states[selected]).float()
+            if getattr(model.config, "model_type", None) == "gemma2":
+                cap = model.config.final_logit_softcapping
+                if cap is not None:
+                    if isinstance(cap, bool) or not math.isfinite(cap) or cap <= 0:
+                        raise ValueError("invalid Gemma final logit softcap")
+                    logits = (logits / cap).tanh() * cap
+            loss = F.cross_entropy(logits, ids[selected + 1], reduction="sum")
+            total += float(loss.item())
+            del logits, loss, selected
     return total, len(positions)
 
 
@@ -347,7 +349,7 @@ def _segmentation_record(segments):
             "record": "evaluation/state.json:content_segments"}
 
 
-def _gemma_batch(stream, pending, remaining, policy, batch_tokens, *, device, health):
+def _gemma_batch(stream, pending, remaining, policy, batch_tokens, *, device, health, prepare=None):
     """Retain source coordinates and complete contexts across source batch boundaries."""
     _validate_pending(pending, remaining)
     row_limit = batch_tokens // policy["model_context"]
@@ -362,7 +364,7 @@ def _gemma_batch(stream, pending, remaining, policy, batch_tokens, *, device, he
             rows = [pending["ids"][start:end] for start, end in spans]
             segments = [[pending["documents"][start], pending["positions"][start], end - start]
                         for start, end in spans]
-            return prepare_contexts(rows, policy, device=device, pad_to=policy["model_context"]), segments
+            return (prepare or prepare_contexts)(rows, policy, device=device, pad_to=policy["model_context"]), segments
         requested = min(row_limit * capacity, remaining) - len(pending["ids"])
         batch = stream.next_tokens(requested, health=health)
         for field, value in (("ids", batch.input_ids), ("documents", batch.document_ids), ("positions", batch.positions)):
@@ -373,8 +375,16 @@ def _gemma_batch(stream, pending, remaining, policy, batch_tokens, *, device, he
         _validate_pending(pending, remaining)
 
 
-def evaluate(model, dictionary, stream, folder, *, tokens=200_000, context=256,
-             batch_tokens=512, chunk_tokens=64, memory=None, stop=None, resume=False):
+def evaluate(model, dictionary, stream, folder, *, tokens=200_000, context=None,
+             batch_tokens=None, chunk_tokens=64, memory=None, stop=None, resume=False, protocol="legacy"):
+    context = (1024 if protocol == "research_v1" else 256) if context is None else context
+    batch_tokens = (max(1024, context) if protocol == "research_v1" else 512) if batch_tokens is None else batch_tokens
+    if protocol == "research_v1":
+        return evaluate_research(model, dictionary, stream, folder, tokens=tokens, context=context,
+                                 batch_tokens=batch_tokens, chunk_tokens=chunk_tokens,
+                                 memory=memory, stop=stop, resume=resume)
+    if protocol != "legacy":
+        raise ValueError("unknown evaluation protocol")
     if (not 2 <= tokens <= 200_000 or not 2 <= context <= 256
             or not context <= batch_tokens <= 4096 or not 1 <= chunk_tokens <= 128):
         raise ValueError("invalid evaluation dimensions")
@@ -504,21 +514,290 @@ def evaluate(model, dictionary, stream, folder, *, tokens=200_000, context=256,
     return quality
 
 
+@torch.no_grad()
+def evaluate_research_batch(model, dictionary, prepared, source_count, *, chunk_tokens, health, check_binding):
+    """Measure one atomic batch with one baseline and serial replacement passes."""
+    from .evaluation_protocol import ResearchStats, research_mlps
+
+    result = ResearchStats(quality_stats(dictionary.metadata))
+    result.source_tokens = source_count
+    result.count = int(prepared.content_mask.sum())
+    ids = prepared.input_ids
+    metadata = dictionary.metadata
+    requested = [metadata[field][i] for field in ("read_points", "write_points") for i in result.active_layers]
+    captured = None
+    try:
+        with autorelease_scope(ids.device):
+            with capture(model, requested) as captured:
+                original = hidden_forward(model, ids, attention_mask=prepared.attention_mask)
+            check_binding()
+            result.original_ce, result.ce_tokens = cross_entropy_sum(
+                model, original, ids, source_count, chunk_tokens=chunk_tokens,
+                health=health, prediction_mask=prepared.prediction_mask)
+            del original
+            if not math.isfinite(result.original_ce):
+                raise ValueError("research baseline cross-entropy is nonfinite")
+            # Reduce CPU float64 moments in chunks, including between-context mean shifts.
+            positions = prepared.content_mask.reshape(-1).nonzero().flatten()
+            for i in result.active_layers:
+                x, y = (captured[metadata[field][i]].reshape(-1, metadata["width"])
+                        for field in ("read_points", "write_points"))
+                observed = 0
+                for start in range(0, result.count, chunk_tokens):
+                    health()
+                    with autorelease_scope(ids.device):
+                        selected = positions[start:start + chunk_tokens]
+                        features = dictionary.layers[i].encode(x[selected])
+                        decoded = dictionary.layers[i].decode(features)
+                        target = y[selected].to(device="cpu", dtype=torch.float64)
+                        reconstructed = decoded.to(device="cpu", dtype=torch.float64)
+                        if not all(torch.isfinite(t).all() for t in (features, target, reconstructed)):
+                            raise ValueError("research observations contain nonfinite values")
+                        n = len(selected)
+                        mean = target.mean(0)
+                        delta = mean - result.mean[i]
+                        result.variance_sum[i] += ((target - mean).square().sum()
+                                                  + delta.square().sum() * (observed * n / (observed + n)))
+                        result.mean[i] += delta * (n / (observed + n))
+                        result.error_sum[i] += (target - reconstructed).square().sum()
+                        result.hits[i] += (features > 0).sum(0).cpu()
+                        observed += n
+                        del selected, features, decoded, target, reconstructed, mean, delta
+                del x, y
+                captured.pop(metadata["read_points"][i])
+                captured.pop(metadata["write_points"][i])
+            captured.close(clear=True)
+            del positions
+        # Every pass releases hidden states and autorelease objects before the next pass.
+        for index in [*result.active_layers, None]:
+            layers = result.active_layers if index is None else (index,)
+            health()
+            check_binding()
+            with autorelease_scope(ids.device):
+                with research_mlps(model, dictionary, layers, prepared.content_mask,
+                                   chunk_tokens=chunk_tokens, health=health):
+                    replaced = hidden_forward(model, ids, attention_mask=prepared.attention_mask)
+                check_binding()
+                ce, targets = cross_entropy_sum(model, replaced, ids, source_count, chunk_tokens=chunk_tokens,
+                                                health=health, prediction_mask=prepared.prediction_mask)
+                del replaced
+            if targets != result.ce_tokens or not math.isfinite(ce):
+                raise ValueError("research cross-entropy targets differ or loss is nonfinite")
+            # The final pass remains distinct even for a one-layer active scope.
+            if index is None:
+                result.replaced_ce = ce
+            else:
+                result.isolated_ce[index] = ce
+        result.validate()
+        return result
+    finally:
+        if captured is not None:
+            captured.close(clear=True)
+
+
+def save_research(folder, stats, stream, pending, identity, settings, elapsed, binding, *, quality=None):
+    """Publish committed statistics with a replayable pending batch."""
+    stats.validate()
+    binding.verify()
+    folder.mkdir(exist_ok=True, parents=True)
+    prior = json.loads((folder / "state.json").read_text()) if (folder / "state.json").exists() else {}
+    name = "stats-b.safetensors" if prior.get("tensors") == "stats-a.safetensors" else "stats-a.safetensors"
+    _save_tensors({key: getattr(stats, key) for key in stats.tensor_names}, folder / name)
+    state = {"version": 2, "identity": identity, "settings": settings,
+             "tensor_binding": binding.evidence, "model_binding": binding.model_evidence,
+             "tensors": name, "stream": stream.state_dict(), "pending_ids": pending,
+             "content_segments": stats.content_segments, "elapsed_seconds": elapsed,
+             "metric_observations": stats.count, "cross_entropy_tokens": stats.ce_tokens,
+             **{key: getattr(stats, key) for key in stats.scalar_names}}
+    staged = folder / "state.pending.json"
+    write_json(staged, state)
+    binding.verify()
+    staged.replace(folder / "state.json")
+    if quality is not None:
+        # Bind report counters to the committed cursor. A report can lag after a crash.
+        quality["checkpoint_sha256"] = hashlib.sha256((folder / "state.json").read_bytes()).hexdigest()
+        write_json(folder / "quality.json", quality)
+
+
+def restore_research(folder, stats, stream, identity, settings, binding):
+    """Reject protocol and identity changes before any statistics allocation."""
+    state = json.loads((folder / "state.json").read_text())
+    if (state.get("version") != 2 or state.get("settings") != settings or state.get("identity") != identity
+            or state.get("tensor_binding") != binding.evidence or state.get("model_binding") != binding.model_evidence):
+        raise ValueError("research evaluation protocol, source, model, or dictionary settings changed across resume")
+    for name in ("count", "source_tokens", "ce_tokens"):
+        if type(state.get(name)) is not int or not 0 <= state[name] <= settings["tokens"]:
+            raise ValueError("invalid research evaluation cursor counts")
+    if state.get("metric_observations") != state["count"] or state.get("cross_entropy_tokens") != state["ce_tokens"]:
+        raise ValueError("research observation counters differ")
+    segments = state.get("content_segments")
+    capacity = settings["context_policy"]["content_context"]
+    if (not isinstance(segments, list) or any(
+            not isinstance(row, list) or len(row) != 3 or
+            any(type(value) is not int or value < 0 for value in row) or not 1 <= row[2] <= capacity
+            for row in segments) or sum(row[2] for row in segments) != state["source_tokens"]):
+        raise ValueError("invalid research source segmentation")
+    _validate_pending(state["pending_ids"], settings["tokens"] - state["source_tokens"])
+    if state["tensors"] not in ("stats-a.safetensors", "stats-b.safetensors"):
+        raise ValueError("invalid research tensor path")
+    if not math.isfinite(state["elapsed_seconds"]) or state["elapsed_seconds"] < 0:
+        raise ValueError("invalid research elapsed time")
+    binding.verify()
+    # Header validation prevents an oversized or malformed cursor allocation.
+    from safetensors import safe_open
+    with safe_open(folder / state["tensors"], framework="pt", device="cpu") as source:
+        if set(source.keys()) != set(stats.tensor_names):
+            raise ValueError("invalid research statistics tensors")
+        for name in stats.tensor_names:
+            target = getattr(stats, name)
+            stored = source.get_slice(name)
+            if stored.get_shape() != list(target.shape) or stored.get_dtype() != ("I64" if name == "hits" else "F64"):
+                raise ValueError("invalid research statistics shape or dtype")
+        for name in stats.tensor_names:
+            getattr(stats, name).copy_(source.get_tensor(name))
+    for name in stats.scalar_names:
+        setattr(stats, name, state[name])
+    stats.content_segments = segments
+    stats.validate()
+    stream.load_state_dict(state["stream"])
+    return state["pending_ids"], state["elapsed_seconds"]
+
+
+def evaluate_research(model, dictionary, stream, folder, *, tokens, context, batch_tokens,
+                      chunk_tokens, memory, stop, resume):
+    """Run the explicit research protocol without a change to legacy publications."""
+    from .evaluation_protocol import (
+        CHECKPOINT_SECONDS, ResearchStats, admit_workspace, protocol_settings,
+        research_contexts, research_policy, workspace_bytes,
+    )
+    from .text_stream import DATASET_ID, DATASET_CONFIG, DATASET_REVISION
+
+    if (any(type(x) is not int for x in (tokens, context, batch_tokens, chunk_tokens))
+            or not 2 <= tokens <= 200_000 or not 2 <= context <= 1024
+            or not context <= batch_tokens <= 4096 or not 1 <= chunk_tokens <= 128):
+        raise ValueError("invalid research evaluation dimensions")
+    if stream.partition != "quality":
+        raise ValueError("research evaluation requires the quality partition")
+    metadata = dictionary.metadata
+    source = evaluation_source_metadata(metadata)
+    if source.get("source_id") is not None and source["source_id"] != stream.source_id:
+        raise ValueError("research evaluation source differs from the dictionary source")
+    if source["dataset_id"] != "fixture" and any(source.get(key) != value for key, value in {
+            "dataset_id": DATASET_ID, "dataset_config": DATASET_CONFIG,
+            "dataset_revision": DATASET_REVISION, "split": "train", "partitions": partition_metadata()}.items()):
+        raise ValueError("research evaluation requires the pinned FineWeb source")
+    policy = research_policy(model, context, stream.tokenizer)
+    device = dictionary.layers[0].W_enc.device
+    if memory is None:
+        memory = MemoryGuard(40 if metadata.get("model_id") == GEMMA_ID else 12, device)
+    required = workspace_bytes(model, metadata, batch_tokens, context, chunk_tokens)
+    if stop:
+        stop.check()
+    # This check precedes context, capture, feature, and head allocations.
+    admit_workspace(memory, required)
+    folder = Path(folder)
+    identity = dictionary_fingerprint(folder, metadata, memory=memory)
+    binding = EvaluationBinding(folder, dictionary, identity, model=model, memory=memory)
+    state_folder = folder / "evaluation-research-v1"
+    settings = {"protocol": protocol_settings(policy), "context_policy": policy,
+                "tokens": tokens, "context": context, "batch_tokens": batch_tokens, "chunk_tokens": chunk_tokens,
+                "source": {**{k: source[k] for k in ("dataset_id", "dataset_config", "dataset_revision", "split")},
+                           "source_id": stream.source_id, "partition": "quality", "partitions": partition_metadata()},
+                "dictionary_hash": identity, "tensor_binding": binding.evidence, "model_binding": binding.model_evidence}
+    stats = ResearchStats(quality_stats(metadata))
+    settings.update(scope=stats.scope, active_layers=list(stats.active_layers))
+    pending = {"ids": [], "documents": [], "positions": [], "exhausted": False}
+    elapsed_before = 0.0
+    if resume:
+        pending, elapsed_before = restore_research(state_folder, stats, stream, identity, settings, binding)
+    elif (state_folder / "state.json").exists():
+        raise ValueError("research evaluation state exists; use --resume")
+    started = last_save = time.monotonic()
+
+    def health():
+        nonlocal last_save
+        if stop:
+            stop.check()
+        memory.check("research_evaluation", force=False)
+        if stream.source_id != settings["source"]["source_id"] or research_policy(model, context, stream.tokenizer) != policy:
+            raise ValueError("research source or context policy changed during evaluation")
+        if time.monotonic() - last_save >= CHECKPOINT_SECONDS:
+            save_research(state_folder, stats, stream, pending, identity, settings,
+                          elapsed_before + time.monotonic() - started, binding)
+            last_save = time.monotonic()
+
+    reason = "complete"
+    handles = []
+    try:
+        # Long sweeps can checkpoint the prior committed batch between model layers.
+        # Hooks change outputs, never module identities or model parameters.
+        for point in metadata["read_points"]:
+            module = model.get_submodule(point.rsplit(".", 1)[0])
+            handles.append(module.register_forward_pre_hook(lambda *args: health()))
+        while stats.source_tokens < tokens:
+            health()
+            binding.check()
+            admit_workspace(memory, required)
+            prepared, segments = _gemma_batch(stream, pending, tokens - stats.source_tokens,
+                                               policy, batch_tokens, device=device, health=health,
+                                               prepare=research_contexts)
+            count = sum(row[2] for row in segments)
+            try:
+                result = evaluate_research_batch(model, dictionary, prepared, count, chunk_tokens=chunk_tokens,
+                                                 health=health, check_binding=binding.check)
+                binding.check()
+                result.content_segments = segments
+                stats.merge(result)
+                for field in ("ids", "documents", "positions"):
+                    del pending[field][:count]
+                del result
+            finally:
+                del prepared
+            print(json.dumps({"stage": "research_quality_batch", "source_tokens": stats.source_tokens,
+                              "metric_observations": stats.count, "cross_entropy_tokens": stats.ce_tokens,
+                              "target": tokens}), flush=True)
+    except CleanStop as error:
+        reason = stop_reason(error)
+    finally:
+        for handle in reversed(handles):
+            handle.remove()
+    quality = stats.metrics()
+    quality.update(settings=settings, context_policy=policy,
+                   content_segmentation={**_segmentation_record(stats.content_segments),
+                                         "record": "evaluation-research-v1/state.json:content_segments"},
+                   elapsed_seconds=elapsed_before + time.monotonic() - started, stop_reason=reason,
+                   dictionary_hash=identity, tensor_binding=binding.evidence, model_binding=binding.model_evidence,
+                   partition="quality", evaluation_source=settings["source"], publisher_training_overlap="unknown",
+                   peak_memory_bytes=memory.peak, workspace_reserve_bytes=required,
+                   replaced_mlps=len(stats.active_layers))
+    if stats.scope == "all_layers":
+        quality["all_mlps_replaced"] = len(dictionary.layers)
+    save_research(state_folder, stats, stream, pending, identity, settings, quality["elapsed_seconds"],
+                  binding, quality=quality)
+    print(json.dumps({"stage": "research_quality_end", **quality}), flush=True)
+    return quality
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--dictionary", type=Path, required=True)
     parser.add_argument("--model", choices=(MODEL_ID, GEMMA_ID), default=MODEL_ID)
     parser.add_argument("--device", choices=("mps", "cpu"), default="mps")
     parser.add_argument("--tokens", type=int, default=200_000)
-    parser.add_argument("--context", type=int, default=256)
-    parser.add_argument("--batch-tokens", type=int, default=512)
+    parser.add_argument("--context", type=int)
+    parser.add_argument("--batch-tokens", type=int)
     parser.add_argument("--chunk-tokens", type=int, default=64)
     parser.add_argument("--memory-gb", type=float)
     parser.add_argument("--dataset-cache", type=Path)
     parser.add_argument("--local-dataset-manifest", type=Path)
     parser.add_argument("--resume", action="store_true")
+    parser.add_argument("--protocol", choices=("legacy", "research_v1"), default="legacy")
     args = parser.parse_args(argv)
-    if (not 2 <= args.tokens <= 200_000 or not 2 <= args.context <= 256
+    if args.context is None:
+        args.context = 1024 if args.protocol == "research_v1" else 256
+    if args.batch_tokens is None:
+        args.batch_tokens = 1024 if args.protocol == "research_v1" else 512
+    if (not 2 <= args.tokens <= 200_000 or not 2 <= args.context <= (1024 if args.protocol == "research_v1" else 256)
             or not args.context <= args.batch_tokens <= 4096 or not 1 <= args.chunk_tokens <= 128):
         raise ValueError("requested dimensions exceed the bounded evaluator allocations")
     ceiling = 40 if args.model == GEMMA_ID else 12
@@ -552,7 +831,7 @@ def main(argv=None):
             stop.check()
             result = evaluate(model, dictionary, stream, args.dictionary, tokens=args.tokens,
                               context=args.context, batch_tokens=args.batch_tokens, chunk_tokens=args.chunk_tokens,
-                              memory=memory, stop=stop, resume=args.resume)
+                              memory=memory, stop=stop, resume=args.resume, protocol=args.protocol)
     except CleanStop as error:
         print(json.dumps(clean_stop_record(error)), flush=True)
         return 2
