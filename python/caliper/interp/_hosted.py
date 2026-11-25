@@ -108,8 +108,10 @@ def _check_checkpoint_interventions(ivs):
         # A pending request acquires an applied copy. A replacement can retain
         # its old effect, or revert to it. Reserve two copies of each maximum.
         # The largest byte count and value count can come from different specs.
-        count += record_count - 2 + 2 * max(item[0] for item in sizes)
-        size += record_size - 8 + 2 * max(item[1] for item in sizes) + (2 if index else 0)
+        # Ended history cannot acquire an effect without another admission.
+        copies = 1 if iv.state == "ended" and iv.applied_spec is None else 2
+        count += record_count - copies + copies * max(item[0] for item in sizes)
+        size += record_size - 4 * copies + copies * max(item[1] for item in sizes) + (2 if index else 0)
         if count > CHECKPOINT_VALUES or size > CHECKPOINT_BYTES:
             raise ValueError("interventions exceed the checkpoint metadata limits with lifecycle headroom")
 

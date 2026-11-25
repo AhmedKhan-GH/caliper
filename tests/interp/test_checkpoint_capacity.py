@@ -153,6 +153,7 @@ def test_full_active_snapshot_and_automatic_checkpoints(wide_run, width, request
     assert run.restored == queued
     service.load_state_dict(queued["interventions"], restore_active=True)
     assert service.state_dict() == queued["interventions"]
+    assert _read_checkpoint(run) == queued
     run.boundary()
     assert not run.managed.kept.off
     kept = Path(run.managed.dir) / "kept" / "checkpoint-2.json"
@@ -183,6 +184,22 @@ def test_review_snapshot_exceeds_values_before_bytes(wide_run):
     run.controls.interpretation_service = run.service
     with pytest.raises(InterventionError, match="checkpoint metadata"):
         run.interventions.load_state_dict(snapshot["interventions"], restore_active=True)
+
+
+def test_full_ended_history_remains_checkpointable(wide_run):
+    run = wide_run(2304)
+    records = [{"specification": dict(_add(point, 2304), op="add"),
+                "state": "ended", "applied_specification": None, "since_step": 1,
+                "clear": False, "error": None, "error_code": None}
+               for point in _points()[:64]]
+    state = {"version": 1, "interventions": records}
+    run.interventions.load_state_dict(state, restore_active=True)
+    assert run.interventions.state_dict() == state
+    assert not run.interventions.specifications()
+    assert _read_checkpoint(run)["interventions"] == state
+    run.boundary()
+    assert not run.managed.kept.off
+    assert run.interventions.state_dict() == state
 
 
 def test_checkpoint_admission_bounds_bytes_and_both_replacement_outcomes():
