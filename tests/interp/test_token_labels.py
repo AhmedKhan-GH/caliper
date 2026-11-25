@@ -8,7 +8,7 @@ from caliper import _interpret_protocol as protocol
 from caliper.interp import Tracer
 from caliper.interp._graph import Graph, TOKEN_CAP
 from caliper.interp._index import FeatureIndex, _tokenizer_hash, build_index
-from caliper.interp._labels import display_text, pack_labels, token_label
+from caliper.interp._labels import bounded_label, display_text, pack_labels, token_label
 from caliper.interp._service import InterpretationService
 from .fixture import TinyLM, TinyTokenizer
 from .test_dictionary import write_fixture
@@ -50,7 +50,7 @@ def byte_level_tokenizer():
 
 @pytest.mark.parametrize("token_id,expected", [
     (0, " France"), (1, " Belgium"), (2, r"\n"), (3, r"\t"), (4, " ."),
-    (5, "café"), (6, "  "), (7, r"\x00"), (8, "<special>"),
+    (5, "café"), (6, "[whitespace token 6]"), (7, r"\x00"), (8, "<special>"),
 ])
 def test_byte_level_decoder_controls_display_text(byte_level_tokenizer, token_id, expected):
     assert token_label(byte_level_tokenizer, token_id) == expected
@@ -64,7 +64,21 @@ def test_token_labels_support_ids_only_decoders_without_vocabulary_lookup():
 
 def test_token_labels_identify_an_empty_decode_without_vocabulary_lookup():
     tokenizer = SimpleNamespace(decode=lambda ids: "")
-    assert token_label(tokenizer, 17) == "#17"
+    assert token_label(tokenizer, 17) == "[empty token 17]"
+
+
+@pytest.mark.parametrize("decoded", [" ", "  ", "\u00a0", "\u2003", "\v", "\f", ""])
+def test_blank_token_labels_preserve_vocabulary_and_identity(decoded):
+    tokenizer = SparseTokenizer()
+    tokenizer.decode = lambda ids: decoded
+    vocabulary = dict(tokenizer.tokens)
+    identity = _tokenizer_hash(tokenizer, 512)
+    expected = "[whitespace token 65]" if decoded else "[empty token 65]"
+    assert token_label(tokenizer, 65) == expected
+    assert unpack_label(pack_labels([expected], 1)[0]) == expected
+    assert tokenizer.decode([65]) == decoded
+    assert tokenizer.tokens == vocabulary
+    assert _tokenizer_hash(tokenizer, 512) == identity
 
 
 def test_token_labels_support_special_token_option_without_cleanup_option():
@@ -106,7 +120,7 @@ def test_token_labels_propagate_vocabulary_errors():
 
 
 @pytest.mark.parametrize("token_id,expected", [
-    (0, r"\x00"), (1, "#1"), (2, "None"), (65, "A"), (256, "<bos>"),
+    (0, r"\x00"), (1, "[empty token 1]"), (2, "None"), (65, "A"), (256, "<bos>"),
     (500, " tail"), (66, "[unmapped token 66]"), (511, "[unmapped token 511]"),
 ])
 def test_sparse_token_labels_decode_text_and_identify_absent_rows(token_id, expected):
@@ -200,7 +214,7 @@ def test_padded_rows_keep_exact_scores_ids_and_example_labels(tmp_path, monkeypa
             assert shown["label"] == (
                 "Output: [unmapped token 511] | [unmapped token 66] |  tail"
                 " / Examples: [unmapped token 66] |  tail | [unmapped token 511]"
-            )
+            )[:60] + "..."
             result = execute(service, "feature.examples", {"layer": 0, "feature": 0})
             assert len(result["examples"]) == 3
             labels = ["[unmapped token 66]", " tail", "[unmapped token 511]"]
@@ -242,6 +256,26 @@ def test_display_labels_escape_nul_and_keep_utf8_boundaries():
     assert labels[3].tolist() == [0] * 16
     assert not protocol.bounded({"text": value})
     assert not protocol.request({"version": 1, "method": "trace.run", "params": {"prompt": value}})
+
+
+@pytest.mark.parametrize("value,expected", [
+    ("", ""), ("a" * 62, "a" * 62), ("a" * 63, "a" * 63),
+    ("a" * 64, "a" * 60 + "..."), ("é" * 32, "é" * 30 + "..."),
+    ("a" + "é" * 32, "a" + "é" * 29 + "..."),
+    ("界" * 21, "界" * 21), ("界" * 22, "界" * 20 + "..."),
+    ("a" * 59 + "😀x", "a" * 59 + "..."), ("😀" * 16, "😀" * 15 + "..."),
+    ("a" * 60 + "\n", "a" * 60 + r"\n"), ("a" * 61 + "\0", "a" * 60 + "..."),
+    ("\ud800\0é", r"?\x00" + "é"),
+])
+def test_bounded_display_labels_match_packed_utf8(value, expected):
+    label = bounded_label(value)
+    assert label == expected
+    assert len(label.encode("utf-8")) <= 63
+    assert bounded_label(label) == label
+    packed = pack_labels([label], 1)
+    assert packed.dtype == torch.uint32 and packed.shape == (1, 16)
+    assert unpack_label(packed[0]) == label
+    assert int(packed[0, -1]) >> 24 == 0
 
 
 def test_control_character_labels_remain_visible_after_repacking():
@@ -299,7 +333,8 @@ def test_trace_read_escapes_nul_without_changing_prompt_ids(monkeypatch):
 
 def test_trace_axes_nodes_and_bars_use_decoded_text(byte_level_tokenizer, monkeypatch):
     source_ids = list(range(10)) + [11]
-    expected = [" France", " Belgium", r"\n", r"\t", " .", "café", "  ", r"\x00", "<special>", "#9"]
+    expected = [" France", " Belgium", r"\n", r"\t", " .", "café", "[whitespace token 6]",
+                r"\x00", "<special>", "[empty token 9]"]
 
     class Tokenizer:
         def __call__(self, text, **kwargs):

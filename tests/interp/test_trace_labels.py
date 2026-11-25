@@ -39,7 +39,7 @@ def test_service_binds_labels_before_trace_identity_and_publication(trace_index,
         for i, node in features:
             expected = index.show(node["layer"], node["feature"])["label"]
             assert node["label"] == expected
-            assert unpack_label(published["trace.label_text"][32 + i]) == expected.encode()[:63].decode(errors="ignore")
+            assert unpack_label(published["trace.label_text"][32 + i]) == expected
         original = published["trace.label_text"].clone()
         monkeypatch.setattr(index, "labels", lambda *a, **k: pytest.fail("cached labels were recomputed"))
         service._execute("trace.run", {"prompt": "AB", "max_targets": 8}, 2)

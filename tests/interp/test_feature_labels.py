@@ -14,6 +14,7 @@ from caliper.interp import _index
 from caliper.interp._feature_labels import label_graph_nodes
 from caliper.interp._graph import Graph, TOKEN_CAP
 from caliper.interp._index import FeatureIndex, LABEL_FEATURES, build_index
+from caliper.interp._labels import bounded_label
 from caliper.interp._memory import CleanStop, MemoryGuard
 from .fixture import TinyLM, TinyTokenizer
 from .test_dictionary import write_fixture
@@ -21,9 +22,12 @@ from .test_token_labels import unpack_label
 
 
 @pytest.fixture
-def label_index(tmp_path):
+def label_index(tmp_path, request):
     model, _ = write_fixture(tmp_path, TinyLM(layers=2, width=8, heads=2, latents=300, k=2))
     tokenizer = TinyTokenizer()
+    token_text = getattr(request, "param", None)
+    if token_text is not None:
+        tokenizer.decode = lambda ids: "".join(token_text + str(token) for token in ids)
     dictionary = load_dictionary(tmp_path, model=model)
     build_index(tmp_path, [("first", [65, 66, 65, 67] * 9), ("edge", [70, 71])],
                 model=model, tokenizer=tokenizer, dictionary=dictionary,
@@ -50,8 +54,9 @@ def test_batch_labels_match_scores_and_document_windows(label_index, monkeypatch
         rows = index._windows(layer, feature)
         counts = Counter(i for row in rows for i in row["token_ids"] if i is not None)
         common = sorted(counts, key=lambda i: (-counts[i], i))[:3]
-        expected[layer, feature] = ("Output: " + " | ".join(index._token(i) for i in promoted)
-                                   + " / Examples: " + (" | ".join(index._token(i) for i in common) or "none"))
+        expected[layer, feature] = bounded_label(
+            "Output: " + " | ".join(index._token(i) for i in promoted)
+            + " / Examples: " + (" | ".join(index._token(i) for i in common) or "none"))
     contents = {file.name: file.read_bytes() for file in (index.root / "index").iterdir()}
     for name in ("_dictionary_hash", "_source_hash", "_tokenizer_hash", "model_identity", "weights_hash"):
         monkeypatch.setattr(_index, name, refuse)
@@ -205,12 +210,22 @@ def display_nodes():
     ]
 
 
-def test_graph_json_and_publication_share_decorated_labels(label_index, monkeypatch):
+@pytest.mark.parametrize("label_index,expected_label", [
+    (None, None), ("é" * 40, "Output: " + "é" * 26 + "..."),
+], indirect=["label_index"])
+def test_graph_json_and_publication_share_decorated_labels(label_index, monkeypatch, expected_label):
     index = label_index
     nodes = display_nodes()
     original = deepcopy(nodes)
     labeled = label_graph_nodes(nodes, index)
     expected = index.show(0, 0)["label"]
+    assert len(expected.encode("utf-8")) <= 63
+    if expected_label is not None:
+        assert expected == expected_label
+        shown = index.show(0, 0)
+        assert shown["promoted_tokens"] == index._promoted(0, 0)
+        for row in shown["promoted_tokens"] + shown["example_tokens"]:
+            assert row["token"] == "é" * 40 + str(row["token_id"])
     assert labeled[1]["label"] == labeled[2]["label"] == expected
     assert labeled[0] == nodes[0] and labeled[3:] == nodes[3:]
     assert nodes == original
@@ -226,9 +241,8 @@ def test_graph_json_and_publication_share_decorated_labels(label_index, monkeypa
     graph.publish()
     assert graph.read()["nodes"] == labeled
     assert json.loads(graph.to_json())["nodes"][1]["label"] == expected
-    packed = expected.encode("utf-8")[:63].decode("utf-8", errors="ignore")
-    assert unpack_label(published["trace.label_text"][TOKEN_CAP + 1]) == packed
-    assert unpack_label(published["trace.label_text"][TOKEN_CAP + 2]) == packed
+    assert unpack_label(published["trace.label_text"][TOKEN_CAP + 1]) == expected
+    assert unpack_label(published["trace.label_text"][TOKEN_CAP + 2]) == expected
     assert unpack_label(published["trace.label_text"][0]) == "A"
     assert unpack_label(published["trace.label_text"][TOKEN_CAP + 3]) == "L0 error"
     assert unpack_label(published["trace.logit_label_text"][0]) == "B"

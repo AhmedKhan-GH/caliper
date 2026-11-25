@@ -8,6 +8,7 @@ import torch
 
 from caliper.interp import capture, load_dictionary
 from caliper.interp._index import FeatureIndex, _TopTable, build_index
+from caliper.interp._labels import bounded_label
 from .fixture import TinyTokenizer
 from .test_dictionary import write_fixture
 
@@ -119,7 +120,9 @@ def test_label_values_and_query_cache(indexed):
     frequencies = Counter(i for row in all_rows for i in row["token_ids"] if i is not None)
     expected = sorted(frequencies, key=lambda i: (-frequencies[i], i))[:3]
     assert [t["token_id"] for t in info["example_tokens"]] == expected
-    assert info["label"] == "Output: " + " | ".join(index._token(i) for i in promoted) + " / Examples: " + " | ".join(index._token(i) for i in expected)
+    assert info["label"] == bounded_label(
+        "Output: " + " | ".join(index._token(i) for i in promoted)
+        + " / Examples: " + " | ".join(index._token(i) for i in expected))
     rows[0]["token_ids"][16] = -1
     info["maximum"] = -1
     assert index.examples(0, feature, 1)[0]["token_ids"][16] >= 0
@@ -147,7 +150,9 @@ def test_empty_index_and_zero_features(tmp_path):
     assert index.examples(0, 0, 0) == []
     info = index.show(0, 0)
     assert info["count"] == info["maximum"] == 0
-    assert info["example_tokens"] == [] and info["label"].endswith("Examples: none")
+    assert info["example_tokens"] == []
+    assert info["label"] == bounded_label(
+        "Output: " + " | ".join(row["token"] for row in info["promoted_tokens"]) + " / Examples: none")
     assert len(info["promoted_tokens"]) == 3
     assert len(index.documents) == len(index.tokens) == 0
 

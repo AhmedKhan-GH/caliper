@@ -16,6 +16,7 @@ from ._memory import (BudgetMemory, CleanStop, MemoryGuard, allocation_bytes, fa
                       autorelease_scope as _device_scope)
 from ._points import capture
 from ._frozen import _trace_features
+from ._labels import bounded_label
 
 INDEX_VERSION = 2
 ENCODER_POLICY = "live_input_v1"
@@ -353,6 +354,7 @@ class FeatureIndex:
     """Read an index with 256 cached windows and 512 cached feature summaries.
 
     ``show(layer, feature)`` returns JSON data with label, count, maximum, and token lists.
+    The display label fits 63 UTF-8 bytes. Token lists retain full text.
     ``examples(layer, feature, limit=16)`` returns rows sorted by indexed activation.
     Each row has 33 token slots. Missing document-edge slots contain null values.
     Gemma adds BOS before each window, with at most 34 model positions.
@@ -569,7 +571,7 @@ class FeatureIndex:
                   for i, count in sorted(frequency.items(), key=lambda item: (-item[1], item[0]))[:3]]
         label = "Output: " + " | ".join(t["token"] for t in promoted)
         label += " / Examples: " + (" | ".join(t["token"] for t in common) or "none")
-        return {"layer": layer, "feature": feature, "label": label,
+        return {"layer": layer, "feature": feature, "label": bounded_label(label),
                 "count": int(self.counts[layer, feature]),
                 "maximum": float(self.table[layer, feature, 0]["activation"]),
                 "promoted_tokens": promoted, "example_tokens": common}

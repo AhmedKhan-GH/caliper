@@ -10,7 +10,7 @@ from caliper import _controls, _programs as P
 from caliper.interp import Tracer, publish
 from caliper.interp import _publish
 from caliper.interp._index import FeatureIndex, build_index
-from caliper.interp._labels import display_text
+from caliper.interp._labels import token_label
 from caliper.interp._service import register_service, unregister_service
 from .fixture import TinyLM, TinyTokenizer
 from .test_dictionary import write_fixture
@@ -155,8 +155,7 @@ def test_standalone_trace_and_cache_publish_all_piece_inputs_before_pruning(regi
         assert unpack_label(published["trace.label_text"][1]) == "A"
         assert unpack_label(published["trace.label_text"][32]) == graph.nodes[0]["label"]
         for index, token in enumerate(order[:count].tolist()):
-            decoded = display_text(tokenizer.decode([token]))
-            assert unpack_label(published["trace.logit_label_text"][index]) == (decoded or f"#{token}")
+            assert unpack_label(published["trace.logit_label_text"][index]) == token_label(tokenizer, token)
         assert all(tensor.device.type == "cpu" for tensor in published.values())
         _publish._clear()
         assert tracer.trace("A", max_targets=0, max_nodes=1, max_edges=0) is graph

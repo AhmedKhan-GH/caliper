@@ -11,6 +11,13 @@ def display_text(value):
     return text
 
 
+def bounded_label(value):
+    """Return at most 63 UTF-8 bytes, with three dots after truncation."""
+    text = display_text(value)
+    raw = text.encode("utf-8")
+    return text if len(raw) <= 63 else raw[:60].decode("utf-8", errors="ignore") + "..."
+
+
 def token_label(tokenizer, token_id):
     """Decode one token, or identify a row with no token spelling.
 
@@ -30,7 +37,11 @@ def token_label(tokenizer, token_id):
                                      (Parameter.POSITIONAL_OR_KEYWORD, Parameter.KEYWORD_ONLY))}
     # Select supported options before the call. Decoder errors must propagate.
     decoded = display_text(decode([token_id], **options))
-    return decoded if decoded else f"#{token_id}"
+    if not decoded:
+        return f"[empty token {token_id}]"
+    if decoded.isspace():
+        return f"[whitespace token {token_id}]"
+    return decoded
 
 
 def pack_labels(values, count):

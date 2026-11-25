@@ -128,7 +128,8 @@ def test_utf8_labels_end_on_character_boundaries():
     assert raw[2].rstrip(b"\0").decode() == r"A\x00B"
 
 
-def test_comparison_labels_preserve_sparse_rows_and_shared_display_text(output_case, monkeypatch):
+@pytest.mark.parametrize("blank", [" ", "\u2003", ""])
+def test_comparison_labels_preserve_sparse_rows_and_shared_display_text(output_case, monkeypatch, blank):
     from caliper.interp import _output
     from caliper.interp._labels import token_label
     model, tokenizer, _, _, output = output_case
@@ -136,7 +137,7 @@ def test_comparison_labels_preserve_sparse_rows_and_shared_display_text(output_c
     logits[:, 0, :10] = torch.arange(10, 0, -1, dtype=torch.float64)
     spellings = {0: "A\0B", 1: None, 2: "None", 3: "", 4: "é" * 40,
                  5: "\ud800", 6: "<eos>", 7: "Ġtail", 8: r"\x00", 9: "word"}
-    decoded = {**spellings, 7: " tail"}
+    decoded = {**spellings, 7: " tail", 9: blank}
     def decode(ids, *, skip_special_tokens=True, clean_up_tokenization_spaces=True):
         assert skip_special_tokens is False
         assert clean_up_tokenization_spaces is False
@@ -147,14 +148,19 @@ def test_comparison_labels_preserve_sparse_rows_and_shared_display_text(output_c
     monkeypatch.setattr(_output, "forward_logits", lambda *a, **k: logits)
     result = output.compare("A")
     assert result["tokens"] == list(range(10))
-    assert result["labels"] == [r"A\x00B", "[unmapped token 1]", "None", "#3", "é" * 31,
-                                "?", "<eos>", " tail", r"\x00", "word"]
+    blank_label = "[whitespace token 9]" if blank else "[empty token 9]"
+    assert result["labels"] == [r"A\x00B", "[unmapped token 1]", "None", "[empty token 3]", "é" * 31,
+                                "?", "<eos>", " tail", r"\x00", blank_label]
+    assert len(result["labels"]) == 10 and all(label.strip() for label in result["labels"])
+    assert _resolve("output.tokens").tolist() == result["tokens"]
+    assert result["argmax_token_ids"] == [0, 0]
     packed = _resolve("output.label_text").tolist()
     for token, label, row in zip(result["tokens"], result["labels"], packed):
         assert label == token_label(tokenizer, token).encode("utf-8")[:63].decode("utf-8", errors="ignore")
         raw = b"".join(int(word).to_bytes(4, "little") for word in row)
         assert raw.split(b"\0", 1)[0].decode("utf-8") == label
     expected = logits[:, 0].softmax(-1)[:, :10].float()
+    assert result["probabilities"] == expected.tolist()
     torch.testing.assert_close(_resolve("output.probs"), expected, atol=0, rtol=0)
 
 
