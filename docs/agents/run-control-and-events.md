@@ -53,12 +53,12 @@ A script allows control when it starts its server with `caliper.serve(control=Tr
 
 ## Intervention Commands
 
-An intervention changes a module of the model at a step boundary while the run trains. The first intervention is `ablate`, which sets the output of a module to zero. For an attention module that gives heads, it sets the slice of one head. The names `scale`, `steer` and `patch` are reserved, and `intervene.set` refuses them with `intervene.op_reserved`. A script offers interventions only under `caliper.watch(model, optimizer)`.
+An intervention changes a model tensor at a step boundary during training or inference. `ablate` sets a module output or one attention head to zero. The operations `add`, `scale`, `clamp`, and `patch` use the payloads in the [intervention reference](../python/interpretability.md). Only `steer` remains reserved and returns `intervene.op_reserved`. A script offers interventions under `caliper.watch(model)` or `caliper.watch(model, optimizer)`.
 
 | Command | Arguments | Result |
 |---|---|---|
 | `intervene.points` | `match`, a glob over the point names | `points`, each with `point`, `kind` (`module` or `head`), `module`, `head`, `type` and `shape`, plus optional `probe`, `layer` and `pattern` |
-| `intervene.set` | `point`, `op`, `from_step`, `until_step` | `point`, `op`, `pending: true` |
+| `intervene.set` | `point`, `op` or matching `kind`, operation payload, optional `from_step` and `until_step` | `point`, `op`, `pending: true` |
 | `intervene.clear` | `point`, or `all: true` | `cleared` (the points) and `pending: true` |
 | `intervene.list` | None | `interventions`, each with `point`, `op`, `from_step`, `until_step`, `since_step` and `state` (`pending`, `active` or `ended`) |
 
@@ -74,7 +74,7 @@ Each module of `model.named_modules()` is a point, with its dotted name, such as
 | Code | Cause |
 |---|---|
 | `intervene.unknown_point` | The model has no point of this name |
-| `intervene.op_reserved` | The op is `scale`, `steer` or `patch` |
+| `intervene.op_reserved` | The op is `steer` |
 | `intervene.bad_range` | `until_step` is not above `from_step`, or a step is in the past |
 | `intervene.not_supported` | The attached script did not announce `interventions` |
 

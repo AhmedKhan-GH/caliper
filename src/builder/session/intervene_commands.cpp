@@ -94,12 +94,12 @@ json intervention_json(const Intervention& i) {
 Error check(const RunState& state, RunControl& control, bool change) {
     if (!state.attached)
         return fail(kRunNotAttached,
-                    "No script is attached to Caliper; start a script with caliper.watch(model, optimizer) and "
+                    "No script is attached to Caliper. Start a script with caliper.watch(model) and "
                     "attach the app to its stream first.");
     if (!control.interventions_supported())
         return fail(kInterveneNotSupported,
                     "The script " + state.script +
-                        " takes no interventions: it announces them only under caliper.watch(model, optimizer).");
+                        " takes no interventions. It announces them under caliper.watch(model).");
     if (change && !state.control)
         return fail(kRunControlNotAllowed,
                     state.why_not.empty() ? "The stream of " + state.script + " takes no control." : state.why_not);
