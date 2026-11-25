@@ -1668,7 +1668,9 @@ bool DrawRuntime::encode(std::vector<caliper_gfx::Frame>* frames, const FrameInp
     // What the frame shows, for the item map, the text table and the reset rules: a new copy for
     // each new version, also one at the same step, and the copy a pick of an earlier frame holds
     // stays as it was.
+    m.status.resource_steps.clear();
     for (Impl::Slot& s : m.slots) {
+        if (!s.unbound) m.status.resource_steps[s.id] = s.step;
         if (s.drawn_serial == s.serial && s.shown) continue;
         s.drawn_serial = s.serial;
         auto shown = std::make_shared<Impl::Shown>();

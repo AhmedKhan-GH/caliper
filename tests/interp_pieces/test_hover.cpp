@@ -2,6 +2,7 @@
 #include <doctest/doctest.h>
 #include "pieces.h"
 #include "draw/draw_runtime.h"
+#include "draw/draw_runtime_impl.h"
 #include "gfx/recording_backend.h"
 #include <cstring>
 #include <limits>
@@ -111,6 +112,41 @@ TEST_CASE("graph hover labels use a local hit without a derive update or a selec
     CHECK(hovered[2].priority == 4);
     CHECK(graph.runtime.labels().size() == 2);
     CHECK(graph.runtime.shown_items().version == shown.version);
+}
+
+TEST_CASE("draw status tracks staggered attribution resources and a new selected frame") {
+    Graph graph;
+    const auto first = graph.runtime.status();
+    CHECK(first.frames == 1);
+    CHECK(first.resource_steps == std::map<std::string, std::int64_t>{
+        {"nodes", 1}, {"curves", 1}, {"labels", 1}, {"strings", 1}});
+    std::map<std::string, std::vector<std::uint8_t>> bytes;
+    for (const auto& slot : graph.runtime.internals().slots)
+        if (slot.shown) bytes[slot.id] = slot.shown->bytes;
+    graph.put_text(33, "New Selected Feature");
+    graph.set("nodes", bytes.at("nodes"), 2, 2);
+    CHECK(graph.runtime.status().resource_steps == first.resource_steps);
+    graph.draw(1);
+    CHECK(graph.runtime.status().resource_step == 2);
+    CHECK(graph.runtime.status().resource_steps.at("nodes") == 2);
+    CHECK(graph.runtime.status().resource_steps.at("strings") == 1);
+    REQUIRE(graph.runtime.labels().size() == 1);
+    graph.set("curves", {}, 0, 2);
+    graph.draw(1);
+    CHECK(graph.runtime.status().resource_steps.at("curves") == 2);
+    graph.set("labels", bytes.at("labels"), 34, 2);
+    graph.draw(1);
+    CHECK(graph.runtime.status().resource_steps.at("labels") == 2);
+    CHECK(graph.runtime.status().resource_steps.at("strings") == 1);
+    REQUIRE(graph.runtime.labels().size() == 1);
+    graph.set("strings", graph.strings, 544, 2);
+    CHECK(graph.runtime.status().resource_steps.at("strings") == 1);
+    graph.draw(1);
+    CHECK(graph.runtime.status().frames == first.frames + 4);
+    CHECK(graph.runtime.status().resource_steps == std::map<std::string, std::int64_t>{
+        {"nodes", 2}, {"curves", 2}, {"labels", 2}, {"strings", 2}});
+    REQUIRE(graph.runtime.labels().size() == 2);
+    CHECK(graph.runtime.labels()[1].text == "New Selected Feature");
 }
 
 TEST_CASE("a hover declaration chooses its own anchor and string offset") {

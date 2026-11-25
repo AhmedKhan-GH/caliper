@@ -14445,6 +14445,11 @@
                         "null"
                       ]
                     },
+                    "frames": {
+                      "description": "The number of encoded frames since this draw instance was installed.",
+                      "minimum": 0,
+                      "type": "integer"
+                    },
                     "memory_bytes": {
                       "description": "The bytes of its resources, buffer inputs, draw buffers and targets in the viewer.",
                       "minimum": 0,
@@ -14461,6 +14466,13 @@
                         "integer",
                         "null"
                       ]
+                    },
+                    "resource_steps": {
+                      "additionalProperties": {
+                        "type": "integer"
+                      },
+                      "description": "The step of each bound resource in the last encoded frame. Unbound optional inputs are absent.",
+                      "type": "object"
                     },
                     "state": {
                       "description": "The draw half's state in the viewer: review in a foreign spec without a review of the piece's hash.",

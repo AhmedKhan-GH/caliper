@@ -985,6 +985,10 @@ TEST_CASE("labels take their strings from a published buffer, checked as UTF-8, 
     CHECK(rt.labels()[0].text == "cat");
     REQUIRE(frame(h, rt).size() == 1);
     CHECK(rt.labels()[0].text == "cow");
+    // Independent versions retain their own displayed steps.
+    CHECK(rt.status().resource_step == 2);
+    CHECK(rt.status().resource_steps.at("anchors") == 1);
+    CHECK(rt.status().resource_steps.at("names") == 2);
 }
 
 TEST_CASE("a refused frame is an error of its program only") {
@@ -1279,6 +1283,8 @@ TEST_CASE("the draw host gives each panel its programs, packs params and refuses
     CHECK(j["state"] == "stopped");
     CHECK(j["error"]["code"] == cp::kProgramDrawTimeout);
     CHECK(j["frame_limit_ms"] == 4.0);
+    CHECK(j["resource_steps"] == nlohmann::json{{"pattern", 64}});
+    CHECK(j["frames"] == 1);
 
     // A program that leaves the spec leaves its panel; a changed piece gets a new revision.
     const std::uint64_t before = host.feed("pattern")->programs()[0].revision;
@@ -1289,6 +1295,35 @@ TEST_CASE("the draw host gives each panel its programs, packs params and refuses
     host.reconcile(spec);
     CHECK(host.feed("pattern")->programs().empty());
     CHECK(host.status().count("head_pattern") == 0);
+}
+
+TEST_CASE("the draw host reports resource completion when the maximum step stays unchanged") {
+    cd::DrawHost host;
+    host.set_resolver([](const cs::Spec&, const cs::Program&, cs::Piece* out) {
+        *out = named_tags();
+        return cp::Verdict{};
+    });
+    cs::Spec spec;
+    spec.programs = {instance_of("tags", "tags", "text")};
+    host.reconcile(spec);
+    auto* feed = host.feed("text");
+    const auto program = feed->programs().at(0);
+    Host h;
+    cd::DrawRuntime rt(h.gfx, true, checks());
+    REQUIRE(rt.install(program.piece, program.instance, program.pick_id).ok());
+    REQUIRE(rt.set_resource(version("anchors", std::vector<std::array<std::uint32_t, 8>>(1), 2)).ok());
+    REQUIRE(rt.set_resource(version("names", std::vector<std::array<std::uint32_t, 8>>(1), 1)).ok());
+    REQUIRE(frame(h, rt).size() == 1);
+    feed->status(rt);
+    CHECK(host.status().at("tags").resource_step == 2);
+    REQUIRE(rt.set_resource(version("names", std::vector<std::array<std::uint32_t, 8>>(1), 2)).ok());
+    REQUIRE(frame(h, rt).size() == 1);
+    CHECK(host.status().at("tags").resource_steps.at("names") == 1);
+    cd::FrameInputs inputs;
+    feed->frame(rt, &inputs);
+    CHECK(host.status().at("tags").resource_step == 2);
+    CHECK(host.status().at("tags").resource_steps.at("names") == 2);
+    CHECK(host.status().at("tags").frames == 2);
 }
 
 TEST_CASE("the draw host holds a foreign spec's piece for a review of its hash, then draws it") {

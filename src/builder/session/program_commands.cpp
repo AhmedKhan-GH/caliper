@@ -27,6 +27,8 @@ json draw_status_json(const DrawStatus& d) {
                 {"memory_bytes", d.memory_bytes},
                 {"memory_limit_bytes", d.memory_limit_bytes},
                 {"resource_step", opt(d.resource_step)},
+                {"resource_steps", d.resource_steps},
+                {"frames", d.frames},
                 {"error", nullptr}};
     if (d.error) out["error"] = {{"code", d.error->code}, {"message", d.error->message}, {"where", d.error_where}};
     return out;
@@ -148,6 +150,8 @@ json instance_status(const spec::Spec& s, const spec::Program& p, const ProgramS
                        {"memory_limit_bytes",
                         std::uint64_t(d.memory_mb.value_or(spec::piece_limits::kDrawMemoryMbDefault)) << 20},
                        {"resource_step", nullptr},
+                       {"resource_steps", json::object()},
+                       {"frames", 0},
                        {"error", nullptr}};
     }
     return out;

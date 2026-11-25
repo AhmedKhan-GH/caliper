@@ -1209,6 +1209,8 @@ std::vector<caliper_builder::ProgramStatus> drawn_items(const caliper_draw::Draw
         d.memory_bytes = s.memory_bytes;
         d.memory_limit_bytes = s.memory_limit_bytes;
         if (s.resource_step >= 0) d.resource_step = s.resource_step;
+        d.resource_steps = s.resource_steps;
+        d.frames = s.frames;
         if (!s.error.ok()) {
             d.error = caliper_builder::ProgramError{s.error.code, s.error.message, s.error.line, s.error.column};
             d.error_where = s.error.where;

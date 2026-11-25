@@ -524,6 +524,8 @@ const std::pair<const char*, const char*> kFragments[] = {
                    "memory_bytes": {"type": "integer", "minimum": 0, "description": "The bytes of its resources, buffer inputs, draw buffers and targets in the viewer."},
                    "memory_limit_bytes": {"type": "integer", "minimum": 0, "description": "Its draw.memory_mb in bytes."},
                    "resource_step": {"type": ["integer", "null"], "description": "The step of the newest resource version that a frame drew, or null."},
+                   "resource_steps": {"type": "object", "additionalProperties": {"type": "integer"}, "description": "The step of each bound resource in the last encoded frame. Unbound optional inputs are absent."},
+                   "frames": {"type": "integer", "minimum": 0, "description": "The number of encoded frames since this draw instance was installed."},
                    "error": {"type": ["object", "null"], "additionalProperties": false, "required": ["code", "message", "where"], "description": "The draw half's last error, or null.",
                              "properties": {
                                "code": {"type": "string", "description": "A stable code, such as program.draw_over_time."},

@@ -67,6 +67,8 @@ nlohmann::json draw_status_json(const DrawStatus& s) {
                         {"memory_bytes", s.memory_bytes},
                         {"memory_limit_bytes", s.memory_limit_bytes},
                         {"resource_step", s.resource_step < 0 ? nlohmann::json(nullptr) : nlohmann::json(s.resource_step)},
+                        {"resource_steps", s.resource_steps},
+                        {"frames", s.frames},
                         {"error", nullptr}};
     if (!s.error.ok()) {
         j["error"] = {{"code", s.error.code}, {"message", s.error.message}, {"where", s.error.where},
@@ -110,6 +112,9 @@ public:
     }
 
     void frame(DrawRuntime& rt, FrameInputs* in) override {
+        // Publish the previous frame even when only a resource below the maximum step changed.
+        // SceneView can suppress its status callback when the maximum and timing stay unchanged.
+        host_.report(rt.instance().program, id_, rt.status());
         const Record* r = nullptr;
         for (const Record& rec : host_.records_)
             if (rec.program == rt.instance().program) r = &rec;
