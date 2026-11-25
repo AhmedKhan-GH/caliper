@@ -98,6 +98,53 @@ class _Target:
     intervention_bias: torch.Tensor
 
 
+def _reference_target_objective(path, reads, final, targets, check):
+    """Gather independent target rows once per destination layer.
+
+    Each row has one target. Grouped index backward adds each direction to
+    positive zero, as the original multiple select branches do. Singleton
+    layers retain select backward because its negative zero must survive.
+    All objective nodes follow the path nodes in autograd sequence order.
+    The path thus receives every seed before its original branches execute.
+    """
+    check("target objective admission")
+    path.guard.reserve("target objective metadata", 2048 * len(targets))
+    groups = {}
+    for row, target in enumerate(targets):
+        groups.setdefault(target.layer, []).append((row, target))
+    # Admit both full scatter storages, four compact tensors, coordinates,
+    # and scalar work. This local reserve does not reduce batch admission.
+    workspace = 2048 * len(targets)
+    for layer, entries in groups.items():
+        if len(entries) > 1:
+            source = final if layer == path.layers else reads[layer]
+            itemsize = max(source.element_size(), *(target.direction.element_size() for _, target in entries))
+            workspace += (2 * source.numel() + 4 * len(entries) * path.width + 8 * len(entries)) * itemsize
+            workspace += 16 * len(entries)
+    path.guard.reserve("target objective tensors", workspace)
+    terms = []
+    rows = positions = directions = None
+    try:
+        for layer, entries in groups.items():
+            with autorelease_scope(path.device):
+                check("target objective layer")
+                source = final if layer == path.layers else reads[layer]
+                if len(entries) == 1:
+                    row, target = entries[0]
+                    terms.append((source[row, target.position] * target.direction).sum())
+                else:
+                    rows = torch.tensor([row for row, _ in entries], device=source.device)
+                    positions = torch.tensor([target.position for _, target in entries], device=source.device)
+                    directions = torch.stack([target.direction for _, target in entries])
+                    terms.append((source[rows, positions] * directions).sum())
+        return torch.stack(terms).sum()
+    finally:
+        # A retained stop traceback must not retain partial seed graphs.
+        terms.clear()
+        groups.clear()
+        rows = positions = directions = entries = source = None
+
+
 def _decoder_groups(nodes, feature_slice, tokens, step, capacity, check):
     """Bound source rows within separate BOS and published layer scopes."""
     node = feature_slice.start
@@ -293,9 +340,12 @@ class _DirectEffects:
                     zeros[source.dtype] = source.new_zeros(batch, path.tokens, path.width)
                 leaves.append(zeros[source.dtype].detach().requires_grad_(True))
             reads, final = path.run(leaves[0], leaves[1:], bias_masks=(0., 0., 0., 0.), check=self.check)
-            objective = torch.stack([((final if target.layer == path.layers else reads[target.layer])
-                                      [row, target.position] * target.direction).sum()
-                                     for row, target in enumerate(targets)]).sum()
+            if self.reference and batch > 1:
+                objective = _reference_target_objective(path, reads, final, targets, self.check)
+            else:
+                objective = torch.stack([((final if target.layer == path.layers else reads[target.layer])
+                                          [row, target.position] * target.direction).sum()
+                                         for row, target in enumerate(targets)]).sum()
             path.guard.check("target forward")
             self.check("target forward")
             gradients = torch.autograd.grad(objective, leaves, allow_unused=True)
