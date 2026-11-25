@@ -121,8 +121,8 @@ struct HubOptions {
     int idle_timeout_ms = 30000;       // CALIPER_NET_IDLE_TIMEOUT_MS
     int shutdown_timeout_ms = 2000;    // wait this long for peers to answer the close
 
-    // One line per session that starts, resumes or ends (the CLI prints them);
-    // null for silence. Never given the token. Called on the hub's thread.
+    // Session changes and connection close codes (the CLI prints them).
+    // Null for silence. Excludes tokens and peer close reasons. Runs on the hub thread.
     std::function<void(const std::string&)> log;
 
     // For a server that embeds the hub. The stream is upgraded at
