@@ -54,6 +54,7 @@ def packed_snapshot(device_snapshot, monkeypatch):
     (6, 4, 0, [(torch.uint8, 6)]),
     (7, 0, 0, [(torch.uint8, 7)]),
     (17, 4, 8, [(torch.int32, 4), (torch.uint8, 1)]),
+    (29, 4, 8, [(torch.int32, 4), (torch.uint8, 13)]),
     (33, 0, 0, [(torch.int32, 4), (torch.int32, 4), (torch.uint8, 1)]),
 ])
 def test_packed_snapshot_preserves_offsets_and_complete_tails(
