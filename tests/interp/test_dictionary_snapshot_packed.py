@@ -196,3 +196,16 @@ def test_packed_snapshot_failure_releases_views_with_retained_tracebacks(
         traceback.clear_frames(caught.value.__traceback__)
         case.executor.close()
         assert saved() is None
+
+
+@pytest.mark.parametrize("batch_blocks", [8, 32, 64])
+def test_packed_snapshot_checks_full_batches_and_final_tail(packed_snapshot, batch_blocks):
+    value = torch.arange(64 * 16 + 13, dtype=torch.uint8)
+    case, snapshot = packed_snapshot({"weight": value}, batch_blocks=batch_blocks)
+    assert snapshot.matches(case.dictionary, case.executor.dictionary_id, case.guard)
+    assert sum(size for size, _ in case.comparisons) == value.numel()
+    assert [size for size, _ in case.transfers] == [batch_blocks] * (64 // batch_blocks) + [1]
+    value[-1] ^= 128
+    assert not snapshot.matches(case.dictionary, case.executor.dictionary_id, case.guard)
+    assert sum(size for size, _ in case.comparisons) == 2 * value.numel()
+    assert not case.scopes and not case.drains

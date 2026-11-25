@@ -29,7 +29,9 @@ MAX_PROMPT_BYTES = 4096
 MAX_SOURCE_BYTES = 16 * 1024 * 1024
 MAX_SOURCE_ENTRIES = 64
 _SNAPSHOT_COMPARE_BYTES = 16 * 1024 * 1024
-_SNAPSHOT_BATCH_BLOCKS = 8
+# One bounded readback covers up to 1 GiB of source bytes.
+# Admission reserves every queued block before dispatch.
+_SNAPSHOT_BATCH_BLOCKS = 64
 _SNAPSHOT_FLAG_RESERVE = 64 * 1024
 KINDS = ("ablate", "add", "scale", "clamp", "patch")
 _SUSPENDED = ContextVar("caliper_interventions_suspended", default=frozenset())

@@ -340,6 +340,7 @@ def device_snapshot(controlled, monkeypatch):
         monkeypatch.setattr(_memory, "autorelease_scope", scope)
         monkeypatch.setattr(_dictionary, "autorelease_scope", scope)
         monkeypatch.setattr(_intervene, "_SNAPSHOT_COMPARE_BYTES", 4096)
+        monkeypatch.setattr(_intervene, "_SNAPSHOT_BATCH_BLOCKS", 8)
         return case
     return make
 
