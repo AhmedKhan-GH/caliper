@@ -18,6 +18,19 @@ def write_collection(out, root, result):
         if evidence:
             for item in (evidence["metadata"], evidence["preparation_file"], evidence["result"]["evidence"]):
                 files.add(str(verify_descriptor(root, item)))
+            record = evidence["result"]
+            if "native_evidence" in record:
+                files.add(str(verify_descriptor(root, record["native_evidence"])))
+            for observation in record.get("observations", {}).values():
+                files.add(str(verify_descriptor(root, observation["native_evidence"])))
+            trace_id = result.get("trace", {}).get("trace_id")
+            if trace_id:
+                require(isinstance(trace_id, str) and len(trace_id) == 64
+                        and all(char in "0123456789abcdef" for char in trace_id), "Invalid full graph identity.")
+                folder = verify_descriptor(root, evidence["preparation_file"]).parent
+                graph = folder / f"trace-{trace_id}.json"
+                if graph.exists():
+                    files.add(str(verify_descriptor(root, descriptor(root, graph))))
     collection = {"schema": "caliper.published-dallas.collection.v1", "protocol": PROFILE,
                   "source_manifest_sha256": MANIFEST_SHA256,
                   "evidence_collection_complete": result.get("evidence_collection_complete") is True and not result.get("error"),
