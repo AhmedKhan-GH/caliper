@@ -579,7 +579,7 @@ class HostedService(InterpretationService):
             prompt = self.owner.prompt
             with self.owner.controls.lock:
                 prompt_version = prompt._version
-            prompt_inputs(self.model, self.tokenizer, params["prompt"])
+            prompt_inputs(self.model, self.tokenizer, params["prompt"], profile=params.get("profile", "caliper"))
             # Check the control limits before trace admission without an edit.
             with self.owner.controls.lock:
                 entry = prompt.entry()
