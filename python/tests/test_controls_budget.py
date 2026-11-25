@@ -102,6 +102,67 @@ def fill_budget(ctl):
     pytest.fail("the wire budget did not refuse a bounded text value")
 
 
+@pytest.mark.parametrize("terminal", ["run", "expire"])
+def test_due_activation_defers_when_concurrent_metadata_consumes_its_reserve(case, monkeypatch, terminal):
+    from tests.interp.test_service import Transport as ReplyTransport
+
+    ctl, service = case
+    timers, observed, prepared, queued = [], [], [], []
+    monkeypatch.setattr(ctl._timers, "at", lambda when, fn, *args: timers.append((when, fn, args)))
+    route = ctl.attach(ReplyTransport())
+    try:
+        service.set(spec(1, from_step=None, vector=[0.] * 1024))
+        ctl.step()
+        retained = ctl._ivs[(spec(1)["point"], "add")]
+        hook, applied = retained.hook, retained.applied_spec
+        service.set(spec(0, from_step=ctl.n + 2))
+        action = ctl.action("inspect", lambda: observed.append(service.specifications()))
+        route.on_control(None, wire.Control(1, "run", name="inspect").to_meta())
+        deadline, expire, args = next(item for item in timers if item[2] == (action, action.run_id))
+        install = service.executor.install
+        cache, identity = service.executor._cache, service.executor._cache_identity
+
+        def installed(request, **kwargs):
+            assert ctl.lock.acquire(blocking=False), "metadata callback holds the controls lock"
+            ctl.lock.release()
+            result = install(request, **kwargs)
+            prepared.append(result)
+            if request["point"] == spec(0)["point"] and not queued:
+                service.set(dict(request, vector=[0.] * 1024))
+                service.set(spec(2, from_step=None, vector=[0.] * 1024))
+                fill_budget(ctl)
+                queued.append(service.state_dict())
+            return result
+
+        with monkeypatch.context() as patch:
+            patch.setattr(service.executor, "install", installed)
+            ctl.step()
+        assert len(queued) == 1 and service.state_dict() == queued[0]
+        assert all(item.removed for item in prepared)
+        assert retained.hook is hook and retained.applied_spec is applied and not hook.removed
+        assert service.executor._cache is cache and service.executor._cache_identity is identity
+        assert not observed and not route.transport.replies and action.queued
+        assert [(when, fn, values) for when, fn, values in timers if fn == expire] == [(deadline, expire, args)]
+        encoded(ctl)
+        if terminal == "expire":
+            expire(*args)
+        ctl.step()
+        assert len(service.specifications()) == 3
+        assert all(record.error is None for record in ctl._ivs.values())
+        reply, = route.transport.replies
+        assert (reply.request_id, reply.status) == (1, "ok" if terminal == "run" else "error")
+        if terminal == "expire":
+            assert reply.error["code"] == "timeout" and not observed
+        else:
+            assert observed == [service.specifications()]
+        expire(*args)
+        ctl.step()
+        assert len(route.transport.replies) == 1 and not ctl.queue
+        encoded(ctl)
+    finally:
+        route.detach()
+
+
 @pytest.mark.parametrize("admission", ["request", "restore"])
 def test_smaller_replacement_reserves_the_retained_specification(case, monkeypatch, admission):
     ctl, service = case

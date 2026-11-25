@@ -2378,8 +2378,15 @@ class Controls:
                         current.state, current.since_step = IV_PENDING, None
                         current.error, current.error_code = None, None
                 current.replace = current.applied_spec is not None and current.spec != current.applied_spec
-            self._check_metadata_budget(ivs=prospective)
             traffic = self._iv_revision != revision
+            try:
+                self._check_metadata_budget(ivs=prospective)
+            except ValueError:
+                if not traffic:
+                    raise
+                # A newer, smaller request can release its metadata reserve.
+                # Defer the obsolete preparation and retain the admitted requests.
+                return changed, True
             for key in records:
                 iv = originals[key]
                 for field in _Intervention.__slots__:

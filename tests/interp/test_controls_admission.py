@@ -11,6 +11,20 @@ from .test_intervention_replay import hook_objects
 from .test_service import Transport
 
 
+def assert_callback_unlocked(controls):
+    assert controls.lock.acquire(blocking=False), "install callback holds the controls lock"
+    controls.lock.release()
+
+
+def test_install_callback_lock_guard_fails_without_a_wait():
+    from caliper._controls import Controls
+
+    controls = Controls()
+    with controls.lock, pytest.raises(AssertionError, match="install callback holds the controls lock"):
+        assert_callback_unlocked(controls)
+    assert_callback_unlocked(controls)
+
+
 def test_source_capacity_refusal_preserves_an_independent_add_request(monkeypatch):
     from caliper._controls import Controls
     from caliper.interp import _intervene
@@ -260,6 +274,7 @@ def test_scheduled_reinstallation_conflict_preserves_the_newer_request(monkeypat
         install, queued = service.executor.install, []
 
         def installed(spec, **kwargs):
+            assert_callback_unlocked(controls)
             hook = install(spec, **kwargs)
             if spec["point"] == specs[0]["point"] and not queued:
                 service.set(dict(specs[0], source_prompt="b"))
