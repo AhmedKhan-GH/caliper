@@ -768,7 +768,7 @@ def test_device_snapshot_preserves_prospective_host_reserve(device_snapshot, mon
     else:
         case.executor._prepare_dictionary_identity()
         case.allocations.clear()
-        required = 2 * total + _intervene._snapshot_workspace(4096, _intervene._SNAPSHOT_BATCH_BLOCKS)
+        required = 2 * total + _intervene._snapshot_workspace(4096, 1)
     monkeypatch.setattr(psutil, "virtual_memory", lambda: SimpleNamespace(available=8_000_000_000 + required + margin))
     action = case.executor._prepare_dictionary_identity if phase == "create" else lambda: case.executor.validate(feature_spec())
     if margin < 0:

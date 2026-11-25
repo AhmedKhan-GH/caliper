@@ -176,6 +176,7 @@ class _DeviceSnapshotMemory(_IdentityMemory):
     def __init__(self, guard):
         super().__init__(guard)
         self.reserve = self.reserve_floor = 0
+        self.headroom = 0
 
     @property
     def limit(self):
@@ -189,7 +190,8 @@ class _DeviceSnapshotMemory(_IdentityMemory):
                        getattr(self.inner, "current", 0) or 0,
                        self._checked_current or 0)
         pending = max(0, max(self.floor, self.reserve_floor) - observed)
-        if psutil.virtual_memory().available - pending - self.reserve < 8_000_000_000:
+        self.headroom = psutil.virtual_memory().available - pending - 8_000_000_000
+        if self.headroom < self.reserve:
             raise CleanStop("dictionary identity allocation exceeds the host reserve")
 
 
@@ -258,6 +260,26 @@ class _DictionarySnapshot:
                 raise CleanStop("dictionary identity allocation exceeds the process memory limit")
 
     @classmethod
+    def _admit_batch(cls, memory, sizes, *, retained=0, minimum=0, floor=0):
+        """Admit the largest bounded prefix that fits both prospective budgets."""
+        sizes = sizes[:_SNAPSHOT_BATCH_BLOCKS]
+        largest = sizes[0] if sizes else 0
+        count = 1 if sizes else 0
+        reserve = max(minimum, _snapshot_workspace(largest, count))
+        # Check only the minimum first. A real guard stop must propagate.
+        cls._admit(memory, retained + reserve, force=True, floor=floor)
+        budget = min(memory.headroom, memory.limit - allocation_bytes(memory, floor=floor)) - retained
+        for blocks, size in enumerate(sizes[1:], 2):
+            largest = max(largest, size)
+            candidate = max(minimum, _snapshot_workspace(largest, blocks))
+            if candidate > budget:
+                break
+            count, reserve = blocks, candidate
+        # Reserve the selected queue again before any allocation or dispatch.
+        cls._admit(memory, retained + reserve, floor=floor)
+        return count, reserve
+
+    @classmethod
     def create(cls, dictionary, identifier, guard):
         from ._admission import GEMMA_ID
         from ._dictionary import _dense_state, _HASH_CHUNK_BYTES, _UNVERIFIED_CPU_BYTES
@@ -272,8 +294,9 @@ class _DictionarySnapshot:
         # Account for the retained copy, hash chunks, and comparison workspace.
         scratch = max(4 * min(largest, _SNAPSHOT_COMPARE_BYTES), 4 * _HASH_CHUNK_BYTES)
         if device_compare:
-            scratch = max(scratch, _snapshot_workspace(min(largest, _SNAPSHOT_COMPARE_BYTES),
-                                                      _SNAPSHOT_BATCH_BLOCKS))
+            # Creation must fit all private bytes, the hash, and one comparison
+            # block. Queue capacity follows live headroom at each batch boundary.
+            scratch = max(scratch, _snapshot_workspace(min(largest, _SNAPSHOT_COMPARE_BYTES), 1))
         if memory is None:
             if any(t.device.type != "cpu" for t in state.values()) or total + scratch > _UNVERIFIED_CPU_BYTES:
                 return None
@@ -293,25 +316,35 @@ class _DictionarySnapshot:
                         snapshot[name] = tensor.detach().clone()
                     copied += tensor.numel() * tensor.element_size()
                     continue
-                # Count the entire private destination before its first write.
-                with autorelease_scope(tensor.device):
-                    snapshot[name] = torch.empty_like(tensor)
-                copied += tensor.numel() * tensor.element_size()
                 current = tensor.detach().reshape(-1).view(torch.uint8)
-                original = snapshot[name].reshape(-1).view(torch.uint8)
-                stride = _SNAPSHOT_COMPARE_BYTES * _SNAPSHOT_BATCH_BLOCKS
-                for batch in range(0, current.numel(), stride):
-                    with _snapshot_device_batch(tensor.device):
-                        for start in range(batch, min(batch + stride, current.numel()), _SNAPSHOT_COMPARE_BYTES):
-                            stop = min(start + _SNAPSHOT_COMPARE_BYTES, current.numel())
-                            cls._admit(memory, total - copied + scratch, floor=initial + copied)
-                            original[start:stop].copy_(current[start:stop])
+                original, batch = None, 0
+                while original is None or batch < current.numel():
+                    sizes = [min(_SNAPSHOT_COMPARE_BYTES, current.numel() - start)
+                             for start in range(batch, min(current.numel(), batch +
+                                 _SNAPSHOT_COMPARE_BYTES * _SNAPSHOT_BATCH_BLOCKS), _SNAPSHOT_COMPARE_BYTES)]
+                    count, workspace = cls._admit_batch(
+                        memory, sizes, retained=total - copied, minimum=scratch, floor=initial + copied)
+                    if original is None:
+                        # Count the entire destination before its first write,
+                        # including pages absent from the process reader.
+                        with autorelease_scope(tensor.device):
+                            snapshot[name] = torch.empty_like(tensor)
+                        copied += current.numel()
+                        original = snapshot[name].reshape(-1).view(torch.uint8)
+                    end = min(batch + count * _SNAPSHOT_COMPARE_BYTES, current.numel())
+                    if count:
+                        with _snapshot_device_batch(tensor.device):
+                            for start in range(batch, end, _SNAPSHOT_COMPARE_BYTES):
+                                stop = min(start + _SNAPSHOT_COMPARE_BYTES, end)
+                                cls._admit(memory, total - copied + workspace, floor=initial + copied)
+                                original[start:stop].copy_(current[start:stop])
+                    batch = end
             if memory is not None:
                 memory.floor = initial + copied
-            cls._admit(memory, scratch, force=True, floor=initial + copied)
+            cls._admit(memory, 4 * _HASH_CHUNK_BYTES, force=True, floor=initial + copied)
             content = _content_identity(snapshot, memory)
             result = cls(snapshot, content, source_devices, device_compare=device_compare)
-            cls._admit(memory, scratch, force=True, floor=initial + copied)
+            cls._admit(memory, 0, force=True, floor=initial + copied)
             # The copied bytes must reproduce the configured full-content identity.
             if _dictionary_digest(dictionary, content) != identifier or not result.matches(dictionary, identifier, memory):
                 raise InterventionError("dictionary content changed. Reconfigure before use",
@@ -377,15 +410,21 @@ class _DictionarySnapshot:
                     yield current[start:start + _SNAPSHOT_COMPARE_BYTES], original[start:start + _SNAPSHOT_COMPARE_BYTES]
 
         pending = blocks()
-        batch = []
+        batch, selected = [], []
         equal = True
         try:
-            while batch := list(islice(pending, _SNAPSHOT_BATCH_BLOCKS)):
+            while True:
+                batch.extend(islice(pending, _SNAPSHOT_BATCH_BLOCKS - len(batch)))
+                if not batch:
+                    return equal
+                count, _ = self._admit_batch(memory, [left.numel() for left, _ in batch])
+                selected = batch[:count]
+                del batch[:count]
                 # Do not short-circuit later batches after a content mismatch.
-                equal = self._device_equal(batch, memory) and equal
-                batch.clear()
-            return equal
+                equal = self._device_equal(selected, memory) and equal
+                selected.clear()
         finally:
+            selected.clear()
             batch.clear()
             pending.close()
 
@@ -424,7 +463,7 @@ class _DictionarySnapshot:
                     else:
                         equal = torch.equal(block, original[start:stop]) and equal
                     del block
-                    if not equal:
+                    if not equal and not self.device_compare:
                         return False
         return equal
 
