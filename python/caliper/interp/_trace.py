@@ -291,7 +291,7 @@ class _DirectEffects:
             if self.reference:
                 cast_gradient = None
                 try:
-                    for node_slice, position, decoder in self._decoder_blocks[layer]:
+                    for block, (node_slice, position, decoder) in enumerate(self._decoder_blocks[layer]):
                         with autorelease_scope(path.device):
                             self.check("direct decoder block")
                             # The pinned hook gathers one gradient per source, then
@@ -309,6 +309,8 @@ class _DirectEffects:
                                 # gradient stays immutable throughout these blocks.
                                 cast_gradient = gradient.to(decoder.dtype)
                             gathered = cast_gradient[:, positions]
+                            if block + 1 == len(self._decoder_blocks[layer]):
+                                cast_gradient = None
                             products = torch.einsum("bpd,pd->pb", gathered, decoder)
                             weights[node_slice] = products
                             del products, gathered, positions

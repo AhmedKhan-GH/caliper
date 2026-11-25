@@ -138,7 +138,9 @@ def test_cast_reuse_keeps_each_block_reserve_and_releases_each_layer(monkeypatch
         if stage == "direct decoder contraction":
             decoder = blocks[len(sizes)][2]
             count, itemsize = len(decoder), decoder.element_size()
-            assert size == batch * effects.path.tokens * effects.path.width * itemsize + batch * count * (effects.path.width + 1) * itemsize + count * 8
+            cast_bytes = batch * effects.path.tokens * effects.path.width * itemsize
+            block_bytes = batch * count * (effects.path.width + 1) * itemsize + count * 8
+            assert size == cast_bytes + block_bytes
             sizes.append(size)
             live.append(sum(ref() is not None for ref in refs))
         elif stage == "direct decoder bias accounting":
@@ -221,3 +223,112 @@ def test_late_failures_keep_checks_and_cleanup(monkeypatch, stage, reason):
     assert seen[-1] == stage
     effects.release_decoders()
     assert effects._decoder_blocks is None
+
+
+@pytest.mark.parametrize("block", [1, 2])
+@pytest.mark.parametrize("fault", ["process", "host", "history", "supplied"])
+def test_cast_reserves_keep_real_guard_limits(monkeypatch, block, fault):
+    from types import SimpleNamespace
+    from caliper.interp import _frozen
+    from .test_memory_phases import process_guard
+
+    effects = position_case()
+    monkeypatch.setattr(_trace, "_ENCODER_BLOCK_ELEMENTS", 4)
+    effects.prepare_decoders()
+    readings = dict(current=1_000, peak=1_000)
+    supplied = process_guard(1_000_000, readings)
+    supplied.host_reserve_bytes = 8_000_000_000
+    host = SimpleNamespace(available=9_000_000_000)
+    monkeypatch.setattr("psutil.virtual_memory", lambda: host)
+    monkeypatch.setattr(_frozen, "ProcessMemoryGuard", lambda limit, device, **kwargs:
+                        process_guard(int(limit * 1e9), readings))
+    guard = _trace._SuppliedTraceGuard("cpu", memory_limit_gb=40, memory=supplied)
+    effects.path.guard = guard
+    refs, calls = observe_casts(monkeypatch, effects, len(effects.logit_nodes))
+    full, reserve, check = torch.full, guard.reserve, supplied.check
+    allocations, reserves, stages = [], [], []
+    cast_bytes = len(effects.logit_nodes) * effects.path.tokens * effects.path.width * 2
+
+    def positions(*args, **kwargs):
+        allocations.append(args)
+        return full(*args, **kwargs)
+
+    def supplied_check(stage, **kwargs):
+        stages.append(stage)
+        if fault == "supplied" and len(reserves) == block:
+            raise CleanStop("supplied refusal")
+        return check(stage, **kwargs)
+
+    def limited(stage, size):
+        if stage == "direct decoder contraction":
+            reserves.append(size)
+            if len(reserves) == block:
+                # Each bound fits the block scratch but cannot also fit the cast.
+                if fault == "process":
+                    supplied.limit = readings["current"] + size - cast_bytes // 2
+                elif fault == "host":
+                    host.available = supplied.host_reserve_bytes + size - cast_bytes // 2
+                elif fault == "history":
+                    readings["peak"] = supplied.limit + 1
+        return reserve(stage, size)
+
+    monkeypatch.setattr(torch, "full", positions)
+    monkeypatch.setattr(supplied, "check", supplied_check)
+    monkeypatch.setattr(guard, "reserve", limited)
+    with pytest.raises(CleanStop) as failure:
+        effects.backward(effects.logit_nodes)
+    assert failure.value.__traceback__ is not None
+    assert len(allocations) == block - 1
+    assert len(calls) == min(1, block - 1)
+    assert all(ref() is None for ref in refs)
+    assert stages.count("direct decoder contraction") == block
+    assert guard.limit == supplied.limit < 40_000_000_000
+    assert guard.host_reserve_bytes == supplied.host_reserve_bytes
+    if fault == "history":
+        readings["peak"] = 0
+        with pytest.raises(CleanStop, match="memory limit"):
+            guard.check("latched breach")
+
+
+@pytest.mark.parametrize("missing", ["gradient", "blocks"])
+def test_absent_reference_work_allocates_no_cast(monkeypatch, missing):
+    effects = position_case()
+    effects.prepare_decoders()
+    targets = effects.logit_nodes
+    if missing == "gradient":
+        targets = [effects.feature_nodes[0]]
+    else:
+        effects._decoder_blocks = [[] for _ in effects.source_layers]
+    refs, calls = observe_casts(monkeypatch, effects, len(targets))
+    effects.path.reserves.clear()
+    effects.backward(targets)
+    assert calls == refs == []
+    assert not any(stage == "direct decoder contraction" for stage, _ in effects.path.reserves)
+
+
+@pytest.mark.parametrize("single_block", [False, True])
+def test_cast_lifetime_ends_at_last_gather(monkeypatch, single_block):
+    if single_block:
+        from .test_direct_reference_edges import LinearPath, effects_for, SOURCE, DIRECTION
+        path = LinearPath(SOURCE, SOURCE, DIRECTION, feature_value=1.3046875)
+        path.errors = [value.float() for value in path.errors]
+        effects = effects_for(path)
+    else:
+        effects = position_case()
+    effects.prepare_decoders()
+    refs, _ = observe_casts(monkeypatch, effects, len(effects.logit_nodes))
+    final = {id(blocks[-1][2]) for blocks in effects._decoder_blocks if blocks}
+    decoders = {id(decoder) for blocks in effects._decoder_blocks for _, _, decoder in blocks}
+    products, einsum = [], torch.einsum
+
+    def contract(equation, left, right):
+        if id(right) in decoders:
+            live = sum(ref() is not None for ref in refs)
+            assert live == (0 if id(right) in final else 1)
+            products.append(live)
+        return einsum(equation, left, right)
+
+    monkeypatch.setattr(torch, "einsum", contract)
+    effects.backward(effects.logit_nodes)
+    assert len(products) == len(decoders)
+    assert refs and all(ref() is None for ref in refs)
