@@ -11,7 +11,8 @@ import numpy as np
 import torch
 
 from ._context import context_policy, prepare_contexts
-from ._dictionary import _canonical_device, _memory_limit, load_dictionary, model_identity, weights_hash
+from ._dictionary import (_canonical_device, _encoder_matches_dtype, _memory_limit,
+                          load_dictionary, model_identity, weights_hash)
 from ._memory import (BudgetMemory, CleanStop, MemoryGuard, allocation_bytes, family_memory_limit,
                       autorelease_scope as _device_scope)
 from ._points import capture
@@ -58,15 +59,23 @@ def _encoding_policy(manifest, model, dictionary, memory):
     if version == INDEX_VERSION:
         if manifest.get("encoder_policy") != ENCODER_POLICY:
             raise ValueError("unsupported index encoder policy; rebuild the index")
-        if manifest.get("model_encoding") != _model_encoding(model, memory):
+        encoding = _model_encoding(model, memory)
+        if manifest.get("model_encoding") != encoding:
             raise ValueError("index model encoding differs; rebuild the index")
+        dtypes = {row[1] for row in encoding["tensors"] if row[1].startswith("torch.float")
+                  or row[1] == "torch.bfloat16"}
+        if encoding["autocast_dtype"] is not None:
+            dtypes.add(encoding["autocast_dtype"])
+        if (any(hasattr(layer, "threshold") and dtypes != {str(layer.threshold.dtype)}
+                for layer in dictionary.layers)
+                and manifest.get("threshold_policy") != ENCODER_POLICY):
+            raise ValueError("index threshold precision differs; rebuild the index")
         return
     # Version 1 cast captured inputs to encoder storage precision. The two
     # policies agree only when the admitted model and encoder use one dtype.
     dtypes = {value.dtype for value in model.state_dict().values() if value.is_floating_point()}
     if ("encoder_policy" in manifest or "model_encoding" in manifest or len(dtypes) != 1 or
-            any(value.dtype not in dtypes for layer in dictionary.layers
-                for value in (layer.W_enc, layer.b_enc))):
+            any(not _encoder_matches_dtype(layer, next(iter(dtypes))) for layer in dictionary.layers)):
         raise ValueError("legacy index encoder precision differs; rebuild the index")
 
 
@@ -260,7 +269,8 @@ def build_index(dictionary_path, documents, *, model, tokenizer, provenance,
         # Batch boundaries refresh live bytes. Small work units retain interval
         # checks, dynamic lower limits, and the caller's cancellation callback.
         memory.check(stage, force=stage not in (
-            "document", "dictionary batch", "dictionary encoder block", "dictionary encoder block complete"))
+            "document", "dictionary batch", "dictionary encoder block", "dictionary encoder block complete",
+            "dictionary threshold admission", "dictionary threshold block"))
         if memory_guard is not None:
             memory_guard(stage)
 
@@ -314,7 +324,9 @@ def build_index(dictionary_path, documents, *, model, tokenizer, provenance,
                         x = saved.pop(point).to(device=weights.device)
                         if prepared is not None:
                             x = x[prepared.content_mask]
-                        activations = _trace_features(dictionary.layers[layer], x, check=check)
+                        # The model batch just refreshed the process reading.
+                        activations = _trace_features(dictionary.layers[layer], x, guard=memory,
+                                                      check=check, refresh=False)
                         table.update(layer, activations, total + begin)
                         del x, activations
                         check("dictionary batch")
@@ -340,6 +352,8 @@ def build_index(dictionary_path, documents, *, model, tokenizer, provenance,
         "files": {name: {"bytes": (folder / name).stat().st_size,
                          "sha256": _hash_file(folder / name)} for name in _FILES},
     }
+    if any(hasattr(layer, "threshold") for layer in dictionary.layers):
+        manifest["threshold_policy"] = ENCODER_POLICY
     if policy is not None:
         manifest.update(context_policy=policy,
                         example_context_policy=context_policy(model, WINDOW_TOKENS + 1, tokenizer=tokenizer))

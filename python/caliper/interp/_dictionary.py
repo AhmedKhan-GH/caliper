@@ -357,6 +357,15 @@ def verify_hf_model(model, snapshot, *, key_mapping=None, checkpoint_subset=None
     return identity
 
 
+_THRESHOLD_BLOCK_ELEMENTS = 65_536
+
+
+def _encoder_matches_dtype(layer, dtype):
+    """Include activation parameters in the encoder precision contract."""
+    return (layer.W_enc.dtype == dtype and layer.b_enc.dtype == dtype
+            and (not hasattr(layer, "threshold") or layer.threshold.dtype == dtype))
+
+
 class TopKTranscoder(nn.Module):
     """One MLP replacement with feature rows in both weight matrices."""
 
@@ -395,8 +404,22 @@ class JumpReLUTranscoder(TopKTranscoder):
         super().__init__(W_enc, b_enc, W_dec, b_dec, None, trainable=trainable)
         self.register_parameter("threshold", nn.Parameter(threshold, requires_grad=trainable))
 
-    def activate(self, preactivation):
-        return preactivation * (preactivation > self.threshold)
+    def activate(self, preactivation, *, check=None):
+        if self.threshold.dtype == preactivation.dtype:
+            return preactivation * (preactivation > self.threshold)
+        # The runtime caller reserves output and scratch before this allocation.
+        if check is not None:
+            check("dictionary threshold admission")
+        result = torch.empty_like(preactivation)
+        for start in range(0, self.threshold.numel(), _THRESHOLD_BLOCK_ELEMENTS):
+            if check is not None:
+                check("dictionary threshold block")
+            stop = start + _THRESHOLD_BLOCK_ELEMENTS
+            threshold = self.threshold[start:stop].to(preactivation.dtype)
+            values = preactivation[..., start:stop]
+            result[..., start:stop] = values * (values > threshold)
+            del threshold, values
+        return result
 
 
 class Dictionary(nn.Module):

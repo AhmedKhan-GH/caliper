@@ -19,6 +19,7 @@ from caliper.interp._dictionary import fallback_metadata, _canonical_device
 from caliper.interp._memory import BudgetMemory
 from .checkpoint_state import _save_tensors, dictionary_fingerprint, write_json
 from .evaluation_binding import EvaluationBinding
+from .evaluation_protocol import evaluation_features, evaluation_memory, evaluation_reconstruction
 from .memory_limits import CleanStop, MemoryGuard, StopControl, autorelease_scope
 from .model_load import GEMMA_ID, MODEL_ID, hidden_forward, load_text_model
 from .stop_records import clean_stop_record, stop_reason
@@ -29,14 +30,30 @@ _QUALITY_THRESHOLDS = {"fvu": 0.40, "dead_fraction": 0.15, "cross_entropy_delta"
                        "evaluated_tokens": 200_000}
 
 
+class _EvaluationTranscoder(torch.nn.Module):
+    """Retain dictionary storage while the live input selects arithmetic precision."""
+
+    def __init__(self, layer, chunk_tokens, memory, health):
+        super().__init__()
+        self.layer = layer
+        self.chunk_tokens, self.memory, self.health = chunk_tokens, memory, health
+
+    def forward(self, x):
+        return evaluation_reconstruction(self.layer, x, chunk_tokens=self.chunk_tokens,
+                                         memory=self.memory, health=self.health)
+
+
 @contextmanager
-def replace_all_mlps(model, dictionary, *, content_mask=None):
+def replace_all_mlps(model, dictionary, *, content_mask=None, chunk_tokens=64, memory=None, health=None):
     """Replace active MLPs and restore them on exit. Gemma masks preserve unselected writes."""
     if content_mask is not None:
         if getattr(model.config, "model_type", None) != "gemma2":
             raise ValueError("legacy replacement content masks require Gemma")
         if not isinstance(content_mask, torch.Tensor) or content_mask.dtype != torch.bool or content_mask.ndim != 2:
             raise ValueError("invalid replacement content mask")
+    if type(chunk_tokens) is not int or not 1 <= chunk_tokens <= 128:
+        raise ValueError("invalid replacement chunk size")
+    memory = evaluation_memory(model, memory)
     originals = []
     handles, reads = [], {}
     try:
@@ -58,7 +75,8 @@ def replace_all_mlps(model, dictionary, *, content_mask=None):
 
                 def replace(module, args, output, index=i):
                     # The dictionary decoder already writes after the post norm.
-                    value = dictionary.layers[index](reads.pop(index))
+                    value = evaluation_reconstruction(dictionary.layers[index], reads.pop(index),
+                                                        chunk_tokens=chunk_tokens, memory=memory, health=health)
                     if value.shape != output.shape:
                         raise ValueError("Gemma replacement shape differs from the semantic write")
                     value = value.to(dtype=output.dtype, device=output.device)
@@ -76,7 +94,7 @@ def replace_all_mlps(model, dictionary, *, content_mask=None):
             point = dictionary.metadata["read_points"][i]
             block = model.get_submodule(point.rsplit(".", 1)[0])
             originals.append((block, block.mlp))
-            block.mlp = dictionary.layers[i]
+            block.mlp = _EvaluationTranscoder(dictionary.layers[i], chunk_tokens, memory, health)
         yield
     finally:
         for handle in reversed(handles):
@@ -214,14 +232,15 @@ def quality_stats(metadata):
 
 @torch.no_grad()
 def evaluate_batch(model, dictionary, ids, count, *, chunk_tokens=64, health=None, check_binding=None,
-                   prepared=None):
+                   prepared=None, memory=None):
     """Commit no statistics until both complete model forwards succeed."""
+    memory = evaluation_memory(model, memory)
     with autorelease_scope(ids.device):
         return _evaluate_batch(model, dictionary, ids, count, chunk_tokens=chunk_tokens,
-                               health=health, check_binding=check_binding, prepared=prepared)
+                               health=health, check_binding=check_binding, prepared=prepared, memory=memory)
 
 
-def _evaluate_batch(model, dictionary, ids, count, *, chunk_tokens, health, check_binding, prepared):
+def _evaluate_batch(model, dictionary, ids, count, *, chunk_tokens, health, check_binding, prepared, memory):
     metadata = dictionary.metadata
     result = quality_stats(metadata)
     requested = [metadata[field][i] for field in ("read_points", "write_points") for i in result.active_layers]
@@ -252,17 +271,19 @@ def _evaluate_batch(model, dictionary, ids, count, *, chunk_tokens, health, chec
             result.variance_sum[i] = (y - mean).square().sum().cpu().double()
             # Chunk sparse features as well as vocabulary logits.
             for start in range(0, count, chunk_tokens):
-                a = layer.encode(x[start:start + chunk_tokens])
-                residual = y[start:start + chunk_tokens] - layer.decode(a)
+                a, decoded = evaluation_features(layer, x[start:start + chunk_tokens], memory=memory, health=health)
+                residual = y[start:start + chunk_tokens] - decoded
                 result.error_sum[i] += residual.square().sum().cpu().double()
                 result.hits[i] += (a > 0).sum(0).cpu()
+                del a, decoded, residual
             del x, y
             captured.pop(metadata["read_points"][i])
             captured.pop(metadata["write_points"][i])
         captured.close(clear=True)
         if check_binding:
             check_binding()
-        with replace_all_mlps(model, dictionary, content_mask=None if prepared is None else prepared.content_mask):
+        with replace_all_mlps(model, dictionary, content_mask=None if prepared is None else prepared.content_mask,
+                              chunk_tokens=chunk_tokens, memory=memory, health=health):
             replaced = hidden_forward(model, ids, **options)
         # Check only after the original MLP modules are restored.
         if check_binding:
@@ -543,6 +564,7 @@ def evaluate(model, dictionary, stream, folder, *, tokens=200_000, context=None,
         raise ValueError(f"quality source differs from the {label} source")
     if source_metadata["dataset_id"] != "fixture" and source_metadata["partitions"] != partition_metadata():
         raise ValueError("dictionary text partitions differ from this evaluator")
+    memory = evaluation_memory(model, memory)
     folder = Path(folder)
     identity = dictionary_fingerprint(folder, metadata, memory=memory)
     binding = EvaluationBinding(folder, dictionary, identity, model=model, memory=memory)
@@ -607,7 +629,7 @@ def evaluate(model, dictionary, stream, folder, *, tokens=200_000, context=None,
             binding.check()
             batch_options = {} if prepared is None else {"prepared": prepared}
             result = evaluate_batch(model, dictionary, ids, count, chunk_tokens=chunk_tokens,
-                                    health=health, check_binding=binding.check, **batch_options)
+                                    health=health, check_binding=binding.check, memory=memory, **batch_options)
             binding.check()
             stats.merge(result)
             if policy is None:
@@ -661,10 +683,12 @@ def evaluate(model, dictionary, stream, folder, *, tokens=200_000, context=None,
 
 
 @torch.no_grad()
-def evaluate_research_batch(model, dictionary, prepared, source_count, *, chunk_tokens, health, check_binding):
+def evaluate_research_batch(model, dictionary, prepared, source_count, *, chunk_tokens, health, check_binding,
+                            memory=None):
     """Measure one atomic batch with one baseline and serial replacement passes."""
     from .evaluation_protocol import ResearchStats, research_mlps
 
+    memory = evaluation_memory(model, memory)
     result = ResearchStats(quality_stats(dictionary.metadata))
     result.source_tokens = source_count
     result.count = int(prepared.content_mask.sum())
@@ -693,8 +717,8 @@ def evaluate_research_batch(model, dictionary, prepared, source_count, *, chunk_
                     health()
                     with autorelease_scope(ids.device):
                         selected = positions[start:start + chunk_tokens]
-                        features = dictionary.layers[i].encode(x[selected])
-                        decoded = dictionary.layers[i].decode(features)
+                        features, decoded = evaluation_features(dictionary.layers[i], x[selected],
+                                                                 memory=memory, health=health)
                         target = y[selected].cpu().double()
                         reconstructed = decoded.cpu().double()
                         if not all(torch.isfinite(t).all() for t in (features, target, reconstructed)):
@@ -721,7 +745,7 @@ def evaluate_research_batch(model, dictionary, prepared, source_count, *, chunk_
             check_binding()
             with autorelease_scope(ids.device):
                 with research_mlps(model, dictionary, layers, prepared.content_mask,
-                                   chunk_tokens=chunk_tokens, health=health):
+                                   chunk_tokens=chunk_tokens, health=health, memory=memory):
                     replaced = hidden_forward(model, ids, attention_mask=prepared.attention_mask)
                 check_binding()
                 ce, targets = cross_entropy_sum(model, replaced, ids, source_count, chunk_tokens=chunk_tokens,
@@ -883,7 +907,7 @@ def evaluate_research(model, dictionary, stream, folder, *, tokens, context, bat
             count = sum(row[2] for row in segments)
             try:
                 result = evaluate_research_batch(model, dictionary, prepared, count, chunk_tokens=chunk_tokens,
-                                                 health=health, check_binding=binding.check)
+                                                 health=health, check_binding=binding.check, memory=memory)
                 binding.check()
                 result.content_segments = segments
                 stats.merge(result)

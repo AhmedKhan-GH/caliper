@@ -201,7 +201,7 @@ def test_every_mlp_replaced_and_restored_on_exception(tmp_path):
     original = [block.mlp for block in model.layers]
     with pytest.raises(RuntimeError, match="fixture"):
         with evaluation.replace_all_mlps(model, dictionary):
-            assert all(block.mlp is dictionary.layers[i] for i, block in enumerate(model.layers))
+            assert all(block.mlp.layer is dictionary.layers[i] for i, block in enumerate(model.layers))
             raise RuntimeError("fixture")
     assert all(block.mlp is original[i] for i, block in enumerate(model.layers))
 

@@ -11,7 +11,7 @@ import time
 import torch
 from torch.nn import functional as F
 
-from ._dictionary import model_identity
+from ._dictionary import _encoder_matches_dtype, model_identity
 from ._families import model_family
 from . import _qwen_family
 from ._points import _architecture, capture
@@ -65,17 +65,17 @@ def _finite_max(values, name):
     return largest
 
 
-def _trace_features(layer, x, guard=None, check=_no_check):
+def _trace_features(layer, x, guard=None, check=_no_check, *, refresh=True):
     """Encode features in live input precision with bounded weight copies.
 
     Storage precision defines the weight values. Live input precision defines
     encoder arithmetic and activation identity in hooks, traces, and validation.
     """
-    if layer.W_enc.dtype == x.dtype and layer.b_enc.dtype == x.dtype:
+    if _encoder_matches_dtype(layer, x.dtype):
         return layer.encode(x)
     memory = BudgetMemory(guard, guard.limit / 1e9) if guard is not None else None
     if memory is not None:
-        memory.check("dictionary encoder admission")
+        memory.check("dictionary encoder admission", force=refresh)
     latents, width = layer.W_enc.shape
     rows = max(1, _ENCODER_BLOCK_ELEMENTS // width)
     if memory is not None:
@@ -104,6 +104,14 @@ def _trace_features(layer, x, guard=None, check=_no_check):
                 if allocation_bytes(memory, floor=initial + output_bytes) + scratch > memory.limit:
                     raise CleanStop("dictionary encoder allocation exceeds the process memory limit")
             check("dictionary encoder block complete")
+    if hasattr(layer, "threshold") and layer.threshold.dtype != preactivation.dtype:
+        def activation_check(stage):
+            check(stage)
+            if memory is not None:
+                memory.check(stage, force=False)
+                if allocation_bytes(memory, floor=initial + output_bytes) + scratch > memory.limit:
+                    raise CleanStop("dictionary encoder allocation exceeds the process memory limit")
+        return layer.activate(preactivation, check=activation_check)
     if callable(getattr(layer, "activate", None)):
         return layer.activate(preactivation)
     # Compatibility with existing TopK instances before activation metadata.
@@ -111,13 +119,15 @@ def _trace_features(layer, x, guard=None, check=_no_check):
     return torch.zeros_like(preactivation).scatter_(-1, indices, values)
 
 
-def _trace_reconstruction(layer, features):
+def _trace_reconstruction(layer, features, *, check=_no_check):
     """Decode in model precision with bounded copies of decoder rows."""
+    check("dictionary decoder admission")
     if layer.W_dec.dtype == features.dtype and layer.b_dec.dtype == features.dtype:
         return layer.decode(features)
     flat = features.reshape(-1, features.shape[-1])
     indices = _active_columns(flat)
-    result = _decode_selected(layer, indices, flat.gather(-1, indices))
+    result = _decode_selected(layer, indices, flat.gather(-1, indices), check=check)
+    check("dictionary decoder bias")
     return result.reshape(*features.shape[:-1], layer.W_dec.shape[1]) + layer.b_dec.detach().to(features.dtype)
 
 
@@ -141,6 +151,7 @@ def _decode_selected(layer, indices, activations, *, check=_no_check):
             check("selected decoder block")
             rows = layer.W_dec.detach()[indices[:, start:start + step]].to(activations.dtype)
             result += torch.einsum("...tk,tkw->...tw", activations[..., start:start + step], rows)
+            del rows
     return result
 
 

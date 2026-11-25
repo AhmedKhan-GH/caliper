@@ -7,7 +7,9 @@ import math
 import torch
 
 from caliper.interp._context import ContextBatch
-from caliper.interp._memory import allocation_bytes, autorelease_scope
+from caliper.interp import _frozen
+from caliper.interp._dictionary import _canonical_device, _encoder_matches_dtype
+from caliper.interp._memory import BudgetMemory, MemoryGuard, allocation_bytes, autorelease_scope
 from caliper.interp._points import _architecture, _input
 from .memory_limits import CleanStop
 
@@ -136,12 +138,78 @@ def admit_workspace(memory, required):
         raise CleanStop("research evaluation workspace exceeds available memory headroom")
 
 
+def evaluation_memory(model, memory):
+    """Keep the family ceiling and any lower caller limit."""
+    ceiling = 40 if model.config.model_type == "gemma2" else 12
+    device = next(model.parameters()).device
+    memory = MemoryGuard(ceiling, device) if memory is None else BudgetMemory(memory, ceiling)
+    if _canonical_device(memory.device) != _canonical_device(device):
+        raise ValueError("evaluation requires a guard for its device")
+    return memory
+
+
+def evaluation_features(layer, x, *, memory=None, health=None):
+    """Use runtime precision with admission for features and decoder scratch."""
+    memory = (MemoryGuard(12, x.device) if memory is None
+              else BudgetMemory(memory, memory.limit / 1e9))
+    positions = math.prod(x.shape[:-1])
+    latents, width = layer.W_enc.shape
+    size = x.element_size()
+    block = _frozen._ENCODER_BLOCK_ELEMENTS
+    encoder_rows = min(latents, max(1, block // width))
+    decoder_rows = min(latents, max(1, block // max(1, positions * width)))
+    # Cover feature copies, masks, selection indices, gather, sort, and outputs.
+    required = (positions * latents * (6 * size + 40) + positions * width * 6 * size
+                + encoder_rows * (width + 1 + positions) * size
+                + positions * decoder_rows * width * (size + layer.W_dec.element_size())
+                + (latents + width) * size)
+    if health:
+        health()
+    admit_workspace(memory, required)
+    initial = allocation_bytes(memory)
+
+    def check(stage):
+        if health:
+            health()
+        memory.check(stage, force=False)
+        if allocation_bytes(memory, floor=initial) + required > memory.limit:
+            raise CleanStop("evaluation dictionary workspace exceeds the process memory limit")
+
+    check("evaluation dictionary admission")
+    features = _frozen._trace_features(layer, x, memory, check)
+    decoded = _frozen._trace_reconstruction(layer, features, check=check)
+    return features, decoded
+
+
+def evaluation_reconstruction(layer, x, *, chunk_tokens, memory=None, health=None):
+    """Preserve uniform arithmetic and bound mixed precision token chunks."""
+    if type(chunk_tokens) is not int or not 1 <= chunk_tokens <= 128:
+        raise ValueError("invalid replacement chunk size")
+    if (_encoder_matches_dtype(layer, x.dtype)
+            and layer.W_dec.dtype == x.dtype and layer.b_dec.dtype == x.dtype):
+        return evaluation_features(layer, x, memory=memory, health=health)[1]
+    memory = (MemoryGuard(12, x.device) if memory is None
+              else BudgetMemory(memory, memory.limit / 1e9))
+    # A contiguous input copy and the output can coexist.
+    admit_workspace(memory, 2 * x.numel() * x.element_size())
+    flat = x.reshape(-1, x.shape[-1])
+    result = torch.empty_like(flat)
+    for start in range(0, len(flat), chunk_tokens):
+        with autorelease_scope(x.device):
+            features, decoded = evaluation_features(layer, flat[start:start + chunk_tokens],
+                                                     memory=memory, health=health)
+            result[start:start + chunk_tokens] = decoded
+            del features, decoded
+    return result.reshape_as(x)
+
+
 @contextmanager
-def research_mlps(model, dictionary, active_layers, mask, *, chunk_tokens, health=None):
+def research_mlps(model, dictionary, active_layers, mask, *, chunk_tokens, health=None, memory=None):
     """Replace semantic writes in bounded chunks and restore all hooks on exit."""
     if (not isinstance(mask, torch.Tensor) or mask.dtype != torch.bool or mask.ndim != 2
             or type(chunk_tokens) is not int or not 1 <= chunk_tokens <= 128):
         raise ValueError("invalid research replacement mask or chunk size")
+    memory = evaluation_memory(model, memory)
     handles, reads = [], {}
     probes = _architecture(model)
     try:
@@ -159,6 +227,9 @@ def research_mlps(model, dictionary, active_layers, mask, *, chunk_tokens, healt
                 if (output.shape != x.shape or mask.shape != output.shape[:-1]
                         or mask.device != output.device):
                     raise ValueError("research replacement shape differs from context")
+                if health:
+                    health()
+                admit_workspace(memory, 3 * output.numel() * output.element_size() + mask.numel() * 8)
                 value = output.clone()
                 positions = mask.reshape(-1).nonzero().flatten()
                 flat_x, flat_value = x.reshape(-1, x.shape[-1]), value.reshape(-1, value.shape[-1])
@@ -168,8 +239,7 @@ def research_mlps(model, dictionary, active_layers, mask, *, chunk_tokens, healt
                         health()
                     with autorelease_scope(output.device):
                         selected = positions[start:start + chunk_tokens]
-                        features = layer.encode(flat_x[selected])
-                        decoded = layer.decode(features)
+                        features, decoded = evaluation_features(layer, flat_x[selected], memory=memory, health=health)
                         if not torch.isfinite(features).all() or not torch.isfinite(decoded).all():
                             raise ValueError("research replacement contains nonfinite values")
                         flat_value[selected] = decoded.to(dtype=output.dtype, device=output.device)
