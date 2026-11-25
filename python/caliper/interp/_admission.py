@@ -121,7 +121,9 @@ def _load_gemma_model(snapshot, *, device, memory, dtype=torch.float32, referenc
         verify_hf_model(model, snapshot, memory_limit_gb=memory.limit / 1e9)
     verified = _VERIFIED_MODELS[model]
     _admit_model_transfer(memory, estimate, device, staged=True)
-    model.to(device=device, dtype=dtype)
+    # The loader selected parameter precision. Transfer must preserve buffer
+    # precision, including the float32 rotary frequencies of a BF16 model.
+    model.to(device=device)
     memory.check("inference model load")
     # Preserve the proven bytes and settings across transfer. Only the guard
     # changes, because future readbacks must use the destination device guard.

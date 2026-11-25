@@ -167,11 +167,18 @@ def test_loader_opt_in_preserves_complete_verification(tmp_path, monkeypatch, dt
     from caliper.interp import _admission, _dictionary
     from .test_gemma_runtime import mock_gemma_load, memory
     model, snapshot, calls = mock_gemma_load(tmp_path, monkeypatch)
+    buffers = {name: value.clone() for name, value in model.named_buffers()}
     model.to(dtype=dtype)
+    # The actual pretrained loader retains float32 rotary buffers with BF16
+    # parameters. A second dtype conversion would invalidate verified bytes.
+    for name, buffer in model.named_buffers():
+        buffer.data = buffers[name].clone()
     loaded = _admission._load_gemma_model(snapshot, device="cpu", memory=memory(),
                                          dtype=dtype, reference_profile=PROFILE)
     assert loaded is model and calls == ["weights"]
     assert profile_metadata(loaded)["dtype"] == str(dtype).removeprefix("torch.")
+    assert all(value.dtype == buffers[name].dtype and torch.equal(value, buffers[name])
+               for name, value in loaded.named_buffers())
     assert _dictionary.model_identity(loaded) == f"hf:{_admission.GEMMA_ID}@{_admission.GEMMA_REVISION}"
     model.model.layers[0].pre_feedforward_layernorm.weight.data.add_(1)
     with pytest.raises(ValueError, match="weights changed"):
