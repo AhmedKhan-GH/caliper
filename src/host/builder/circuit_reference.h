@@ -79,15 +79,22 @@ public:
         if (label.fit_width) {
             if (!std::isfinite(*label.fit_width) || *label.fit_width < 0)
                 throw std::runtime_error("The label has an invalid fit width.");
-            expected = fit_with_ellipsis(label.original_text, *label.fit_width, width_of);
+            const float full_width = width_of(label.original_text);
+            const float ellipsis_width = width_of(kTextEllipsis);
+            if (full_width > *label.fit_width)
+                expected = ellipsis_width <= *label.fit_width ? kTextEllipsis : "";
             // First the ellipsis alone, then each eligible proper UTF-8 prefix
             // with the ellipsis. A prefix must not end with an ASCII space.
-            Json widths = Json::array({width_of(kTextEllipsis)});
+            Json widths = Json::array({ellipsis_width});
             for (std::size_t i = 1; i < label.original_text.size(); ++i)
                 if ((static_cast<unsigned char>(label.original_text[i]) & 0xC0) != 0x80 &&
-                    label.original_text[i - 1] != ' ')
-                    widths.push_back(width_of(label.original_text.substr(0, i) + kTextEllipsis));
-            fit = {{"width", *label.fit_width}, {"full_width", width_of(label.original_text)},
+                    label.original_text[i - 1] != ' ') {
+                    const auto candidate = label.original_text.substr(0, i) + kTextEllipsis;
+                    const float width = width_of(candidate);
+                    widths.push_back(width);
+                    if (full_width > *label.fit_width && width <= *label.fit_width) expected = candidate;
+                }
+            fit = {{"width", *label.fit_width}, {"full_width", full_width},
                    {"prefix_widths", widths}};
         }
         if (expected.empty() || expected != label.text)

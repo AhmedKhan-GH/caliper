@@ -966,6 +966,48 @@ def test_text_provenance_rejects_incomplete_or_invalid_font_measurements(fault):
     assert not required_text([row], ["é你🙂 suffix"])
 
 
+def test_text_provenance_keeps_colliding_prefixes_and_selected_duplicates_distinct():
+    from _composition import required_text
+    first, second = "[empty token 256]", "[empty token 257]"
+    rows = [dict(fitted_label(original, "[emp…", 20), passed=True) for original in (first, second)]
+    assert required_text(rows, [first, second])
+    assert not required_text(rows[:1], [first, second])
+    assert not required_text(rows, [first, second, second])
+    assert required_text([*rows, rows[1]], [first, second, second])
+
+
+def test_text_provenance_requires_the_measured_longest_fit_with_proportional_widths():
+    from _composition import required_text
+    row = {"text": "Wi…", "original_text": "Wide label", "passed": True,
+           "fit": {"width": 13, "full_width": 36, "prefix_widths": [3, 11, 13, 18, 22, 27, 30, 34, 36]}}
+    assert required_text([row], ["Wide label"])
+    for visible in ("W…", "Wid…", "Wide…", "Wide label"):
+        assert not required_text([dict(row, text=visible)], ["Wide label"])
+
+
+@pytest.mark.parametrize("fault", ["zero_width", "missing_measurement", "extra_measurement", "wrong_width",
+                                    "wrong_full_width", "no_fit", "null_source", "source_bound", "embedded_null"])
+def test_text_provenance_rejects_inconsistent_fit_evidence(fault):
+    from _composition import required_text
+    row = dict(fitted_label("[empty token 256]", "[emp…", 20), passed=True)
+    if fault == "zero_width": row["fit"]["width"] = 0
+    elif fault == "missing_measurement": row["fit"]["prefix_widths"].pop()
+    elif fault == "extra_measurement": row["fit"]["prefix_widths"].append(100)
+    elif fault == "wrong_width": row["fit"]["width"] = 24
+    elif fault == "wrong_full_width": row["fit"]["full_width"] = 16
+    elif fault == "no_fit": row["fit"] = None
+    elif fault == "null_source": row["original_text"] = None
+    elif fault == "source_bound": row["original_text"] = "x" * 1025
+    else: row["original_text"] += "\0"
+    assert not required_text([row], ["[empty token 256]"])
+
+
+def test_text_provenance_legacy_capture_cannot_attest_a_fitted_source():
+    from _composition import required_text
+    assert not required_text([{"text": "[emp…", "passed": True}], ["[empty token 256]"])
+    assert required_text([{"text": "literal…", "passed": True}], ["literal…"])
+
+
 def test_text_oracle_rejects_partial_glyphs_under_the_actual_clip(tmp_path):
     from _checks import capture_checks
     metadata, graph, bars = synthetic_capture(tmp_path)
