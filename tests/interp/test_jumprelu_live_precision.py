@@ -100,7 +100,7 @@ def test_threshold_only_mismatch_obeys_lower_caller_limit(monkeypatch, phase):
 def test_legacy_index_refuses_threshold_only_precision_mismatch():
     layer, _ = boundary_layer(torch.float32, torch.float64, 2**-26, True)
     model = SimpleNamespace(state_dict=lambda: {"weight": torch.ones(1)})
-    dictionary = SimpleNamespace(layers=[layer])
+    dictionary = SimpleNamespace(metadata={}, layers=[layer])
     with pytest.raises(ValueError, match="legacy index encoder precision differs"):
         _index._encoding_policy({"format_version": 1}, model, dictionary, None)
     layer.threshold.data = layer.threshold.float()
@@ -113,7 +113,7 @@ def test_version_two_index_requires_fixed_threshold_policy_only_for_mixed_precis
     encoding = {"autocast_dtype": None, "tensors": [["weight", "torch.float32", "cpu"]]}
     monkeypatch.setattr(_index, "_model_encoding", lambda *a: encoding)
     manifest = {"format_version": 2, "encoder_policy": "live_input_v1", "model_encoding": encoding}
-    dictionary = SimpleNamespace(layers=[layer])
+    dictionary = SimpleNamespace(metadata={}, layers=[layer])
     if mixed:
         with pytest.raises(ValueError, match="threshold precision differs"):
             _index._encoding_policy(manifest, None, dictionary, None)

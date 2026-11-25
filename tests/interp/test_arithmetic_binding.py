@@ -41,7 +41,7 @@ def test_default_evaluation_and_index_hashes_match_legacy(factory, evaluation_ha
     assert encoding["forward_settings_hash"] == evaluation_hash
     assert hashlib.sha256(json.dumps(encoding, sort_keys=True).encode()).hexdigest() == index_hash
     manifest = {"format_version": 2, "encoder_policy": "live_input_v1", "model_encoding": encoding}
-    dictionary = SimpleNamespace(layers=[])
+    dictionary = SimpleNamespace(metadata={}, layers=[])
     saved = deepcopy(manifest)
     _encoding_policy(manifest, model, dictionary, None)
     with arithmetic("bf16"), pytest.raises(ValueError, match="model encoding differs"):
