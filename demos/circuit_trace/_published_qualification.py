@@ -42,7 +42,7 @@ _BUFFERS = {"buffer:model.embed_tokens.embed_scale", "buffer:model.rotary_emb.in
 _BACKENDS = {"", "model", "model.rotary_emb", *(f"model.layers.{i}{suffix}" for i in range(26)
                                                for suffix in ("", ".self_attn", ".mlp"))}
 _OPERATIONS = {
-    *(_MODULE + name + ".forward" for name in (*_ADAPTERS.values(), "ReferenceInput")),
+    *(_MODULE + name + ".forward" for name in (*_ADAPTERS.values(), "ReferenceInput", "ReferenceMLPOutputNorm")),
     _MODULE + "normalized_input", _HF + "rotate_half",
     *(_HF + name + ".forward" for name in
       ("Gemma2ForCausalLM", "Gemma2Model", "Gemma2DecoderLayer", "Gemma2MLP", "Gemma2TextScaledWordEmbedding")),
@@ -136,10 +136,11 @@ def _model_evidence(response, index):
         and len({row[0] for row in backends}) == len(backends) and {row[0] for row in backends} == _BACKENDS,
         "Published index requires the qualified eager attention backend.")
     profile = encoding["reference_profile"]
-    fixed = {"profile": REFERENCE_PROFILE, "dtype": "bfloat16", "version": 1,
+    fixed = {"profile": REFERENCE_PROFILE, "dtype": "bfloat16", "version": 2,
              "reference_revision": REFERENCE_REVISION, "reference_transformer_lens": "3.9.0",
              "normalization": "float32_divide_sqrt_then_cast_then_gain",
              "gain": "source_weight_float32_plus_one_then_cast",
+             "mlp_output": "model_dtype_post_norm_then_float32_before_residual_add",
              "rotary": "cpu_float32_position_divide_frequency_then_trig_then_cast_then_transfer",
              "attention": "matmul_divide_sqrt_scalar_softcap_mask_negative_inf_softmax_score_dtype",
              "encoder_coordinate": "gemma_scope_pre_gain", "capture": "pre_feedforward_layernorm.reference_input",

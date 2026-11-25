@@ -73,6 +73,7 @@ def published_reply():
         "Gemma2RMSNorm": "caliper.interp._gemma_reference.ReferenceRMSNorm.forward",
         "Gemma2RotaryEmbedding": "caliper.interp._gemma_reference.ReferenceRotaryEmbedding.forward"}
     functions = [*operations.values(), "caliper.interp._gemma_reference.ReferenceInput.forward",
+        "caliper.interp._gemma_reference.ReferenceMLPOutputNorm.forward",
         "caliper.interp._gemma_reference.normalized_input", "transformers.models.gemma2.modeling_gemma2.rotate_half",
         "transformers.models.gemma2.modeling_gemma2.Gemma2ForCausalLM.forward",
         "transformers.models.gemma2.modeling_gemma2.Gemma2Model.forward",
@@ -80,10 +81,11 @@ def published_reply():
         "transformers.models.gemma2.modeling_gemma2.Gemma2MLP.forward",
         "transformers.models.gemma2.modeling_gemma2.Gemma2TextScaledWordEmbedding.forward",
         "torch.nn.modules.linear.Linear.forward", "transformers.activations.GELUTanh.forward"]
-    profile = {"profile": "circuit_tracer_82996f14", "version": 1, "dtype": "bfloat16",
+    profile = {"profile": "circuit_tracer_82996f14", "version": 2, "dtype": "bfloat16",
         "reference_revision": "82996f144b3371ae858ea5713590d004c218f0c2", "reference_transformer_lens": "3.9.0",
         "torch_version": "2.12.0", "transformers_version": "5.6.1",
         "normalization": "float32_divide_sqrt_then_cast_then_gain", "gain": "source_weight_float32_plus_one_then_cast",
+        "mlp_output": "model_dtype_post_norm_then_float32_before_residual_add",
         "rotary": "cpu_float32_position_divide_frequency_then_trig_then_cast_then_transfer",
         "attention": "matmul_divide_sqrt_scalar_softcap_mask_negative_inf_softmax_score_dtype",
         "encoder_coordinate": "gemma_scope_pre_gain", "capture": "pre_feedforward_layernorm.reference_input",
@@ -146,6 +148,48 @@ def test_exact_reference_response_requires_no_research_sample():
     assert not result["quality_disclosure"]["authorizes_current_resources"]
     assert "F32" in result["quality_disclosure"]["reason"] and "BF16" in result["quality_disclosure"]["reason"]
     assert response == before
+
+
+@pytest.mark.parametrize("wire", [False, True])
+def test_live_adapter_metadata_satisfies_the_demo_contract(wire):
+    import torch
+    from transformers import Gemma2Config, Gemma2ForCausalLM
+    from caliper.interp._gemma_reference import install_reference_profile, profile_metadata
+    from caliper.interp._qualification import _wire_index
+
+    config = Gemma2Config(vocab_size=37, hidden_size=24, intermediate_size=40,
+                         num_hidden_layers=2, num_attention_heads=4, num_key_value_heads=2,
+                         head_dim=6, max_position_embeddings=32, sliding_window=3,
+                         query_pre_attn_scalar=6, hidden_activation="gelu_pytorch_tanh", use_cache=False)
+    config._attn_implementation = "eager"
+    with torch.random.fork_rng(devices=[]):
+        model = Gemma2ForCausalLM(config).eval().to(dtype=torch.bfloat16)
+    install_reference_profile(model, "circuit_tracer_82996f14")
+    response = published_reply()
+    response["index"]["model_encoding"]["reference_profile"] = profile_metadata(model)
+    seal_index(response)
+    if wire:
+        response.update(_wire_index(response["index"]))
+    before = deepcopy(response)
+    result = qualify(response)
+    assert result["qualified"], result
+    assert response == before
+
+
+@pytest.mark.parametrize("fault", ["legacy_version", "missing_output", "wrong_output", "missing_operation"])
+def test_current_output_coordinate_is_required(fault):
+    response = published_reply()
+    profile = response["index"]["model_encoding"]["reference_profile"]
+    if fault == "legacy_version":
+        profile["version"] = 1
+    elif fault == "missing_output":
+        profile.pop("mlp_output")
+    elif fault == "wrong_output":
+        profile["mlp_output"] = "model_dtype_post_norm"
+    else:
+        profile["operation_sha256"].pop("caliper.interp._gemma_reference.ReferenceMLPOutputNorm.forward")
+    seal_index(response)
+    assert not qualify(response)["qualified"]
 
 
 def test_full_reference_evidence_crosses_the_metadata_boundary():
