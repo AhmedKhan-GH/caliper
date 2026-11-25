@@ -38,7 +38,12 @@ def test_paired_probabilities_use_one_batch_and_preserve_baseline(output_case):
     assert calls == [(torch.Size([2, 3, 512]), True)]
     assert not is_internal_forward()
     selected = result["tokens"]
-    assert int(logits[0, -1].argmax()) in selected
+    top = int(logits[0, -1].argmax())
+    assert top in selected
+    assert result["argmax_token_ids"][0] == top
+    assert result["baseline_top_text"] == tokenizer.decode([top])
+    assert result["baseline_top_probability"] == pytest.approx(
+        float(logits[0, -1].detach().softmax(-1)[top]), rel=1e-12)
     torch.testing.assert_close(_resolve("output.probs")[0], logits[0, -1].softmax(-1)[selected].float())
     torch.testing.assert_close(_resolve("output.probs")[1], expected[0, -1].softmax(-1)[selected].float())
     assert _resolve("output.tokens").dtype == torch.int32
@@ -46,6 +51,31 @@ def test_paired_probabilities_use_one_batch_and_preserve_baseline(output_case):
     assert _resolve("output.label_text").shape == (10, 16)
     assert controls.n == 1
     assert service.specifications()[0]["feature"] == feature
+
+
+def test_baseline_evidence_uses_full_row_argmax_and_exact_decode(output_case, monkeypatch):
+    from caliper.interp import _output
+    model, tokenizer, _, _, output = output_case
+    logits = torch.zeros((2, 1, model.config.vocab_size), dtype=torch.float64)
+    logits[0, 0, 73] = 3.
+    logits[1, 0, :10] = 6.
+    calls = []
+    def forward(*args, **kwargs):
+        calls.append(1)
+        return logits
+    def decode(ids, *, skip_special_tokens, clean_up_tokenization_spaces):
+        assert skip_special_tokens is False and clean_up_tokenization_spaces is False
+        return " Austin" if ids == [73] else "other"
+    monkeypatch.setattr(_output, "forward_logits", forward)
+    monkeypatch.setattr(tokenizer, "decode", decode)
+    monkeypatch.setattr(tokenizer, "convert_ids_to_tokens", lambda token: "vocabulary spelling")
+    result = output.compare("AB")
+    assert calls == [1]
+    assert result["tokens"][0] != 73
+    assert result["argmax_token_ids"] == [73, 0]
+    assert result["baseline_top_text"] == " Austin"
+    assert result["baseline_top_probability"] == float(logits[0, 0].softmax(-1)[73])
+    assert 0 < result["baseline_top_probability"] < .5
 
 
 def test_fork_matches_full_logits_after_overlapping_replacement(output_case):

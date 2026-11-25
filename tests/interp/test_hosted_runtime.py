@@ -208,6 +208,29 @@ def inference_reply(route):
     return frame.result["inference"]
 
 
+def test_baseline_evidence_preserves_comparison_and_completion(hosted_run, monkeypatch):
+    run, route = hosted_run
+    compare = run.output.compare
+    results = []
+    def observed(prompt):
+        result = compare(prompt)
+        results.append(result)
+        return result
+    monkeypatch.setattr(run.output, "compare", observed)
+    run.update_output(force=True)
+    evidence = inference_reply(route)
+    comparison = evidence["comparison"]
+    assert len(results) == 1
+    for key in ("argmax_token_ids", "baseline_top_text", "baseline_top_probability"):
+        assert comparison[key] == results[0][key]
+    for key in ("prompt_hash", "interventions_hash"):
+        assert comparison[key] == evidence[key]
+    assert comparison["completed_step"] == run.controls.n
+    comparison["baseline_top_text"] = "changed response"
+    assert inference_reply(route)["comparison"]["baseline_top_text"] == results[0]["baseline_top_text"]
+    assert len(results) == 1
+
+
 def test_generation_evidence_is_fresh_exact_and_follows_both_text_rows(hosted_run, monkeypatch):
     import hashlib
     from caliper import _wire

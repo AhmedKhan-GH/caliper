@@ -77,7 +77,7 @@ def publication_run(monkeypatch, tmp_path):
                         for name in ("output.probs", "output.tokens")})
         if state.change_prompt:
             run.prompt.set("AD")
-        return {"argmax_token_ids": [0, 0]}
+        return {"argmax_token_ids": [0, 0], "baseline_top_text": "\u0020Austin", "baseline_top_probability": .1}
 
     run.output = SimpleNamespace(compare=compare)
 

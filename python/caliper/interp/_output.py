@@ -109,6 +109,10 @@ class Output:
             scores = probabilities.max(dim=0).values
             ids = torch.argsort(scores, descending=True, stable=True)[:10].clone()
             argmax_ids = probabilities.argmax(dim=-1)
+            baseline_top = int(argmax_ids[0])
+            baseline_top_text = self.tokenizer.decode(
+                [baseline_top], skip_special_tokens=False, clean_up_tokenization_spaces=False)
+            baseline_top_probability = float(probabilities[0, baseline_top])
             # Reserve both row winners before filling the fixed comparison slots.
             winners = set(argmax_ids.tolist())
             for winner in sorted(winners):
@@ -121,7 +125,8 @@ class Output:
             publish("output.tokens", ids.to(torch.int32))
             publish("output.label_text", packed_labels(labels, ids.device))
             return {"tokens": ids.tolist(), "probabilities": values.tolist(), "labels": labels,
-                    "argmax_token_ids": argmax_ids.tolist()}
+                    "argmax_token_ids": argmax_ids.tolist(), "baseline_top_text": baseline_top_text,
+                    "baseline_top_probability": baseline_top_probability}
 
     def generate(self, prompt):
         """Produce exactly 24 greedy tokens for both rows, including EOS tokens."""

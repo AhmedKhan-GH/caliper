@@ -1079,6 +1079,8 @@ class HostedInference:
                 raise ValueError("inference state changed during the output comparison")
             with self._inference_lock:
                 self._comparison = dict(self._input_hashes(key), argmax_token_ids=comparison["argmax_token_ids"],
+                                        baseline_top_text=comparison["baseline_top_text"],
+                                        baseline_top_probability=comparison["baseline_top_probability"],
                                         completed_step=self.controls.n, compute_publish_seconds=seconds)
             self._output_key = deepcopy(key)
             self._output_action_id = action_id
