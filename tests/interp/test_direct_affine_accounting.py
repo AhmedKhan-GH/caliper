@@ -12,12 +12,13 @@ from caliper.interp._trace import _DirectEffects
 class BiasPath:
     """Two scalar writes with a rounded read after each residual sum."""
 
-    def __init__(self, dtype):
+    def __init__(self, dtype, *, gain=1.):
         self.dtype, self.device = dtype, torch.device("cpu")
         self.tokens, self.layers, self.width = 1, 2, 1
         self.embedding = torch.zeros(1, 1, 1, dtype=dtype)
         self.errors = [torch.zeros(1, 1, 1, dtype=torch.float64 if dtype == torch.float64
                                    else torch.float32) for _ in range(self.layers)]
+        self.gain = self.errors[0].new_tensor([gain])
         self.decoder_biases = [self.embedding.new_tensor([[[32.]]]),
                                self.embedding.new_tensor([[[.125]]])]
         self.guard = SimpleNamespace(reserve=lambda *args: None, check=lambda *args: None)
@@ -39,7 +40,7 @@ class BiasPath:
         for write, bias in zip(writes, self.decoder_biases):
             reads.append(x.to(self.dtype))
             x = x + write + decoder * bias
-        return reads, x.to(self.dtype)
+        return reads, (x * self.gain).to(self.dtype)
 
     def logit_target(self, token, **kwargs):
         return self.direction, self.embedding.new_zeros(())
@@ -110,3 +111,33 @@ def test_discrete_edge_rounding_alone_prevents_exact_completeness():
     assert rows[0]["incoming"] == .125
     assert not any(rows[0]["biases"].values())
     assert rows[0]["absolute_residual"] == .125 > .02
+
+
+def test_decoder_contraction_retains_the_recorded_gradient_precision():
+    path = BiasPath(torch.bfloat16, gain=1.00390625)
+    first = torch.tensor([32.], requires_grad=True)
+    second = torch.tensor([.125], requires_grad=True)
+    output = ((first + second) * 1.00390625).to(torch.bfloat16)
+    gradients = torch.autograd.grad(output.sum(), (first, second))
+    assert all(float(gradient) == 1.00390625 for gradient in gradients)
+    actual = fsum(float(g) * float(b) for g, b in zip(gradients, (first.detach(), second.detach())))
+    rounded = fsum(float(g.bfloat16()) * float(b) for g, b in zip(gradients, (first.detach(), second.detach())))
+    assert actual == 32.25048828125 and rounded == 32.125
+    effects = effects_for(path)
+    _, rows = effects.backward(effects.logit_nodes)
+    assert rows[0]["biases"]["decoder"] == actual
+    assert rows[0]["expected"] == float(output.detach()) == 32.25
+    assert rows[0]["absolute_residual"] == .00048828125
+
+
+def test_decoder_correction_preserves_the_other_accounting_channels():
+    path = BiasPath(torch.bfloat16)
+    # Distinct sentinels test the existing channel layout, not another forward oracle.
+    path.bias_final[1:, 0, 0] = path.embedding.new_tensor([.25, .5, 1.])
+    path.logit_target = lambda *args, **kwargs: (path.direction, path.embedding.new_tensor(2.))
+    effects = effects_for(path)
+    _, rows = effects.backward(effects.logit_nodes)
+    assert rows[0]["expected"] == 34. and rows[0]["incoming"] == 0.
+    assert rows[0]["biases"] == {"decoder": 32.125, "normalization": .25, "attention": .5,
+                                 "intervention": 1., "encoder": 0., "unembedding": 2.}
+    assert rows[0]["absolute_residual"] == 1.875
