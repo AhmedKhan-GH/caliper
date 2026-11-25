@@ -22,6 +22,7 @@ from ._memory import (MemoryGuard as ProcessMemoryGuard, BudgetMemory, CleanStop
 # or one row when the residual width exceeds the block limit.
 _ENCODER_BLOCK_ELEMENTS = 1_048_576
 _FINITE_BLOCK_ELEMENTS = 65_536
+_FINITE_BATCH_BLOCKS = 64
 
 
 def _no_check(stage):
@@ -29,21 +30,28 @@ def _no_check(stage):
 
 
 def _require_finite(value, name, check=_no_check):
-    """Check bounded views without a full tensor copy, including strided inputs."""
+    """Check bounded views with one scalar readback per bounded batch."""
     pending = [value.detach()]
     while pending:
-        block = pending.pop()
-        if block.numel() > _FINITE_BLOCK_ELEMENTS:
-            axis = max(range(block.ndim), key=lambda i: block.shape[i])
-            middle = block.shape[axis] // 2
-            pending.append(block.narrow(axis, middle, block.shape[axis] - middle))
-            pending.append(block.narrow(axis, 0, middle))
-            continue
         with autorelease_scope(value.device):
-            check("finite block")
-            if not torch.isfinite(block).all().item():
+            results = []
+            while pending and len(results) < _FINITE_BATCH_BLOCKS:
+                block = pending.pop()
+                if block.numel() > _FINITE_BLOCK_ELEMENTS:
+                    axis = max(range(block.ndim), key=lambda i: block.shape[i])
+                    middle = block.shape[axis] // 2
+                    pending.append(block.narrow(axis, middle, block.shape[axis] - middle))
+                    pending.append(block.narrow(axis, 0, middle))
+                    continue
+                check("finite block")
+                # Each mask covers one bounded view. Only scalar results persist.
+                results.append(torch.isfinite(block).all())
+                check("finite block complete")
+            finite = (results[0] if len(results) == 1 else torch.stack(results).all()).item()
+            del results
+            check("finite batch complete")
+            if not finite:
                 raise ValueError(f"{name} must be finite")
-            check("finite block complete")
 
 
 def _finite_max(values, name):
