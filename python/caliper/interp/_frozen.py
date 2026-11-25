@@ -387,8 +387,11 @@ class FrozenNorm:
         self.scale = scale.detach()
         self.denominator = (work.square().mean(-1, keepdim=True) + module.eps).sqrt().detach()
         self.weight = (1 + module.weight.detach().float()) if qwen else module.weight.detach()
+        self.promote_output = False
         if reference:
-            self.weight = self.weight.to(x.dtype)
+            from ._gemma_reference import ReferenceMLPOutputNorm
+            self.weight = self.weight.to(module.weight.dtype)
+            self.promote_output = type(module) is ReferenceMLPOutputNorm
         self.bias = _bias(module)
         self.qwen = qwen
         self.reference = reference
@@ -399,11 +402,12 @@ class FrozenNorm:
                   ((work * self.scale) * self.weight).to(x.dtype))
         if self.bias is not None:
             result = result + bias * self.bias
-        return result
+        return result.float() if self.promote_output else result
 
     def pure(self, x):
         """Return the original Scope input before gain and encoder conversion."""
-        return (x.float() / self.denominator).to(x.dtype)
+        dtype = self.weight.dtype if self.reference else x.dtype
+        return (x.float() / self.denominator).to(dtype)
 
 
 class FrozenAttentionOutput:
@@ -506,8 +510,11 @@ class FrozenAttention:
         if gate_projection is not None:
             self.gate = _qwen_family.attention_gate(gate_projection, x, self.heads, self.head_dim)
         with torch.no_grad():
-            self.offset = self._apply(torch.zeros_like(x), True).detach()
-            self.intervention_offset = self._apply(torch.zeros_like(x), False, True).detach()
+            # The recorded residual can be float32 while the preceding norm
+            # supplies model-dtype values to the attention projection.
+            zero = torch.zeros_like(x, dtype=self.v_weight.dtype)
+            self.offset = self._apply(zero, True).detach()
+            self.intervention_offset = self._apply(zero, False, True).detach()
 
     def _apply(self, x, biases, intervention=False):
         batch, length, _ = x.shape

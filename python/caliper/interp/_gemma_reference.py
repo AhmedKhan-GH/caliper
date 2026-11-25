@@ -51,6 +51,16 @@ class ReferenceRMSNorm(hf.Gemma2RMSNorm):
         return value * (self.weight.float() + 1).to(self.weight.dtype)
 
 
+class ReferenceMLPOutputNorm(ReferenceRMSNorm):
+    """Preserve the replacement hook's float32 MLP output coordinate."""
+
+    def forward(self, x):
+        # The pinned no-skip hook uses the float32 ln2.hook_normalized
+        # coordinate for skip = input * 0, then skip + (output - skip).
+        # This promotes the output before the residual addition.
+        return super().forward(x).float()
+
+
 class ReferenceRotaryEmbedding(hf.Gemma2RotaryEmbedding):
     def forward(self, x, position_ids):
         # The reference divides positions by frequencies before trigonometry.
@@ -117,7 +127,7 @@ _ADAPTERS = {
 # Retain function objects to reject instance and class overrides at admission.
 _FORWARDS = {cls: cls.forward for cls in (*_ADAPTERS.values(), hf.Gemma2ForCausalLM, hf.Gemma2Model,
     hf.Gemma2DecoderLayer, hf.Gemma2MLP, hf.Gemma2TextScaledWordEmbedding, torch.nn.Linear,
-    ReferenceInput, type(hf.ACT2FN["gelu_pytorch_tanh"]))}
+    ReferenceInput, ReferenceMLPOutputNorm, type(hf.ACT2FN["gelu_pytorch_tanh"]))}
 _NORMALIZED_INPUT = normalized_input
 _ROTATE_HALF = hf.rotate_half
 
@@ -225,7 +235,12 @@ def _check_model(model, *, adapted):
         if any(type(module) is not torch.nn.Linear or module.bias is not None for module in projections):
             raise ValueError("Gemma reference projection state changed")
         norms.extend(getattr(block, name) for name in ("input_layernorm", "post_attention_layernorm",
-                     "pre_feedforward_layernorm", "post_feedforward_layernorm"))
+                     "pre_feedforward_layernorm"))
+        output_norm = block.post_feedforward_layernorm
+        if (type(output_norm) is not (ReferenceMLPOutputNorm if adapted else hf.Gemma2RMSNorm)
+                or output_norm.eps != config.rms_norm_eps
+                or adapted and type(getattr(output_norm, "reference_input", None)) is not ReferenceInput):
+            raise ValueError("Gemma reference MLP output normalization changed")
     if any(type(norm) is not (ReferenceRMSNorm if adapted else hf.Gemma2RMSNorm)
            or norm.eps != config.rms_norm_eps for norm in norms):
         raise ValueError("Gemma reference normalization state changed")
@@ -253,6 +268,8 @@ def install_reference_profile(model, profile):
             module.__class__ = replacement
             if replacement is ReferenceRMSNorm:
                 module.reference_input = ReferenceInput().eval()
+    for block in model.model.layers:
+        block.post_feedforward_layernorm.__class__ = ReferenceMLPOutputNorm
     setattr(model, _PROFILE_FIELD, profile)
     setattr(model, _DTYPE_FIELD, str(dtype))
     setattr(model, _CONFIG_FIELD, _config_signature(model.config))
@@ -264,18 +281,19 @@ def profile_metadata(model):
     """Bind the installed operations, gain preparation, and arithmetic dtype."""
     profile = getattr(model, _PROFILE_FIELD, None)
     if profile is None:
-        if any(type(module) in _ADAPTERS.values() for module in model.modules()):
+        if any(type(module) in (*_ADAPTERS.values(), ReferenceMLPOutputNorm) for module in model.modules()):
             raise ValueError("Gemma reference adapter profile is missing")
         return None
     validate_profile(profile)
     dtype = _check_model(model, adapted=True)
     return {
-        "profile": profile, "dtype": str(dtype).removeprefix("torch."), "version": 1,
+        "profile": profile, "dtype": str(dtype).removeprefix("torch."), "version": 2,
         "reference_revision": "82996f144b3371ae858ea5713590d004c218f0c2",
         "reference_transformer_lens": "3.9.0",
         "torch_version": str(torch.__version__), "transformers_version": transformers_version,
         "normalization": "float32_divide_sqrt_then_cast_then_gain",
         "gain": "source_weight_float32_plus_one_then_cast",
+        "mlp_output": "model_dtype_post_norm_then_float32_before_residual_add",
         "rotary": "cpu_float32_position_divide_frequency_then_trig_then_cast_then_transfer",
         "attention": "matmul_divide_sqrt_scalar_softcap_mask_negative_inf_softmax_score_dtype",
         "encoder_coordinate": "gemma_scope_pre_gain",
