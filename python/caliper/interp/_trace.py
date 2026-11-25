@@ -949,7 +949,7 @@ class Tracer:
             tolerance = 1e-9 if path.dtype == torch.float64 else 2e-2
             if completeness["max_absolute_residual"] > tolerance:
                 raise ValueError(f"direct-effect completeness residual exceeds {tolerance}")
-            display_nodes = label_graph_nodes(display_nodes, label_index, check=check)
+            display_nodes = label_graph_nodes(display_nodes, label_index, profile=profile, check=check)
             settings = dict(settings, dtype=str(path.dtype), physical_batches=batch_sizes,
                             logical_queues=logical_queues,
                             source_projection="selected_features_without_bos_features_or_errors" if reference else "all_sources")

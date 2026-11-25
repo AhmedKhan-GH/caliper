@@ -12,10 +12,11 @@ import torch
 from caliper.interp import load_dictionary
 from caliper.interp import _index
 from caliper.interp._feature_labels import label_graph_nodes
-from caliper.interp._graph import Graph, TOKEN_CAP
+from caliper.interp._graph import Graph, NODE_CAP, REFERENCE_NODE_CAP, TOKEN_CAP
 from caliper.interp._index import FeatureIndex, LABEL_FEATURES, build_index
 from caliper.interp._labels import bounded_label
 from caliper.interp._memory import CleanStop, MemoryGuard
+from caliper.interp._reference_graph import PROFILE
 from .fixture import TinyLM, TinyTokenizer
 from .test_dictionary import write_fixture
 from .test_token_labels import unpack_label
@@ -262,7 +263,7 @@ def test_graph_label_decoration_is_atomic_and_bounded():
     index = SimpleNamespace(labels=labels)
     with pytest.raises(CleanStop, match="graph cancellation"):
         label_graph_nodes(nodes, index)
-    assert calls == [[(0, 0), (0, 0)]]
+    assert calls == [[(0, 0)]]
     assert nodes == original
     with pytest.raises(ValueError, match="label nodes"):
         label_graph_nodes([nodes[1]] * 513, index)
@@ -275,3 +276,74 @@ def test_indexless_graph_keeps_explicit_feature_ids():
     labeled = label_graph_nodes(nodes)
     assert labeled[1]["label"] == labeled[2]["label"] == "L0 F0"
     assert nodes[1]["label"] is None
+
+
+@pytest.mark.parametrize("profile,capacity", [("caliper", NODE_CAP), (PROFILE, REFERENCE_NODE_CAP)])
+def test_graph_label_profile_boundaries(profile, capacity):
+    node = display_nodes()[1]
+    labeled = label_graph_nodes([node] * capacity, profile=profile)
+    assert len(labeled) == capacity
+    assert all(record["label"] == "L0 F0" and record is not node for record in labeled)
+    with pytest.raises(ValueError, match="label nodes"):
+        label_graph_nodes([node] * (capacity + 1), SimpleNamespace(labels=refuse), profile=profile)
+    with pytest.raises(ValueError, match="profile"):
+        label_graph_nodes([], profile="unknown")
+
+
+def test_reference_labels_keep_unique_order_and_all_batches(label_index, monkeypatch):
+    index = label_index
+    keys = [(layer, feature) for layer in range(2) for feature in reversed(range(300))]
+    requests = [*keys[:510], keys[0], *keys[510:], keys[1]]
+    nodes = [dict(display_nodes()[1], id=f"feature:{i}", layer=layer, feature=feature)
+             for i, (layer, feature) in enumerate(requests)]
+    original = deepcopy(nodes)
+    batches, expected, stages = [], {}, []
+    labels = index.labels
+
+    # Keep one callback object to check that each batch receives the same deadline.
+    check = stages.append
+
+    def record_batch(features, **kwargs):
+        assert kwargs["check"] is check
+        batches.append(list(features))
+        result = labels(features, **kwargs)
+        expected.update(result)
+        return result
+
+    monkeypatch.setattr(index, "labels", record_batch)
+    labeled = label_graph_nodes(nodes, index, profile=PROFILE, check=check)
+    assert batches == [keys[:LABEL_FEATURES], keys[LABEL_FEATURES:]]
+    assert [node["label"] for node in labeled] == [expected[key] for key in requests]
+    assert len(index._summaries) == LABEL_FEATURES and keys[0] not in index._summaries
+    assert nodes == original
+    assert all(before is not after for before, after in zip(nodes, labeled))
+    assert [{k: v for k, v in n.items() if k != "label"} for n in labeled] == [
+        {k: v for k, v in n.items() if k != "label"} for n in original]
+    assert stages.count("graph label batch admission") == stages.count("graph label batch complete") == 2
+    assert stages[-1] == "graph labels complete"
+    with pytest.raises(ValueError, match="at most 512 requests"):
+        labels(keys[:LABEL_FEATURES + 1])
+
+
+@pytest.mark.parametrize("failure", ["index", "admission", "complete"])
+def test_later_label_batch_failure_keeps_input_unchanged(failure):
+    nodes = [dict(display_nodes()[1], feature=i) for i in range(LABEL_FEATURES + 1)]
+    original = deepcopy(nodes)
+    batches, stages = [], Counter()
+
+    def check(stage):
+        stages[stage] += 1
+        if stage == "graph label batch " + failure and stages[stage] == 2:
+            raise CleanStop("later batch cancellation")
+
+    def labels(features, **kwargs):
+        batches.append(list(features))
+        if failure == "index" and len(batches) == 2:
+            raise CleanStop("later batch cancellation")
+        return {key: f"L{key[0]} F{key[1]}" for key in features}
+
+    with pytest.raises(CleanStop, match="later batch cancellation"):
+        label_graph_nodes(nodes, SimpleNamespace(labels=labels), profile=PROFILE, check=check)
+    assert len(batches) == (1 if failure == "admission" else 2)
+    assert nodes == original
+    assert stages["graph labels complete"] == 0
