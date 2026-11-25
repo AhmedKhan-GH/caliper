@@ -11,11 +11,19 @@ from tests.interp.test_replication_coordinates import original_case, oracle
 from tests.interp.test_replication_groups import replicated_hosted
 
 
-def test_complete_hosted_status_fits_protocol_for_every_published_case(replicated_hosted):
+@pytest.mark.parametrize("trace_first", [False, True])
+def test_complete_hosted_status_fits_protocol_for_every_published_case(replicated_hosted, trace_first):
     from caliper import _interpret_protocol as protocol, _wire
     from tests.interp.test_service import call
 
     run, route = replicated_hosted
+    if trace_first:
+        queued = call(route, "trace.run", {"prompt": run.prompt.value, "max_targets": 4,
+                                           "max_nodes": 64, "max_edges": 128}, request_id=90)
+        assert queued["status"] == "queued"
+        run.boundary()
+        replies = [reply for reply in route.transport.replies if reply.request_id == 90]
+        assert len(replies) == 1 and replies[0].status == "ok"
     for sequence, cell in enumerate(actions.CASES, 1):
         action = f"published_dallas_v1.cell{cell}"
         queued = route.on_control(None, _wire.Control(sequence, "run", name=action).to_meta())
@@ -25,6 +33,7 @@ def test_complete_hosted_status_fits_protocol_for_every_published_case(replicate
         assert len(replies) == 1 and replies[0].status == "ok"
         status, result = run.service.submit({"version": 1, "method": "trace.status", "params": {}}, None)
         assert status == "ok"
+        assert result["state"] == ("done" if trace_first else "idle")
         assert protocol.MAX_DEPTH == 8 and protocol.bounded(result), cell
         reply = call(route, "trace.status", request_id=100 + sequence)
         assert reply["status"] == "ok" and protocol.bounded(reply["result"])

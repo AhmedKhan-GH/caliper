@@ -21,8 +21,12 @@ def replace_native(root, descriptor, tensors):
     with target.open("wb") as stream:
         torch.save(tensors, stream)
     descriptor.update(published.descriptor(root, target))
-    descriptor["tensors"] = {name: {"dtype": str(value.dtype), "shape": list(value.shape)}
-                             for name, value in tensors.items()}
+    if "tensor" in descriptor:
+        name, = tensors
+        descriptor.update(tensor=name, dtype=str(tensors[name].dtype), shape=list(tensors[name].shape))
+    else:
+        descriptor["tensors"] = {name: {"dtype": str(value.dtype), "shape": list(value.shape)}
+                                 for name, value in tensors.items()}
 
 
 @pytest.mark.parametrize("fault", ["omitted", "tampered", "dtype", "shape", "values", "declaration"])
@@ -51,36 +55,77 @@ def test_native_arrays_bind_actual_bytes(evidence_factory, fault):
         published.validate_case(root, status, 14, previous_sequence=0)
 
 
-@pytest.mark.parametrize("fault", ["omitted", "node", "native_omitted", "tampered", "nonzero", "nan", "dtype", "shape"])
-def test_cell29_requires_actual_zero_observation(evidence_factory, fault):
+@pytest.mark.parametrize("fault,message", [
+    ("omitted", "observation identity differs"),
+    ("node_layer", "observation identity differs"),
+    ("node_feature", "observation identity differs"),
+    ("node_position", "observation identity differs"),
+    ("native_omitted", "Native observation declaration differs"),
+    ("tampered", "Private evidence hash differs"),
+    ("hash", "Private evidence hash differs"),
+    ("absolute", "Private evidence requires a relative path"),
+    ("tensor", "Native observation declaration differs"),
+    ("nested", "Native observation declaration differs"),
+    ("declared_dtype", "Native tensor declarations differ"),
+    ("declared_shape", "Native tensor declarations differ"),
+    ("nonzero", "activation is not zero"),
+    ("nan", "Native tensor contains nonfinite values"),
+    ("dtype", "Native archive member exceeds its evidence limit"),
+    ("dtype16", "Unsupported native tensor metadata global"),
+    ("shape", "Native tensor shape or storage differs"),
+    ("actual_name", "Native tensor coverage differs"),
+])
+def test_cell29_requires_actual_zero_observation(evidence_factory, fault, message):
     root, _, make = evidence_factory
     status = make(29)
+    published.validate_case(root, status, 29, previous_sequence=0)
     record = status["inference"]["replication"]["result"]
     observation = record["observations"]["Say Victoria"]
     native = observation["native_evidence"]
     if fault == "omitted":
         record.pop("observations")
-    elif fault == "node":
-        observation["node"]["feature"] += 1
+    elif fault.startswith("node_"):
+        observation["node"][fault.removeprefix("node_")] += 1
     elif fault == "native_omitted":
         observation.pop("native_evidence")
     elif fault == "tampered":
         (root / native["file"]).write_bytes(b"changed")
+    elif fault == "hash":
+        native["sha256"] = "0" * 64
+    elif fault == "absolute":
+        native["file"] = str(root / native["file"])
+    elif fault == "tensor":
+        native["tensor"] = "other"
+    elif fault == "nested":
+        native["tensors"] = {native.pop("tensor"): {"dtype": native.pop("dtype"), "shape": native.pop("shape")}}
+    elif fault == "declared_dtype":
+        native["dtype"] = "torch.float32"
+    elif fault == "declared_shape":
+        native["shape"] = [1, 1]
     else:
         activation = torch.tensor([1. if fault == "nonzero" else float("nan") if fault == "nan" else 0.],
-                                  dtype=torch.float32 if fault == "dtype" else torch.bfloat16)
+                                  dtype=torch.float32 if fault == "dtype" else
+                                  torch.float16 if fault == "dtype16" else torch.bfloat16)
         if fault == "shape":
             activation = activation.reshape(1, 1)
-        replace_native(root, native, {"activation": activation})
+        replace_native(root, native, {"other" if fault == "actual_name" else "activation": activation})
+        # Keep valid declarations to exercise actual archive metadata validation.
+        native.update(tensor="activation", dtype="torch.bfloat16", shape=[1])
     sync_metadata(root, record)
-    with pytest.raises(Failure):
+    with pytest.raises(Failure, match=message):
         published.validate_case(root, status, 29, previous_sequence=0)
 
 
-@pytest.mark.parametrize("fault", ["pickle_global", "large_member", "large_file", "duplicate"])
-def test_observation_reader_refuses_unqualified_archives(evidence_factory, fault):
+@pytest.mark.parametrize("fault,message", [
+    ("pickle_global", "Unsupported native tensor metadata global"),
+    ("large_member", "Native archive member exceeds its evidence limit"),
+    ("large_file", "Native archive exceeds its evidence limit"),
+    ("duplicate", "Duplicate native archive entries"),
+])
+def test_observation_reader_refuses_unqualified_archives(evidence_factory, fault, message):
     root, _, make = evidence_factory
     status = make(29)
+    published.validate_case(root, status, 29, previous_sequence=0)
     record = status["inference"]["replication"]["result"]
     native = record["observations"]["Say Victoria"]["native_evidence"]
     target = root / native["file"]
@@ -90,7 +135,7 @@ def test_observation_reader_refuses_unqualified_archives(evidence_factory, fault
     if fault == "pickle_global":
         entries[metadata] = pickle.dumps(len, protocol=2)
     elif fault == "large_member":
-        entries[metadata] = b"0" * (128 * 1024)
+        entries[metadata] = b"0" * (16384 + 1)
     with zipfile.ZipFile(target, "w", compression=zipfile.ZIP_STORED) as archive:
         for name, value in entries.items():
             archive.writestr(name, value)
@@ -102,7 +147,7 @@ def test_observation_reader_refuses_unqualified_archives(evidence_factory, fault
             stream.truncate(32 * 1024 * 1024 + 1)
     native.update(published.descriptor(root, target))
     sync_metadata(root, record)
-    with pytest.raises(Failure):
+    with pytest.raises(Failure, match=message):
         published.validate_case(root, status, 29, previous_sequence=0)
 
 

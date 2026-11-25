@@ -54,7 +54,7 @@ def evidence_factory(tmp_path):
 
     def make(cell=14, sequence=1):
         import torch
-        from caliper.interp._replication_native import write_native
+        from caliper.interp._replication_native import write_native, write_native_tensor
         probabilities = np.array([[.5, .25, .125, .0625, .0625]] * 2, dtype=np.float32)
         if cell != 10:
             probabilities[1] = probabilities[1, [1, 0, 2, 3, 4]]
@@ -85,8 +85,8 @@ def evidence_factory(tmp_path):
         if cell == 29:
             record["observations"] = {"Say Victoria": {
                 "node": deepcopy(published.SOURCE["groups"]["Say Victoria"][0]),
-                "native_evidence": write_native(
-                    archive.with_name(archive.stem + "-observation.pt"), {"activation": torch.zeros(1, dtype=torch.bfloat16)},
+                "native_evidence": write_native_tensor(
+                    archive.with_name(archive.stem + "-observation.pt"), "activation", torch.zeros(1, dtype=torch.bfloat16),
                     root=tmp_path, created=[], reserve=lambda amount: None)}}
         metadata = tmp_path / f"cell{cell}-{sequence}.json"
         write_json(metadata, record)
@@ -129,13 +129,21 @@ def test_preparation_refuses_invalid_content_identity(evidence_factory, key, inv
 
 @pytest.mark.parametrize("cell", list(published.CASES))
 def test_private_case_identity_and_manifest_members(evidence_factory, cell):
+    from caliper import _interpret_protocol as protocol
     root, prepared, make = evidence_factory
     status = make(cell)
+    assert protocol.MAX_DEPTH == 8 and protocol.bounded(status)
     record = published.validate_case(root, status, cell, previous_sequence=0, preparation_id=prepared["id"])
     assert record["result"]["cell"] == cell
     assert "probabilities" not in record["result"]
     assert record["result"]["native_evidence"]["tensors"]["probabilities"] == {
         "dtype": "torch.bfloat16", "shape": [2, 5]}
+    if cell == 29:
+        observation = record["result"]["observations"]["Say Victoria"]
+        native = observation["native_evidence"]
+        assert set(native) == {"file", "sha256", "tensor", "dtype", "shape"}
+        assert (native["tensor"], native["dtype"], native["shape"]) == ("activation", "torch.bfloat16", [1])
+        np.testing.assert_array_equal(published.native_array(root, native, "activation", [1]), [0.])
 
 
 @pytest.mark.parametrize("fault", ["sequence", "attempt", "active", "preparation", "prompt", "publication", "publication_hash",

@@ -176,6 +176,15 @@ def native_arrays(root, record, shapes):
         raise Failure(f"Invalid native evidence: {error}") from error
 
 
+def native_array(root, record, name, shape):
+    """Validate a flat observation descriptor with the native BF16 reader."""
+    require(isinstance(record, dict) and set(record) == {"file", "sha256", "tensor", "dtype", "shape"}
+            and record.get("tensor") == name, "Native observation declaration differs.")
+    return native_arrays(root, {"file": record["file"], "sha256": record["sha256"],
+                               "tensors": {name: {"dtype": record["dtype"], "shape": record["shape"]}}},
+                         {name: shape})[name]
+
+
 def replication_state(status):
     state = inference_state(status, PROMPT)
     replication = state.get("replication")
@@ -271,8 +280,8 @@ def validate_case(root, status, cell, *, previous_sequence, preparation_id=None)
             observation = record.get("observations", {}).get("Say Victoria", {})
             require(observation.get("node") == SOURCE["groups"]["Say Victoria"][0],
                     "The Say Victoria observation identity differs.")
-            observed = native_arrays(root, observation.get("native_evidence"), {"activation": [1]})
-            require(observed["activation"][0] == 0, "The Say Victoria activation is not zero.")
+            observed = native_array(root, observation.get("native_evidence"), "activation", [1])
+            require(observed[0] == 0, "The Say Victoria activation is not zero.")
         require(((probabilities >= 0) & (probabilities <= 1)).all()
                 and np.allclose(probabilities.sum(axis=1), 1, atol=.01, rtol=0), "Private probabilities are invalid.")
         require(record["argmax_token_ids"] == probabilities.argmax(axis=1).tolist(), "Private argmax identity differs.")
