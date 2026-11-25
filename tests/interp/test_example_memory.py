@@ -16,6 +16,7 @@ from .test_memory_phases import process_guard
 def test_gemma_example_admission_counts_live_snapshot_and_keeps_reserve():
     tensor = torch.empty(0)
     case = SimpleNamespace(
+        context_policy={"prefix_ids": [2]},
         model=SimpleNamespace(parameters=lambda: iter([tensor]), config=SimpleNamespace(
             model_type="gemma2", num_attention_heads=8, head_dim=256,
             intermediate_size=9216, vocab_size=256000)),
@@ -32,6 +33,16 @@ def test_gemma_example_admission_counts_live_snapshot_and_keeps_reserve():
     assert readings["current"] + case._example_bytes(count) <= case.memory.limit
     assert readings["current"] + case._example_bytes(count + 1) > case.memory.limit
     assert case._example_bytes(1) > 512_000_000
+    prefixed_bytes = case._example_bytes(1)
+    case.context_policy = None
+    unprefixed_bytes = case._example_bytes(1)
+    case.context_policy = {"prefix_ids": [2]}
+    assert prefixed_bytes > unprefixed_bytes
+    readings["current"] = case.memory.limit - unprefixed_bytes
+    with pytest.raises(CleanStop, match="example allocation"):
+        _index.FeatureIndex._admit_examples(case, 1)
+    readings["current"] = case.memory.limit - prefixed_bytes
+    assert _index.FeatureIndex._admit_examples(case, 1) == 1
     readings["current"] = case.memory.limit - case._example_bytes(1) + 1
     with pytest.raises(CleanStop, match="example allocation"):
         _index.FeatureIndex._admit_examples(case, 16)
