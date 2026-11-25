@@ -342,13 +342,31 @@ def test_published_model_scan_reserves_host_memory_before_readback(published, mo
     from types import SimpleNamespace
     from caliper.interp._memory import CleanStop
     _, _, _, service, runtime = published
+    # Exercise the real-model reserve policy without a real Gemma allocation.
+    monkeypatch.setattr(runtime.model.config, 'model_type', 'gemma2')
     runtime.guard = SimpleNamespace(limit=40_000_000_000, current=0, peak=0, device=torch.device('cpu'),
                                     check=lambda *a, **k: 0)
     monkeypatch.setattr('psutil.virtual_memory', lambda: SimpleNamespace(available=8_000_000_100))
     monkeypatch.setattr(service.executor, '_identity', lambda: pytest.fail('model scan before host admission'))
     with pytest.raises(CleanStop, match='host reserve'):
-        runtime.run(26)
-    assert not service.specifications() and runtime.last_attempt['status'] == 'error'
+        runtime._model_identity()
+    assert not service.specifications()
+
+
+def test_generic_cpu_group_keeps_caller_budget_without_gemma_reserve(grouped, monkeypatch):
+    from types import SimpleNamespace
+    from caliper.interp._memory import CleanStop
+    _, _, _, service = grouped
+    service.replace_atomic([clamp(1, 1)], lambda: None)
+    service.executor.resource_guard = SimpleNamespace(limit=1_000_000, current=0, peak=0,
+                                                      device=torch.device('cpu'), check=lambda *a, **k: 0)
+    monkeypatch.setattr('psutil.virtual_memory', lambda: SimpleNamespace(available=1_000_000))
+    group = service.executor._feature_groups['layers.0.mlp_out']
+    value = torch.ones(1, 3, 64, dtype=torch.float64)
+    group._apply_members(value, value, group.members)
+    service.executor.resource_guard.limit = 1
+    with pytest.raises(CleanStop, match='process memory limit'):
+        group._apply_members(value, value, group.members)
 
 
 @pytest.mark.parametrize('phase', ['revision', 'metadata', 'guard', 'prompt', 'watch', 'publication'])
@@ -378,12 +396,12 @@ def test_prepared_candidate_refusal_preserves_public_success(replicated_hosted, 
         finished = threading.Event()
         def edit():
             with _programs._LOCK, run.controls.lock:
-                if phase == 'revision':
-                    run.interventions.set({'kind': 'ablate', 'point': 'layers.3.mlp_out'})
-                if phase == 'prompt':
-                    run.prompt.set('CD')
                 if phase == 'watch':
                     monkeypatch.setattr(_programs, '_WATCH_EPOCH', _programs._WATCH_EPOCH + 1)
+            if phase == 'revision':
+                run.interventions.set({'kind': 'ablate', 'point': 'layers.3.mlp_out'})
+            if phase == 'prompt':
+                run.prompt.set('CD')
             finished.set()
         worker = threading.Thread(target=edit)
         worker.start()

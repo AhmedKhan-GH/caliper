@@ -1,7 +1,7 @@
 """Published Dallas cases from the pinned executable tutorial."""
 from __future__ import annotations
 
-from contextlib import contextmanager, ExitStack
+from contextlib import contextmanager, ExitStack, nullcontext
 from copy import deepcopy
 import hashlib
 import json
@@ -13,8 +13,9 @@ import uuid
 import torch
 
 from ._frozen import _trace_features
-from ._intervene import (InterventionError, _DeviceSnapshotMemory, _DictionarySnapshot,
-                         _ACTIVE_REPLAYS, _hook_muted)
+from ._intervene import (InterventionError, _DictionarySnapshot, _group_memory,
+                         _ACTIVE_REPLAYS, _hook_muted, _uses_reference_inputs,
+                         _reference_input_scope, _reference_features)
 from ._memory import autorelease_scope
 from ._output import bounded_text, forward_logits, prompt_inputs
 from ._points import _architecture, capture
@@ -141,7 +142,7 @@ class PublishedCases:
 
     def _reserve(self, amount):
         if self.guard is not None:
-            _DictionarySnapshot._admit(_DeviceSnapshotMemory(self.guard), amount, force=True)
+            _DictionarySnapshot._admit(_group_memory(self.model, self.guard), amount, force=True)
 
     def _model_identity(self):
         from ._dictionary import _HASH_CHUNK_BYTES
@@ -170,6 +171,7 @@ class PublishedCases:
         probes = _architecture(self.model)
         patterns = [name for name, probe in probes.items() if probe.event == 'pattern']
         reads = executor.dictionary.metadata['read_points']
+        original = _uses_reference_inputs(executor.dictionary)
         dtype = next(self.model.parameters()).dtype
         if not executor._default_dictionary_id:
             raise ValueError('published preparation requires an exact dictionary content identity')
@@ -177,6 +179,8 @@ class PublishedCases:
             raise ValueError('published Dallas requires the bfloat16 model and dictionary')
         if self.model.config.model_type == 'gemma2' and self.guard is None:
             raise ValueError('published Gemma requires a bounded memory guard')
+        if self.model.config.model_type == 'gemma2' and not original:
+            raise ValueError('published Gemma requires qualified original encoder coordinates')
         if any(layer.W_enc.dtype != dtype or layer.W_dec.dtype != dtype for layer in executor.dictionary.layers):
             raise ValueError('published dictionary precision differs from the model')
         with service._ctl.lock, service._operation('preparation'):
@@ -199,18 +203,24 @@ class PublishedCases:
                         # Capture buffers, encoder work, attention replay, and full output evidence.
                         self._reserve(length * width * len(reads) * 16 + length * largest * 32
                                       + len(reads) * length * length * 256 + self.model.config.vocab_size * 64)
-                        with capture(self.model, [*reads, *patterns] if source == 'dallas' else reads) as captured:
+                        points = (patterns if source == 'dallas' else []) if original else (
+                            [*reads, *patterns] if source == 'dallas' else reads)
+                        with capture(self.model, points) as captured, (
+                            _reference_input_scope(self.model) if original else nullcontext(captured)
+                        ) as encoder_inputs:
                             logits = forward_logits(self.model, inputs, guard=self.guard)[0, -1]
-                        values[source] = {}
-                        for layer in sorted({node[0] for node in nodes}):
-                            features = _trace_features(executor.dictionary.layers[layer], captured[reads[layer]], self.guard)
-                            for node in nodes:
-                                if node[0] == layer:
-                                    value = features[0, node[2], node[1]]
-                                    if not torch.isfinite(value).item():
-                                        raise ValueError('published source activation is nonfinite')
-                                    values[source][node] = float(value)
-                            del features
+                            values[source] = {}
+                            for layer in sorted({node[0] for node in nodes}):
+                                weights, coordinate = executor.dictionary.layers[layer], encoder_inputs[reads[layer]]
+                                features = (_reference_features(weights, coordinate) if original else
+                                            _trace_features(weights, coordinate, self.guard))
+                                for node in nodes:
+                                    if node[0] == layer:
+                                        value = features[0, node[2], node[1]]
+                                        if not torch.isfinite(value).item():
+                                            raise ValueError('published source activation is nonfinite')
+                                        values[source][node] = float(value)
+                                del features, coordinate, value
                         if source == 'dallas':
                             baseline = logits.detach().clone()
                             saved_patterns = {name: captured[name].detach().clone() for name in patterns}
@@ -221,6 +231,7 @@ class PublishedCases:
         binding = {'protocol': PROTOCOL, 'source_revision': SOURCE_REVISION, 'producer': 'caliper',
                    'model_content_hash': identity[4], 'model_settings': dict(identity[5]),
                    'dictionary_identity': executor.dictionary_id, 'dtype': str(dtype),
+                   'reference_input': deepcopy(executor.dictionary.metadata.get('reference_input')),
                    'prompts': {source: {'text': prompt, 'sha256': hashlib.sha256(prompt.encode()).hexdigest(),
                                         'token_ids': tokens[source]} for source, prompt in PROMPTS.items()},
                    'freeze_attention': True, 'freeze_norms': False, 'freeze_mlps': False,
@@ -255,15 +266,21 @@ class PublishedCases:
             return
         specs = [hook.spec for hook in hooks]
         if self.matching_case(PROMPTS['dallas'], specs) is not None:
-            scope = self._attention_scope(executor)
+            scope = self._attention_scope(executor, inputs.shape)
             scope.__enter__()
             self._forward_scopes[-1] = scope
 
     @contextmanager
-    def _attention_scope(self, executor):
+    def _attention_scope(self, executor, shape):
         executor._published_forward_depth += 1
         try:
-            with attention_patterns(self.model, self.patterns):
+            original = _uses_reference_inputs(executor.dictionary)
+            if original:
+                # The arithmetic capture retains one input per layer until scope exit.
+                self._reserve(shape[0] * shape[1] * self.model.config.hidden_size * len(executor.dictionary.layers)
+                              * next(self.model.parameters()).element_size())
+            with (attention_patterns(self.model, self.patterns),
+                  _reference_input_scope(self.model) if original else nullcontext()):
                 yield
         finally:
             executor._published_forward_depth -= 1

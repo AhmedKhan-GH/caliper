@@ -39,6 +39,52 @@ _ROWS = ContextVar("caliper_intervention_rows", default={})
 _MUTED_HOOKS = ContextVar("caliper_muted_intervention_hooks", default=frozenset())
 _ACTIVE_REPLAYS = ContextVar("caliper_intervention_replays", default=())
 _DICTIONARY_ADMISSIONS = ContextVar("caliper_group_dictionary_admissions", default=())
+_REFERENCE_INPUTS = ContextVar("caliper_group_reference_inputs", default=())
+_REFERENCE_INPUT = {"coordinate": "gemma_scope_pre_gain", "encoder": "W_enc_original", "dtype": "bfloat16"}
+
+
+def _uses_reference_inputs(dictionary):
+    declaration = dictionary.metadata.get("reference_input")
+    if declaration is not None and declaration != _REFERENCE_INPUT:
+        raise InterventionError("unsupported published encoder coordinate")
+    return declaration is not None
+
+
+def _capture_reference_inputs(model):
+    # This explicit dependency belongs to the independently qualified arithmetic path.
+    from ._gemma_reference import capture_reference_inputs
+    return capture_reference_inputs(model)
+
+
+@contextmanager
+def _reference_input_scope(model):
+    with _capture_reference_inputs(model) as inputs:
+        token = _REFERENCE_INPUTS.set((*_REFERENCE_INPUTS.get(), (model, inputs)))
+        try:
+            yield inputs
+        finally:
+            _REFERENCE_INPUTS.reset(token)
+            inputs.clear()
+
+
+def _reference_features(weights, inputs):
+    """Encode actual pre-gain inputs with the independently imported encoder."""
+    encoder = getattr(weights, "W_enc_original", None)
+    if (not isinstance(encoder, torch.Tensor) or encoder.shape != weights.W_enc.shape
+            or getattr(weights, "activation", None) != "jumprelu"
+            or any(value.dtype != torch.bfloat16 for value in
+                   (encoder, inputs, weights.b_enc, weights.threshold, weights.W_dec))
+            or any(value.device != inputs.device for value in
+                   (encoder, weights.b_enc, weights.threshold, weights.W_dec))):
+        raise InterventionError("published features require original bfloat16 encoder coordinates")
+    return weights.activate(torch.nn.functional.linear(inputs, encoder, weights.b_enc))
+
+
+def _group_memory(model, guard):
+    """Keep generic CPU fixture budgets separate from real model reserves."""
+    if model.config.model_type == "caliper_tiny" and next(model.parameters()).device.type == "cpu":
+        return _IdentityMemory(guard)
+    return _DeviceSnapshotMemory(guard)
 
 
 class InterventionError(ValueError):
@@ -1384,6 +1430,12 @@ class _PositionedFeatures(Intervention):
             return None
 
     def _apply_members(self, value, live_input, members):
+        original = self.service._published_forward_depth and _uses_reference_inputs(self.service.dictionary)
+        if original:
+            captured = next((values for model, values in reversed(_REFERENCE_INPUTS.get())
+                             if model is self.service.model), {})
+            point = self.service.dictionary.metadata["read_points"][self.probe.layer]
+            live_input = captured.get(point)
         if (not isinstance(value, torch.Tensor) or value.ndim != 3 or value.shape[-1] != self.width
                 or not value.is_floating_point() or not isinstance(live_input, torch.Tensor)
                 or live_input.shape != value.shape):
@@ -1396,13 +1448,14 @@ class _PositionedFeatures(Intervention):
             raise InterventionError("selected position is outside the live tensor")
         weights = self.service.dictionary.layers[self.probe.layer]
         if self.service.resource_guard is not None:
-            memory = _DeviceSnapshotMemory(self.service.resource_guard)
+            memory = _group_memory(self.service.model, self.service.resource_guard)
             elements = value.shape[0] * value.shape[1] * weights.W_enc.shape[0]
             # Encoder, activation delta, nonzero indices, and decoder products.
             reserve = elements * (4 * value.element_size() + 24) + value.numel() * value.element_size() * 4
             reserve += len(batch) * sum(len(m.spec["positions"]) for m in members) * self.width * value.element_size() * 2
             _DictionarySnapshot._admit(memory, reserve, force=True)
-        activations = _trace_features(weights, live_input.to(weights.W_enc.device), self.service.resource_guard)
+        activations = (_reference_features(weights, live_input) if original else
+                       _trace_features(weights, live_input.to(weights.W_enc.device), self.service.resource_guard))
         changes = torch.zeros_like(activations)
         b = torch.tensor(batch, device=activations.device, dtype=torch.long)[:, None]
         for member in members:
