@@ -1,9 +1,12 @@
 """Explicit Gemma dense arithmetic for the pinned circuit-tracer profile."""
 from contextlib import ExitStack, contextmanager
+import hashlib
 import json
 import math
+from types import CodeType
 
 import torch
+from transformers import __version__ as transformers_version
 from transformers.models.gemma2 import modeling_gemma2 as hf
 
 PROFILE = "circuit_tracer_82996f14"
@@ -53,11 +56,13 @@ class ReferenceRotaryEmbedding(hf.Gemma2RotaryEmbedding):
         # The reference divides positions by frequencies before trigonometry.
         # Retain HF buffers for checkpoint verification, without rounded inverses.
         dim = self.config.head_dim
-        exponent = torch.arange(dim // 2, device=x.device, dtype=torch.float32) / (dim / 2)
+        # The reference constructs its default rotary table on CPU, then moves it.
+        exponent = torch.arange(dim // 2, device="cpu", dtype=torch.float32) / (dim / 2)
         frequency = self.config.rope_parameters["rope_theta"] ** exponent
-        angles = position_ids.float()[..., None] / frequency
+        angles = position_ids.to(device="cpu", dtype=torch.float32)[..., None] / frequency
         angles = torch.cat((angles, angles), dim=-1)
-        return angles.cos().to(x.dtype), angles.sin().to(x.dtype)
+        return (angles.cos().to(device=x.device, dtype=x.dtype),
+                angles.sin().to(device=x.device, dtype=x.dtype))
 
 
 class ReferenceAttention(hf.Gemma2Attention):
@@ -93,6 +98,10 @@ class ReferenceAttention(hf.Gemma2Attention):
 class ReferenceGemmaForCausalLM(hf.Gemma2ForCausalLM):
     def forward(self, *args, **kwargs):
         profile_metadata(self)
+        devices = {"cpu", *(parameter.device.type for parameter in self.parameters())}
+        if (any(torch.is_autocast_enabled(device) for device in devices)
+                or torch.get_float32_matmul_precision() != "highest"):
+            raise ValueError("Gemma reference arithmetic requires disabled autocast and highest matmul precision")
         if kwargs.get("use_cache") or kwargs.get("cache") is not None or kwargs.get("past_key_values") is not None:
             raise ValueError("Gemma reference arithmetic requires an uncached dense forward")
         kwargs["use_cache"] = False
@@ -106,11 +115,47 @@ _ADAPTERS = {
     hf.Gemma2RotaryEmbedding: ReferenceRotaryEmbedding,
 }
 # Retain function objects to reject instance and class overrides at admission.
-_FORWARDS = {cls: cls.forward for cls in (*_ADAPTERS.values(), hf.Gemma2Model,
+_FORWARDS = {cls: cls.forward for cls in (*_ADAPTERS.values(), hf.Gemma2ForCausalLM, hf.Gemma2Model,
     hf.Gemma2DecoderLayer, hf.Gemma2MLP, hf.Gemma2TextScaledWordEmbedding, torch.nn.Linear,
     ReferenceInput, type(hf.ACT2FN["gelu_pytorch_tanh"]))}
 _NORMALIZED_INPUT = normalized_input
 _ROTATE_HALF = hf.rotate_half
+
+
+def _operations():
+    result = {}
+    for function in (*_FORWARDS.values(), normalized_input, hf.rotate_half):
+        name = function.__module__ + "." + function.__qualname__
+        while True:
+            result[name] = function
+            if not hasattr(function, "__wrapped__"):
+                break
+            function = function.__wrapped__
+            name += ".__wrapped__"
+    return result
+
+
+_OPERATIONS = _operations()
+_CODES = {function: function.__code__ for function in _OPERATIONS.values()}
+
+
+def _code_identity(code):
+    """Bind executable expressions without source paths or line numbers."""
+    def constant(value):
+        if isinstance(value, CodeType):
+            return _code_identity(value)
+        if isinstance(value, (tuple, frozenset)):
+            return [constant(item) for item in sorted(value, key=repr)] if isinstance(value, frozenset) else [
+                constant(item) for item in value]
+        return {"type": type(value).__name__, "value": repr(value)}
+    content = {"bytecode": code.co_code.hex(), "constants": [constant(value) for value in code.co_consts],
+               "names": code.co_names, "variables": code.co_varnames, "freevars": code.co_freevars,
+               "cellvars": code.co_cellvars, "arguments": [code.co_argcount, code.co_posonlyargcount,
+               code.co_kwonlyargcount], "flags": code.co_flags, "exceptions": code.co_exceptiontable.hex()}
+    return hashlib.sha256(json.dumps(content, sort_keys=True).encode()).hexdigest()
+
+
+_OPERATION_HASHES = {name: _code_identity(function.__code__) for name, function in _OPERATIONS.items()}
 
 
 def _check_model(model, *, adapted):
@@ -141,6 +186,10 @@ def _check_model(model, *, adapted):
         raise ValueError("Gemma reference adapter dtype changed")
     if normalized_input is not _NORMALIZED_INPUT or hf.rotate_half is not _ROTATE_HALF:
         raise ValueError("Gemma reference adapter operation changed")
+    if any(cls.forward is not forward for cls, forward in _FORWARDS.items()):
+        raise ValueError("Gemma reference adapter class operation changed")
+    if any(function.__code__ is not code for function, code in _CODES.items()):
+        raise ValueError("Gemma reference adapter implementation changed")
     if (type(model.model) is not hf.Gemma2Model or model.model.config is not config
             or type(model.model.embed_tokens) is not hf.Gemma2TextScaledWordEmbedding
             or type(model.lm_head) is not torch.nn.Linear
@@ -151,8 +200,6 @@ def _check_model(model, *, adapted):
         if any(key in vars(module) for key in ("forward", "_call_impl", "_compiled_call_impl")):
             raise ValueError("Gemma reference adapter callable override")
         cls = type(module)
-        if cls in _FORWARDS and cls.forward is not _FORWARDS[cls]:
-            raise ValueError("Gemma reference adapter class operation changed")
         if adapted and cls in _ADAPTERS:
             raise ValueError("Gemma reference adapter is incomplete")
     norms = [model.model.norm]
@@ -226,12 +273,15 @@ def profile_metadata(model):
         "profile": profile, "dtype": str(dtype).removeprefix("torch."), "version": 1,
         "reference_revision": "82996f144b3371ae858ea5713590d004c218f0c2",
         "reference_transformer_lens": "3.9.0",
+        "torch_version": str(torch.__version__), "transformers_version": transformers_version,
         "normalization": "float32_divide_sqrt_then_cast_then_gain",
         "gain": "source_weight_float32_plus_one_then_cast",
-        "rotary": "float32_position_divide_frequency_then_trig_then_cast",
+        "rotary": "cpu_float32_position_divide_frequency_then_trig_then_cast_then_transfer",
         "attention": "matmul_divide_sqrt_scalar_softcap_mask_negative_inf_softmax_score_dtype",
         "encoder_coordinate": "gemma_scope_pre_gain",
         "capture": "pre_feedforward_layernorm.reference_input",
+        "runtime": "autocast_disabled_float32_matmul_highest",
+        "operation_sha256": dict(_OPERATION_HASHES),
         "operations": {name: cls.__module__ + "." + cls.__qualname__ + ".forward"
                        for name, cls in sorted((base.__name__, cls) for base, cls in _ADAPTERS.items())},
     }

@@ -188,3 +188,82 @@ def test_configuration_and_hook_mutation_refused():
     model.model.layers[0].pre_feedforward_layernorm.reference_input = torch.nn.Identity().eval()
     with pytest.raises(ValueError, match="input hook changed"):
         model(torch.tensor([[1, 2]]))
+
+
+def test_reference_runtime_rejects_implicit_precision_changes():
+    model = reference_fixture(torch.float32)
+    install_reference_profile(model, PROFILE)
+    ids = torch.tensor([[1, 2]])
+    with torch.autocast("cpu", dtype=torch.bfloat16):
+        with pytest.raises(ValueError, match="disabled autocast"):
+            model(ids)
+    precision = torch.get_float32_matmul_precision()
+    try:
+        torch.set_float32_matmul_precision("high")
+        with pytest.raises(ValueError, match="highest matmul precision"):
+            model(ids)
+    finally:
+        torch.set_float32_matmul_precision(precision)
+
+
+def test_capture_nested_forward_retains_outer_coordinates():
+    model = reference_fixture()
+    install_reference_profile(model, PROFILE)
+    outer = torch.tensor([[1, 4, 6]])
+    with capture_reference_inputs(model) as expected:
+        model(outer)
+    active = False
+    def nested(module, args, output):
+        nonlocal active
+        if not active:
+            active = True
+            try:
+                model(torch.tensor([[1, 8]]))
+            finally:
+                active = False
+    with ExitStack() as stack:
+        stack.callback(model.model.layers[0].mlp.register_forward_hook(nested).remove)
+        with capture_reference_inputs(model) as actual:
+            model(outer)
+    assert expected.keys() == actual.keys()
+    assert all(torch.equal(expected[key], value) for key, value in actual.items())
+
+
+def test_checkpoint_buffer_mutation_is_not_hidden_by_adapter(tmp_path):
+    from .test_gemma_runtime import local_gemma, gemma_model
+    model = gemma_model()
+    snapshot = local_gemma(tmp_path, model)
+    install_reference_profile(model, PROFILE)
+    model.model.rotary_emb.inv_freq.data.add_(1)
+    with pytest.raises(ValueError, match="nonpersistent buffers"):
+        verify_hf_model(model, snapshot)
+
+
+def test_identity_binds_executable_operations_and_refuses_code_mutation(monkeypatch):
+    from caliper.interp import _gemma_reference as reference
+    model = reference_fixture()
+    install_reference_profile(model, PROFILE)
+    settings = profile_metadata(model)
+    key = "caliper.interp._gemma_reference.normalized_input"
+    assert len(settings["operation_sha256"][key]) == 64
+    original = reference.normalized_input.__code__
+    assert reference._code_identity(original) == reference._code_identity(
+        original.replace(co_filename="different.py", co_firstlineno=42))
+    def changed(module, x):
+        return x
+    monkeypatch.setattr(reference.normalized_input, "__code__", changed.__code__)
+    with pytest.raises(ValueError, match="implementation changed"):
+        model_identity(model)
+    with pytest.raises(ValueError, match="implementation changed"):
+        model(torch.tensor([[1, 2]]))
+
+
+@pytest.mark.parametrize("base", [False, True])
+def test_class_forward_mutation_refused(monkeypatch, base):
+    from transformers import Gemma2ForCausalLM
+    from caliper.interp._gemma_reference import ReferenceRotaryEmbedding
+    model = reference_fixture()
+    install_reference_profile(model, PROFILE)
+    monkeypatch.setattr(Gemma2ForCausalLM if base else ReferenceRotaryEmbedding, "forward", lambda *args: None)
+    with pytest.raises(ValueError, match="class operation changed"):
+        forward_settings(model, tensor_hash=_state_hash)
