@@ -158,7 +158,10 @@ class Session:
                 state = self.mcp.body("run.state", run=self.run_id)
                 names = {p["name"] for p in state["params"]}
                 return state if state["attached"] and {"prompt", "selected_node", "clamp", "retrace"} <= names else False
-            self.events.until("hosted inference readiness", ready)
+            # The explicit reference path verifies all source bytes before attachment.
+            # Its startup allowance is separate from trace and action timing.
+            ready_options = {"timeout": 300} if self.replication_profile else {}
+            self.events.until("hosted inference readiness", ready, **ready_options)
         except BaseException as exc:
             if (show or interactive) and isinstance(exc, Exception) and self.live():
                 raise StartupFailure(self, exc) from exc
