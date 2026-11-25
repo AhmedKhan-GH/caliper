@@ -49,7 +49,7 @@ def _require_finite(value, name, check=_no_check):
                 check("finite block complete")
             finite = (results[0] if len(results) == 1 else torch.stack(results).all()).item()
             del results
-            check("finite batch complete")
+            check("finite block readback")
             if not finite:
                 raise ValueError(f"{name} must be finite")
 
@@ -196,6 +196,32 @@ def _validate_dictionary(model, dictionary, check=_no_check, *, memory=None):
                 raise ValueError("dictionary JumpReLU threshold must be positive")
             _require_finite(value, f"dictionary layer {i} {name}", check)
     return probes
+
+
+class _DictionaryAdmission:
+    """Single-use validation for one synchronous trace request."""
+
+    def __init__(self, model, dictionary, check, *, memory):
+        self._probes = _validate_dictionary(model, dictionary, check, memory=memory)
+        self._model, self._dictionary = model, dictionary
+        self._active = False
+
+    def __enter__(self):
+        if self._active or self._probes is None:
+            raise ValueError("trace dictionary admission cannot be reused")
+        self._active = True
+        return self
+
+    def __exit__(self, *exc):
+        self._active = False
+        self._probes = None
+
+    def consume(self, model, dictionary):
+        if (not self._active or self._probes is None
+                or model is not self._model or dictionary is not self._dictionary):
+            raise ValueError("trace dictionary admission is expired or belongs to different resources")
+        probes, self._probes = self._probes, None
+        return probes
 
 
 class MemoryGuard:
@@ -571,10 +597,15 @@ class FrozenPath:
     """
 
     def __init__(self, model, input_ids, dictionary, *, guard=None, interventions=(), check=_no_check,
-                 memory_limit_gb=12):
+                 memory_limit_gb=12, _admission=None):
         _validate_ablation_points(model, interventions)
         _validate_intervention_positions(input_ids.shape[1], interventions)
-        probes = _validate_dictionary(model, dictionary, check, memory=guard)
+        if _admission is None:
+            probes = _validate_dictionary(model, dictionary, check, memory=guard)
+        else:
+            if not isinstance(_admission, _DictionaryAdmission):
+                raise TypeError("trace requires a private dictionary admission")
+            probes = _admission.consume(model, dictionary)
         parameter = next(model.parameters())
         self.device, self.dtype = parameter.device, parameter.dtype
         self.family = model_family(model)

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from collections import OrderedDict, deque
+from contextlib import ExitStack
 from copy import deepcopy
 from dataclasses import dataclass
 import hashlib
@@ -14,7 +15,7 @@ from ._dictionary import _HASH_CHUNK_BYTES, _canonical_device, _state_hash, weig
 from ._families import model_family
 from ._frozen import (FrozenPath, MemoryGuard, _validate_dictionary, _validate_ablation_points,
                       _validate_intervention_positions, _finite_max, _require_finite, _no_check,
-                      _ENCODER_BLOCK_ELEMENTS)
+                      _DictionaryAdmission, _ENCODER_BLOCK_ELEMENTS)
 from ._memory import BudgetMemory, CleanStop, allocation_bytes, autorelease_scope, family_memory_limit
 from ._graph import Graph, bounded_integer
 from ._influence import influence
@@ -34,7 +35,7 @@ class _Deadline:
 
     def __call__(self, stage):
         if time.monotonic() >= self.expires:
-            raise TraceTimeout("Trace exceeded the 20 second request budget.")
+            raise TraceTimeout(f"Trace exceeded the 20 second request budget at {stage}.")
 
 
 class _DeadlineMemory:
@@ -573,28 +574,17 @@ class Tracer:
         if isinstance(state, dict) and state["rows"] is not None and 0 not in state["rows"]:
             specifications = []
         _validate_ablation_points(self.model, specifications)
-        with autorelease_scope(next(self.model.parameters()).device):
+        with autorelease_scope(next(self.model.parameters()).device), ExitStack() as admission_scope:
             if self.model.training:
                 raise ValueError("trace requires an evaluation model")
-            try:
-                def dictionary_check(stage):
-                    check(stage)
-                    self._dictionary_check(stage)
-                _validate_dictionary(self.model, self.dictionary, dictionary_check)
-            except (TypeError, ValueError):
-                self._cache.clear()
-                self._forward_cache = None
-                raise
-            device = next(self.model.parameters()).device
-            if device != self.guard.device:
-                self.guard = self._new_guard(device)
-                self._forward_cache = None
             if not isinstance(prompt, str):
                 raise TypeError("prompt must be a string")
             bounded_integer(max_targets, "max_targets", 0, 512)
             bounded_integer(max_nodes, "max_nodes", 1, 512)
             bounded_integer(max_edges, "max_edges", 0, 8192)
             bounded_integer(self.target_batch_size, "target_batch_size", 1, 64)
+            self.guard.check("tokenization admission")
+            check("tokenization admission")
             encoded = self.tokenizer(prompt, return_tensors="pt", truncation=False)
             check("tokenization")
             ids = encoded["input_ids"]
@@ -604,11 +594,29 @@ class Tracer:
             if ids.min() < 0 or ids.max() >= self.model.config.vocab_size:
                 raise ValueError("tokenizer returned an out-of-range token")
             _validate_intervention_positions(ids.shape[1], specifications)
+            device = next(self.model.parameters()).device
+            if device != self.guard.device:
+                self.guard = self._new_guard(device)
+                self._forward_cache = None
+            try:
+                def dictionary_check(stage):
+                    check(stage)
+                    self._dictionary_check(stage)
+                # Prompt and patch-source tokenizers can change bytes through aliases.
+                # Share validation only after those callbacks, within this request.
+                admission = admission_scope.enter_context(_DictionaryAdmission(
+                    self.model, self.dictionary, dictionary_check, memory=self.guard))
+            except (TypeError, ValueError):
+                self._cache.clear()
+                self._forward_cache = None
+                raise
             self._new_prompt(prompt)
+            content = weights_hash(self.dictionary, memory=_DeadlineMemory(
+                self.guard._guard, lambda stage: check("dictionary content " + stage)))
+            check("dictionary content complete")
             identity = {"model": id(self.model), "model_weights": _versions(self.model),
                         "dictionary": id(self.dictionary), "dictionary_weights": _versions(self.dictionary),
-                        "dictionary_content": weights_hash(
-                            self.dictionary, memory=_DeadlineMemory(self.guard._guard, check)),
+                        "dictionary_content": content,
                         "dictionary_metadata": self.dictionary.metadata,
                         "tokenizer": id(self.tokenizer), "prompt": prompt, "tokens": ids.tolist(),
                         "interventions": state}
@@ -632,7 +640,8 @@ class Tracer:
                     if stage == "record complete" and self._intervention_state(check) != identity["interventions"]:
                         raise RuntimeError("intervention state changed during the trace forward")
                 path = FrozenPath(self.model, ids.to(self.guard.device), self.dictionary,
-                                  guard=self.guard, interventions=specifications, check=check_forward)
+                                  guard=self.guard, interventions=specifications, check=check_forward,
+                                  _admission=admission)
                 self._validate_forward_settings(check)
                 if self._intervention_state(check) != identity["interventions"]:
                     raise RuntimeError("intervention state changed during the trace forward")
