@@ -190,9 +190,15 @@ class _DeviceSnapshotMemory(_IdentityMemory):
                        getattr(self.inner, "current", 0) or 0,
                        self._checked_current or 0)
         pending = max(0, max(self.floor, self.reserve_floor) - observed)
-        self.headroom = psutil.virtual_memory().available - pending - 8_000_000_000
+        available = psutil.virtual_memory().available
+        self.headroom = available - pending - 8_000_000_000
         if self.headroom < self.reserve:
-            raise CleanStop("dictionary identity allocation exceeds the host reserve")
+            # Fixed names and saturated byte counts keep public errors bounded.
+            counts = (("available_bytes", available), ("pending_bytes", pending),
+                      ("requested_bytes", self.reserve), ("host_reserve_bytes", 8_000_000_000))
+            details = ", ".join(f"{name}={min(max(int(value), 0), 2**64 - 1)}"
+                                for name, value in counts)
+            raise CleanStop(f"dictionary identity allocation exceeds the host reserve ({details})")
 
 
 def _snapshot_workspace(block_bytes, blocks):

@@ -653,3 +653,39 @@ def test_snapshot_creation_completes_at_the_minimum_boundary(headroom_snapshot, 
     assert not case.scopes
     case.executor.close()
     assert all(reference() is None for reference in case.allocations)
+
+
+def test_snapshot_host_stop_reports_the_fresh_observation(headroom_snapshot, monkeypatch):
+    case = headroom_snapshot()
+    memory = _intervene._DeviceSnapshotMemory(case.guard)
+    memory.floor = case.guard.current + 123
+    memory.reserve, memory.reserve_floor = 456, case.guard.current + 789
+    observations = []
+
+    def available():
+        observations.append(8_000_000_000 + 789 + 455)
+        return SimpleNamespace(available=observations[-1])
+
+    monkeypatch.setattr(psutil, "virtual_memory", available)
+    with pytest.raises(CleanStop) as caught:
+        memory.check("dictionary identity")
+    assert observations == [8_000_001_244]
+    assert str(caught.value) == (
+        "dictionary identity allocation exceeds the host reserve "
+        "(available_bytes=8000001244, pending_bytes=789, requested_bytes=456, "
+        "host_reserve_bytes=8000000000)")
+    assert memory.headroom == 455 and memory.reserve == 456
+
+
+def test_snapshot_host_stop_bounds_byte_counts(headroom_snapshot):
+    case = headroom_snapshot()
+    memory = _intervene._DeviceSnapshotMemory(case.guard)
+    case.available = 10**200
+    memory.floor = case.guard.current + 10**200
+    memory.reserve = 10**200
+    with pytest.raises(CleanStop, match="host reserve") as caught:
+        memory.check("dictionary identity")
+    message = str(caught.value)
+    assert message.count(str(2**64 - 1)) == 3
+    assert "host_reserve_bytes=8000000000" in message
+    assert len(message) < 256 and message.isascii()
