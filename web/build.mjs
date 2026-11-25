@@ -25,12 +25,10 @@ const at = (...p) => path.join(here, ...p);
 const dist = at('dist');
 fs.mkdirSync(dist, { recursive: true });
 
-// Read the exact design token revision selected by the native build.
-async function designTokens() {
-  const pin = fs.readFileSync(at('..', 'cmake', 'SternbildTokens.cmake'), 'utf8');
-  const commit = /set\(STERNBILD_TOKENS_COMMIT ([0-9a-f]{40})\)/.exec(pin)?.[1];
-  const repository = /set\(STERNBILD_TOKENS_REPOSITORY (https:\/\/github\.com\/[^\s)]+)\)/.exec(pin)?.[1];
-  if (!commit || !repository) throw new Error('palette: design token pin is incomplete');
+// Read the local Sternbild design token JSON when a checkout or cache at the
+// pinned commit is present, so the build verifies shared_colors.json against
+// the exact release pinned in cmake/SternbildTokens.cmake.
+function localDesignTokens(commit) {
   const sources = [process.env.STERNBILD_TOKENS_SOURCE,
     at('..', 'cmake-build-release', '_deps', 'sternbild_tokens-src'),
     at('wasm', 'build', '_deps', 'sternbild_tokens-src')].filter(Boolean);
@@ -43,59 +41,59 @@ async function designTokens() {
   }
   const cache = at('node_modules', '.cache', 'sternbild-tokens', `${commit}.json`);
   if (fs.existsSync(cache)) return JSON.parse(fs.readFileSync(cache, 'utf8'));
-  const source = repository.replace('https://github.com/', 'https://raw.githubusercontent.com/').replace(/\.git$/, '');
-  const response = await fetch(`${source}/${commit}/design/tokens.json`, { signal: AbortSignal.timeout(30000) });
-  if (!response.ok) throw new Error(`palette: design token download failed (${response.status})`);
-  const text = await response.text();
-  const tokens = JSON.parse(text);
-  fs.mkdirSync(path.dirname(cache), { recursive: true });
-  fs.writeFileSync(cache, text);
-  return tokens;
+  return null;
 }
 
-// The app's colours, read from the C++ that the app is built from, so that the
-// page and the app share one source: the house's colour tokens and class
-// pigments (src/host/ui/sternbild_theme.h) and the live views' categorical
-// palette (src/host/scene/scene_tree.cpp, kPalette). The table is written into
-// src/render/palette.gen.ts only when it changes; it is checked in, so that
-// the type check and the tests that import the sources directly find it.
-async function writePalette() {
-  const design = await designTokens();
-  const theme = fs.readFileSync(at('..', 'src', 'host', 'ui', 'sternbild_theme.h'), 'utf8');
-  const tree = fs.readFileSync(at('..', 'src', 'host', 'scene', 'scene_tree.cpp'), 'utf8');
-  const ns = /namespace col \{([\s\S]*?)\}\s*\/\/ namespace col/.exec(theme);
-  if (!ns) throw new Error('palette: no namespace col in sternbild_theme.h');
-  const tokens = {};
-  const color = (name, active = new Set()) => {
-    if (active.has(name)) throw new Error(`palette: cyclic design token ${name}`);
-    active.add(name);
-    const token = name.split('.').reduce((node, key) => node?.[key], design);
-    const value = token?.$value;
-    if (typeof value === 'string' && /^\{[^}]+\}$/.test(value)) return color(value.slice(1, -1), active);
-    const hex = value?.hex;
-    if (!/^#[0-9a-f]{6}$/i.test(hex ?? '')) throw new Error(`palette: invalid color token ${name}`);
-    return [1, 3, 5].map((offset) => parseInt(hex.slice(offset, offset + 2), 16));
-  };
-  for (const m of ns[1].matchAll(/constexpr ImU32 (\w+)\s*=\s*tokens::(\w+)::(\w+)\.imu32;/g))
-    tokens[m[1]] = color(`${m[2]}.${m[3].replaceAll('_', '-')}`);
-  const house = ['vehicle', 'dog', 'bird', 'cat', 'other'].map((n) => {
-    if (!tokens[n]) throw new Error(`palette: sternbild_theme.h has no class pigment ${n}`);
-    return tokens[n];
+// The app's colours, read from the canonical shared source
+// (scripts/shared_colors.json), verified against cmake/SternbildTokens.cmake
+// (and its design/tokens.json when locally present). The format matches
+// scripts/shared_colors.py byte for byte so neither tool overwrites the other
+// with different text.
+function writePalette() {
+  const shared = JSON.parse(fs.readFileSync(at('..', 'scripts', 'shared_colors.json'), 'utf8'));
+  const pin = fs.readFileSync(at('..', 'cmake', 'SternbildTokens.cmake'), 'utf8');
+  const tag = /set\(STERNBILD_TOKENS_TAG ([^\s)]+)\)/.exec(pin)?.[1];
+  const commit = /set\(STERNBILD_TOKENS_COMMIT ([0-9a-f]{40})\)/.exec(pin)?.[1];
+  if (!tag || !commit) throw new Error('palette: design token pin is incomplete');
+  if (shared.sternbild_tokens.tag !== tag || shared.sternbild_tokens.commit !== commit) {
+    throw new Error('palette: scripts/shared_colors.json sternbild_tokens pin differs from cmake/SternbildTokens.cmake');
+  }
+  const design = localDesignTokens(commit);
+  if (design) {
+    const color = (name, active = new Set()) => {
+      if (active.has(name)) throw new Error(`palette: cyclic design token ${name}`);
+      active.add(name);
+      const token = name.split('.').reduce((node, key) => node?.[key], design);
+      const value = token?.$value;
+      if (typeof value === 'string' && /^\{[^}]+\}$/.test(value)) return color(value.slice(1, -1), active);
+      const hex = value?.hex;
+      if (!/^#[0-9a-f]{6}$/i.test(hex ?? '')) throw new Error(`palette: invalid color token ${name}`);
+      return [1, 3, 5].map((offset) => parseInt(hex.slice(offset, offset + 2), 16));
+    };
+    for (const t of shared.theme.tokens) {
+      const want = color(`${t.group}.${t.token.replaceAll('_', '-')}`);
+      if (want.join(',') !== t.rgb.join(',')) {
+        throw new Error(`palette: shared_colors.json token ${t.name} is [${t.rgb}], Sternbild has [${want}]`);
+      }
+    }
+  }
+  const byName = Object.fromEntries(shared.theme.tokens.map((t) => [t.name, t.rgb]));
+  const house = shared.theme.house_pigments.map((n) => {
+    if (!byName[n]) throw new Error(`palette: shared_colors.json has no class pigment ${n}`);
+    return byName[n];
   });
-  const table = /kPalette\[16\] = \{([\s\S]*?)\};/.exec(tree);
-  if (!table) throw new Error('palette: no kPalette[16] in scene_tree.cpp');
-  const categorical = [...table[1].matchAll(/SCENE_RGB\((\d+),\s*(\d+),\s*(\d+)\)/g)].map((m) => [+m[1], +m[2], +m[3]]);
-  if (categorical.length !== 16) throw new Error(`palette: kPalette holds ${categorical.length} colours, not 16`);
+  const categorical = shared.categorical_palette;
+  if (categorical.length !== 16) throw new Error(`palette: categorical_palette holds ${categorical.length} colours, not 16`);
   const rgb = (c) => `[${c.join(', ')}]`;
   const text = [
-    '// Generated by web/build.mjs from src/host/ui/sternbild_theme.h and src/host/scene/scene_tree.cpp;',
-    '// do not edit. The app draws with those constants, and the page with this table.',
+    '// Generated by scripts/shared_colors.py from scripts/shared_colors.json; do not edit by hand.',
+    '// The app draws with these constants, and the page with this table.',
     '',
     'export type Rgb = readonly [number, number, number];',
     '',
     '/** The house\'s colour tokens (sternbild::col), by their C++ names. */',
     'export const TOKENS: Readonly<Record<string, Rgb>> = {',
-    ...Object.entries(tokens).map(([k, v]) => `  ${k}: ${rgb(v)},`),
+    ...shared.theme.tokens.map((t) => `  ${t.name}: ${rgb(t.rgb)},`),
     '};',
     '',
     '/** The class pigments in their fixed order: vehicle, dog, bird, cat, other. */',
@@ -110,7 +108,7 @@ async function writePalette() {
   const file = at('src', 'render', 'palette.gen.ts');
   if (!fs.existsSync(file) || fs.readFileSync(file, 'utf8') !== text) fs.writeFileSync(file, text);
 }
-await writePalette();
+writePalette();
 
 const banner = { js: '/* @caliper/view, Apache License 2.0 */' };
 const common = { bundle: true, format: 'esm', target: 'es2022', minify: true, legalComments: 'none', logLevel: 'warning', banner };
@@ -144,12 +142,14 @@ fs.writeFileSync(path.join(dist, 'spec.html'),
   specTemplate.replace('/*@FONTS@*/', () => fonts).replace('/*@SCRIPT@*/', () => specScript));
 
 if (process.argv.includes('--test')) {
-  const protocolTest = at('test-dist/text-params.mjs');
-  await esbuild.build({
-    bundle: true, platform: 'node', format: 'esm', logLevel: 'warning',
-    entryPoints: [at('test/text-params.node.ts')], outfile: protocolTest,
-  });
-  execFileSync(process.execPath, ['--test', protocolTest], { stdio: 'inherit' });
+  for (const name of ['text-params', 'spec-colormaps']) {
+    const nodeTest = at(`test-dist/${name}.mjs`);
+    await esbuild.build({
+      bundle: true, platform: 'node', format: 'esm', logLevel: 'warning',
+      entryPoints: [at(`test/${name}.node.ts`)], outfile: nodeTest,
+    });
+    execFileSync(process.execPath, ['--test', nodeTest], { stdio: 'inherit' });
+  }
   await esbuild.build({
     bundle: true, format: 'esm', target: 'es2022', logLevel: 'warning', sourcemap: 'inline',
     entryPoints: [at('test/harness.ts')], outfile: at('test-dist/harness.js'),

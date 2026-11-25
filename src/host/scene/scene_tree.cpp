@@ -9,14 +9,7 @@ namespace caliper_scene {
 
 using caliper_gfx::VertexFormat;
 
-#define SCENE_RGB(r, g, b) (0xff000000u | ((uint32_t)(b) << 16) | ((uint32_t)(g) << 8) | (uint32_t)(r))
-const uint32_t kPalette[16] = {
-    SCENE_RGB(31, 119, 180),  SCENE_RGB(255, 127, 14),  SCENE_RGB(44, 160, 44),   SCENE_RGB(214, 39, 40),
-    SCENE_RGB(148, 103, 189), SCENE_RGB(140, 86, 75),   SCENE_RGB(227, 119, 194), SCENE_RGB(127, 127, 127),
-    SCENE_RGB(188, 189, 34),  SCENE_RGB(23, 190, 207),  SCENE_RGB(174, 199, 232), SCENE_RGB(255, 187, 120),
-    SCENE_RGB(152, 223, 138), SCENE_RGB(255, 152, 150), SCENE_RGB(197, 176, 213), SCENE_RGB(196, 156, 148),
-};
-#undef SCENE_RGB
+const uint32_t kPalette[16] = CALIPER_SCENE_PALETTE_INIT;
 
 namespace {
 

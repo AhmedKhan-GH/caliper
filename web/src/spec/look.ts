@@ -10,6 +10,7 @@
 // the ascender below it.
 
 import { PALETTE } from '../render/colormap.js';
+import { FLAT_POINT } from '../render/colormaps.gen.js';
 import { HOUSE_PIGMENTS, TOKENS } from '../render/palette.gen.js';
 import type { Spec } from './types.js';
 import { bindingName } from './layout.js';
@@ -31,7 +32,7 @@ export const COL = {
   secondary: tok('secondary'),
   faint: tok('faint'),
   accent: tok('bronze'),
-  flatPoint: 'rgb(220,220,230)',
+  flatPoint: `rgb(${FLAT_POINT[0]},${FLAT_POINT[1]},${FLAT_POINT[2]})`,
 } as const;
 
 /** The app's sizes at text scale 1: the UI face, its small size, and the mono face of the live views' info and axes. */

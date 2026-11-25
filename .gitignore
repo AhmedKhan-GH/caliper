@@ -92,7 +92,7 @@ __pycache__/
 *.pyc
 .pytest_cache/
 media/
-python/bench/results/*.png
+/python/bench/results/
 # The browser's WebAssembly views in the Python package: build outputs that
 # scripts/build_wasm.py builds and scripts/fetch_wasm.py downloads from CI
 python/caliper/_web/caliper-views-loader.js
