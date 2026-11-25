@@ -1072,6 +1072,7 @@ def test_bridge_sets_selection_and_queries_examples():
         events = Events()
         def parameter(self, name, value):
             calls.append((name, value))
+            return {"step": 7}
         def ready_programs(self, names):
             calls.append(("ready_programs", names))
     session = Session()
@@ -1088,6 +1089,7 @@ def test_bridge_sets_selection_and_queries_examples():
                      ("ready_programs", ["example_tokens"]),
                      ("feature.examples", {"node": 10, "limit": 16})]
     assert bridge.last_selection == 10
+    assert bridge.selection_step == 7
 
 
 @pytest.mark.parametrize("kind", [0, 2, 3])
@@ -1109,6 +1111,7 @@ def test_bridge_clears_shared_state_for_non_feature_picks(tmp_path, kind, monkey
 def test_bridge_creates_examples_after_an_early_refusal(tmp_path):
     from unittest.mock import Mock, patch
     session = Mock(out=tmp_path)
+    session.parameter.return_value = {"step": 7}
     bridge = driver.Bridge(session)
     session.events.complete.side_effect = [Failure("feature unavailable"), {"maximum": 2},
                                            {"examples": []}, {"examples": []}]
@@ -2004,33 +2007,255 @@ def test_mcp_journal_records_request_duration(monkeypatch):
     assert record["started_monotonic"] == 10. and record["seconds"] == .125
 
 
-def test_capture_waits_for_derive_status_at_the_rendered_step():
-    from copy import deepcopy
-    from types import SimpleNamespace
-    session = driver.Session.__new__(driver.Session)
-    ready = {"id": "examples", "last_step": 7, "last_pass_ms": .1,
-             "draw": {"resource_step": 7, "frame_ms": .2}, "piece": {"name": "token_strip"}}
-    missing = deepcopy(ready)
-    missing.update(last_step=None, last_pass_ms=None)
-    stale = deepcopy(ready)
-    stale["last_step"] = 6
-    replies = iter([missing, stale, ready])
-    seen = []
-    def body(command, **kwargs):
+class CaptureResources:
+    """The fixture separates received versions from displayed versions."""
+    def __init__(self, tmp_path, monkeypatch):
+        from types import SimpleNamespace
+        import _mcp
+        self.session = driver.Session.__new__(driver.Session)
+        self.session.out = tmp_path
+        self.session.show = True
+        self.session.capture_number = 0
+        self.session.program_evidence = {}
+        self.session.bridge = SimpleNamespace(selection_step=2)
+        self.session.mcp = self
+        self.cursor = dict(step=2, latest=2, live=True, playing=False, speed=10)
+        self.received = {p: dict.fromkeys(resources, 2) for p, resources in driver.CAPTURE_RESOURCES.items()}
+        self.shown = deepcopy(self.received)
+        self.frames = 8
+        self.stage = 0
+        self.clock = 0
+        self.actions = []
+        self.captures = []
+        self.reads = []
+        self.stopped = False
+        self.derive_ready = True
+        self.advance = lambda: None
+        events = _mcp.Events(self)
+        monkeypatch.setattr(_mcp, "time", SimpleNamespace(monotonic=lambda: self.clock))
+        def wait(timeout):
+            self.clock += .25
+            self.stage += 1
+            self.frames += 1
+            self.advance()
+        events.wait = wait
+        until = events.until
+        events.until = lambda description, read: until(description, read, timeout=1)
+        self.session.events = events
+
+    def body(self, command, **args):
+        if command == "cursor.get":
+            return {"cursor": dict(self.cursor)}
+        if command == "cursor.set":
+            self.actions.append(dict(args))
+            self.cursor.update(args)
+            return {"cursor": dict(self.cursor)}
+        if command == "program.read":
+            self.reads.append(dict(args))
+            step = self.received[args["id"]][args["resource"]]
+            return {"step": step if step is None else min(step, args["step"])}
         if command == "program.status":
-            item = next(replies)
-            seen.append(item)
-            return {"programs": [item]}
-        assert command == "piece.show"
-        raise Failure("capture barrier passed")
-    def until(label, callback):
-        for _ in range(3):
-            result = callback()
-            if result:
-                return result
-        pytest.fail("capture did not reach the complete derive status")
-    session.mcp = SimpleNamespace(body=body)
-    session.events = SimpleNamespace(until=until)
-    with pytest.raises(Failure, match="capture barrier passed"):
-        session.capture("before", {"examples": 7})
-    assert seen == [missing, stale, ready]
+            return {"programs": [
+                dict(id=p, state="running",
+                     last_step=max((v or 0) for v in self.received[p].values()) if self.derive_ready else None,
+                     last_pass_ms=.1 if self.derive_ready else None, piece={"name": p},
+                     draw=dict(resource_step=max((v or 0) for v in self.shown[p].values()),
+                               resource_steps=dict(self.shown[p]), frames=self.frames, frame_ms=.2,
+                               state="stopped" if self.stopped else "running"))
+                for p in self.received]}
+        if command == "piece.show":
+            return {"piece": {"name": args["name"]}}
+        raise AssertionError((command, args))
+
+    def call(self, command):
+        assert command == "capture.frame"
+        assert not self.cursor["live"] and not self.cursor["playing"]
+        assert all(len(set(steps.values())) == 1 for steps in self.shown.values())
+        assert min(self.shown["attribution"].values()) >= self.session.bridge.selection_step
+        assert self.derive_ready
+        self.captures.append((self.stage, deepcopy(self.shown)))
+        # A later resource must not move the held capture to another step.
+        held = self.cursor["step"]
+        self.cursor["latest"] = held + 1
+        assert self.cursor["step"] == held
+        return {"structuredContent": {"png_base64": "cG5n"}}
+
+    def capture(self, name="before"):
+        return self.session.capture(name, dict.fromkeys(driver.CAPTURE_RESOURCES, 1))
+
+
+def test_capture_waits_for_received_and_displayed_resources_after_selection(tmp_path, monkeypatch):
+    harness = CaptureResources(tmp_path, monkeypatch)
+    harness.received["attribution"] = dict.fromkeys(driver.CAPTURE_RESOURCES["attribution"], 1)
+    harness.shown["attribution"] = dict(harness.received["attribution"])
+    def advance():
+        if harness.stage <= 4:
+            resource = driver.CAPTURE_RESOURCES["attribution"][harness.stage - 1]
+            harness.received["attribution"][resource] = 2
+            if resource != "strings":
+                harness.shown["attribution"][resource] = 2
+        else:
+            harness.shown["attribution"]["strings"] = 2
+    harness.advance = advance
+    png, metadata = harness.capture()
+    assert png.read_bytes() == b"png" and metadata is None
+    assert harness.captures[0][0] == 5
+    assert harness.cursor["live"]
+    evidence = harness.session.program_evidence["before"]
+    assert evidence["expected_steps"]["attribution"] == 2
+    assert evidence["resource_steps"] == harness.shown
+    assert {item["resource"] for item in harness.reads if item["id"] == "attribution"} == {
+        "nodes", "curves", "labels", "strings"}
+
+
+@pytest.mark.parametrize("program,resource", [(p, r) for p, resources in driver.CAPTURE_RESOURCES.items() for r in resources])
+def test_capture_waits_for_each_displayed_resource(tmp_path, monkeypatch, program, resource):
+    harness = CaptureResources(tmp_path, monkeypatch)
+    harness.shown[program][resource] = 1
+    harness.advance = lambda: harness.shown[program].update({resource: 2}) if harness.stage == 2 else None
+    harness.capture()
+    assert harness.captures[0][0] == 2
+
+
+@pytest.mark.parametrize("fault", ["missing_publication", "missing_frame", "mixed_frame", "old_frame", "derive_status"])
+def test_capture_resource_failure_is_bounded_without_pixels_or_sleeps(tmp_path, monkeypatch, fault):
+    harness = CaptureResources(tmp_path, monkeypatch)
+    if fault == "missing_publication":
+        harness.received["attribution"]["strings"] = None
+    elif fault == "missing_frame":
+        harness.shown["attribution"].pop("strings")
+    elif fault == "mixed_frame":
+        harness.shown["attribution"]["strings"] = 1
+    elif fault == "old_frame":
+        harness.advance = lambda: setattr(harness, "frames", 8)
+    else:
+        harness.derive_ready = False
+    with pytest.raises(Failure, match="Timed out"):
+        harness.capture()
+    assert not harness.captures
+    assert harness.stage == 4
+    assert harness.cursor["live"]
+
+
+def test_capture_waits_for_derive_status_at_the_rendered_step(tmp_path, monkeypatch):
+    harness = CaptureResources(tmp_path, monkeypatch)
+    harness.derive_ready = False
+    harness.advance = lambda: setattr(harness, "derive_ready", harness.stage >= 2)
+    harness.capture()
+    assert harness.captures[0][0] == 2
+
+
+def test_new_selection_requires_a_new_frame_after_an_existing_capture(tmp_path, monkeypatch):
+    harness = CaptureResources(tmp_path, monkeypatch)
+    harness.capture("first")
+    first = harness.session.program_evidence["first"]["status"]["programs"][0]["draw"]["frames"]
+    harness.cursor.update(step=3, latest=3)
+    harness.session.bridge.selection_step = 3
+    start = harness.stage
+    def advance():
+        index = harness.stage - start - 1
+        if index < 4:
+            resource = driver.CAPTURE_RESOURCES["attribution"][index]
+            harness.received["attribution"][resource] = 3
+            if resource != "strings":
+                harness.shown["attribution"][resource] = 3
+        else:
+            harness.shown["attribution"]["strings"] = 3
+    harness.advance = advance
+    harness.capture("second")
+    second = harness.session.program_evidence["second"]["status"]["programs"][0]["draw"]["frames"]
+    assert second > first
+    assert [stage for stage, _ in harness.captures] == [1, 6]
+    assert harness.session.program_evidence["second"]["resource_steps"]["attribution"] == dict.fromkeys(
+        driver.CAPTURE_RESOURCES["attribution"], 3)
+
+
+@pytest.mark.parametrize("failure", ["capture", "cursor", "stopped"])
+def test_capture_restores_a_held_cursor_after_failure(tmp_path, monkeypatch, failure):
+    harness = CaptureResources(tmp_path, monkeypatch)
+    original = dict(harness.cursor, step=1, live=False, playing=True, speed=3)
+    harness.cursor = dict(original)
+    if failure == "capture":
+        def fail(command):
+            raise Failure("Capture unavailable")
+        harness.call = fail
+    elif failure == "cursor":
+        harness.advance = lambda: harness.cursor.update(step=3)
+    else:
+        harness.advance = lambda: setattr(harness, "stopped", True)
+    with pytest.raises(Failure):
+        harness.capture()
+    assert {k: harness.cursor[k] for k in original} == original
+    assert not harness.captures
+
+
+def test_selection_bridge_waits_for_a_fresh_pick_even_when_the_row_matches(tmp_path):
+    from types import SimpleNamespace
+    bridge = driver.Bridge(SimpleNamespace(out=tmp_path))
+    bridge.last_selection = 4
+    bridge.last_examples = {"examples": ["old"]}
+    bridge.selection_generation = 1
+    polls = []
+    def until(description, read):
+        polls.append(read())
+        bridge.selection_generation += 1
+        bridge.last_examples = {"examples": ["new"]}
+        polls.append(read())
+        return polls[-1]
+    bridge.consume = lambda: None
+    bridge.session.mcp = SimpleNamespace(body=lambda *a, **kw: None)
+    bridge.session.events = SimpleNamespace(until=until)
+    assert bridge.select(4) == {"examples": ["new"]}
+    assert polls == [False, {"examples": ["new"]}]
+
+
+@pytest.mark.parametrize("flow", ["ordinary", "live", "published_collection", "published_live"])
+def test_demo_flows_use_the_complete_selection_capture_barrier(tmp_path, monkeypatch, flow):
+    from types import SimpleNamespace
+    harness = CaptureResources(tmp_path, monkeypatch)
+    session = harness.session
+    session.run_id = "circuit-trace"
+    session.private_output_directory = tmp_path
+    session.replication_profile = driver.published.PROFILE if flow.startswith("published") else None
+    session.ready_programs = lambda identifiers: None
+    session.read = lambda *args, **kwargs: {"step": 2}
+    session.example_page = lambda page: ({"step": 2}, {"step": 2})
+    selected = dict(index=0, id="feature:0:0:1", kind="feature", layer=0, feature=1, position=0,
+                    influence=1, effect=1, label="Selected Feature")
+    graph = dict(nodes=[selected], counts={"layers": 2}, completeness={"max_absolute_residual": 0})
+    trace = dict(step=1, seconds=0, state="done", counts={"nodes": 1})
+    session.events.complete = lambda *args, **kwargs: trace
+    monkeypatch.setattr(driver, "check_assets", lambda s: {})
+    monkeypatch.setattr(driver, "instrument", lambda s: None)
+    monkeypatch.setattr(driver, "programs", lambda s: None)
+    monkeypatch.setattr(driver, "read_graph", lambda s: graph)
+    monkeypatch.setattr(driver, "bar_rows", lambda r: [dict(token=1, baseline=.7, probability=.7)])
+    monkeypatch.setattr(driver, "comparison_evidence", lambda *a: {"argmax_token_ids": [1, 1]})
+    monkeypatch.setattr(driver.published, "replication_state", lambda s: ({}, {}))
+    monkeypatch.setattr(driver.published, "preparation", lambda *a: {
+        "id": "prepared", "prompts": {"dallas": {"token_ids": []}}})
+    monkeypatch.setattr(driver.published, "read_graph", lambda *a, **kw: (graph, []))
+    monkeypatch.setattr(driver.published, "published_selection", lambda g: selected)
+    monkeypatch.setattr(driver, "published_action", lambda *a: {
+        "completed": True, "evidence": {"result": {"argmax_token_ids": [1, 1]}}})
+    def select(bridge, row):
+        bridge.selection_step = 2
+        harness.received["attribution"]["strings"] = 1
+        harness.shown["attribution"]["strings"] = 1
+        return {"examples": []}
+    monkeypatch.setattr(driver.Bridge, "select", select)
+    def advance():
+        if harness.stage >= 2:
+            harness.received["attribution"]["strings"] = 2
+        if harness.stage >= 3:
+            harness.shown["attribution"]["strings"] = 2
+    harness.advance = advance
+    def reached(command):
+        CaptureResources.call(harness, command)
+        raise Failure("Complete resource capture reached")
+    harness.call = reached
+    entry = driver.live_demo if flow in ("live", "published_live") else driver.acceptance
+    with pytest.raises(Failure, match="Complete resource capture reached"):
+        entry(session, SimpleNamespace(prompt=driver.published.PROMPT, model="tiny-lm"), {"checks": []})
+    assert harness.captures[0][0] == 3
+    assert harness.cursor["live"]

@@ -27,6 +27,11 @@ from _visible import StartupFailure, check_assets, configure_assets, hold_after_
 import _published as published
 
 ROOT = Path(__file__).resolve().parents[2]
+CAPTURE_RESOURCES = {
+    "attribution": ("nodes", "curves", "labels", "strings"),
+    "example_tokens": ("rows", "cells", "labels", "strings"),
+    "probabilities": ("cells", "labels", "strings"),
+}
 METHOD_DISCLOSURES = {
     "dictionary": "The graph uses a separate transcoder dictionary for each layer.",
     "routing": "The graph fixes attention routing, normalization scales, and feature masks for this prompt.",
@@ -256,22 +261,85 @@ class Session:
         return self.events.until("compiled derive programs", compiled)
 
     def capture(self, name, expected_steps):
+        """Hold resource history until a fresh, coherent frame reaches the capture."""
+        if not expected_steps or set(expected_steps) - CAPTURE_RESOURCES.keys():
+            raise Failure("Capture requires known circuit programs and their resource steps.")
+        expected_steps = dict(expected_steps)
+        selection_step = getattr(getattr(self, "bridge", None), "selection_step", None)
+        if "attribution" in expected_steps and selection_step is not None:
+            expected_steps["attribution"] = max(expected_steps["attribution"], selection_step)
+        cursor = self.mcp.body("cursor.get")["cursor"]
+        def current_cursor():
+            self._capture_status(expected_steps)
+            current = self.mcp.body("cursor.get")["cursor"]
+            # A derive pass can finish after the selection acknowledgment step.
+            # Do not hold a cursor that predates the resources required for selection.
+            steps = self._capture_resources(expected_steps, current["latest"])
+            return current if steps else False
+        current = self.events.until("capture cursor step", current_cursor)
+        try:
+            held = self.mcp.body("cursor.set", step=current["latest"], live=False, playing=False)["cursor"]
+            return self._capture_held(name, expected_steps, held["step"])
+        finally:
+            restore = {key: cursor[key] for key in ("live", "playing", "speed")}
+            if not cursor["live"]:
+                restore["step"] = cursor["step"]
+            self.mcp.body("cursor.set", **restore)
+
+    def _capture_status(self, expected_steps):
+        status = self.mcp.body("program.status")
+        for program in status["programs"]:
+            if program["id"] not in expected_steps:
+                continue
+            draw = program.get("draw") or {}
+            if (program.get("error") or draw.get("error")
+                    or program.get("state") in ("refused", "stopped")
+                    or draw.get("state") in ("refused", "stopped")):
+                raise Failure(f"The {program['id']} program reports an error: {program}")
+        return status
+
+    def _capture_resources(self, expected_steps, cursor_step):
+        # Each circuit piece writes all its listed resources on each derive run.
+        resources = {}
+        for identifier, minimum in expected_steps.items():
+            steps = {resource: self.mcp.body("program.read", id=identifier, resource=resource,
+                                            step=cursor_step, count=1)["step"]
+                     for resource in CAPTURE_RESOURCES[identifier]}
+            if any(step is None or step < minimum for step in steps.values()) or len(set(steps.values())) != 1:
+                return None
+            resources[identifier] = steps
+        return resources
+
+    def _capture_held(self, name, expected_steps, cursor_step):
+        initial = self._capture_status(expected_steps)
+        first_frames = {p["id"]: (p.get("draw") or {}).get("frames", 0) for p in initial["programs"]}
+        resource_steps = {}
         def rendered():
-            status = self.mcp.body("program.status")
+            cursor = self.mcp.body("cursor.get")["cursor"]
+            if cursor["step"] != cursor_step or cursor["live"] or cursor["playing"]:
+                raise Failure("The capture cursor changed before the resource barrier completed.")
+            status = self._capture_status(expected_steps)
             by_id = {p["id"]: p for p in status["programs"]}
-            for identifier, minimum in expected_steps.items():
+            # Read the viewer's retained history at the held cursor. Producer status alone
+            # cannot prove that the final resource chunk arrived or that a frame used it.
+            resources = self._capture_resources(expected_steps, cursor_step)
+            if resources is None:
+                return False
+            for identifier, steps in resources.items():
                 program = by_id.get(identifier, {})
-                draw = program.get("draw", {})
-                if program.get("error") or draw.get("error"):
-                    raise Failure(f"The {identifier} program reports an error: {program}")
-                if draw.get("resource_step") is None or draw["resource_step"] < minimum:
+                draw = program.get("draw") or {}
+                shown = draw.get("resource_steps") or {}
+                if any(shown.get(resource) != step for resource, step in steps.items()):
+                    return False
+                if draw.get("frames", 0) <= first_frames.get(identifier, 0):
                     return False
                 if draw.get("frame_ms") is None or program.get("last_pass_ms") is None:
                     return False
-                if program.get("last_step") is None or program["last_step"] < minimum:
+                if program.get("last_step") is None or program["last_step"] < max(steps.values()):
                     return False
+                resource_steps[identifier] = steps
             return status
-        status = self.events.until("rendered resource steps", rendered)
+        status = self.events.until("rendered circuit resources", rendered)
         pieces = {}
         for program in status["programs"]:
             if program["id"] in expected_steps:
@@ -279,6 +347,7 @@ class Session:
                 pieces[program["id"]] = self.mcp.body("piece.show", name=pin["name"], version=pin.get("version", 1),
                                                      **{"from": pin.get("from", "library")})["piece"]
         snapshot = {"status": status, "pieces": pieces, "expected_steps": expected_steps,
+                    "resource_steps": resource_steps, "cursor_step": cursor_step,
                     "phase": "after the resource barrier and before capture.frame"}
         self.program_evidence[name] = snapshot
         save(self.out / (name + "-program-status.json"), snapshot)
@@ -465,6 +534,8 @@ class Bridge:
         self.session = session
         self.last_examples = None
         self.last_selection = None
+        self.selection_step = None
+        self.selection_generation = 0
         self.examples_present = False
         self.details_expanded = False
 
@@ -473,6 +544,7 @@ class Bridge:
             scene_programs(self.session, [], remove_examples=True)
             self.examples_present = False
         self.last_selection = self.last_examples = None
+        self.selection_step = None
 
     def fill_examples(self, index):
         s = self.session
@@ -485,6 +557,7 @@ class Bridge:
             s.ready_programs(["example_tokens"])
             s.events.complete("feature.examples", node=index, limit=16)
         self.last_selection = index
+        self.selection_generation += 1
         save(s.out / "selected-examples.json", self.last_examples)
 
     def handle(self, event):
@@ -528,11 +601,12 @@ class Bridge:
                 s.parameter("selected_node", -1)
                 self.clear_examples()
                 return
-            s.parameter("selected_node", int(index))
+            self.selection_step = s.parameter("selected_node", int(index))["step"]
             self.fill_examples(int(index))
         elif event["kind"] == "run" and event.get("change") == "param" and event.get("name") == "selected_node":
             index = int(event["value"])
             if (index if index >= 0 else None) != self.last_selection:
+                self.selection_step = event.get("step")
                 s.mcp.body("state.set", id="selected_node", value=index)
                 if index < 0:
                     self.clear_examples()
@@ -559,10 +633,11 @@ class Bridge:
                     log.write(json.dumps({"event": event, "error": str(exc)}) + "\n")
 
     def select(self, row):
+        generation = self.selection_generation
         self.session.mcp.body("selection.set", panel="graph", program="attribution", item=row)
         def selected():
             self.consume()
-            return self.last_examples if self.last_selection == row else False
+            return self.last_examples if self.last_selection == row and self.selection_generation > generation else False
         return self.session.events.until("feature pick bridge", selected)
 
     def details(self, expanded):
@@ -630,9 +705,7 @@ def acceptance(session, args, result):
     if result.get("mode") == "gemma":
         from _checks import prompt_confidence_check
         result["checks"].append(prompt_confidence_check(args.prompt, before, baseline_top_token))
-    # A resource barrier confirms selected-label derivation before the capture.
-    labels = s.read("attribution", "labels", minimum_step=before_reply["step"])
-    expected_steps = {"attribution": labels["step"], "example_tokens": first_page["step"],
+    expected_steps = {"attribution": trace["step"], "example_tokens": first_page["step"],
                       "probabilities": before_reply["step"]}
     result["checks"].append(check("selection_only", all(abs(r["probability"] - r["baseline"]) <= 1e-7 for r in before),
                                    before, "selection preserves the baseline"))
@@ -765,8 +838,7 @@ def live_demo(session, args, result):
     bridge.select(selected["index"])
     rows, _ = session.example_page(0)
     bars = session.read("probabilities", "cells")
-    labels = session.read("attribution", "labels", minimum_step=bars["step"])
-    session.capture("demo", {"attribution": labels["step"], "probabilities": bars["step"],
+    session.capture("demo", {"attribution": trace["step"], "probabilities": bars["step"],
                              "example_tokens": rows["step"]})
     session.mcp.body("applet.save")
     spec = session.mcp.body("spec.get")
