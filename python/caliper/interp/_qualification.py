@@ -8,6 +8,7 @@ from ._dictionary import dictionary_fingerprint, model_identity
 from ._evaluation_identity import evaluation_dictionary_evidence, evaluation_model_evidence
 from ._gemma_import_identity import verified_import_binding
 from ._index import FeatureIndex, WINDOW_TOKENS, _FILES, _dictionary_hash, _hash_file, _json, _source_hash, _tokenizer_hash
+from ._research_evidence import research_evidence
 
 
 def dictionary_response(dictionary, index=None, *, model=None, tokenizer=None):
@@ -61,6 +62,9 @@ def dictionary_response(dictionary, index=None, *, model=None, tokenizer=None):
     })
     if import_binding is not None:
         result["import_binding"] = import_binding
+    research = research_evidence(index.root, fingerprint, tensor_binding, model_binding, memory=memory)
+    if research is not None:
+        result["research_quality"] = research
     if "fallback_source" in metadata:
         result["fallback_source"] = deepcopy(metadata["fallback_source"])
     memory.check("dictionary qualification complete")

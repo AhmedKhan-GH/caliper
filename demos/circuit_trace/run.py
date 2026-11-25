@@ -69,6 +69,7 @@ class Session:
     def __init__(self, args, out, *, show=False):
         self.out, self.show = out, show
         self.quality_override = getattr(args, "quality_override", None)
+        self.family = getattr(args, "family", "fixture" if args.model == "tiny-lm" else "qwen")
         self.app = self.mcp = self.events = None
         self.app_process = None
         self.app_owner = None
@@ -342,6 +343,14 @@ def read_graph(session):
 def instrument(session):
     m = session.mcp
     disclosures = dict(METHOD_DISCLOSURES)
+    if getattr(session, "family", None) == "gemma":
+        evidence = session.events.complete("feature.dictionary")
+        research = evidence.get("research_quality", {})
+        if not dictionary_qualification(evidence, family="gemma")["qualified"]:
+            raise Failure("The complete Gemma research protocol or artifact identity is unavailable.")
+        disclosures["quality_measurements"] = (
+            f"FVU {research['fvu']:.6f}. Dead fraction {research['dead_fraction']:.6f}. "
+            f"All-layer loss rise {research['cross_entropy_delta']:.6f} nats. Quality bars await calibration.")
     override = getattr(session, "quality_override", None)
     if override is not None:
         override = validate_quality_override(override)
@@ -382,8 +391,9 @@ def instrument(session):
 
 def instrument_layout(session, *, expanded):
     override = getattr(session, "quality_override", None)
+    research = getattr(session, "family", None) == "gemma"
     # Flat control groups stay within the spec's eight-level layout limit.
-    ratio = .74 if expanded else (.90 if override else .95)
+    ratio = .74 if expanded else (.90 if override or research else .95)
     nodes = [{"id": "instrument", "split": "vertical", "ratio": ratio, "children": ["main", "methods"]},
              {"id": "main", "split": "vertical", "ratio": .10225, "children": ["header", "body"]},
              {"id": "header", "split": "vertical", "children": ["prompt", "clamp_status"]},
@@ -403,6 +413,8 @@ def instrument_layout(session, *, expanded):
         method_ids.extend("method_" + name for name in METHOD_DISCLOSURES)
     if override is not None:
         method_ids.extend(["method_dictionary_quality_override", "method_dictionary_identity"])
+    if research:
+        method_ids.append("method_quality_measurements")
     if len(method_ids) == 1:
         nodes[0]["children"][1] = method_ids[0]
     else:
@@ -692,6 +704,7 @@ def acceptance_profile(model):
 def main(argv=None):
     args = parser().parse_args(argv)
     family, memory_limit = acceptance_profile(args.model)
+    args.family = family
     if args.quality_override is not None:
         if family != "qwen" or args.quality_override.stat().st_size > 4096:
             raise Failure("A quality override requires Qwen and at most 4096 JSON bytes.")

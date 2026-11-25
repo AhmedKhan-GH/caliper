@@ -65,6 +65,32 @@ def gemma_reply():
     identity["model_hash"] = index["model_hash"] = GEMMA_HASH
     index.update(layers=26, features=16384,
                  provenance={**deepcopy(source), "partition": "index", "publisher_training_overlap": "unknown"})
+    research = deepcopy(metadata["quality"])
+    research_policy = {"version": 1, "family": "gemma2", "bos_policy": "genuine_bos_prefix",
+        "prefix_ids": [2], "pad_id": 0, "eos_ids": [1], "excluded_ids": [0, 1, 2],
+        "model_context": 1024, "content_context": 1023, "segmentation": "contiguous_document_positions",
+        "observations": "source_positions_excluding_bos_eos_pad",
+        "replacement": "metric_positions_only_preserve_special_outputs",
+        "cross_entropy": "attended_predictor_and_next_nonspecial_source_target_in_same_row",
+        "first_token_loss": "bos_predicts_first_nonspecial_target"}
+    research.update(protocol="research_v1", protocol_version=1, source_budget_complete=True,
+        source_tokens=200000, metric_observations=199000, cross_entropy_tokens=199000,
+        thresholds={"fvu": .30, "dead_fraction": .15, "cross_entropy_delta": .5, "evaluated_tokens": 200000},
+        checkpoint_sha256="7" * 64, context_policy=research_policy, active_layers=list(range(26)),
+        per_layer_status=["active"] * 26, per_layer_l0=[20.] * 26,
+        per_layer_cross_entropy=[research["original_cross_entropy"] + .1] * 26,
+        per_layer_cross_entropy_delta=[.1] * 26,
+        evaluation_source={**deepcopy(source), "partition": "quality"})
+    research["content_segmentation"]["record"] = "evaluation-research-v1/state.json:content_segments"
+    research["settings"] = {"protocol": {"name": "research_v1", "version": 1,
+        "context_policy": deepcopy(research_policy), "source_budget": 200000,
+        "fvu": "sum_squared_error_over_sum_squared_deviation_from_dataset_mean_vector_per_layer",
+        "activity": "positive_features_per_nonspecial_source_position",
+        "loss": "sum_nats_over_identical_targets_baseline_isolated_and_all_active",
+        "statistics_dtype": "cpu_float64"}, "context_policy": deepcopy(research_policy),
+        "tokens": 200000, "context": 1024, "source": deepcopy(research["evaluation_source"]),
+        **{key: deepcopy(research[key]) for key in ("dictionary_hash", "tensor_binding", "model_binding")}}
+    response["research_quality"] = research
     return response
 
 
@@ -72,7 +98,7 @@ def test_gemma_requires_its_own_identity_and_preserves_unknown_training():
     response = gemma_reply()
     original = deepcopy(response)
     result = dictionary_qualification(response, family="gemma")
-    assert result["qualified"] and result["status"] == "passed" and result["scope"] == "all_layers"
+    assert result["qualified"] and result["status"] == "research_reported" and result["scope"] == "all_layers"
     assert response == original
     assert not dictionary_qualification(response)["qualified"]
     assert not dictionary_qualification(qualification_reply(), family="gemma")["qualified"]
@@ -82,7 +108,7 @@ def test_gemma_requires_its_own_identity_and_preserves_unknown_training():
 @pytest.mark.parametrize("fault", ["missing", "version", "boolean_version", "hash", "different", "extra"])
 def test_gemma_requires_exact_dictionary_tensor_evidence(location, fault):
     response = gemma_reply()
-    owner = response["metadata"]["quality"] if location == "quality" else response
+    owner = response["research_quality"] if location == "quality" else response
     if fault == "missing":
         del owner["tensor_binding"]
     else:
@@ -106,12 +132,17 @@ def test_qwen_artifact_qualification_keeps_legacy_tensor_policy():
                                            ("cross_entropy_delta", .500001)])
 def test_gemma_retains_original_quality_thresholds(metric, value):
     response = gemma_reply()
-    quality = response["metadata"]["quality"]
+    quality = response["research_quality"]
     quality[metric] = value
     if metric == "cross_entropy_delta":
         quality["replaced_cross_entropy"] = quality["original_cross_entropy"] + value
     else:
         quality["per_layer_" + metric] = [value] * 26
+    quality["status"] = "failed"
+    result = dictionary_qualification(response, family="gemma")
+    assert result["qualified"] and not result["quality_gates_blocking"]
+    assert result["historical_quality_status"] == "failed"
+    quality["status"] = "passed"
     assert not dictionary_qualification(response, family="gemma")["qualified"]
 
 
@@ -141,13 +172,13 @@ def test_gemma_rejects_stale_or_incomplete_release_evidence(fault):
     elif fault == "corpus":
         metadata["evaluation_source"]["dataset_revision"] = "0" * 40
     elif fault == "quality_source":
-        metadata["quality"]["evaluation_source"]["source_id"] = "different"
+        response["research_quality"]["evaluation_source"]["source_id"] = "different"
     elif fault == "index_source":
         response["index"]["provenance"]["source_id"] = "different"
     elif fault == "index_overlap":
         response["index"]["provenance"]["publisher_training_overlap"] = "excluded"
     elif fault == "partial_quality":
-        metadata["quality"]["evaluated_tokens"] -= 1
+        response["research_quality"]["evaluated_tokens"] -= 1
     else:
         response["index"]["tokens"] -= 1
     assert not dictionary_qualification(response, family="gemma")["qualified"]
@@ -177,7 +208,7 @@ def test_gemma_requires_current_import_evidence(fault):
                                     "model_hash", "uppercase", "extra", "version_type"])
 def test_gemma_requires_exact_quality_and_live_model_binding(location, fault):
     response = gemma_reply()
-    target = response["metadata"]["quality"] if location == "quality" else response
+    target = response["research_quality"] if location == "quality" else response
     if fault == "missing":
         del target["model_binding"]
     elif fault == "legacy":
@@ -228,7 +259,7 @@ def test_memory_budget_requires_the_exact_gemma_snapshot(tmp_path):
 @pytest.mark.parametrize("fault", ["missing", "bos", "boolean", "segmentation", "replacement"])
 def test_gemma_qualification_requires_corrected_context_policy(owner, fault):
     response = gemma_reply()
-    parent = response["metadata"]["quality"] if owner == "quality" else response["index"]
+    parent = response["research_quality"] if owner == "quality" else response["index"]
     key = "example_context_policy" if owner == "examples" else "context_policy"
     if fault == "missing":
         del parent[key]
@@ -244,7 +275,7 @@ def test_gemma_qualification_requires_corrected_context_policy(owner, fault):
 @pytest.mark.parametrize("fault", ["missing", "hash", "count", "record"])
 def test_gemma_qualification_requires_content_segmentation_evidence(fault):
     response = gemma_reply()
-    quality = response["metadata"]["quality"]
+    quality = response["research_quality"]
     if fault == "missing":
         del quality["content_segmentation"]
     else:
@@ -253,3 +284,57 @@ def test_gemma_qualification_requires_content_segmentation_evidence(fault):
         quality["content_segmentation"][field] = value
     result = dictionary_qualification(response, family="gemma")
     assert not result["qualified"] and "segmentation evidence" in result["reason"]
+
+
+@pytest.mark.parametrize("fault", ["absent", "target_count", "context_count", "source_count", "layer_loss",
+                                   "layer_delta", "metric_count", "threshold", "prefix", "cursor"])
+def test_gemma_research_rejects_incomplete_or_inconsistent_measurements(fault):
+    response = gemma_reply()
+    quality = response["research_quality"]
+    if fault == "absent":
+        del response["research_quality"]
+    elif fault == "context_count":
+        quality["content_segmentation"]["contexts"] = 1
+    elif fault == "layer_loss":
+        quality["per_layer_cross_entropy"].pop()
+    elif fault == "layer_delta":
+        quality["per_layer_cross_entropy_delta"][3] += .1
+    elif fault == "threshold":
+        quality["thresholds"]["fvu"] = .4
+    elif fault == "prefix":
+        quality["context_policy"]["prefix_ids"] = [True]
+    else:
+        key, value = {"target_count": ("cross_entropy_tokens", 1), "source_count": ("source_tokens", 199999),
+                      "metric_count": ("metric_observations", True), "cursor": ("checkpoint_sha256", "bad")}[fault]
+        quality[key] = value
+    assert not dictionary_qualification(response, family="gemma")["qualified"]
+
+
+def test_legacy_quality_cannot_replace_missing_research_evidence():
+    response = gemma_reply()
+    assert response["metadata"]["quality"]["status"] == "passed"
+    del response["research_quality"]
+    assert not dictionary_qualification(response, family="gemma")["qualified"]
+
+
+def test_gemma_instrument_discloses_failed_measurements_without_blocking():
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+    from run import instrument, instrument_layout
+
+    response = gemma_reply()
+    quality = response["research_quality"]
+    quality.update(status="failed", fvu=.5, per_layer_fvu=[.5] * 26)
+    session = SimpleNamespace(family="gemma", quality_override=None, mcp=Mock(), events=Mock())
+    session.events.complete.return_value = response
+    instrument(session)
+    calls = session.mcp.body.call_args_list
+    readout = next(call.kwargs for call in calls if call.args[0] == "control.create"
+                   and call.kwargs["id"] == "method_quality_measurements")
+    assert "0.500000" in readout["options"]["format"]
+    assert "await calibration" in readout["options"]["format"]
+    for expanded in (False, True):
+        instrument_layout(session, expanded=expanded)
+        nodes = session.mcp.body.call_args.kwargs["layout"]["nodes"]
+        methods = next(node for node in nodes if node["id"] == "methods")
+        assert methods["children"].count("method_quality_measurements") == 1

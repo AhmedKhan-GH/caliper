@@ -47,7 +47,7 @@ Model-bound conversion and real Gemma acceptance remain unrun in the recorded ev
 
 The founder accepted the existing Qwen dictionary for its recorded visual results and prohibited further dictionary training.
 The M8 acceptance target is Gemma 2 2B with the public Gemma Scope transcoders.
-M8 remains held until that model passes every quality and acceptance check.
+M8 remains held until that model passes every causal, visual, timing, parity, and memory check.
 The graph requires at least eight of ten correct signs and Spearman correlation of at least 0.6.
 The Qwen quality override does not apply to Gemma.
 
@@ -147,7 +147,9 @@ Local partition separation does not establish disjointness from publisher traini
 Quality and index records must retain `publisher_training_overlap="unknown"`.
 The evaluation and index tools implement this source contract for the explicit Gemma model selection.
 
-Gemma quality retains the original limits of 0.30 mean FVU, 0.15 dead fraction, and 0.5 nats cross-entropy rise on exactly 200,000 tokens.
+Gemma quality retains historical comparisons against 0.30 mean FVU, 0.15 dead fraction, and 0.5 nats cross-entropy rise.
+The revised protocol evaluates 200,000 source tokens and reports nonspecial observation and loss-target counts separately.
+Quality values inform calibration and do not block the index or hidden acceptance after the revised protocol result exists.
 Its evidence binds the evaluated model, dictionary tensor bytes, forward settings, and evaluation device.
 A device change requires a new quality evaluation because kernel arithmetic can differ.
 The index requires exactly 2,000,000 tokens.
@@ -407,7 +409,9 @@ This quality exception does not change causal, pixel, parity, or budget threshol
 The later decision on 24 November changes the steering direction rule and holds M8 open.
 The later Gemma decision selects the pinned Gemma Scope set without new training.
 
-M8 cannot merge until Gemma passes all quality and acceptance checks and platform CI passes.
+M8 cannot merge until Gemma passes all causal, visual, timing, parity, and memory checks and platform CI passes.
+The 24 November protocol decision removes the quality-gate block without a change to the historical thresholds.
+The founder sets final quality bars from the published comparison.
 Graph validation requires at least eight of ten signs and Spearman correlation of at least 0.6.
 The Qwen quality override does not apply to Gemma.
 

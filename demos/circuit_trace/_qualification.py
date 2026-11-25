@@ -1,6 +1,7 @@
 """Release qualification from the live feature.dictionary response."""
 from __future__ import annotations
 
+import json
 import math
 import re
 
@@ -184,15 +185,14 @@ def _gemma_model_binding(metadata, response):
 
 
 def _gemma_context(metadata, index):
-    """Require the corrected context policy for quality, index, and examples."""
+    """Require the corrected source positions for the index and examples."""
     policy = {"version": 1, "family": "gemma2", "prefix_ids": [2], "pad_id": 0,
               "model_context": 256, "content_context": 255,
               "segmentation": "contiguous_document_positions",
               "observations": "source_tokens_only", "replacement": "source_positions_only",
               "cross_entropy": "within_context_content_targets_including_bos_to_first"}
     examples = dict(policy, model_context=34, content_context=33)
-    for actual, expected in ((metadata["quality"].get("context_policy"), policy),
-                             (index.get("context_policy"), policy),
+    for actual, expected in ((index.get("context_policy"), policy),
                              (index.get("example_context_policy"), examples)):
         _require(isinstance(actual, dict) and actual == expected
                  and all(type(actual[key]) is type(value) for key, value in expected.items())
@@ -200,13 +200,78 @@ def _gemma_context(metadata, index):
                  "Gemma quality or index context policy differs from the corrected contract.")
     _require(_integer(index.get("context_length"), 256), "Gemma index context length differs.")
     spans = metadata["quality"].get("content_segmentation")
+    capacity = metadata["quality"]["context_policy"]["content_context"]
     _require(isinstance(spans, dict) and set(spans) == {"contexts", "sha256", "encoding", "fields", "record"}
-             and type(spans["contexts"]) is int and 1 <= spans["contexts"] <= QUALITY_TOKENS
+             and type(spans["contexts"]) is int
+             and math.ceil(QUALITY_TOKENS / capacity) <= spans["contexts"] <= QUALITY_TOKENS
              and _digest(spans["sha256"])
              and spans["encoding"] == "sha256_ascii_json_rows_with_newlines"
              and spans["fields"] == ["document_id", "source_position", "content_length"]
-             and spans["record"] == "evaluation/state.json:content_segments",
+             and spans["record"] == "evaluation-research-v1/state.json:content_segments",
              "Gemma quality content segmentation evidence is incomplete.")
+
+
+def _gemma_research(metadata, response):
+    """Require complete research measurements without calibration-gate blocking."""
+    quality = response.get("research_quality")
+    _require(isinstance(quality, dict) and quality.get("protocol") == "research_v1"
+             and _integer(quality.get("protocol_version"), 1)
+             and quality.get("source_budget_complete") is True
+             and _integer(quality.get("source_tokens"), QUALITY_TOKENS)
+             and _digest(quality.get("checkpoint_sha256")),
+             "Gemma requires the complete research protocol and its committed cursor.")
+    policy = {"version": 1, "family": "gemma2", "bos_policy": "genuine_bos_prefix",
+              "prefix_ids": [2], "pad_id": 0, "eos_ids": [1], "excluded_ids": [0, 1, 2],
+              "model_context": 1024, "content_context": 1023,
+              "segmentation": "contiguous_document_positions",
+              "observations": "source_positions_excluding_bos_eos_pad",
+              "replacement": "metric_positions_only_preserve_special_outputs",
+              "cross_entropy": "attended_predictor_and_next_nonspecial_source_target_in_same_row",
+              "first_token_loss": "bos_predicts_first_nonspecial_target"}
+    actual = quality.get("context_policy")
+    _require(json.dumps(actual, sort_keys=True, allow_nan=False) == json.dumps(policy, sort_keys=True),
+             "Gemma research context policy differs from the published protocol.")
+    settings = quality["settings"]
+    protocol = settings["protocol"]
+    _require(protocol.get("name") == "research_v1" and _integer(protocol.get("version"), 1)
+             and protocol.get("context_policy") == actual and settings.get("context_policy") == actual
+             and protocol.get("fvu") == "sum_squared_error_over_sum_squared_deviation_from_dataset_mean_vector_per_layer"
+             and protocol.get("activity") == "positive_features_per_nonspecial_source_position"
+             and protocol.get("loss") == "sum_nats_over_identical_targets_baseline_isolated_and_all_active"
+             and protocol.get("statistics_dtype") == "cpu_float64"
+             and _integer(protocol.get("source_budget"), QUALITY_TOKENS)
+             and _integer(settings.get("tokens"), QUALITY_TOKENS)
+             and _integer(settings.get("context"), 1024),
+             "Gemma research aggregation or source budget differs.")
+    observations = quality.get("metric_observations")
+    _require(type(observations) is int and 0 < observations <= QUALITY_TOKENS
+             and _integer(quality.get("cross_entropy_tokens"), observations),
+             "Gemma research target count must equal its nonspecial observations.")
+    _require(quality.get("thresholds") == {"fvu": .30, "dead_fraction": .15,
+                                          "cross_entropy_delta": .5, "evaluated_tokens": QUALITY_TOKENS},
+             "Gemma historical quality thresholds changed.")
+    _require(quality.get("active_layers") == list(range(26))
+             and all(type(i) is int for i in quality["active_layers"])
+             and quality.get("per_layer_status") == ["active"] * 26,
+             "Gemma research replacement scope is incomplete.")
+    for key in ("per_layer_cross_entropy", "per_layer_cross_entropy_delta", "per_layer_l0"):
+        _require(isinstance(quality.get(key), list) and len(quality[key]) == 26
+                 and all(_number(value) for value in quality[key]), "Gemma lacks finite per-layer research measurements.")
+    baseline = quality["original_cross_entropy"]
+    _require(_number(baseline) and all(value >= 0 for value in quality["per_layer_cross_entropy"])
+             and all(0 <= value <= 16384 for value in quality["per_layer_l0"])
+             and all(math.isclose(delta, loss - baseline, rel_tol=1e-9, abs_tol=1e-12)
+                     for loss, delta in zip(quality["per_layer_cross_entropy"], quality["per_layer_cross_entropy_delta"])),
+             "Gemma isolated loss measurements are inconsistent.")
+    source = {**metadata["evaluation_source"], "partition": "quality"}
+    _require(quality.get("evaluation_source") == settings.get("source") == source,
+             "Gemma research quality source differs from the held-out partition.")
+    for key in ("dictionary_hash", "tensor_binding", "model_binding"):
+        label = {"dictionary_hash": "dictionary identity", "tensor_binding": "dictionary tensor",
+                 "model_binding": "model binding"}[key]
+        _require(settings.get(key) == quality.get(key), f"Gemma research settings have stale {label} evidence.")
+    # The existing source validator expects the source identity without its partition tag.
+    return {**metadata, "quality": {**quality, "evaluation_source": metadata["evaluation_source"]}}
 
 
 def _gemma_dictionary_binding(metadata, response):
@@ -267,6 +332,8 @@ def dictionary_qualification(response, *, quality_override=None, family="qwen"):
         _require(family in ("qwen", "gemma"), "Unsupported acceptance model family.")
         metadata = response["metadata"]
         gemma = family == "gemma"
+        if gemma:
+            metadata = _gemma_research(metadata, response)
         fallback = "fallback" in metadata["training"]
         result.update(scope="upper_half" if fallback else "all_layers",
                       status="fallback_unverified" if fallback else "unverified",
@@ -306,10 +373,15 @@ def dictionary_qualification(response, *, quality_override=None, family="qwen"):
         if gemma or "source_id" in provenance:
             _require(provenance["source_id"] == training["source_id"], "The index source identity differs.")
         _quality(metadata, identity["dictionary_fingerprint"], fallback=fallback, override=quality_override,
-                 fvu_limit=.30 if gemma else .40)
+                 fvu_limit=.30 if gemma else .40,
+                 failed=gemma and metadata["quality"].get("status") == "failed")
         if fallback:
             _fallback(metadata, response)
         result.update(qualified=True, status="fallback_passed" if fallback else "passed", identity=dict(identity))
+        if gemma:
+            result.update(status="research_reported", quality_gates_blocking=False,
+                          historical_quality_status=metadata["quality"]["status"],
+                          research_protocol="research_v1")
         if quality_override is not None:
             result.update(status="founder_override", quality_override=validate_quality_override(quality_override))
     except (KeyError, TypeError, ValueError, AttributeError, OverflowError) as error:
