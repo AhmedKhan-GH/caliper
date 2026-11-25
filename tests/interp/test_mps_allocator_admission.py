@@ -32,6 +32,7 @@ def metrics(monkeypatch):
             recommended_max_memory=lambda: state.recommended,
             current_allocated_memory=lambda: state.allocated,
             driver_allocated_memory=lambda: state.driver,
+            empty_cache=lambda: None,
             set_per_process_memory_fraction=state.fractions.append))
     monkeypatch.setattr(_memory, "torch", facade)
     monkeypatch.setattr(_frozen, "torch", facade)

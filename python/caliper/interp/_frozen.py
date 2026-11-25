@@ -407,6 +407,11 @@ class MemoryGuard:
 
     def batch_size(self, requested, *, layers, tokens, width, mixer_width, itemsize=4):
         current = self.check("target batch admission")
+        if self.device.type == "mps":
+            # Release only unoccupied cache at the synchronous batch boundary.
+            # Keep prior failures and use fresh counters for every admission.
+            torch.mps.empty_cache()
+            current = self.check("target batch admission after cache release")
         # Bound live values, adjoints, convolution work, and allocator headroom.
         per_target = max(4, itemsize) * tokens * (width * (layers + 1) * 12 + mixer_width * layers * 8)
         available = self.limit - current - 512_000_000
