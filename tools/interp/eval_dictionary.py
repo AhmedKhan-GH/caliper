@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 from contextlib import ExitStack, contextmanager
+import hashlib
 import json
 import math
 from pathlib import Path
@@ -13,6 +14,7 @@ from torch.nn import functional as F
 from safetensors.torch import load_file
 
 from caliper.interp import capture, load_dictionary
+from caliper.interp._context import context_policy, prepare_contexts, source_segments
 from caliper.interp._dictionary import fallback_metadata
 from .checkpoint_state import _save_tensors, dictionary_fingerprint, write_json
 from .evaluation_binding import EvaluationBinding
@@ -27,7 +29,7 @@ _QUALITY_THRESHOLDS = {"fvu": 0.40, "dead_fraction": 0.15, "cross_entropy_delta"
 
 
 @contextmanager
-def replace_all_mlps(model, dictionary):
+def replace_all_mlps(model, dictionary, *, content_mask=None):
     """Replace every active MLP for one forward and restore it on every exit."""
     originals = []
     handles, reads = [], {}
@@ -53,7 +55,12 @@ def replace_all_mlps(model, dictionary):
                     value = dictionary.layers[index](reads.pop(index))
                     if value.shape != output.shape:
                         raise ValueError("Gemma replacement shape differs from the semantic write")
-                    return value.to(dtype=output.dtype, device=output.device)
+                    value = value.to(dtype=output.dtype, device=output.device)
+                    if content_mask is not None:
+                        if content_mask.shape != output.shape[:-1]:
+                            raise ValueError("replacement content mask differs from the model context")
+                        value = torch.where(content_mask[..., None], value, output)
+                    return value
 
                 handles.append(model.get_submodule(read.module).register_forward_hook(remember, with_kwargs=True))
                 handles.append(model.get_submodule(write.module).register_forward_hook(replace))
@@ -74,12 +81,19 @@ def replace_all_mlps(model, dictionary):
 
 
 @torch.no_grad()
-def cross_entropy_sum(model, hidden, input_ids, count, *, chunk_tokens=64, health=None):
+def cross_entropy_sum(model, hidden, input_ids, count, *, chunk_tokens=64, health=None,
+                      prediction_mask=None):
     """Project a bounded token chunk. Exclude padding and context boundaries."""
     width = hidden.shape[-1]
     context = input_ids.shape[-1]
-    positions = torch.arange(max(count - 1, 0), device=hidden.device)
-    positions = positions[(positions + 1) % context != 0]
+    if prediction_mask is None:
+        positions = torch.arange(max(count - 1, 0), device=hidden.device)
+        positions = positions[(positions + 1) % context != 0]
+    else:
+        if prediction_mask.dtype != torch.bool or prediction_mask.shape != input_ids[:, :-1].shape:
+            raise ValueError("invalid cross-entropy prediction mask")
+        positions = torch.arange(input_ids.numel(), device=hidden.device).reshape_as(input_ids)
+        positions = positions[:, :-1][prediction_mask]
     head = model.get_output_embeddings()
     states = hidden.reshape(-1, width)
     ids = input_ids.reshape(-1)
@@ -92,6 +106,8 @@ def cross_entropy_sum(model, hidden, input_ids, count, *, chunk_tokens=64, healt
         if getattr(model.config, "model_type", None) == "gemma2":
             cap = model.config.final_logit_softcapping
             if cap is not None:
+                if isinstance(cap, bool) or not math.isfinite(cap) or cap <= 0:
+                    raise ValueError("invalid Gemma final logit softcap")
                 logits = (logits / cap).tanh() * cap
         loss = F.cross_entropy(logits, ids[selected + 1], reduction="sum")
         total += float(loss.item())
@@ -185,32 +201,40 @@ def quality_stats(metadata):
 
 
 @torch.no_grad()
-def evaluate_batch(model, dictionary, ids, count, *, chunk_tokens=64, health=None, check_binding=None):
+def evaluate_batch(model, dictionary, ids, count, *, chunk_tokens=64, health=None, check_binding=None,
+                   prepared=None):
     """Commit no statistics until both complete model forwards succeed."""
     with autorelease_scope(ids.device):
         return _evaluate_batch(model, dictionary, ids, count, chunk_tokens=chunk_tokens,
-                               health=health, check_binding=check_binding)
+                               health=health, check_binding=check_binding, prepared=prepared)
 
 
-def _evaluate_batch(model, dictionary, ids, count, *, chunk_tokens, health, check_binding):
+def _evaluate_batch(model, dictionary, ids, count, *, chunk_tokens, health, check_binding, prepared):
     metadata = dictionary.metadata
     result = quality_stats(metadata)
     requested = [metadata[field][i] for field in ("read_points", "write_points") for i in result.active_layers]
     captured = None
+    options = {} if prepared is None else {"attention_mask": prepared.attention_mask}
+    ce_options = {} if prepared is None else {"prediction_mask": prepared.prediction_mask}
+    if prepared is not None and (prepared.input_ids is not ids or int(prepared.content_mask.sum()) != count):
+        raise ValueError("prepared context differs from evaluation content")
     try:
         with capture(model, requested) as captured:
-            original = hidden_forward(model, ids)
+            original = hidden_forward(model, ids, **options)
         if check_binding:
             check_binding()
         result.original_ce, result.ce_tokens = cross_entropy_sum(model, original, ids, count,
-                                                                chunk_tokens=chunk_tokens, health=health)
+                                                                chunk_tokens=chunk_tokens, health=health, **ce_options)
         del original
         for i in result.active_layers:
             layer = dictionary.layers[i]
             if health:
                 health()
-            x = captured[metadata["read_points"][i]].reshape(-1, metadata["width"])[:count]
-            y = captured[metadata["write_points"][i]].reshape(-1, metadata["width"])[:count]
+            x, y = (captured[metadata[field][i]] for field in ("read_points", "write_points"))
+            if prepared is None:
+                x, y = (value.reshape(-1, metadata["width"])[:count] for value in (x, y))
+            else:
+                x, y = x[prepared.content_mask], y[prepared.content_mask]
             mean = y.mean(0)
             result.mean[i] = mean.cpu().double()
             result.variance_sum[i] = (y - mean).square().sum().cpu().double()
@@ -226,13 +250,13 @@ def _evaluate_batch(model, dictionary, ids, count, *, chunk_tokens, health, chec
         captured.close(clear=True)
         if check_binding:
             check_binding()
-        with replace_all_mlps(model, dictionary):
-            replaced = hidden_forward(model, ids)
+        with replace_all_mlps(model, dictionary, content_mask=None if prepared is None else prepared.content_mask):
+            replaced = hidden_forward(model, ids, **options)
         # Check only after the original MLP modules are restored.
         if check_binding:
             check_binding()
         result.replaced_ce, replaced_count = cross_entropy_sum(model, replaced, ids, count,
-                                                              chunk_tokens=chunk_tokens, health=health)
+                                                              chunk_tokens=chunk_tokens, health=health, **ce_options)
         if replaced_count != result.ce_tokens:
             raise ValueError("cross-entropy target counts differ")
         result.count = count
@@ -260,7 +284,8 @@ def prepare_evaluation(folder, stats, stream, pending, identity, settings, elaps
                        "tensors": name, "stream": stream_state, "pending_ids": pending,
                        "count": stats.count, "original_ce": stats.original_ce,
                        "replaced_ce": stats.replaced_ce, "ce_tokens": stats.ce_tokens,
-                       "elapsed_seconds": elapsed})
+                       "elapsed_seconds": elapsed,
+                       **({"content_segments": stats.content_segments} if hasattr(stats, "content_segments") else {})})
     return staged
 
 
@@ -278,6 +303,16 @@ def restore_evaluation(folder, stats, stream, identity, settings, binding):
         raise ValueError("evaluation dictionary or settings changed across resume")
     if state.get("model_binding") != binding.model_evidence:
         raise ValueError("evaluation model identity mismatch: cursor binding differs")
+    if "context_policy" in settings:
+        segments = state.get("content_segments")
+        capacity = settings["context_policy"]["content_context"]
+        if (not isinstance(segments, list) or any(
+                not isinstance(row, list) or len(row) != 3 or
+                any(type(value) is not int or value < 0 for value in row) or not 1 <= row[2] <= capacity
+                for row in segments) or sum(row[2] for row in segments) != state["count"]):
+            raise ValueError("invalid evaluation content segmentation")
+        _validate_pending(state["pending_ids"], settings["tokens"] - state["count"])
+        stats.content_segments = segments
     binding.verify()
     if state["tensors"] not in ("stats-a.safetensors", "stats-b.safetensors"):
         raise ValueError("invalid evaluation tensor path")
@@ -288,6 +323,54 @@ def restore_evaluation(folder, stats, stream, identity, settings, binding):
         setattr(stats, name, state[name])
     stream.load_state_dict(state["stream"])
     return state["pending_ids"], state["elapsed_seconds"]
+
+
+def _validate_pending(pending, remaining):
+    if (not isinstance(pending, dict) or set(pending) != {"ids", "documents", "positions", "exhausted"}
+            or type(pending["exhausted"]) is not bool
+            or any(not isinstance(pending[name], list) for name in ("ids", "documents", "positions"))
+            or not len(pending["ids"]) == len(pending["documents"]) == len(pending["positions"])
+            or not 0 <= len(pending["ids"]) <= min(4096, remaining)
+            or any(type(value) is not int or value < 0 for name in ("ids", "documents", "positions")
+                   for value in pending[name])):
+        raise ValueError("invalid evaluation pending content")
+
+
+def _segmentation_record(segments):
+    """Bind exact cursor spans without an unbounded list in dictionary metadata."""
+    digest = hashlib.sha256()
+    for row in segments:
+        digest.update((json.dumps(row, separators=(",", ":")) + "\n").encode("ascii"))
+    return {"contexts": len(segments), "sha256": digest.hexdigest(),
+            "encoding": "sha256_ascii_json_rows_with_newlines",
+            "fields": ["document_id", "source_position", "content_length"],
+            "record": "evaluation/state.json:content_segments"}
+
+
+def _gemma_batch(stream, pending, remaining, policy, batch_tokens, *, device, health):
+    """Retain source coordinates and complete contexts across source batch boundaries."""
+    _validate_pending(pending, remaining)
+    row_limit = batch_tokens // policy["model_context"]
+    capacity = policy["content_context"]
+    while True:
+        final = pending["exhausted"] or len(pending["ids"]) == remaining
+        spans = list(source_segments(pending["documents"], pending["positions"], capacity, final=final))
+        if len(spans) >= row_limit or final:
+            spans = spans[:row_limit]
+            if not spans:
+                raise CleanStop("quality source exhausted")
+            rows = [pending["ids"][start:end] for start, end in spans]
+            segments = [[pending["documents"][start], pending["positions"][start], end - start]
+                        for start, end in spans]
+            return prepare_contexts(rows, policy, device=device, pad_to=policy["model_context"]), segments
+        requested = min(row_limit * capacity, remaining) - len(pending["ids"])
+        batch = stream.next_tokens(requested, health=health)
+        for field, value in (("ids", batch.input_ids), ("documents", batch.document_ids), ("positions", batch.positions)):
+            if value.ndim != 1 or value.dtype != torch.int64 or value.device.type != "cpu":
+                raise ValueError("evaluation source requires CPU int64 token coordinates")
+            pending[field].extend(value.tolist())
+        pending["exhausted"] = len(batch) < requested
+        _validate_pending(pending, remaining)
 
 
 def evaluate(model, dictionary, stream, folder, *, tokens=200_000, context=256,
@@ -310,12 +393,18 @@ def evaluate(model, dictionary, stream, folder, *, tokens=200_000, context=256,
     binding = EvaluationBinding(folder, dictionary, identity, model=model, memory=memory)
     state_folder = folder / "evaluation"
     stats = quality_stats(metadata)
+    policy = context_policy(model, context, tokenizer=getattr(stream, "tokenizer", None))
     settings = {"tokens": tokens, "context": context, "batch_tokens": batch_tokens, "chunk_tokens": chunk_tokens}
+    if policy is not None:
+        settings["context_policy"] = policy
+        stats.content_segments = []
     if "import_source" in metadata:
         settings["evaluation_source"] = source_metadata
     if stats.scope == "upper_half":
         settings.update(scope=stats.scope, active_layers=list(stats.active_layers))
     pending, elapsed_before = None, 0.0
+    if policy is not None:
+        pending = {"ids": [], "documents": [], "positions": [], "exhausted": False}
     if not resume and (state_folder / "state.json").exists():
         raise ValueError("evaluation state exists; use --resume")
     started = time.monotonic()
@@ -344,20 +433,34 @@ def evaluate(model, dictionary, stream, folder, *, tokens=200_000, context=256,
         while stats.count < tokens:
             health()
             binding.check()
-            if pending is None:
+            prepared, segments = None, None
+            if policy is not None:
+                prepared, segments = _gemma_batch(stream, pending, tokens - stats.count, policy, batch_tokens,
+                                                   device=device, health=health)
+                ids = prepared.input_ids
+                count = sum(row[2] for row in segments)
+            elif pending is None:
                 batch = stream.next_tokens(min(batch_tokens, tokens - stats.count), health=health)
                 if not len(batch):
                     raise CleanStop("quality source exhausted")
                 pending = batch.input_ids.tolist()
-            count = len(pending)
-            ids = torch.tensor(pending, dtype=torch.int64, device=device)
-            ids = F.pad(ids, (0, (-count) % context)).reshape(-1, context)
+            if policy is None:
+                count = len(pending)
+                ids = torch.tensor(pending, dtype=torch.int64, device=device)
+                ids = F.pad(ids, (0, (-count) % context)).reshape(-1, context)
             binding.check()
+            batch_options = {} if prepared is None else {"prepared": prepared}
             result = evaluate_batch(model, dictionary, ids, count, chunk_tokens=chunk_tokens,
-                                    health=health, check_binding=binding.check)
+                                    health=health, check_binding=binding.check, **batch_options)
             binding.check()
             stats.merge(result)
-            pending = None
+            if policy is None:
+                pending = None
+            else:
+                stats.content_segments.extend(segments)
+                for field in ("ids", "documents", "positions"):
+                    del pending[field][:count]
+            del ids, prepared, result, batch_options
             if time.monotonic() - last_save >= 240:
                 save_evaluation(state_folder, stats, stream, pending, identity, settings,
                                 elapsed_before + time.monotonic() - started, binding)
@@ -378,6 +481,8 @@ def evaluate(model, dictionary, stream, folder, *, tokens=200_000, context=256,
     quality.update(elapsed_seconds=elapsed_before + time.monotonic() - started, stop_reason=reason,
                    dictionary_hash=identity, tensor_binding=binding.evidence,
                    model_binding=binding.model_evidence, partition="quality")
+    if policy is not None:
+        quality.update(context_policy=policy, content_segmentation=_segmentation_record(stats.content_segments))
     if "import_source" in metadata:
         quality.update(evaluation_source=source_metadata, publisher_training_overlap="unknown")
     if stats.scope == "upper_half":

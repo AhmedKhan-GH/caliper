@@ -5,6 +5,8 @@ from dataclasses import dataclass
 
 import torch
 
+from ._memory import autorelease_scope
+
 
 def context_policy(model, context_length, *, tokenizer=None):
     """Return the Gemma policy, or None for the unchanged Qwen and fixture paths."""
@@ -40,6 +42,11 @@ class ContextBatch:
 
 def prepare_contexts(rows, policy, *, device, pad_to=None):
     """Prefix nonempty source rows without a change to their IDs or order."""
+    with autorelease_scope(device):
+        return _prepare_contexts(rows, policy, device=device, pad_to=pad_to)
+
+
+def _prepare_contexts(rows, policy, *, device, pad_to):
     lengths = [len(row) for row in rows]
     if not lengths or min(lengths) < 1 or max(lengths) > policy["content_context"]:
         raise ValueError("invalid content context lengths")
