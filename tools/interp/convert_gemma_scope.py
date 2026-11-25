@@ -277,7 +277,7 @@ def _evaluation_source(record):
                 "partitions": partition_metadata()}
     if (not isinstance(record, dict) or set(record) != {*expected, "source_id"}
             or any(record.get(k) != value for k, value in expected.items())
-            or not isinstance(record.get("source_id"), str) or not record["source_id"]):
+            or not isinstance(record.get("source_id"), str) or not 0 < len(record["source_id"]) <= 65_536):
         raise ValueError("conversion requires the pinned evaluation source and partitions")
     encoded = json.dumps(record, allow_nan=False)
     if len(encoded.encode("utf-8")) > 65_536:
@@ -334,12 +334,13 @@ def convert_gemma_scope(source, output, *, model, memory_limit_gb=40, evaluation
     source, output = Path(source), Path(output)
     if reference and (model_snapshot is None or _snapshot_identity(model_snapshot) != _GEMMA_IDENTITY):
         raise ValueError("reference conversion requires the pinned local Gemma model snapshot")
-    evaluation_source = _evaluation_source(evaluation_source)
     if _snapshot_identity(source) != f"hf:{SOURCE_ID}@{SOURCE_REVISION}":
         raise ValueError("Gemma Scope source snapshot revision differs")
-    blocks = _model_admission(model, memory_limit_gb)
+    _memory_limit(memory_limit_gb, _GEMMA_IDENTITY, "conversion")
     memory = MemoryGuard(memory_limit_gb, next(model.parameters()).device)
-    memory.check("scope_conversion_start")
+    _admit(memory, 4 * _CHUNK_BYTES, "scope_conversion_start")
+    evaluation_source = _evaluation_source(evaluation_source)
+    blocks = _model_admission(model, memory_limit_gb)
     output.parent.mkdir(parents=True, exist_ok=True)
     # A sibling lock serializes publishers without exposing an incomplete output.
     lock = output.with_name("." + output.name + ".conversion-lock")
@@ -411,11 +412,6 @@ def main(argv=None):
     parser.add_argument("--evaluation-source", type=Path,
                         help="Pinned local evaluation and index source JSON, separate from publisher training")
     args = parser.parse_args(argv)
-    evaluation_source = None
-    if args.evaluation_source is not None:
-        if args.evaluation_source.stat().st_size > 65_536:
-            raise ValueError("evaluation source exceeds the metadata byte limit")
-        evaluation_source = _evaluation_source(json.loads(args.evaluation_source.read_text(encoding="utf-8")))
     # CPU conversion avoids a second device copy of the complete checkpoint.
     _memory_limit(args.memory_limit_gb, _GEMMA_IDENTITY, "conversion")
     if _snapshot_identity(args.model_snapshot) != _GEMMA_IDENTITY:
@@ -425,6 +421,17 @@ def main(argv=None):
     from caliper.interp._admission import _load_gemma_model
 
     memory = MemoryGuard(args.memory_limit_gb, "cpu")
+    evaluation_source = None
+    if args.evaluation_source is not None:
+        _admit(memory, 64 * _HEADER_BYTES, "scope_evaluation_source_admission")
+        with args.evaluation_source.open("rb") as source:
+            info = os.fstat(source.fileno())
+            if not stat.S_ISREG(info.st_mode) or info.st_size > 65_536:
+                raise ValueError("evaluation source exceeds the metadata byte limit")
+            raw = source.read(info.st_size + 1)
+            if len(raw) != info.st_size:
+                raise ValueError("evaluation source changed during the read")
+        evaluation_source = _evaluation_source(json.loads(raw))
     model = _load_gemma_model(args.model_snapshot, device="cpu", memory=memory)
     convert_gemma_scope(args.source, args.output, model=model, memory_limit_gb=args.memory_limit_gb,
                         evaluation_source=evaluation_source, profile=args.profile, model_snapshot=args.model_snapshot)
