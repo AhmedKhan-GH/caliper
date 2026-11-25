@@ -719,7 +719,7 @@ def live_demo(session, args, result):
     labels = session.read("attribution", "labels", minimum_step=bars["step"])
     session.capture("demo", {"attribution": labels["step"], "probabilities": bars["step"],
                              "example_tokens": rows["step"]})
-    session.mcp.body("applet.save", overwrite=True)
+    session.mcp.body("applet.save")
     spec = session.mcp.body("spec.get")
     (session.out / "instrument.toml").write_text(spec["text"], encoding="utf-8")
     state = session.mcp.body("run.state", run=session.run_id)

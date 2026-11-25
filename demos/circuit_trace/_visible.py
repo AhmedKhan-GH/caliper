@@ -33,7 +33,6 @@ def startup_instrument(session):
     session.mcp.body("panel.create", id="startup", primitive="text", title="Model Initialization",
                      options={"text": "The model and dictionary must load before the graph is available."})
     session.mcp.body("layout.set", layout={"root": "startup", "nodes": []})
-    session.mcp.body("applet.save")
 
 
 def check_assets(session):
@@ -86,7 +85,9 @@ def show_error(session, error):
             spec["layout"] = "demo_error"
         session.mcp.body("spec.set_text", text="\n".join(
             toml_value(key) + " = " + toml_value(value) for key, value in spec.items()) + "\n")
-        session.mcp.body("applet.save", overwrite=True)
+        # Each error is a new artifact. An overwrite requires a person in the app.
+        session.error_number = getattr(session, "error_number", 0) + 1
+        session.mcp.body("applet.save", id=f"circuit-trace-error-{session.error_number}")
     except Exception as exc:
         # A broken command connection must not close the app either.
         (session.out / "demo-error-display.json").write_text(json.dumps({"error": str(exc)}) + "\n")

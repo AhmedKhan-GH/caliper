@@ -80,7 +80,7 @@ def test_error_panel_is_valid_before_and_after_instrument_creation(tmp_path, exi
         if method == "spec.get":
             return {"json": spec}
         if method == "applet.save":
-            assert args == {"overwrite": True}
+            assert args == {"id": "circuit-trace-error-1"}
             return {}
         assert method == "spec.set_text"
         changed.append(tomllib.loads(args["text"]))
