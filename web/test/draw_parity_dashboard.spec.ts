@@ -140,6 +140,16 @@ async function composite(page: Page, step: number, programs: number, consoleLine
   });
   return page.evaluate(() => new Promise<Composite>((done) => {
     const w = window as any;
+    w.caliperSpec.stop();
+    w.__dashboard.snaps.clear();
+    w.__dashboard.ready = () => {
+      for (const m of (w.caliperSpec.programs.mounts as Map<string, any>).values()) {
+        const mc = m.handle?.canvas as HTMLCanvasElement | undefined;
+        if (!mc || m.box.style.display === 'none') continue;
+        if (!w.__dashboard.snaps.has(m.panel)) return false;
+      }
+      return w.caliperTextLog.length > 0;
+    };
     w.__dashboard.compose = () => {
       const area = document.getElementById('area')!.getBoundingClientRect();
       const d = window.devicePixelRatio || 1;
@@ -151,8 +161,9 @@ async function composite(page: Page, step: number, programs: number, consoleLine
       for (const m of (w.caliperSpec.programs.mounts as Map<string, any>).values()) {
         const mc = m.handle?.canvas as HTMLCanvasElement | undefined;
         if (!mc || m.box.style.display === 'none') continue;
+        const snap = w.__dashboard.snaps.get(m.panel) as HTMLCanvasElement | undefined;
         const r = mc.getBoundingClientRect();
-        g.drawImage(mc, Math.round((r.left - area.left) * d), Math.round((r.top - area.top) * d), Math.round(r.width * d), Math.round(r.height * d));
+        g.drawImage(snap ?? mc, Math.round((r.left - area.left) * d), Math.round((r.top - area.top) * d), Math.round(r.width * d), Math.round(r.height * d));
       }
       const px = g.getImageData(0, 0, c.width, c.height).data;
       let bin = '';
@@ -268,23 +279,61 @@ test('the Arc Tower dashboard draws in the browser as in the app, on the same re
   await page.addInitScript(() => {
     const w = window as any;
     w.caliperTextLog = [];
-    w.__dashboard = { armed: false, compose: null, done: null };
-    // A callback that runs after every other animation callback of a frame: each wrapped callback
-    // moves it behind the callbacks that its frame registered, and it is left alone in the frame
-    // that runs it.
+    w.__dashboard = { armed: false, compose: null, done: null, ready: null, snaps: new Map() };
+    // Each module's WebGPU canvas keeps its presented surface texture only within the animation
+    // frame that rendered it, and a slow software adapter can skip or delay a swapchain texture on
+    // one tick; copy each presented canvas synchronously after its callback and finish once all
+    // shown modules have presented an opaque frame.
     const original = window.requestAnimationFrame.bind(window), cancel = window.cancelAnimationFrame.bind(window);
     let last = 0, lastBatch = -1, frame = 0;
-    const capture = () => {
+    let check: HTMLCanvasElement | null = null;
+    let cg: CanvasRenderingContext2D | null = null;
+    const snapshotModules = () => {
+      const mounts = w.caliperSpec?.programs?.mounts as Map<string, any> | undefined;
+      if (!mounts) return;
+      if (!check) {
+        check = document.createElement('canvas');
+        check.width = 1;
+        check.height = 1;
+        cg = check.getContext('2d', { willReadFrequently: true });
+      }
+      if (!cg) return;
+      for (const m of mounts.values()) {
+        const mc = m.handle?.canvas as HTMLCanvasElement | undefined;
+        if (!mc || m.box.style.display === 'none' || mc.width < 1 || mc.height < 1) continue;
+        cg.clearRect(0, 0, 1, 1);
+        cg.drawImage(mc, 0, 0, 1, 1, 0, 0, 1, 1);
+        if (cg.getImageData(0, 0, 1, 1).data[3] !== 255) continue;
+        let probe = w.__dashboard.snaps.get(m.panel) as HTMLCanvasElement | undefined;
+        if (!probe) probe = document.createElement('canvas');
+        if (probe.width !== mc.width || probe.height !== mc.height) {
+          probe.width = mc.width;
+          probe.height = mc.height;
+        }
+        const pg = probe.getContext('2d', { willReadFrequently: true })!;
+        pg.clearRect(0, 0, probe.width, probe.height);
+        pg.drawImage(mc, 0, 0);
+        w.__dashboard.snaps.set(m.panel, probe);
+      }
+    };
+    const capture = (t: number) => {
       last = 0;
       frame++;
       const d = w.__dashboard;
       if (!d.armed || !d.compose) return;
+      snapshotModules();
+      if (d.ready && !d.ready()) {
+        last = original(capture);
+        lastBatch = t;
+        return;
+      }
       d.armed = false;
       d.done(d.compose(), frame);
     };
     window.requestAnimationFrame = (cb: FrameRequestCallback) => original((t) => {
       cb(t);
       if (!w.__dashboard.armed) return;
+      snapshotModules();
       if (last && lastBatch === t) cancel(last);
       else if (last) return;   // registered in an earlier frame: it runs in this one, after this callback
       last = original(capture);
