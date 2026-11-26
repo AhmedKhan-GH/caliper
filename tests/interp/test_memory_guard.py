@@ -109,3 +109,18 @@ def test_forty_gb_cap_and_eight_gb_host_reserve(capsys):
         guard.check("below reserve")
     records = [json.loads(line) for line in capsys.readouterr().err.splitlines()]
     assert records[-1]["host_available_bytes"] == 7_999_999_999
+
+
+def test_macos_host_available_bytes_includes_memory_pressure_free_share(monkeypatch):
+    import psutil
+    from types import SimpleNamespace
+    import caliper.interp._memory as mem_mod
+
+    monkeypatch.setattr(mem_mod.sys, "platform", "darwin")
+    monkeypatch.setattr(
+        psutil,
+        "virtual_memory",
+        lambda: SimpleNamespace(available=3_376_709_632, total=15_032_385_536),
+    )
+    assert mem_mod.host_available_bytes(free_pct=85.0) == round(0.85 * 15_032_385_536)
+    assert mem_mod._default_host_reserve_bytes() == int(0.20 * 15_032_385_536)

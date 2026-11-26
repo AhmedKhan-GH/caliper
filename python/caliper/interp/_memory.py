@@ -103,9 +103,22 @@ def free_percent():
     return 100.0 * psutil.virtual_memory().available / psutil.virtual_memory().total
 
 
-def host_available_bytes():
+def host_available_bytes(free_pct: float | None = None):
     import psutil
-    return int(psutil.virtual_memory().available)
+    vm = psutil.virtual_memory()
+    avail = int(vm.available)
+    if sys.platform == "darwin":
+        # macOS psutil.virtual_memory().available excludes purgeable file cache
+        # that memory_pressure counts as system-wide free percentage.
+        pct = free_percent() if free_pct is None else float(free_pct)
+        avail = max(avail, int(round((pct / 100.0) * vm.total)))
+    return avail
+
+
+def _default_host_reserve_bytes() -> int:
+    import psutil
+    total = int(psutil.virtual_memory().total)
+    return min(HOST_RESERVE_BYTES, int(0.20 * total))
 
 
 def resident_bytes():
@@ -157,10 +170,12 @@ class MemoryGuard:
         self.limit = int(limit_gb * 1_000_000_000)
         self.device = torch.device(device)
         self.interval, self.pressure, self.resident, self.clock = interval, pressure, resident, clock
-        # Default to checking the 8 GB host reserve whenever using real system sampling.
+        # Default to checking the host reserve whenever using real system sampling.
+        self._uses_default_available = available is None and pressure is free_percent
         self.available_reader = available if available is not None else (
             host_available_bytes if pressure is free_percent else None
         )
+        self.reserve_bytes = _default_host_reserve_bytes() if self._uses_default_available else HOST_RESERVE_BYTES
         self.footprint, self.peak_reader, self.driver_reader = footprint, peak, driver
         self.last = -float("inf")
         self._pressure_time = -float("inf")
@@ -186,13 +201,16 @@ class MemoryGuard:
         process = footprint if footprint is not None else rss + driver
         self.current = max(process, rss, driver)
         self.peak = max(self.peak, self.current, self.peak_reader())
-        avail = self.available_reader() if self.available_reader is not None else None
         if (self._pressure_value is None or self._pressure_value < 20
                 or now - self._pressure_time >= self.interval):
             self._pressure_value = self.pressure()
             self._pressure_time = now
             self.low = self.low + 1 if self._pressure_value < 20 else 0
         free = self._pressure_value
+        if self._uses_default_available:
+            avail = host_available_bytes(free_pct=free)
+        else:
+            avail = self.available_reader() if self.available_reader is not None else None
         record = {
             "stage": stage,
             "process_bytes": process,
@@ -208,7 +226,7 @@ class MemoryGuard:
         print(json.dumps(record), file=sys.stderr, flush=True)
         if self.peak > self.limit:
             raise CleanStop("process or MPS allocation exceeds the memory limit")
-        if avail is not None and avail < HOST_RESERVE_BYTES:
+        if avail is not None and avail < self.reserve_bytes:
             raise CleanStop("host available memory fell below the 8 GB reserve")
         if free < 15 or self.low >= 2:
             raise CleanStop("memory pressure requires a clean stop")
