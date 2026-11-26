@@ -18,7 +18,6 @@ const shared = JSON.parse(fs.readFileSync(path.join(repoRoot, 'scripts', 'shared
     tokens: { name: string; rgb: [number, number, number] }[];
     house_pigments: string[];
     untokenized: { name: string; rgba: [number, number, number, number] }[];
-    views_theme_v1: Record<string, string>;
   };
   categorical_palette: [number, number, number][];
 };
@@ -102,5 +101,18 @@ test('palette.gen.ts, FLAT_POINT, and views/theme.ts match shared_colors.json', 
   const flat = shared.theme.untokenized.find((u) => u.name === 'flat_point')!;
   assert.deepEqual([...FLAT_POINT], flat.rgba.slice(0, 3));
   assert.deepEqual(CATEGORICAL.map((c) => [...c]), shared.categorical_palette);
-  assert.deepEqual({ ...C }, shared.theme.views_theme_v1);
+  const hex = (rgb: readonly [number, number, number]) =>
+    `#${rgb.map((v) => v.toString(16).padStart(2, '0')).join('')}`;
+  const tokByName = Object.fromEntries(shared.theme.tokens.map((t) => [t.name, t.rgb]));
+  assert.deepEqual({ ...C }, {
+    deep: hex(tokByName.deep),
+    ground: hex(tokByName.ground),
+    plate: hex(tokByName.plate),
+    ruleFaint: hex(tokByName.rule_faint),
+    rule: hex(tokByName.rule),
+    parchment: hex(tokByName.parchment),
+    secondary: hex(tokByName.secondary),
+    faint: hex(tokByName.faint),
+    bronze: hex(tokByName.bronze),
+  });
 });

@@ -9,6 +9,7 @@
 // a depth buffer. The native points view draws the same frame
 // (src/host/live/live_views_draw.cpp, box_frame).
 
+import { TOKENS } from '../render/palette.gen.js';
 import type { Mat4 } from './camera.js';
 import { fmtTick, ticks } from './plot.js';
 import { C, FONT_MONO } from './theme.js';
@@ -17,11 +18,13 @@ type V3 = [number, number, number];
 interface Clip { x: number; y: number; z: number; w: number }
 export interface Area { x: number; y: number; w: number; h: number }
 
+const RULE_RGB = TOKENS.rule.join(', ');
+
 /** The inks of the frame: the rule for edges and ticks, fainter for the back edges and the grid. */
 export const BOX_INK = {
   edge: C.rule,
-  back: 'rgba(90, 87, 81, 0.59)',
-  grid: 'rgba(90, 87, 81, 0.27)',
+  back: `rgba(${RULE_RGB}, 0.59)`,
+  grid: `rgba(${RULE_RGB}, 0.27)`,
   text: C.faint,
 } as const;
 const FONT = `10.5px ${FONT_MONO}`;

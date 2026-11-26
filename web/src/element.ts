@@ -54,7 +54,7 @@ const STYLE = `
 .name { font-size: 13.5px; color: ${C.parchment}; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 18em; }
 .picker { display: contents; }
 .picker label { display: inline-flex; align-items: center; gap: 4px; color: ${C.faint}; font-size: 12px; }
-select, input { font: 12px ${FONT_TEXT}; color: ${C.parchment}; background: #1c1b18; border: 1px solid ${C.rule};
+select, input { font: 12px ${FONT_TEXT}; color: ${C.parchment}; background: ${C.deep}; border: 1px solid ${C.rule};
   border-radius: 3px; padding: 1px 3px; height: 21px; }
 input { width: 5.5em; font-family: ${FONT_MONO}; }
 select:focus-visible, input:focus-visible, button:focus-visible { outline: 1px solid ${C.bronze}; outline-offset: 1px; }

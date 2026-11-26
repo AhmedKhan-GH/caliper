@@ -612,18 +612,6 @@ UNTOKENIZED_THEME_COLORS: dict[str, tuple[int, int, int, int]] = {
     'bar_faint': (128, 128, 128, 255),
 }
 
-# Browser element view v1 palette (web/src/views/theme.ts).
-VIEWS_THEME_V1: dict[str, str] = {
-    'ground': '#181715',
-    'plate': '#272622',
-    'ruleFaint': '#36342f',
-    'rule': '#5a5751',
-    'parchment': '#f0e9db',
-    'secondary': '#d0c9ba',
-    'faint': '#a49d8f',
-    'bronze': '#b38b59',
-}
-
 # Fixed 16-colour categorical palette (caliper_scene::kPalette).
 CATEGORICAL_PALETTE: tuple[tuple[int, int, int], ...] = (
     (31, 119, 180), (255, 127, 14), (44, 160, 44), (214, 39, 40),

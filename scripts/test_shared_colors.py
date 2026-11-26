@@ -64,7 +64,7 @@ class SharedColorsTest(unittest.TestCase):
             ("web/src/render/palette.gen.ts", "[18, 17, 15]", "[19, 17, 15]"),
             ("web/src/render/colormaps.gen.ts", "'berlin'", "'berlyn'"),
             ("web/src/render/colormap.ts", "103, 0, 31", "104, 0, 31"),
-            ("web/src/views/theme.ts", "'#272622'", "'#272623'"),
+            ("web/src/page/index.html", "#201f1c", "#201f1d"),
             ("web/src/spec/index.html", "#201f1c", "#201f1d"),
         )
         for rel, old, new in mutations:

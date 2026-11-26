@@ -6,6 +6,7 @@
 
 import type { Page } from '@playwright/test';
 import { colormapLut, lutIndex, PALETTE } from '../src/render/colormap.js';
+import { TOKENS } from '../src/render/palette.gen.js';
 import { bodyPixels, expect, shotPath, test } from './util.js';
 
 type Dbg = Record<string, unknown> & {
@@ -449,9 +450,9 @@ test('histogram draws bars, hovers a bin, toggles log counts, zooms and selects'
   expect([d.renderer, d.bins, d.range]).toEqual(['canvas2d', 10, [-5, 5]]);
   const { px } = await bodyPixels(page, '#hist');
   const bar = toPage(d, { x: 0, y: 0 }, 0.5, 1, false);
-  expect(px.at(bar.bx, bar.by)).toEqual([0xd0, 0xc9, 0xba, 255]);
+  expect(px.at(bar.bx, bar.by)).toEqual([...TOKENS.secondary, 255]);
   const empty = toPage(d, { x: 0, y: 0 }, 4.5, 1, false);
-  expect(px.at(empty.bx, empty.by)).toEqual([0x27, 0x26, 0x22, 255]);
+  expect(px.at(empty.bx, empty.by)).toEqual([...TOKENS.plate, 255]);
   await page.locator('#hist').screenshot({ path: shotPath(info, 'histogram') });
   const box = await bodyBox(page, 'hist');
   const p = toPage(d, box, -1.5, 3, false);

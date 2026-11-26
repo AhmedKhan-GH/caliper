@@ -600,17 +600,7 @@
       {"name": "bar_text", "rgba": [255, 255, 255, 255]},
       {"name": "bar_secondary", "rgba": [190, 190, 190, 255]},
       {"name": "bar_faint", "rgba": [128, 128, 128, 255]}
-    ],
-    "views_theme_v1": {
-      "ground": "#181715",
-      "plate": "#272622",
-      "ruleFaint": "#36342f",
-      "rule": "#5a5751",
-      "parchment": "#f0e9db",
-      "secondary": "#d0c9ba",
-      "faint": "#a49d8f",
-      "bronze": "#b38b59"
-    }
+    ]
   },
   "categorical_palette": [
     [31, 119, 180],

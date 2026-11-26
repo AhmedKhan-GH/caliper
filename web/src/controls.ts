@@ -35,7 +35,7 @@ const STYLE = `
 .note[data-kind="pending"] { color: ${C.bronze}; }
 .note[data-kind="error"] { color: ${C.secondary}; }
 input[type="range"] { width: 100%; accent-color: ${C.bronze}; margin: 0; }
-input[type="number"], select, textarea { font: 12px ${FONT_MONO}; color: ${C.parchment}; background: #1c1b18; border: 1px solid ${C.rule};
+input[type="number"], select, textarea { font: 12px ${FONT_MONO}; color: ${C.parchment}; background: ${C.deep}; border: 1px solid ${C.rule};
   border-radius: 3px; padding: 1px 4px; height: 22px; width: 8em; }
 textarea { width: 100%; height: 4em; resize: vertical; }
 select { font-family: ${FONT_TEXT}; width: auto; }

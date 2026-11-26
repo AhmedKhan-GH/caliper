@@ -10,6 +10,7 @@
 // turns the view slowly until any drag.
 
 import { colormapLut, lutIndex, paletteLut } from '../render/colormap.js';
+import { TOKENS } from '../render/palette.gen.js';
 import { COLORMAPS, LIMITS, snapshotRange, type SnapshotMsg } from '../protocol/messages.js';
 import { linkedIn, toggle, type LinkAxis, type LiveView, type ViewHost } from './base.js';
 import { BoxFrame } from './box3d.js';
@@ -20,8 +21,8 @@ import { drawAxes, fitCanvas, Plot2D } from './plot.js';
 import { C, FONT_TEXT, fmt } from './theme.js';
 
 const LITTLE = new Uint8Array(new Uint16Array([1]).buffer)[0] === 1;
-const PLATE = [0x27, 0x26, 0x22];
-const FLAT = [0xf0, 0xe9, 0xdb];
+const PLATE = TOKENS.plate;
+const FLAT = TOKENS.parchment;
 const PICK_RADIUS = 10;
 
 function pack(r: number, g: number, b: number): number {

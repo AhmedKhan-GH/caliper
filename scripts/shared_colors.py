@@ -2,8 +2,8 @@
 """Generate and check C++, TypeScript, and Python colormap and theme copies.
 
 One source file, scripts/shared_colors.json, holds the 16 built-in colormaps,
-the Sternbild theme token bindings, the untokenized Caliper house colours, the
-element view v1 palette, and the 16-colour categorical palette.
+the Sternbild theme token bindings, the untokenized Caliper house colours,
+and the 16-colour categorical palette.
 
 Usage:
     python3 scripts/shared_colors.py --check [--root <repo>]
@@ -508,14 +508,23 @@ def render_colormap_ts_block(data: dict[str, Any]) -> str:
     return "\n".join(lines) + "\n"
 
 
-def render_views_theme_ts_block(data: dict[str, Any]) -> str:
-    vt = data["theme"]["views_theme_v1"]
-    lines = [
-        f"// {GEN_BANNER}",
-        "export const C = {",
-        *[f"  {k}: '{v}'," for k, v in vt.items()],
-        "} as const;",
-    ]
+def render_page_index_html_block(data: dict[str, Any]) -> str:
+    by_name = {t["name"]: t["rgb"] for t in data["theme"]["tokens"]}
+    css_entries = (
+        ("ground", "ground"),
+        ("deep", "deep"),
+        ("plate", "plate"),
+        ("rule", "rule"),
+        ("rule-faint", "rule_faint"),
+        ("parchment", "parchment"),
+        ("secondary", "secondary"),
+        ("faint", "faint"),
+        ("bronze", "bronze"),
+    )
+    lines = []
+    for css_name, tok_name in css_entries:
+        r, g, b = by_name[tok_name]
+        lines.append(f"    --{css_name}: #{r:02x}{g:02x}{b:02x};")
     return "\n".join(lines) + "\n"
 
 
@@ -541,7 +550,6 @@ def render_python_colors_gen(data: dict[str, Any]) -> str:
     by_name = {t["name"]: tuple(t["rgb"]) for t in tokens}
     house = tuple(by_name[n] for n in data["theme"]["house_pigments"])
     untok = data["theme"]["untokenized"]
-    vt = data["theme"]["views_theme_v1"]
     cat = [tuple(c) for c in data["categorical_palette"]]
 
     lines = [
@@ -590,11 +598,6 @@ def render_python_colors_gen(data: dict[str, Any]) -> str:
         ],
         "}",
         "",
-        "# Browser element view v1 palette (web/src/views/theme.ts).",
-        "VIEWS_THEME_V1: dict[str, str] = {",
-        *[f"    {k!r}: {v!r}," for k, v in vt.items()],
-        "}",
-        "",
         "# Fixed 16-colour categorical palette (caliper_scene::kPalette).",
         "CATEGORICAL_PALETTE: tuple[tuple[int, int, int], ...] = (",
         *[
@@ -629,10 +632,10 @@ BLOCK_TARGETS = (
         render_colormap_ts_block,
     ),
     (
-        "web/src/views/theme.ts",
-        "// BEGIN generated views theme",
-        "// END generated views theme",
-        render_views_theme_ts_block,
+        "web/src/page/index.html",
+        "    /* BEGIN generated theme tokens */",
+        "    /* END generated theme tokens */",
+        render_page_index_html_block,
     ),
     (
         "web/src/spec/index.html",
@@ -725,7 +728,6 @@ def format_source_json(data: dict[str, Any]) -> str:
     entries = data["colormaps"]["entries"]
     tokens = data["theme"]["tokens"]
     untok = data["theme"]["untokenized"]
-    vt = data["theme"]["views_theme_v1"]
     cat = data["categorical_palette"]
     sources = data["colormaps"]["sources"]
     pin = data["sternbild_tokens"]
@@ -791,13 +793,7 @@ def format_source_json(data: dict[str, Any]) -> str:
     for i, u in enumerate(untok):
         c = "," if i + 1 < len(untok) else ""
         lines.append(f'      {{"name": {json.dumps(u["name"])}, "rgba": {json.dumps(u["rgba"])}}}{c}')
-    lines.append("    ],")
-    lines.append('    "views_theme_v1": {')
-    vt_items = list(vt.items())
-    for i, (k, v) in enumerate(vt_items):
-        c = "," if i + 1 < len(vt_items) else ""
-        lines.append(f"      {json.dumps(k)}: {json.dumps(v)}{c}")
-    lines.append("    }")
+    lines.append("    ]")
     lines.append("  },")
     lines.append('  "categorical_palette": [')
     for i, rgb in enumerate(cat):
