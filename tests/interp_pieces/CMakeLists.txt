@@ -22,11 +22,11 @@ function(caliper_interp_piece_targets)
         set_tests_properties(caliper_interp_hover_tests PROPERTIES LABELS "pieces;interp;cpu")
     endif()
     if(APPLE AND TARGET caliper_draw AND TARGET caliper_producer)
-        add_executable(caliper_interp_piece_gpu "${_dir}/test_gpu.mm" "${CMAKE_SOURCE_DIR}/src/host/tensor_bridge.cpp")
+        add_executable(caliper_interp_piece_gpu "${_dir}/test_gpu.mm")
         target_include_directories(caliper_interp_piece_gpu PRIVATE
             "${CMAKE_SOURCE_DIR}/src/host" "${CMAKE_SOURCE_DIR}/third_party/stb")
         target_link_libraries(caliper_interp_piece_gpu PRIVATE caliper_draw caliper_scene caliper_net caliper_spec_runtime
-            caliper_producer caliper::sdk caliper_builder_spec doctest::doctest
+            caliper_tensor_bridge caliper_producer caliper::sdk caliper_builder_spec doctest::doctest
             "-framework Metal" "-framework MetalPerformanceShaders" "-framework Foundation")
         set_source_files_properties("${_dir}/test_gpu.mm" PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
         set_target_properties(caliper_interp_piece_gpu PROPERTIES

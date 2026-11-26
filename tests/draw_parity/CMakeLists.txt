@@ -20,9 +20,9 @@ function(caliper_draw_parity_targets)
     # the params, the module's refusals, and an install of each program on the recording backend.
     # The host's colormaps come from the tensor bridge's tables (colormap_lut), compiled in as the
     # graphics suite compiles them.
-    add_executable(caliper_draw_parity_tests "${_dir}/test_draw_parity.cpp" "${CMAKE_SOURCE_DIR}/src/host/tensor_bridge.cpp")
+    add_executable(caliper_draw_parity_tests "${_dir}/test_draw_parity.cpp")
     target_include_directories(caliper_draw_parity_tests PRIVATE "${CMAKE_SOURCE_DIR}/src/host")
-    target_link_libraries(caliper_draw_parity_tests PRIVATE caliper_draw caliper_net caliper::sdk doctest::doctest
+    target_link_libraries(caliper_draw_parity_tests PRIVATE caliper_draw caliper_net caliper_tensor_bridge caliper::sdk doctest::doctest
         $<TARGET_NAME_IF_EXISTS:caliper_builder_spec>)
     set_target_properties(caliper_draw_parity_tests PROPERTIES CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON)
     add_test(NAME caliper_draw_parity_tests COMMAND caliper_draw_parity_tests)
@@ -30,10 +30,10 @@ function(caliper_draw_parity_targets)
     if(NOT APPLE)
         return()
     endif()
-    add_executable(caliper_draw_parity_app "${_dir}/draw_parity_app.mm" "${CMAKE_SOURCE_DIR}/src/host/tensor_bridge.cpp")
+    add_executable(caliper_draw_parity_app "${_dir}/draw_parity_app.mm")
     target_include_directories(caliper_draw_parity_app PRIVATE
         "${CMAKE_SOURCE_DIR}/src/host" "${CMAKE_SOURCE_DIR}/third_party/stb")
-    target_link_libraries(caliper_draw_parity_app PRIVATE caliper_draw caliper_net caliper::sdk $<TARGET_NAME_IF_EXISTS:caliper_builder_spec>
+    target_link_libraries(caliper_draw_parity_app PRIVATE caliper_draw caliper_net caliper_tensor_bridge caliper::sdk $<TARGET_NAME_IF_EXISTS:caliper_builder_spec>
         "-framework Metal" "-framework MetalPerformanceShaders" "-framework Foundation")
     set_source_files_properties("${_dir}/draw_parity_app.mm" PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
     set_target_properties(caliper_draw_parity_app PROPERTIES
@@ -47,12 +47,11 @@ function(caliper_draw_parity_targets)
     # compiled in with the draw layer, as the graphics suite compiles it.
     if(TARGET caliper_draw_host AND TARGET caliper_scene)
         add_executable(caliper_scene_parity_app "${_dir}/scene_parity_app.mm"
-            "${CMAKE_SOURCE_DIR}/src/host/live/live_scene.cpp" "${CMAKE_SOURCE_DIR}/src/host/live/scene_legacy.cpp" "${CMAKE_SOURCE_DIR}/src/host/live/scene_piece_form.cpp"
-            "${CMAKE_SOURCE_DIR}/src/host/tensor_bridge.cpp")
+            "${CMAKE_SOURCE_DIR}/src/host/live/live_scene.cpp" "${CMAKE_SOURCE_DIR}/src/host/live/scene_legacy.cpp" "${CMAKE_SOURCE_DIR}/src/host/live/scene_piece_form.cpp")
         target_include_directories(caliper_scene_parity_app PRIVATE
             "${CMAKE_SOURCE_DIR}/src/host" "${CMAKE_SOURCE_DIR}/third_party/stb")
         target_link_libraries(caliper_scene_parity_app PRIVATE caliper_draw_host caliper_scene caliper_gfx caliper_net
-            caliper::sdk "-framework Metal" "-framework Foundation")
+            caliper_tensor_bridge caliper::sdk "-framework Metal" "-framework Foundation")
         target_compile_definitions(caliper_scene_parity_app PRIVATE CALIPER_HAVE_DRAW=1)
         set_source_files_properties("${_dir}/scene_parity_app.mm" PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
         set_target_properties(caliper_scene_parity_app PROPERTIES

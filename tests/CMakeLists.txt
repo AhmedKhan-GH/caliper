@@ -37,14 +37,13 @@ add_executable(caliper_tests
     test_alloc_registry.cpp
     test_obj.cpp
     test_pulse_ring.cpp
-    ${CMAKE_SOURCE_DIR}/src/host/tensor_bridge.cpp
 )
 # On Windows the host build provides ZLIB::ZLIB in-tree (Dependencies.cmake).
 if(NOT TARGET ZLIB::ZLIB)
     find_package(ZLIB REQUIRED)
 endif()
 target_link_libraries(caliper_tests PRIVATE doctest::doctest caliper::sdk caliper_host_lib
-    caliper::sdk_testing caliper::ui_stack ZLIB::ZLIB caliper_test_run_marker)
+    caliper_tensor_bridge caliper::sdk_testing caliper::ui_stack ZLIB::ZLIB caliper_test_run_marker)
 # Wire protocol v3 networking (src/host/net): the codec against the golden
 # frames in tests/fixtures/wire_v3, everywhere; the WebSocket layer against its
 # own server on 127.0.0.1 and the hub (src/host/net/hub.h) in-process with fake
@@ -201,10 +200,9 @@ endif()
 # it. Run it as a heavy job: CALIPER_SLOW_TESTS=1 ctest -L slow (6 threads at most).
 find_package(Threads REQUIRED)
 add_executable(caliper_colormap_exhaustive
-    test_colormap_exhaustive.cpp
-    ${CMAKE_SOURCE_DIR}/src/host/tensor_bridge.cpp)
+    test_colormap_exhaustive.cpp)
 target_include_directories(caliper_colormap_exhaustive PRIVATE ${CMAKE_SOURCE_DIR}/src/host)
-target_link_libraries(caliper_colormap_exhaustive PRIVATE caliper::sdk Threads::Threads)
+target_link_libraries(caliper_colormap_exhaustive PRIVATE caliper_tensor_bridge caliper::sdk Threads::Threads)
 set_target_properties(caliper_colormap_exhaustive PROPERTIES CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON)
 add_test(NAME caliper_colormap_exhaustive COMMAND caliper_colormap_exhaustive)
 set_tests_properties(caliper_colormap_exhaustive PROPERTIES LABELS "slow" SKIP_RETURN_CODE 77 TIMEOUT 1800)
@@ -212,10 +210,9 @@ set_tests_properties(caliper_colormap_exhaustive PROPERTIES LABELS "slow" SKIP_R
 # reference for all 2^32 inputs on the same ranges, also under the label slow (Apple only).
 if(APPLE)
     add_executable(caliper_colormap_gpu_exhaustive
-        test_colormap_gpu_exhaustive.mm
-        ${CMAKE_SOURCE_DIR}/src/host/tensor_bridge.cpp)
+        test_colormap_gpu_exhaustive.mm)
     set_source_files_properties(test_colormap_gpu_exhaustive.mm PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
-    target_link_libraries(caliper_colormap_gpu_exhaustive PRIVATE caliper_gfx caliper::sdk Threads::Threads
+    target_link_libraries(caliper_colormap_gpu_exhaustive PRIVATE caliper_gfx caliper_tensor_bridge caliper::sdk Threads::Threads
         "-framework Metal" "-framework Foundation")
     set_target_properties(caliper_colormap_gpu_exhaustive PROPERTIES CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON
         OBJCXX_STANDARD 17 OBJCXX_STANDARD_REQUIRED ON)
@@ -226,10 +223,9 @@ endif()
 # caliper_colormap_cases <file> writes the colormap's boundary cases, with the C++ reference's
 # RGBA for each input, for the browser rows (web/test/shaders.spec.ts, colormap.spec.ts).
 add_executable(caliper_colormap_cases
-    shaders/colormap_cases_tool.cpp
-    ${CMAKE_SOURCE_DIR}/src/host/tensor_bridge.cpp)
+    shaders/colormap_cases_tool.cpp)
 target_include_directories(caliper_colormap_cases PRIVATE ${CMAKE_SOURCE_DIR}/src/host ${CMAKE_CURRENT_SOURCE_DIR})
-target_link_libraries(caliper_colormap_cases PRIVATE caliper::sdk)
+target_link_libraries(caliper_colormap_cases PRIVATE caliper_tensor_bridge caliper::sdk)
 set_target_properties(caliper_colormap_cases PROPERTIES CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON)
 
 # ---------------------------------------------------------------------------
@@ -517,11 +513,10 @@ endif()
 # GPU.
 add_executable(caliper_gfx_tests
     gfx/gfx_main.cpp
-    ${CMAKE_SOURCE_DIR}/src/host/tensor_bridge.cpp
 )
 target_include_directories(caliper_gfx_tests PRIVATE ${CMAKE_SOURCE_DIR}/src/host)
 target_link_libraries(caliper_gfx_tests PRIVATE
-    doctest::doctest caliper::sdk caliper::ui_stack ${CALIPER_DEPENDENCY_LIBS})
+    doctest::doctest caliper_tensor_bridge caliper::sdk caliper::ui_stack ${CALIPER_DEPENDENCY_LIBS})
 set_target_properties(caliper_gfx_tests PROPERTIES
     CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
 
@@ -577,10 +572,9 @@ set_tests_properties(caliper_gfx_tests PROPERTIES LABELS "gfx" SKIP_RETURN_CODE 
 # cases. Skips (77) without a Metal device, as the gfx suite does.
 if(APPLE)
     add_executable(caliper_shader_tests
-        shaders/shaders_metal.mm
-        ${CMAKE_SOURCE_DIR}/src/host/tensor_bridge.cpp)
+        shaders/shaders_metal.mm)
     target_include_directories(caliper_shader_tests PRIVATE ${CMAKE_SOURCE_DIR}/src/host)
-    target_link_libraries(caliper_shader_tests PRIVATE doctest::doctest caliper::sdk
+    target_link_libraries(caliper_shader_tests PRIVATE doctest::doctest caliper_tensor_bridge caliper::sdk
         "-framework Metal" "-framework Foundation")
     set_source_files_properties(shaders/shaders_metal.mm PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
     set_target_properties(caliper_shader_tests PROPERTIES CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON

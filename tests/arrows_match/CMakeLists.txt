@@ -7,12 +7,11 @@ function(caliper_arrows_match_targets)
         return()
     endif()
     set(_dir "${CMAKE_SOURCE_DIR}/tests/arrows_match")
-    add_executable(caliper_arrows_match_tests "${_dir}/test_arrows_match.mm"
-        "${CMAKE_SOURCE_DIR}/src/host/tensor_bridge.cpp")
+    add_executable(caliper_arrows_match_tests "${_dir}/test_arrows_match.mm")
     target_include_directories(caliper_arrows_match_tests PRIVATE
         "${CMAKE_SOURCE_DIR}/src/host" "${CMAKE_SOURCE_DIR}/third_party/stb")
     target_link_libraries(caliper_arrows_match_tests PRIVATE caliper_draw caliper_draw_host caliper_scene caliper_net
-        caliper_producer caliper_builder_session caliper::sdk doctest::doctest
+        caliper_tensor_bridge caliper_producer caliper_builder_session caliper::sdk doctest::doctest
         "-framework Metal" "-framework MetalPerformanceShaders" "-framework Foundation")
     set_source_files_properties("${_dir}/test_arrows_match.mm" PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
     set_target_properties(caliper_arrows_match_tests PROPERTIES

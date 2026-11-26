@@ -17,13 +17,12 @@ function(caliper_image_match_target name)
     endif()
     set(_src "${CMAKE_SOURCE_DIR}/tests/${name}_match/test_${name}_match.mm")
     add_executable(caliper_${name}_match_tests "${_src}"
-        "${CMAKE_SOURCE_DIR}/src/host/tensor_bridge.cpp"
         "${CMAKE_SOURCE_DIR}/src/host/live/live_scene.cpp" "${CMAKE_SOURCE_DIR}/src/host/live/scene_legacy.cpp"
         "${CMAKE_SOURCE_DIR}/src/host/live/scene_piece_form.cpp")
     target_include_directories(caliper_${name}_match_tests PRIVATE
         "${CMAKE_SOURCE_DIR}/src/host" "${CMAKE_SOURCE_DIR}/third_party/stb")
     target_link_libraries(caliper_${name}_match_tests PRIVATE caliper_draw caliper_draw_host caliper_scene caliper_net
-        caliper_producer caliper_builder_session caliper::sdk doctest::doctest
+        caliper_tensor_bridge caliper_producer caliper_builder_session caliper::sdk doctest::doctest
         "-framework Metal" "-framework MetalPerformanceShaders" "-framework Foundation")
     target_compile_definitions(caliper_${name}_match_tests PRIVATE CALIPER_HAVE_DRAW=1)
     set_source_files_properties("${_src}" PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
