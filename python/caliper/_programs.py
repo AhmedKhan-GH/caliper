@@ -484,10 +484,6 @@ def _detach_locked():
         _remove(pid, clear_output=True)
     _drop_act_hooks()
     from .interp import _publish
-    from .interp._points import clear_captures
-    current = _STATE["model"]
-    if current is not None:
-        clear_captures(current)
     _publish._clear()
     _release_unused()
     _STATE["model"] = None
