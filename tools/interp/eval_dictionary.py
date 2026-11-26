@@ -131,14 +131,15 @@ def cross_entropy_sum(model, hidden, input_ids, count, *, chunk_tokens=64, healt
             health()
         with autorelease_scope(hidden.device):
             selected = positions[start:start + chunk_tokens]
-            logits = head(states[selected]).float()
+            logits = head(states[selected])
             if getattr(model.config, "model_type", None) == "gemma2":
                 cap = model.config.final_logit_softcapping
                 if cap is not None:
                     if isinstance(cap, bool) or not math.isfinite(cap) or cap <= 0:
                         raise ValueError("invalid Gemma final logit softcap")
+                    # Preserve native logit precision through all softcap operations.
                     logits = (logits / cap).tanh() * cap
-            loss = F.cross_entropy(logits, ids[selected + 1], reduction="sum")
+            loss = F.cross_entropy(logits.float(), ids[selected + 1], reduction="sum")
             total += float(loss.item())
             del logits, loss, selected
     return total, len(positions)

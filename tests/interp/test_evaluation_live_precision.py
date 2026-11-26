@@ -96,21 +96,111 @@ def batch(model, dictionary, mode, ids, prepared, count, memory, **kwargs):
                                       chunk_tokens=2, memory=memory, **kwargs)
 
 
-def loss(model, ids, prepared, count):
+def native_logits(model, ids, prepared):
     options = {} if prepared is None else {"attention_mask": prepared.attention_mask}
-    # The protocol applies Gemma softcap after the head cast to float32.
-    # The model's own reduced-precision softcap has different boundary values.
-    if model.config.model_type == "gemma2":
-        hidden = model.model(ids, **options, use_cache=False).last_hidden_state
-        head = model.get_output_embeddings()
-        logits = F.linear(hidden, head.weight, head.bias).float()
-        cap = model.config.final_logit_softcapping
-        logits = (logits / cap).tanh() * cap
-    else:
-        logits = model(ids, **options, use_cache=False).logits.float()
+    try:
+        return model(ids, **options, use_cache=False).logits
+    except (RuntimeError, NotImplementedError) as error:
+        dtype = next(model.parameters()).dtype
+        if dtype in (torch.float16, torch.bfloat16) and "not implemented for" in str(error).lower():
+            pytest.skip(f"CPU model kernel does not support {dtype}: {error}")
+        raise
+
+
+def loss(model, ids, prepared, count):
+    logits = native_logits(model, ids, prepared).float()
     selected = (prepared.prediction_mask if prepared is not None else
                 (torch.arange(ids.numel()).reshape_as(ids)[:, :-1] + 1 < count))
     return F.cross_entropy(logits[:, :-1][selected], ids[:, 1:][selected], reduction="sum").item(), int(selected.sum())
+
+
+@pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16, torch.float32])
+@pytest.mark.parametrize("active", [(), (0,), (1,), (0, 1)], ids=["baseline", "layer0", "layer1", "all"])
+@pytest.mark.parametrize("chunk_tokens", [1, 3])
+@pytest.mark.parametrize("cap", [2.0, None], ids=["capped", "uncapped"])
+def test_gemma_loss_matches_native_logits_for_each_replacement(dtype, active, chunk_tokens, cap):
+    model, dictionary = resources("gemma", dtype)
+    model.config.final_logit_softcapping = cap
+    model.lm_head.weight.mul_(20)
+    policy = protocol.research_policy(model, 7, tokenizer(model))
+    prepared = protocol.research_contexts([[4, 1, 5, 2, 0], [6, 7]], policy, device="cpu", pad_to=7)
+    selected = torch.tensor([[True, False, True, False, False, False],
+                             [True, True, False, False, False, False]])
+    assert torch.equal(prepared.prediction_mask, selected)
+    before = hooks(model)
+    states = []
+    handle = model.get_output_embeddings().register_forward_pre_hook(lambda module, args: states.append(args[0]))
+    try:
+        with torch.no_grad(), reference_replacement(model, dictionary, active, prepared.content_mask):
+            logits = native_logits(model, prepared.input_ids, prepared)
+    finally:
+        handle.remove()
+    assert logits.dtype == dtype and len(states) == 1
+    expected = F.cross_entropy(logits[:, :-1][selected].float(), prepared.input_ids[:, 1:][selected],
+                               reduction="sum").item()
+    actual, targets = evaluation.cross_entropy_sum(
+        model, states[0], prepared.input_ids, 7, chunk_tokens=chunk_tokens,
+        prediction_mask=prepared.prediction_mask)
+    assert targets == 4
+    assert actual == pytest.approx(expected, rel=1e-6)
+    assert hooks(model) == before
+
+
+@pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16, torch.float32])
+@pytest.mark.parametrize("cap", [2.0, None], ids=["capped", "uncapped"])
+def test_gemma_unmasked_loss_and_empty_mask(dtype, cap, monkeypatch):
+    model = gemma_model().to(dtype=dtype)
+    model.config.final_logit_softcapping = cap
+    model.lm_head.weight.mul_(20)
+    ids = torch.tensor([[1, 4, 5, 7], [1, 8, 6, 2]])
+    positions = torch.tensor([0, 1, 2, 4, 5])
+    with torch.no_grad():
+        logits = native_logits(model, ids, None)
+        hidden = hidden_forward(model, ids)
+    expected = F.cross_entropy(logits.float().reshape(-1, 37)[positions],
+                               ids.reshape(-1)[positions + 1], reduction="sum").item()
+    actual, targets = evaluation.cross_entropy_sum(model, hidden, ids, 7, chunk_tokens=2)
+    assert targets == 5
+    assert actual == pytest.approx(expected, rel=1e-6)
+    monkeypatch.setattr(model.get_output_embeddings(), "forward", lambda *a: pytest.fail("empty mask called the head"))
+    empty = torch.zeros_like(ids[:, :-1], dtype=torch.bool)
+    assert evaluation.cross_entropy_sum(model, hidden, ids, 7, prediction_mask=empty) == (0.0, 0)
+
+
+@pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16, torch.float32])
+@pytest.mark.parametrize("cap", [True, False, 0.0, -1.0, float("nan"), float("inf"), -float("inf")])
+def test_gemma_invalid_softcap_is_refused_at_each_precision(dtype, cap):
+    model = gemma_model().to(dtype=dtype)
+    ids = torch.tensor([[1, 4]])
+    with torch.no_grad():
+        native_logits(model, ids, None)
+    # Bypass config field checks to exercise the evaluator's own validation.
+    object.__setattr__(model.config, "final_logit_softcapping", cap)
+    hidden = torch.zeros(1, 2, model.config.hidden_size, dtype=dtype)
+    with pytest.raises(ValueError, match="invalid Gemma final logit softcap"):
+        evaluation.cross_entropy_sum(model, hidden, ids, 2)
+
+
+def test_gemma_research_protocol_keeps_1024_positions_and_special_masks():
+    model = gemma_model()
+    policy = protocol.research_policy(model, 1024, tokenizer(model))
+    assert policy["model_context"] == 1024 and policy["content_context"] == 1023
+    assert policy["prefix_ids"] == [1] and policy["excluded_ids"] == [0, 1, 2]
+    source = [4] * 1023
+    source[10:13] = [1, 2, 0]
+    prepared = protocol.research_contexts([source, [5, 1, 2, 0, 6]], policy, device="cpu", pad_to=1024)
+    assert prepared.input_ids.shape == (2, 1024)
+    assert prepared.input_ids[0, 1:].tolist() == source
+    assert prepared.attention_mask.sum(1).tolist() == [1024, 6]
+    assert prepared.content_mask.sum(1).tolist() == [1020, 2]
+    assert not prepared.content_mask[:, 0].any()
+    assert not prepared.content_mask[0, 11:14].any()
+    assert prepared.prediction_mask.sum(1).tolist() == [1020, 2]
+    assert prepared.prediction_mask[1, :6].tolist() == [True, False, False, False, True, False]
+    with pytest.raises(ValueError, match="source context lengths"):
+        protocol.research_contexts([source + [4]], policy, device="cpu")
+    with pytest.raises(ValueError, match="1024"):
+        protocol.research_policy(model, 1025, tokenizer(model))
 
 
 @pytest.mark.parametrize("family", ["gemma", "tiny"])
