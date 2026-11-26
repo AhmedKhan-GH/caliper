@@ -999,6 +999,13 @@ class HostedInference:
                                         completed_step=self.controls.n, case_id=result["case_id"],
                                         compute_publish_seconds=result["action_seconds"])
             self._output_key = deepcopy(key)
+            self._sync_clamp_control()
+            # Original-coordinate reference traces require an unchanged baseline.
+            # Consume the toggle without a default-profile trace or another output
+            # comparison. The completed case owns its published tensors and identity.
+            self._retrace = self.retrace.value
+            self.status.set("Automatic retrace is unsupported for published actions. The current graph is unchanged."
+                            if self._retrace else "ready")
         return f"{result['label']} completed. Evidence: {result['metadata_file']}"
 
     def _check_watch(self):
