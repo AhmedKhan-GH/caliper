@@ -121,12 +121,15 @@ struct ProgramRecord {
     std::string error_code;            // the last error: the item's, a refusal's or the app's
     std::string error_message;
     uint32_t line = 0, column = 0;
+    std::string warning_code;          // the active warning while running (e.g. program.over_budget)
+    std::string warning_message;
+    uint32_t warning_line = 0, warning_column = 0;
 };
 
 // A change of a program that its `program` event reports.
 struct ProgramChange {
     std::string id;
-    std::string change;                // "compiled", "refused" or "stopped"
+    std::string change;                // "compiled", "warned", "refused" or "stopped"
 };
 
 class ProgramSync {
@@ -152,8 +155,8 @@ private:
         std::string sent_sha;          // the hash sent in this epoch; "" when none
         int sends = 0;                 // sets of sent_sha in this epoch
         uint32_t pending = 0;          // the request id of the last set
-        std::string seen;              // "<state>/<error code>/<sha256>" of the last change
-        std::string seen_state, seen_sha;
+        std::string seen;              // "<state>/<error code>/<warning code>/<sha256>" of the last change
+        std::string seen_state, seen_sha, seen_warning;
         bool params_dirty = false;     // the values changed after the set of this epoch
     };
     void apply_item(const caliper_net::Json& item);
@@ -241,6 +244,9 @@ inline void ProgramSync::want(std::vector<WantedProgram> programs) {
             e.rec.error_code.clear();
             e.rec.error_message.clear();
             e.rec.line = e.rec.column = 0;
+            e.rec.warning_code.clear();
+            e.rec.warning_message.clear();
+            e.rec.warning_line = e.rec.warning_column = 0;
             note_change(e);
         }
         if (!e.rec.want.refused_code.empty()) {
@@ -254,6 +260,9 @@ inline void ProgramSync::want(std::vector<WantedProgram> programs) {
             e.rec.error_code = review ? std::string() : e.rec.want.refused_code;
             e.rec.error_message = review ? std::string() : e.rec.want.refused_message;
             e.rec.line = e.rec.column = 0;
+            e.rec.warning_code.clear();
+            e.rec.warning_message.clear();
+            e.rec.warning_line = e.rec.warning_column = 0;
             note_change(e);
         }
     }
@@ -261,17 +270,20 @@ inline void ProgramSync::want(std::vector<WantedProgram> programs) {
 
 inline void ProgramSync::note_change(Entry& e) {
     const std::string sha = program_sync_detail::str_of(e.rec.item, "sha256");
-    const std::string key = e.rec.state + "/" + e.rec.error_code + "/" + sha;
+    const std::string key = e.rec.state + "/" + e.rec.error_code + "/" + e.rec.warning_code + "/" + sha;
     if (key == e.seen) return;
-    const std::string before = e.seen_state, before_sha = e.seen_sha;
+    const std::string before = e.seen_state, before_sha = e.seen_sha, before_warn = e.seen_warning;
     e.seen = key;
     e.seen_state = e.rec.state;
     e.seen_sha = sha;
+    e.seen_warning = e.rec.warning_code;
     const std::string& st = e.rec.state;
     const bool ok = st == "compiled" || st == "running";
     const bool was_ok = before == "compiled" || before == "running";
     if (st == "refused" || st == "stopped") changes_.push_back({e.rec.want.id, st});
     else if (ok && (!was_ok || sha != before_sha)) changes_.push_back({e.rec.want.id, "compiled"});
+    if (ok && !e.rec.warning_code.empty() && e.rec.warning_code != before_warn)
+        changes_.push_back({e.rec.want.id, "warned"});
 }
 
 inline void ProgramSync::apply_item(const caliper_net::Json& item) {
@@ -300,6 +312,17 @@ inline void ProgramSync::apply_item(const caliper_net::Json& item) {
         e->rec.error_message.clear();
         e->rec.line = e->rec.column = 0;
     }
+    const caliper_net::Json* warn = item.find("warning");
+    if (warn && warn->is_object()) {
+        e->rec.warning_code = program_sync_detail::str_of(*warn, "code");
+        e->rec.warning_message = program_sync_detail::str_of(*warn, "message");
+        e->rec.warning_line = program_sync_detail::u32_of(*warn, "line");
+        e->rec.warning_column = program_sync_detail::u32_of(*warn, "column");
+    } else {
+        e->rec.warning_code.clear();
+        e->rec.warning_message.clear();
+        e->rec.warning_line = e->rec.warning_column = 0;
+    }
     note_change(*e);
 }
 
@@ -319,9 +342,13 @@ inline void ProgramSync::poll(ProgramLink& link) {
                 e.rec.host = "none";
                 e.rec.state = "waiting";
                 e.rec.item = caliper_net::Json();
+                e.rec.warning_code.clear();
+                e.rec.warning_message.clear();
+                e.rec.warning_line = e.rec.warning_column = 0;
                 e.seen.clear();
                 e.seen_state.clear();
                 e.seen_sha.clear();
+                e.seen_warning.clear();
             }
             removing_.clear();
         }
@@ -350,6 +377,9 @@ inline void ProgramSync::poll(ProgramLink& link) {
                 e.rec.error_message = "The stream refused the program (" + a.error_code + ")" +
                                       (a.error_message.empty() ? std::string(".") : ": " + a.error_message);
                 e.rec.line = e.rec.column = 0;
+                e.rec.warning_code.clear();
+                e.rec.warning_message.clear();
+                e.rec.warning_line = e.rec.warning_column = 0;
                 note_change(e);
             }
             continue;
@@ -370,6 +400,9 @@ inline void ProgramSync::poll(ProgramLink& link) {
                 e.rec.host = "none";
                 e.rec.state = "waiting";
                 e.rec.item = caliper_net::Json();
+                e.rec.warning_code.clear();
+                e.rec.warning_message.clear();
+                e.rec.warning_line = e.rec.warning_column = 0;
             }
         }
     }
@@ -393,6 +426,9 @@ inline void ProgramSync::poll(ProgramLink& link) {
                                           "capability resources, which Caliper LIB does under "
                                           "caliper.watch(model, optimizer).";
                     e.rec.line = e.rec.column = 0;
+                    e.rec.warning_code.clear();
+                    e.rec.warning_message.clear();
+                    e.rec.warning_line = e.rec.warning_column = 0;
                     note_change(e);
                 }
                 continue;
@@ -745,6 +781,7 @@ public:
         w.piece.set("name", ref.name);
         w.piece.set("version", ref.version);
         w.piece.set("hash", ref.hash);
+        w.piece.set("from", sp::piece_from_name(ref.from));
         auto refuse = [&](const std::string& code, const std::string& message) {
             w.refused_code = code;
             w.refused_message = message;
@@ -855,6 +892,9 @@ public:
             if (j->is_string() && !j->as_string().empty()) s.sha256 = j->as_string();
         if (!r.error_code.empty())
             s.error = caliper_builder::ProgramError{r.error_code, r.error_message, r.line, r.column};
+        if (!r.warning_code.empty())
+            s.warning =
+                caliper_builder::ProgramError{r.warning_code, r.warning_message, r.warning_line, r.warning_column};
         // The script runs an instance's derive half; its events name that half.
         if (r.want.kind == "piece" && !r.want.derive.empty()) s.half = "derive";
         return s;

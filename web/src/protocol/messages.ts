@@ -871,8 +871,8 @@ export interface ProgramMsg {
   sha256?: string;
   /** set: the scene of a geometry output's panel. */
   scene?: string;
-  /** Instance of a piece, set: the pin {name, version, hash}, where the hash is "sha256:" and 64 lowercase hex digits. */
-  piece?: { name: string; version: number; hash?: string };
+  /** Instance of a piece, set: the pin {name, version, hash, from?}, where the hash is "sha256:" and 64 lowercase hex digits. */
+  piece?: { name: string; version: number; hash?: string; from?: 'library' | 'workspace' | 'inline' };
   /** Instance of a piece, set: the piece's manifest. */
   manifest?: Record<string, unknown>;
   /** Instance of a piece, set: an input name to "live:<tensor>" or "program:<id>/<resource>". */

@@ -12012,7 +12012,7 @@
                   "type": "string"
                 },
                 "change": {
-                  "description": "cursor: what changed: live, held, playing, moved (by a command, a step or a key) or clamped (to the nearest kept step); run: what changed: the run's state, a parameter applied at a step, the end of an action, the attachment of a script, the state of a managed run (runner), or an intervention applied at a step (intervene); program: compiled, warned over its frame budget, refused by a check, or stopped by a limit.",
+                  "description": "cursor: what changed: live, held, playing, moved (by a command, a step or a key) or clamped (to the nearest kept step); run: what changed: the run's state, a parameter applied at a step, the end of an action, the attachment of a script, the state of a managed run (runner), or an intervention applied at a step (intervene); program: compiled, warned over its budget, refused by a check, or stopped by a limit.",
                   "enum": [
                     "state",
                     "param",
@@ -14695,7 +14695,7 @@
                   "type": "string"
                 },
                 "last_cost_ms": {
-                  "description": "The overhead D of a pass in milliseconds: the time that a pass adds to the run's wall clock, shared by all programs; null before it is measured.",
+                  "description": "The pass cost D in milliseconds: in a training run, the time that a pass adds to the wall clock; in an interpretability run, the program work time of the pass; null before it is measured.",
                   "type": [
                     "number",
                     "null"
@@ -14726,7 +14726,7 @@
                   "type": "integer"
                 },
                 "overhead_share": {
-                  "description": "The measured share of the training time that the passes take, D / (N b), which the cadence aims to keep at or below 0.04; null before it is measured.",
+                  "description": "The measured share of the training time that the passes take, D / (N b), which training runs aim to keep at or below 0.04; null in interpretability runs or before it is measured.",
                   "minimum": 0,
                   "type": [
                     "number",
@@ -14798,9 +14798,43 @@
                   "type": "string"
                 },
                 "step_ms": {
-                  "description": "The base step time b in milliseconds: the time of a training step far from a pass; null before it is measured.",
+                  "description": "The base training step time b in milliseconds far from a pass; null in interpretability runs or before it is measured.",
                   "type": [
                     "number",
+                    "null"
+                  ]
+                },
+                "warning": {
+                  "additionalProperties": false,
+                  "description": "The active warning while running, such as program.over_budget, or null.",
+                  "properties": {
+                    "code": {
+                      "description": "A stable code, such as program.over_budget.",
+                      "type": "string"
+                    },
+                    "column": {
+                      "description": "The column in the source, or 0.",
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "line": {
+                      "description": "The line in the source, or 0.",
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "message": {
+                      "description": "One plain sentence that says what happened.",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "code",
+                    "message",
+                    "line",
+                    "column"
+                  ],
+                  "type": [
+                    "object",
                     "null"
                   ]
                 }
@@ -14822,6 +14856,7 @@
                 "memory_bytes",
                 "memory_limit_bytes",
                 "error",
+                "warning",
                 "sha256"
               ],
               "type": "object"
@@ -14835,7 +14870,7 @@
         ],
         "type": "object"
       },
-      "summary": "Returns the state of each GPU program of the open spec: where it runs, whether it compiled, runs, was refused or stopped, its cadence N, the GPU time of its last pass, the overhead of a pass and the base step time on the run's wall clock, the measured share of the training time, its passes a second, its memory, and its last error with line and column. It changes nothing."
+      "summary": "Returns the state of each GPU program of the open spec: where it runs, whether it compiled, runs, was refused or stopped, its cadence N, the GPU time of its last pass, the overhead of a pass and the base step time on the run's wall clock, the measured share of the training time, its passes a second, its memory, and its last error or active warning with line and column. It changes nothing."
     },
     {
       "agents": true,

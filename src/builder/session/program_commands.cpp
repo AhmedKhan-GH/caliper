@@ -55,12 +55,18 @@ json program_status_json(const ProgramStatus& s) {
                 {"memory_bytes", s.memory_bytes},
                 {"memory_limit_bytes", s.memory_limit_bytes},
                 {"error", nullptr},
+                {"warning", nullptr},
                 {"sha256", s.sha256}};
     if (s.error)
         out["error"] = {{"code", s.error->code},
                         {"message", s.error->message},
                         {"line", s.error->line},
                         {"column", s.error->column}};
+    if (s.warning)
+        out["warning"] = {{"code", s.warning->code},
+                          {"message", s.warning->message},
+                          {"line", s.warning->line},
+                          {"column", s.warning->column}};
     if (s.piece) out["piece"] = spec::to_json(*s.piece);
     if (s.draw) out["draw"] = draw_status_json(*s.draw);
     return out;
@@ -72,7 +78,11 @@ void push_program_event(EventSink& sink, const ProgramStatus& s, std::string_vie
     e.panel = s.panel;
     e.origin = s.host == "script" ? "script" : "ui";
     e.fields = {{"program", s.id}, {"change", std::string(change)}, {"host", s.host == "none" ? "viewer" : s.host}};
-    const std::optional<ProgramError>& diag = s.error ? s.error : (s.draw ? s.draw->warning : std::nullopt);
+    const std::optional<ProgramError>& diag =
+        change == "compiled"
+            ? std::nullopt
+            : (change == "warned" ? (s.warning ? s.warning : (s.draw ? s.draw->warning : std::nullopt))
+                                  : (s.error ? s.error : (s.draw ? s.draw->error : std::nullopt)));
     if (diag) {
         e.fields["code"] = diag->code;
         e.fields["message"] = diag->message;

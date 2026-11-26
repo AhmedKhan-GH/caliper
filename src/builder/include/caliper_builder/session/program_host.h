@@ -72,6 +72,7 @@ struct ProgramStatus {
     std::uint64_t memory_bytes = 0;               // output buffers and bound tensors
     std::uint64_t memory_limit_bytes = 0;         // from limits.memory_mb
     std::optional<ProgramError> error;            // the last error
+    std::optional<ProgramError> warning;          // the active warning while running (e.g. program.over_budget)
     std::string sha256;                           // of the source the host runs; empty when none
     // An instance of a piece (design/programmable-graphics.md, Status and
     // Events). The item's `piece` and `draw` keys, and the event's `half` and

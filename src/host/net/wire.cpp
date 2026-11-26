@@ -2147,8 +2147,8 @@ void check_declaration(const Json& d) {
 }
 
 // ---- 3.2 draft: instances of pieces and their resources (capability "resources") ----------------------
-// The pin of a piece: name [a-z][a-z0-9_]* of 1 to 32 bytes, version 1 to 1,000,000, and hash "sha256:" with
-// 64 lowercase hex digits.
+// The pin of a piece: name [a-z][a-z0-9_]* of 1 to 32 bytes, version 1 to 1,000,000, hash "sha256:" with
+// 64 lowercase hex digits, and optional from ("library", "workspace" or "inline").
 bool piece_pin_ok(const Json& v) {
     if (!v.is_object()) return false;
     const Json* name = v.find("name");
@@ -2162,7 +2162,9 @@ bool piece_pin_ok(const Json& v) {
     const Json* hash = v.find("hash");
     if (!hash || !hash->is_string() || hash->as_string().compare(0, 7, "sha256:") != 0) return false;
     const Json hex(hash->as_string().substr(7));
-    return sha256_hex_ok(&hex);
+    if (!sha256_hex_ok(&hex)) return false;
+    const Json* from = v.find("from");
+    return !present(from) || one_of(*from, {"library", "workspace", "inline"});
 }
 // One value of "bind": live:<a tensor name of 1 to 255 bytes>, or program:<program id>/<resource name>.
 bool binding_ok(const Json& v) {
@@ -2396,7 +2398,7 @@ bool status_item(const Json& v) {
         !opt_ok(v, "overhead_share", is_nonneg) || !opt_ok(v, "passes_per_s", is_nonneg) ||
         !opt_ok(v, "last_step", is_safe_uint) || !opt_ok(v, "runs", is_safe_uint) ||
         !opt_ok(v, "memory_bytes", is_safe_uint) || !opt_ok(v, "memory_limit_bytes", is_safe_uint) ||
-        !opt_ok(v, "error", program_error_ok))
+        !opt_ok(v, "error", program_error_ok) || !opt_ok(v, "warning", program_error_ok))
         return false;
     const Json* sha = v.find("sha256");
     return !present(sha) || (sha->is_string() && sha->as_string().empty()) || sha256_hex_ok(sha);

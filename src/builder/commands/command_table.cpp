@@ -370,7 +370,7 @@ const std::pair<const char*, const char*> kFragments[] = {
         "key": {"type": "string", "description": "control: the shortcut key that made the change, when a key did."},
         "control": {"type": "string", "description": "control: the control's id."},
         "bind": {"type": "string", "description": "control: the control's target, such as param:lr."},
-        "change": {"type": "string", "enum": ["state", "param", "action", "attach", "runner", "intervene", "compiled", "warned", "refused", "stopped", "live", "held", "playing", "moved", "clamped"], "description": "cursor: what changed: live, held, playing, moved (by a command, a step or a key) or clamped (to the nearest kept step); run: what changed: the run's state, a parameter applied at a step, the end of an action, the attachment of a script, the state of a managed run (runner), or an intervention applied at a step (intervene); program: compiled, warned over its frame budget, refused by a check, or stopped by a limit."},
+        "change": {"type": "string", "enum": ["state", "param", "action", "attach", "runner", "intervene", "compiled", "warned", "refused", "stopped", "live", "held", "playing", "moved", "clamped"], "description": "cursor: what changed: live, held, playing, moved (by a command, a step or a key) or clamped (to the nearest kept step); run: what changed: the run's state, a parameter applied at a step, the end of an action, the attachment of a script, the state of a managed run (runner), or an intervention applied at a step (intervene); program: compiled, warned over its budget, refused by a check, or stopped by a limit."},
         "state": {"type": "string", "description": "state: the state variable's id; run with change state: the run's new state; approval: pending, approved, denied or expired."},
         "step": {"type": ["integer", "null"], "description": "run: the script's step when it changed, or null before the first step; cursor: the step that the cursor shows; pick of a piece's item: the step of the resource version that the frame showed."},
         "first": {"type": "integer", "description": "cursor: the first kept step."},
@@ -492,7 +492,7 @@ const std::pair<const char*, const char*> kFragments[] = {
 
     {"program_status", R"json({
       "type": "object", "additionalProperties": false,
-      "required": ["id", "kind", "host", "state", "every", "every_min", "last_pass_ms", "last_cost_ms", "step_ms", "overhead_share", "passes_per_s", "last_step", "runs", "memory_bytes", "memory_limit_bytes", "error", "sha256"],
+      "required": ["id", "kind", "host", "state", "every", "every_min", "last_pass_ms", "last_cost_ms", "step_ms", "overhead_share", "passes_per_s", "last_step", "runs", "memory_bytes", "memory_limit_bytes", "error", "warning", "sha256"],
       "properties": {
         "id": {"type": "string", "description": "The program's id."},
         "kind": {"type": "string", "enum": ["geometry", "pixels", "tensor", "operator", "piece"], "description": "The program's output kind, piece for an instance of a piece, or operator for the first surface or path step of a source over a live tensor, which runs in the script and has the id operator.<source>.<step index>."},
@@ -501,9 +501,9 @@ const std::pair<const char*, const char*> kFragments[] = {
         "every": {"type": ["integer", "null"], "description": "The steps between two passes of the program: the cadence N that all programs share, or a multiple of N for a larger limits.every; null before the first pass."},
         "every_min": {"type": ["integer", "null"], "description": "The declared limits.every; null when absent."},
         "last_pass_ms": {"type": ["number", "null"], "description": "The GPU time of the last pass or frame in milliseconds, or null."},
-        "last_cost_ms": {"type": ["number", "null"], "description": "The overhead D of a pass in milliseconds: the time that a pass adds to the run's wall clock, shared by all programs; null before it is measured."},
-        "step_ms": {"type": ["number", "null"], "description": "The base step time b in milliseconds: the time of a training step far from a pass; null before it is measured."},
-        "overhead_share": {"type": ["number", "null"], "minimum": 0, "description": "The measured share of the training time that the passes take, D / (N b), which the cadence aims to keep at or below 0.04; null before it is measured."},
+        "last_cost_ms": {"type": ["number", "null"], "description": "The pass cost D in milliseconds: in a training run, the time that a pass adds to the wall clock; in an interpretability run, the program work time of the pass; null before it is measured."},
+        "step_ms": {"type": ["number", "null"], "description": "The base training step time b in milliseconds far from a pass; null in interpretability runs or before it is measured."},
+        "overhead_share": {"type": ["number", "null"], "minimum": 0, "description": "The measured share of the training time that the passes take, D / (N b), which training runs aim to keep at or below 0.04; null in interpretability runs or before it is measured."},
         "passes_per_s": {"type": ["number", "null"], "minimum": 0, "description": "The passes of the program a second on the run's wall clock, over its last passes; null before its second pass and while it does not run."},
         "last_step": {"type": ["integer", "null"], "description": "The script's step of the last pass, or null."},
         "runs": {"type": "integer", "minimum": 0, "description": "The count of passes."},
@@ -515,6 +515,12 @@ const std::pair<const char*, const char*> kFragments[] = {
                     "message": {"type": "string", "description": "One plain sentence that says what happened."},
                     "line": {"type": "integer", "minimum": 0, "description": "The line in the source, or 0."},
                     "column": {"type": "integer", "minimum": 0, "description": "The column in the source, or 0."}}},
+        "warning": {"type": ["object", "null"], "additionalProperties": false, "required": ["code", "message", "line", "column"], "description": "The active warning while running, such as program.over_budget, or null.",
+                    "properties": {
+                      "code": {"type": "string", "description": "A stable code, such as program.over_budget."},
+                      "message": {"type": "string", "description": "One plain sentence that says what happened."},
+                      "line": {"type": "integer", "minimum": 0, "description": "The line in the source, or 0."},
+                      "column": {"type": "integer", "minimum": 0, "description": "The column in the source, or 0."}}},
         "sha256": {"type": "string", "description": "The SHA-256 of the source the host runs, in hex; empty when none runs."},
         "piece": {"$use": "piece_pin", "description": "An instance: its pin; absent for another program."},
         "draw": {"type": ["object", "null"], "additionalProperties": false, "description": "An instance whose piece draws: its draw half in the viewer; absent for another program.",
@@ -1838,7 +1844,7 @@ const Row kRows[] = {
      "Returns the state of each GPU program of the open spec: where it runs, whether it compiled, runs, "
      "was refused or stopped, its cadence N, the GPU time of its last pass, the overhead of a pass and the base step "
      "time on the run's wall clock, the measured share of the training time, its passes a second, its memory, and "
-     "its last error with line and column. It changes nothing.",
+     "its last error or active warning with line and column. It changes nothing.",
      R"json({"type": "object", "additionalProperties": false, "required": [],
       "properties": {
         "id": {"type": "string", "minLength": 1, "maxLength": 320, "description": "Only this program; every program when absent."}}})json",

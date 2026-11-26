@@ -1979,7 +1979,7 @@ const STATUS_KEYS: [string, (v: unknown) => boolean][] = [
   ['every', intIn(1, PROGRAM_EVERY_MAX)], ['every_min', intIn(1, PROGRAM_EVERY_MAX)], ['last_pass_ms', isNonneg], ['last_cost_ms', isNonneg],
   ['step_ms', isNonneg], ['overhead_share', isNonneg], ['passes_per_s', isNonneg],
   ['last_step', isSafeUint], ['runs', isSafeUint], ['memory_bytes', isSafeUint], ['memory_limit_bytes', isSafeUint],
-  ['error', isProgramError],
+  ['error', isProgramError], ['warning', isProgramError],
 ];
 
 /** A status item: id, kind and state, and the optional keys of STATUS_KEYS and sha256, null or absent when unknown. */
@@ -2011,12 +2011,13 @@ export function decodeProgramState(f: Frame): ProgramStateMsg {
 
 const PIECE_NAME_RE = /^[a-z][a-z0-9_]*$/;
 const PIECE_HASH_RE = /^sha256:[0-9a-f]{64}$/;
-/** The pin of a piece: name ([a-z][a-z0-9_]*, at most PIECE_NAME_MAX bytes), version (1 to PIECE_VERSION_MAX) and hash ("sha256:" and 64 lowercase hex digits). */
+/** The pin of a piece: name ([a-z][a-z0-9_]*, at most PIECE_NAME_MAX bytes), version (1 to PIECE_VERSION_MAX), hash ("sha256:" and 64 lowercase hex digits), and optional from ("library", "workspace" or "inline"). */
 const isPiecePin = (v: unknown) => {
   if (!isObj(v)) return false;
   const o = v as Record<string, unknown>;
   return typeof o.name === 'string' && o.name.length > 0 && o.name.length <= PIECE_NAME_MAX && PIECE_NAME_RE.test(o.name)
-    && intIn(1, PIECE_VERSION_MAX)(o.version) && typeof o.hash === 'string' && PIECE_HASH_RE.test(o.hash);
+    && intIn(1, PIECE_VERSION_MAX)(o.version) && typeof o.hash === 'string' && PIECE_HASH_RE.test(o.hash)
+    && (!present(o.from) || o.from === 'library' || o.from === 'workspace' || o.from === 'inline');
 };
 /** The pin of a library piece in the piece form of SCENE_UPDATE: name and version as in isPiecePin, and hash optional (python: _library_pin). */
 const isLibraryPin = (v: unknown) => isObj(v) && isPiecePin({ hash: `sha256:${'0'.repeat(64)}`, ...(v as object) });
