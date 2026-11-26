@@ -17,6 +17,7 @@ A tool is an edit, a change or a read. An edit changes the open spec. It has a d
 | `control_set` | Change | Set the value of a control |
 | `cursor_get`, `cursor_set`, `cursor_step` | Read, change | Read or move the time cursor |
 | `annotation_set`, `annotation_remove` | Edit | Add, replace or remove an annotation of a panel |
+| `layout_lock` | Edit | Lock or unlock the whole layout of the open spec |
 
 ## Entity Commands
 
@@ -59,6 +60,12 @@ A tool is an edit, a change or a read. An edit changes the open spec. It has a d
 ## Annotation Commands
 
 `annotation_set` takes `panel`, `annotation` and `dry_run`. The annotation is a table with an `id`, a `kind` and the keys of that [kind](../builder/annotations.md#annotation-table). The command creates it or replaces the annotation with the same id. `annotation_remove` takes `panel`, `id` and `dry_run`. Both answer with `panel`, `diff`, `warnings` and `applied`. An unknown id fails with `annotation.not_found`.
+
+## Layout Lock
+
+`layout_lock` takes `locked` (`true` or `false`) and optional `dry_run`. It answers with `locked`, `warnings`, `diff` and `applied`. When `locked` is `true`, every panel and control becomes non-closable, and `panel_create`, `panel_remove`, `control_create`, `control_remove`, `layout_place` and `layout_set` fail with `layout.locked`.
+
+`panel_create`, `panel_patch`, `control_create` and `control_patch` also accept `closable`. Set `closable` to `false` to protect a single component even when the layout is unlocked. A remove command on a component with `closable = false` fails with `panel.not_closable` or `control.not_closable`.
 
 ## Events
 

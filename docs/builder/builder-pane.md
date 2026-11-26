@@ -33,7 +33,7 @@ Build mode keeps the page bar, the status bar, the jobs tray and the approval ca
 
 The left column is 17 % of the width (18 % with the chat open). The right column is 21 % (28 % with the chat open). On a small window, the text strip goes first, then the right column, then the left. The canvas keeps its minimum.
 
-The page bar holds, after Home and the spec's title, ⌘B Build. In build mode it also holds ⌘T Text, ⌘Z Undo, ⇧⌘Z Redo and ⌘S Save. ⌘O Open in browser, ⌘L Chat and ⌘K Command are at its right end. When the bar is too narrow, only Build stays, and the other buttons keep their keys. The code of the last refused or failed change follows the buttons, with its reason in a tooltip.
+The page bar holds, after Home and the spec's title, ⌘B Build and Lock Layout. In build mode it also holds ⌘T Text, ⌘Z Undo, ⇧⌘Z Redo and ⌘S Save. ⌘O Open in browser, ⌘L Chat and ⌘K Command are at its right end. When the bar is too narrow, only Build stays, and the other buttons keep their keys. The code of the last refused or failed change follows the buttons, with its reason in a tooltip.
 
 ## Sources
 
@@ -71,13 +71,15 @@ The canvas draws the spec as the page does outside build mode. While the spec ha
 
 You can remove a panel in build mode and on the dashboard page in three ways: the × at the right end of the panel's title strip (at the top right corner for a panel in tabs), Remove panel in the right-click menu, or ⌫ or Delete on the focused panel. The keys do not work while a text field, the command input or the inline prompt has the keyboard. Each way is one undo step, and ⌘Z brings the panel back where it was. No way is offered while the inline prompt is open or a ⌘K preview is shown. Accept or Reject the preview first. A dashboard drawn from a file outside the workspace offers none of them.
 
+A panel with `closable = false` hides its × button, hides Remove panel and ignores ⌫ and Delete. Click Lock Layout in the page bar, or toggle Lock layout in Properties, to lock the whole instrument. While the layout stays locked, every panel hides its close controls and title strips do not drag. Dividers do not move, and layout commands fail with `layout.locked`. Click Lock Layout again to unlock the instrument.
+
 During a drag, the rectangle where the item would land has a bronze outline. A drop that does not fit has a grey outline with the reason in a tooltip, and nothing changes on release. A source held over a panel shows the panel's slots as rows, and the slots it fits are in parchment.
 
 ## Properties
 
 With a panel focused, Properties shows:
 
-- **Panel:** its id, its primitive and its title. A new id renames the panel everywhere in the spec. A new primitive keeps the bindings and options that it takes.
+- **Panel:** its id, its primitive, its title and its Closable flag. A new id renames the panel everywhere in the spec. A new primitive keeps the bindings and options that it takes.
 - **Bindings:** one row for each slot of the primitive, with required slots marked by an asterisk. A series has one row per line and one more to add a line. A click opens the choice of the spec's sources and their columns. The ones that do not fit are faint, with the reason in their tooltip. × removes a binding, except from a required slot.
 - **Options:** exactly the options of the primitive. These are labels, ranges, the log flags, the colormap as four swatches, bins, a table's columns as one flag each, and a text panel's text. A range is empty until set, and the data's extent shows dimmed as a placeholder.
 
@@ -87,7 +89,7 @@ A slice's or a reduce's axis is a choice of every axis of the step's input, each
 
 An index outside a slice's axis range is set to the nearer end, such as `3` for a `7` typed on an axis of 4. The field then says `7 is outside 0–3` until the next change of the transforms. A negative index counts from the end, as the spec format says.
 
-With nothing focused, Properties shows the spec's id, title and description, its numbers of panels and sources, and its file. Text and numbers apply as you type. Ids apply on Enter or when you leave the field.
+With nothing focused, Properties shows the spec's id, title, description, Lock layout flag, numbers of panels and sources, and file. Text and numbers apply as you type. Ids apply on Enter or when you leave the field.
 
 ## Spec Text
 
