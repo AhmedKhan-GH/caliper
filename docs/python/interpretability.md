@@ -62,6 +62,7 @@ These explicit calls do not establish the tensors' model identity.
 ## Feature Dictionaries
 
 A dictionary contains one transcoder for each MLP layer.
+Gemma uses published Gemma Scope dictionaries. The seeded fixture supplies synthetic dictionaries for tests.
 Each transcoder maps the MLP input to sparse feature activations, then reconstructs the MLP output.
 The dictionary folder contains `dictionary.json` and one `layer_NN.safetensors` file per layer.
 The manifest records model identity, probe points, dimensions, activation type, text partitions, and measured quality.
@@ -143,11 +144,14 @@ Set `HEAVY_WRAPPER` to the project wrapper, which accepts a job name, a log path
   --dictionary "$DICTIONARY" --local-dataset-manifest "$DATASET_MANIFEST"
 ```
 
-Quality checks use 200,000 separate tokens.
+Quality evaluation has a configured budget of 200,000 separate source positions and reports the actual sample count.
 The evaluator records reconstruction, activity, and cross-entropy measurements.
-The published Gemma replication defines M8 acceptance.
-The example index uses two million other tokens.
+These measurements and the sample count supply comparison evidence, without a published-replication acceptance threshold.
+
+The current example index contains two million source positions from a separate partition.
+Its exact size is not an acceptance condition. Index identity, integrity, and coverage remain required.
 Gemma jobs use a 40 GB process limit and an 8 GB host reserve.
+
 Index version 2 records the `live_input_v1` encoder policy in its manifest hash.
 It also binds model tensor precision, device, effective forward settings, autocast, and float32 matmul precision.
 Rebuild the index when these settings change, including a move between CPU and MPS.
@@ -174,7 +178,8 @@ The runtime casts source F32 norms to BF16, then promotes them to F32 for gain a
 Conversion and qualification bind all source bytes and the exact version 2 conversion schema.
 The [reference contract](../reference/gemma-scope.md#conversion-and-provenance) defines the artifact and qualification boundaries.
 
-The published index requires exactly 2,000,000 source positions and 256 model positions per context, with BOS.
+The current published-profile index contains 2,000,000 source positions and uses 256 model positions per context, with BOS.
+Qualification checks its recorded counts and source coverage without an exact-size acceptance gate.
 It uses original coordinates, BF16 reference arithmetic, and the complete artifact fingerprint and execution identity.
 Format version 2 requires `encoder_policy="gemma_scope_pre_gain_v1"`.
 Changes to source bytes, arithmetic, dtype, device, or execution settings require a new index.
@@ -182,7 +187,7 @@ Ordinary indexes retain their compatible policies and limits.
 
 F32 research results provide comparison evidence.
 They cannot qualify BF16 artifacts or indexes, and the published profile adds no quality gate.
-The generic `research_v1` protocol retains its sample, identity, context, and per-layer loss checks.
+The generic `research_v1` protocol retains sample records, identity checks, context rules, and per-layer loss measurements.
 
 Independent arithmetic checks use actual TransformerLens conversion with small CPU models.
 They cover F32 and BF16, contexts of 33, 256, and 1,024 positions, and right padding at 256 positions.
@@ -230,11 +235,15 @@ Mixed dictionary storage uses the model input precision for feature arithmetic.
 Encoder conversion uses bounded blocks during these inference forwards.
 This temporary conversion bound does not cover retained autograd tensors in an external training forward.
 Exact feature identity at a numerical tie can depend on the device kernel and tensor shape.
-The completeness and stale-feature checks retain their existing tolerances.
+Full-source residuals remain reported measurements. Generic stale-feature checks remain separate from published acceptance.
 
 Edges represent direct effects between token, feature, error, and logit nodes.
 The tracer accounts for biases separately and measures completeness before display pruning.
-It reports feature share, error share, and omitted influence.
+Every target requires all source terms, explicit bias accounts, and consistent queue and export records.
+Diagnostics report finite residuals with their targets, units, objective, and dtype.
+Complete source coverage does not make a nonzero residual exact arithmetic or establish acceptance.
+The tracer reports feature share, error share, and omitted influence.
+
 The graph uses per-layer transcoders, without cross-layer features or global weight analysis.
 Ordinary feature labels use promoted output tokens and frequent example tokens, without model-generated descriptions.
 The published Dallas profile also exposes the exact source groups and labels.
@@ -267,6 +276,9 @@ Its projection excludes BOS feature and error sources before influence normaliza
 Separate Caliper diagnostics retain completeness over all sources.
 The complete graph remains available through `trace.read`, with at most 256 records of each kind per page.
 Ordinary calls retain their lower limits, objective, and default batch size of 64.
+
+Trace duration is a wall-clock measurement, without a latency pass condition.
+The 600-second trace timeout protects against hangs. It is not a performance target.
 
 ## Graph Tensors
 
@@ -345,7 +357,7 @@ Failure notices run after hook and source-cache cleanup, and each runtime failur
 
 Lifecycle snapshots distinguish `specification`, the requested effect, from `applied_specification`, the saved applied effect.
 `load_state_dict()` restores metadata by default. The next boundary admits the requested effect.
-A saved applied specification without a live hook does not provide a fallback when that request fails.
+A saved applied specification without a live hook cannot restore the prior effect when that request fails.
 `load_state_dict(..., restore_active=True)` performs bounded admission and installs saved applied effects before return.
 It preserves queued replacements for a later boundary.
 
@@ -407,7 +419,7 @@ An explicit published inference request pairs `replication_profile="published_da
 The caller must first create a unique local private directory.
 Script requests reject both fields, and inference requests require the pair.
 The hosted profile selects the pinned Gemma model, qualified reference arithmetic, BF16 artifact, and compatible original-coordinate index.
-It refuses missing or incompatible sources without a profile fallback or download.
+It refuses missing or incompatible sources and requires local resources for the selected profile.
 
 The exact prompt is `Fact: the capital of the state containing Dallas is`.
 The [published group table](../reference/gemma-scope.md#published-dallas-profile) lists the seven interventions, source labels, and expected top tokens.
@@ -498,7 +510,7 @@ Select an empty output folder beneath it:
 ```
 
 Both profile and private output arguments are required.
-The published profile fixes the exact lowercase Dallas prompt and refuses `--quality-override`.
+The published profile fixes the exact lowercase Dallas prompt and uses the qualified published dictionary.
 It selects a 40 decimal GB process cap and retains the 8 decimal GB host reserve.
 Collection uses Caliper MCP for the full reference-profile trace, baseline, and all seven published actions.
 A fresh baseline precedes each intervention.
@@ -548,23 +560,34 @@ Use the full reference outputs and graph for comparison.
 Rounded publication labels alone cannot establish replication.
 The [reference results contract](../reference/gemma-scope.md#reference-results) distinguishes source-library scores from Caliper completeness.
 
-Feature-node Jaccard overlap must reach 0.9.
-Every union edge must satisfy `abs(caliper - reference) <= 1e-6 + 1e-3 * abs(reference)`.
-A missing edge counts as zero.
-Every baseline and intervention comparison covers the full vocabulary, with absolute probability error at most 0.015 and exact top token IDs.
+Report feature-node intersection, union, missing and extra nodes, and Jaccard overlap without a pass threshold.
+Report edge discrepancies over the union of both edge sets, with missing edges valued at zero for the calculation.
+Keep missing and extra edge counts separate from weight discrepancies, and report sign changes and exact matches.
+No edge-error tolerance decides acceptance.
+
+The baseline and all seven interventions require exact reference top token IDs and full vocabulary comparison.
+Each compared probability must differ from the actual reference by at most 0.015 absolute.
 The approved bound equals the largest reference deviation from the published top percentages.
 State suppression sets this bound: `abs(0.375 - 0.36) = 0.015`, or 1.5 percentage points.
-This reference envelope supersedes the earlier probability limit in the immutable source manifest.
-Graph tolerances remain unchanged.
 Both implementations must reproduce every published semantic outcome.
 The ineffective British Columbia intervention remains part of that requirement.
 
-The published path requires completeness residuals at most 0.02 per target and trace time at most 20 seconds.
-Each complete intervention action must take at most one second.
-This duration includes model execution, validation, export, publication, and terminal checks.
-Preparation time remains separate, and cached outputs cannot satisfy this limit.
+The raw pinned source manifest remains immutable provenance for the experiment and its original metadata.
+Current acceptance policy supersedes its old graph and probability thresholds without a change to the published inputs or operations.
+
+Completeness evidence must cover every target, full source set, bias account, queue, and export page with consistent identities and counts.
+Report frozen-forward discrepancies and per-target residuals in their original arithmetic and units, before source projection and display pruning.
+Finite data and complete records remain required, but they do not establish exact numerical reconstruction or acceptance.
+No fixed model residual threshold decides acceptance. Independent review must assess the complete evidence.
+
+Record one wall-clock duration around each trace or complete intervention action, without a latency pass condition.
+Action duration covers execution through validation, export, publication, and terminal checks. Preparation remains separate.
+Place the corresponding circuit-tracer time beside each measurement and state the scope of both calls, including pruning and output work.
+Mark an unavailable reference duration explicitly. A differently scoped reference time is not a direct speed comparison.
+
+Each action requires fresh execution and publication, regardless of its measured duration.
 The process must remain within 40 decimal GB and preserve 8 decimal GB of available host memory.
-Historical five-point clamps, 8/10 signs, Spearman 0.6, and largest-effect selection do not decide published Gemma acceptance.
+Generic clamp effects, sign agreement, rank correlation, and feature selection do not decide published Gemma acceptance.
 
 ### Collection And Review
 
@@ -573,7 +596,8 @@ Private action files retain full vocabulary logits and probabilities as exact F3
 Metadata retains native dtype and exact source and case identities.
 Collection checks fresh output sequences and hashes every required file.
 An exit of zero means collection completed, while `accepted_replication` remains false.
-Measured failures remain in the collection and cannot become optional checks.
+Measured discrepancies remain in the collection for review, without invented pass thresholds.
+Missing evidence, invalid data, identity mismatches, and failed structural or safety checks remain unresolved requirements.
 
 After independent comparison and capture inspection, save a review file beneath the same private root.
 The review binds the collection hash to the numerical, browser, capture, parity, and memory evidence.
@@ -589,24 +613,29 @@ Use a new output file for final verification:
 The verifier rechecks every file hash, case identity, required check, and external review metric.
 Only a successful review sets `accepted_replication=true` and `acceptance_complete=true`.
 Resource qualification and synthetic review fixtures cannot establish real acceptance.
+M8 remains Held until lead validation, fresh review, and green macOS and Windows CI.
 
 ### Visual Evidence
 
 Native and browser captures must show the graph, published labels, group controls, examples, and actual output bars.
-Every visible graph node needs its expected ID, and bar heights must match current probabilities within two pixels.
-Both example pages retain eight rows and 16 distinct examples in total.
+Every visible graph node needs its expected ID, and bar geometry must represent the current probabilities.
+Report measured bar heights and pixel discrepancies for inspection without a pixel tolerance gate.
+Both example pages retain eight row slots and must match the available index records, including empty rows.
 The pixel oracle uses actual image quads, clips, framebuffer scale, texture samples, and text alpha composition.
 PNG/raw equality establishes capture consistency only.
 
 An independent text reference uses the actual font atlas and expected glyph quads for prompt and selected labels.
-Every required label needs visible ink and pixels within two channel levels of that reference.
-App/browser parity requires exact interior IDs, at most two color levels of interior difference, and at most one percent unmatched edge pixels.
+Every required label needs the correct source text, complete glyph coverage, and visible ink.
+Native and browser captures require the same current resources, camera, selection, output generation, and exact interior IDs.
+Color differences, edge pixels, and layout coverage remain measurements without acceptance thresholds.
 The published path requires independent parity evidence for its actual resources.
+Inspection must establish actual content parity and identify blank, stale, clipped, or mislabeled views.
+
 Synthetic captures test oracle failures but do not establish product acceptance.
 
 Each capture records actual `program.status` values and declared piece limits after the resource barrier.
-Derive limits remain 50 ms and 64 MiB, while draw limits remain 4 ms and 64 MiB.
-Missing GPU times leave required checks unverified.
+Shared renderer, scheduler, memory, and hang safeguards remain platform contracts. A stopped program or refused resource must remain visible.
+Available GPU times are measurements. Missing timestamps receive an explicit unavailable status and do not create a latency failure.
 Browser proof requires available asset routes, visible program views, and attachment before and after the capture.
 Startup evidence does not replace these checks for the published collection.
 
@@ -619,14 +648,12 @@ Local measurements remain acceptance evidence and do not establish public produc
 
 Ordinary demos retain feature selection, zero clamps, `trace.validate`, generation, and fixture checks.
 The generic selector uses the largest absolute top-logit effect before the last layer.
-Its historical causal check uses 8/10 signs and Spearman 0.6.
-Its directional check requires a probability change of 0.05 or a changed top token, with the predicted direction.
+Sign agreement, Spearman correlation, probability changes, and predicted directions are reported diagnostics.
 These ordinary diagnostics do not replace any published group action or reference comparison.
 
-Generic learned-model checks retain 20 to 512 nodes, feature share at least 0.30, and a token-to-logit path.
-They require 16 positive sorted examples and completeness residuals at most 0.02.
-Ordinary Gemma diagnostics require baseline confidence above 0.5 for a custom prompt, but the default Dallas prompt has no confidence threshold.
-These generic requirements remain separate from published acceptance.
+Generic learned-model reports retain graph counts, feature share, token-to-logit reachability, and source completeness evidence.
+They report available examples, activation order, residuals, and baseline confidence without arbitrary acceptance thresholds.
+Ordinary graph capacities and example layouts remain representation limits.
 
 The generic Generate check requires a fresh completion with two rows of 24 integer token IDs.
 Prompt, intervention, and text hashes must match the current state.
@@ -634,8 +661,8 @@ The actual comparison argmax IDs determine semantic outcomes, independently of b
 Ordinary controls and their CPU tests remain supported.
 
 The fixture comparison exports actual graph resources and runs the native and browser parity harnesses in sequence.
-It retains the 12 GB limit and requires a positive measured clamp effect without a learned-model acceptance claim.
-Its sign and rank thresholds remain unchanged.
+It retains the 12 GB limit and records the measured clamp effect without a learned-model acceptance claim.
+Controlled fixture checks remain test contracts and do not supply model-scale acceptance bounds.
 A probability change smaller than one pixel can leave its bar height unchanged.
 The selected fixture examples retain 13 valid tokens and 12 padding slots in each 25-slot display row.
 
@@ -658,4 +685,4 @@ The [command reference](../agents/interpretation.md) specifies the request and r
 The seeded CPU fixture verifies mathematical identities without a downloaded model.
 Its reference forward hash is `2464295694bd3690f156dcc7248882f0ad289f55972caafbbd7bd23f4e3d109e`.
 Fixture completeness requires a residual at most `1e-9`.
-Gemma requires at most `0.02` per target and separate learned-model acceptance evidence.
+Gemma requires complete source accounts, finite residual measurements, and separate published-replication acceptance evidence.

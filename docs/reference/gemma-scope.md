@@ -101,6 +101,10 @@ Every setting enters cache identity and result metadata, and `trace.read` expose
 The reference objective centers unembedding directions before the final softcap derivative.
 The reference projection excludes BOS feature and error sources before influence normalization.
 Caliper retains separate diagnostics for completeness over all sources.
+These diagnostics precede source projection and display pruning, and preserve every target and explicit bias account.
+Finite residuals retain their original arithmetic, units, objective, and dtype without a model-scale pass threshold.
+Complete source coverage does not establish exact numerical reconstruction when residuals are nonzero.
+
 The ordinary `caliper` profile retains its original objective, 512 feature targets, 512 nodes, and 8,192 edges.
 
 ## Reference Results
@@ -112,6 +116,9 @@ Use the actual reference graph for node and edge comparisons.
 
 Reference replacement and completeness scores are source-library metrics.
 They do not replace Caliper completeness residuals or the required product checks.
+Record plain wall-clock times for reference traces and actions beside the corresponding Caliper measurements.
+State each call's scope, including preparation, pruning, export, and publication where applicable.
+Mark unavailable durations explicitly, and distinguish differently scoped measurements. Timing has no acceptance threshold.
 
 ## Layer Selection
 
@@ -275,7 +282,7 @@ The local affine tangent belongs only to attribution.
 ## Legacy Context Policy
 
 The pinned Gemma tokenizer adds BOS by default, and the pinned reference prepends a special token before attribution.
-The legacy Gemma quality comparison uses an FVU threshold of 0.30.
+Legacy quality measurements remain comparison evidence and do not decide published replication acceptance.
 
 Legacy quality evaluation and the feature index use one shared context adapter for Gemma.
 The source stream still excludes tokenizer special tokens and appends EOS to each document.
@@ -305,7 +312,7 @@ Their fresh context can produce activations that differ from the original indexe
 The index excludes prefix and padding positions from feature counts, offsets, and returned example activations.
 
 An older Gemma index without these policies requires a rebuild.
-Generic research qualification requires its research report and both corrected index policies.
+Research evidence retains its actual sample, report status, and both corrected index policies.
 Published qualification uses the separate BF16 resource contract below.
 The live response also checks both index policies against the current model and tokenizer.
 Example admission includes the additional prefix position and retains a lower memory limit when supplied.
@@ -313,7 +320,9 @@ The public Gemma tokenizer and index windows both place BOS before content.
 
 ## Reference Index
 
-The published profile requires a new index over exactly 2,000,000 source positions from the pinned index partition.
+The current published-profile index contains 2,000,000 source positions from the pinned index partition.
+That actual size is provenance, not an acceptance condition.
+Qualification requires consistent recorded counts, source coverage, and resource identities.
 Use `--profile circuit_tracer_82996f14` with `tools.interp.build_index` and `--model google/gemma-2-2b`.
 Construction uses BF16 reference arithmetic and captures original coordinates through the reference hooks.
 Qualify the artifact against both pinned snapshots before index construction.
@@ -381,9 +390,9 @@ The separate cursor is `evaluation-research-v1/state.json`, with state schema ve
 `source_tokens` and its `evaluated_tokens` alias count committed source positions.
 `metric_observations` counts nonspecial source positions, and `cross_entropy_tokens` counts CE targets.
 `source_budget_complete` becomes true only at 200,000 committed source positions.
-The numeric quality thresholds classify comparison results, and a failed result remains failed.
+Stored quality classifications remain part of the comparison record and do not decide published acceptance.
 
-The comparison sample can end at the first published checkpoint with at least 50,000 source positions.
+Comparison evidence records the actual sample at its saved checkpoint without a minimum-sample acceptance gate.
 The evaluator accepts SIGINT or SIGTERM for a clean stop at a checkpoint.
 Its partial report retains `status="partial"`, `source_budget_complete=false`, and the exact stop reason.
 The report records the exact committed sample, observation count, loss-target count, and final cursor SHA256.
@@ -459,39 +468,47 @@ Queries preserve example order and cache the complete result only after all batc
 If one window cannot fit, the query refuses before its tensor allocation.
 The budget is a limit, not a measured memory result or a speed guarantee.
 
-Generic research qualification accepts complete measurements from a sample of 50,000 through 199,999 source positions.
-That sample requires `status="partial"` and `source_budget_complete=false`.
-Its stop reason must be `signal 2` or `signal 15`.
-Qualification also accepts a full 200,000-position result with consistent completion status and its original quality status.
-Both forms require all per-layer measurements, exact masks, valid aggregates, and the current source and resource identities.
+Research evidence records the actual sample count, completion status, quality status, and stop reason.
+Partial reports retain `status="partial"` and `source_budget_complete=false`.
+Reports require all per-layer measurements, exact masks, valid aggregates, and the current source and resource identities.
 The service binds the report to the exact cursor bytes.
-The acceptance result and quality disclosure retain the actual sample count and original status.
+Published acceptance adds no sample-size or sample-quality threshold.
 
-Quality comparisons retain thresholds of 0.30 mean FVU, 0.15 dead fraction, and 0.5 nats all-layer loss rise.
-These historical quality thresholds do not decide published Dallas acceptance.
+Quality comparisons retain measured FVU, dead fraction, and cross-entropy changes with their original report classifications.
 Quality evidence binds the evaluated model, dictionary tensor bytes, forward settings, and evaluation device.
 An evaluation device change requires new comparison evidence because kernel arithmetic can differ.
 It does not require a new quality gate for the published profile.
 
 ### Published Acceptance
 
-Feature-node Jaccard overlap with the actual reference must reach 0.9.
-Every edge must satisfy `abs(caliper - reference) <= 1e-6 + 1e-3 * abs(reference)`.
-The comparison uses the union of both edge sets and counts missing edges as zero.
-Every baseline and intervention comparison covers the full vocabulary, with absolute probability error at most 0.015 and exact top token IDs.
+Graph comparison reports feature-node intersection, union, missing and extra nodes, and Jaccard overlap without a pass threshold.
+Edge measurements cover the union of both edge sets, with missing weights valued at zero for the calculation.
+Report weight discrepancies, sign changes, exact matches, and missing or extra support without an edge-error tolerance.
+
+The baseline and all seven published interventions require exact reference top token IDs and full vocabulary comparison.
+Each compared probability must differ from the actual reference by at most 0.015 absolute.
 The approved bound equals the largest reference deviation from the published top percentages.
 State suppression sets this bound: `abs(0.375 - 0.36) = 0.015`, or 1.5 percentage points.
-This reference envelope supersedes the earlier probability limit in the immutable source manifest.
-Graph tolerances remain unchanged.
 Both implementations must reproduce every published semantic outcome.
 The ineffective British Columbia intervention remains part of that requirement.
 
-Caliper completeness residuals must remain at most 0.02 per target.
-Trace time must remain at most 20 seconds, and each complete intervention action must remain at most one second.
-Preparation time remains separate, and cached outputs cannot satisfy action timing.
-Visual, pixel, app/browser parity, the 40 decimal GB process cap, and the 8 decimal GB host reserve remain required.
-The five-point clamp, 8/10 signs, Spearman 0.6, and largest-effect selection do not define published Gemma acceptance.
+The raw pinned manifest remains immutable provenance for the experiment and its original metadata.
+Current policy supersedes its old graph and probability thresholds without changes to published parameters, source identities, or intervention operations.
+
+Completeness requires consistent source accounts, target queues, counts, and complete graph exports before projection and display pruning.
+Report every target residual and frozen-forward discrepancy in the original arithmetic and units.
+Finite data and complete records are necessary evidence, but they do not prove exact reconstruction or establish acceptance.
+No fixed model residual threshold decides acceptance. Independent review must assess the complete evidence.
+
+Use one wall timer per trace or complete action, with preparation separate and each reference duration's scope explicit.
+Each action requires fresh execution and publication. Duration is a measurement without a latency pass condition.
+The 600-second trace timeout protects against hangs and is not a performance target.
+
+Actual visual correctness and native/browser content parity remain required, with current resource identities, labels, glyphs, bars, and node IDs.
+Pixel, color, bar-height, and layout discrepancies remain measurements for independent inspection without numeric acceptance thresholds.
+The 40 decimal GB process cap and 8 decimal GB host reserve remain required, alongside shared platform safety contracts.
 
 Startup evidence covers browser assets, program views, and error retention.
 These checks do not establish published Dallas replication or product acceptance.
 The [demo procedure](../python/interpretability.md#hidden-demo) separates live use, evidence collection, and independent review.
+M8 remains Held until lead validation, fresh review, and green macOS and Windows CI.

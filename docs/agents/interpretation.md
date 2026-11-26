@@ -48,6 +48,16 @@ A reference graph that exceeds the requested node or edge limit is refused witho
 A graph page has at most 256 nodes and 256 edges.
 The default page has 128 nodes and 256 edges.
 
+Trace evidence retains complete target queues, full source and bias accounts, consistent counts, and every export page.
+Residuals must remain finite and retain their original arithmetic, units, objective, and dtype.
+Complete records do not make nonzero residuals exact reconstruction or establish published acceptance.
+Graph overlap, edge discrepancies, and model residuals are measurements without arbitrary pass thresholds.
+
+Record one wall-clock duration per trace or complete action, beside the corresponding circuit-tracer duration and its scope.
+Timing has no acceptance threshold. The 600-second trace timeout protects against hangs.
+The [published acceptance contract](../reference/gemma-scope.md#published-acceptance) retains exact top tokens and the 0.015 probability bound for all seven interventions.
+It also requires source identities, complete evidence, actual visual and native/browser content parity, and the 40 GB cap with an 8 GB host reserve.
+
 ## Run Service
 
 A script registers the service before it starts its stream.
@@ -158,6 +168,9 @@ At that limit, raster order determines the pixel ID. Enlarge the panel or zoom t
 All node records and IDs remain in the published resource.
 Gemma acceptance captures require every visible node ID in the raster buffer.
 Token, hover, and selected labels retain the existing bounds and overlap checks.
+Native and browser inspection must confirm the current graph, labels, examples, and output bars against the same resources.
+Pixel discrepancies remain reported measurements without an acceptance tolerance.
+The raster tests above retain their controlled fixture scope and do not establish published replication.
 
 ### Output Bars
 

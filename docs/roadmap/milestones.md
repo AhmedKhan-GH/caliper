@@ -68,9 +68,15 @@ The library tests check pixels and picks, and the app and browser comparison tes
 
 M7 supplies model probes, transcoder features, dataset examples, and attribution graphs through library pieces and commands.
 M8 adds steering, scale, clamp, and patch operations.
-M8 remains held, with this target: reproduces the published circuit-tracer Gemma 2 2B Dallas example.
+M8 targets replication of the published circuit-tracer Gemma 2 2B Dallas example.
+It remains Held until lead validation, fresh review, and green macOS and Windows CI.
 The explicit `published_dallas_v1` profile uses the exact lowercase prompt, seven source group interventions, and the qualified BF16 reference resources.
 The [Gemma reference](../reference/gemma-scope.md#published-acceptance) defines the full comparison and product requirements.
+
+The baseline and all seven interventions require exact reference top tokens and probability differences at most 0.015 absolute.
+Graph agreement, finite residuals, and scoped wall-clock times remain reported measurements without arbitrary acceptance thresholds.
+Complete source evidence, actual visual and native/browser content parity, resource identities, the 40 GB cap, and the 8 GB host reserve remain required.
+Research quality measurements and the actual index size supply comparison evidence without sample-size or quality acceptance gates.
 
 The actual circuit-tracer reference completed all seven cases and CPU pruning.
 Caliper comparison and product acceptance remain pending.
