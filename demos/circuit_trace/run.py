@@ -1011,17 +1011,26 @@ def published_demo(session, args, result, *, collect):
     bars = bar_rows(bars_reply)
     baseline_top = baseline["evidence"]["result"]["argmax_token_ids"][0]
     steps = {"attribution": trace["step"], "probabilities": bars_reply["step"], "example_tokens": rows["step"]}
+    display_checks = []
 
     def capture_case(name, bars):
         png, metadata = s.capture(name, dict(steps))
-        result["checks"].extend(dict(gate, name=name + "." + gate["name"])
-                                for gate in program_budget_checks(s.program_evidence[name]))
+        budgets = [dict(gate, name=name + "." + gate["name"])
+                   for gate in program_budget_checks(s.program_evidence[name])]
+        result["checks"].extend(budgets)
+        display_checks.extend(budgets)
         if metadata is None:
-            result["checks"].append(check(name + ".native_pixels", False, None, "native diagnostic capture"))
+            gate = check(name + ".native_pixels", False, None, "native diagnostic capture")
+            result["checks"].append(gate)
+            # The founder's visible path has no native diagnostic capture.
+            if not s.show:
+                display_checks.append(gate)
             return
         gates, measured = capture_checks(s.out / "captures", metadata, png, graph, bars,
                                          selected=selected, baseline_top_token=baseline_top)
-        result["checks"].extend(dict(gate, name=name + "." + gate["name"]) for gate in gates)
+        gates = [dict(gate, name=name + "." + gate["name"]) for gate in gates]
+        result["checks"].extend(gates)
+        display_checks.extend(gates)
         result["pixel_evidence_collected"] = True
 
     capture_case("cell10", bars)
@@ -1062,9 +1071,15 @@ def published_demo(session, args, result, *, collect):
     save(s.out / "attachment.json", attachment)
     published.require(attachment.get("attached") is True, "The hosted model detached before completion.")
     if not collect:
+        # Readiness requires the display and its program budgets. Scientific
+        # acceptance remains subject to the separate replication review.
+        result["live_readiness_checks"] = display_checks
+        failed = [gate["name"] for gate in display_checks if not gate["passed"]]
+        published.require(not failed, "Live display checks failed: " + ", ".join(failed))
         result["demo_ready"] = True
         save(s.out / "demo-ready.json", {"attached": True, "browser_assets": result["browser_assets"],
-                                         "capture": "cell10.png", "acceptance": False, "profile": published.PROFILE})
+                                         "capture": "cell10.png", "checks": display_checks,
+                                         "acceptance": False, "profile": published.PROFILE})
     return bridge
 
 def parser():
