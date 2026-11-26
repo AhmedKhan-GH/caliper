@@ -1197,9 +1197,11 @@ def inference_pending() -> bool:
         return bool(_OUTBOX)
 
 
-def _inference_work(p: _Program, links, *, ready=False) -> bool:
+def _inference_work(p: _Program, links, *, ready=False, capacity=None) -> bool:
     """Check pending inputs and, when requested, conservative delivery admission."""
     from .interp import _publish
+    if capacity is None:
+        capacity = lambda ctl, ln, program, limit: _backlog(ctl, ln) <= limit
     if p.state not in ("waiting", "compiled", "running"):
         return False
     changed = p.output_retry or p.params_dirty or p.act_dirty or any(
@@ -1223,7 +1225,7 @@ def _inference_work(p: _Program, links, *, ready=False) -> bool:
             # The next snapshot has no known encoded size. Wait for an empty queue
             # before a new snapshot to avoid repeated readbacks while the sender is busy.
             with _OUTBOX_LOCK:
-                return any(id(ln) not in _OUTBOX and _backlog(ctl, ln) == 0
+                return any(id(ln) not in _OUTBOX and capacity(ctl, ln, p, 0)
                            for ctl, ln in candidates)
     return True
 
@@ -1231,26 +1233,49 @@ def _inference_work(p: _Program, links, *, ready=False) -> bool:
 def inference_blocked() -> bool:
     """Whether all known publication work must wait for transport capacity.
 
-    Call outside Controls.lock. The hosted condition timeout retries delivery when
-    the sender has no drain notification. No blocked retry creates a new step.
+    Call outside Controls.lock. Observe each blocked link with an atomic capacity
+    check. Older transports retain the housekeeping timeout as their fallback.
     """
     pending = False
     with _LOCK:
-        links = [(ctl, ln) for ctl in _controls_ports() for ln in _resource_links(ctl)]
+        ports = _controls_ports()
+        requests = {id(ctl): {} for ctl in ports}
+
+        def capacity(ctl, ln, p, limit):
+            # Old test ports and external transports can lack the internal event API.
+            if not hasattr(ctl, "watch_capacity"):
+                return _backlog(ctl, ln) <= limit
+            table = requests.setdefault(id(ctl), {})
+            previous, owners = table.get(ln, (limit, set()))
+            owners.add(p)
+            table[ln] = (max(previous, limit), owners)
+            return False
+
+        ready = False
+        links = [(ctl, ln) for ctl in ports for ln in _resource_links(ctl)]
         for p in _PROGS.values():
             if _inference_work(p, links):
                 pending = True
-                if _inference_work(p, links, ready=True):
-                    return False
+                if _inference_work(p, links, ready=True, capacity=capacity):
+                    ready = True
         with _OUTBOX_LOCK:
             for ln, ctl, p, chunks in _OUTBOX.values():
                 pending = True
                 # Obsolete outboxes also need one checkpoint for cleanup.
-                if getattr(ln, "closed", True) or not getattr(ln, "attached", False) or \
+                if getattr(ctl, "_capacity_closed", False) or \
+                        getattr(ln, "closed", True) or not getattr(ln, "attached", False) or \
                         _PROGS.get(p.id) is not p or p.handle is None or not chunks or \
-                        _backlog(ctl, ln) + chunks[0][0] <= RESOURCE_BACKLOG_BYTES:
-                    return False
-    return pending
+                        capacity(ctl, ln, p, RESOURCE_BACKLOG_BYTES - chunks[0][0]):
+                    ready = True
+        for ctl in ports:
+            if hasattr(ctl, "watch_capacity"):
+                ready = ctl.watch_capacity({} if ready else requests[id(ctl)]) or ready
+        if ready:
+            # A ready viewer or independent compute needs no capacity subscriptions.
+            for ctl in ports:
+                if hasattr(ctl, "watch_capacity"):
+                    ctl.watch_capacity({})
+        return pending and not ready
 
 
 def _marks():
@@ -2216,6 +2241,9 @@ def _drop_outbox(p: _Program) -> None:
     with _OUTBOX_LOCK:
         for key in [k for k, ob in _OUTBOX.items() if ob[2] is p]:
             del _OUTBOX[key]
+    for ctl in _controls_ports():
+        if hasattr(ctl, "remove_capacity_owner"):
+            ctl.remove_capacity_owner(p)
 
 
 def _pump() -> None:
@@ -2228,7 +2256,8 @@ def _pump() -> None:
     with _OUTBOX_LOCK:
         try:
             for key, (ln, ctl, p, chunks) in list(_OUTBOX.items()):
-                if getattr(ln, "closed", True) or not getattr(ln, "attached", False) or \
+                if getattr(ctl, "_capacity_closed", False) or \
+                        getattr(ln, "closed", True) or not getattr(ln, "attached", False) or \
                         _PROGS.get(p.id) is not p or p.handle is None:
                     del _OUTBOX[key]
                     continue

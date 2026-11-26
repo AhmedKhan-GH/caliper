@@ -328,7 +328,7 @@ jobs:
             -m "not gpu and not local_model" --strict-markers
           # All liveness cases run without the native controls keyword filter.
           "$RUNNER_TEMP/acceptance-py/bin/python" -m pytest -q -p no:cacheprovider \
-            python/tests/test_net_native_liveness.py \
+            python/tests/test_net_native_liveness.py python/tests/test_net_capacity.py \
             -m "not gpu and not local_model" --strict-markers
       - name: Interpretation Command Sidecar
         env:

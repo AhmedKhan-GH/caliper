@@ -303,6 +303,8 @@ class Link:
         self.peer = peer
         self.control: collections.deque = collections.deque()
         self.control_bytes = 0                   # the bytes of the frames in control
+        self._capacity_lock = threading.Lock()
+        self._capacity_limit = None
         self.overflow = False                    # past the limits below: closed with 1008
         self.pong: int | None = None             # the PONG to send, to the latest PING only
         self.subs: dict[int, Sub] = {}
@@ -320,6 +322,31 @@ class Link:
     def backlog(self) -> int:
         """The bytes of the control frames still queued for this peer."""
         return self.control_bytes
+
+    def watch_capacity(self, limit: int) -> bool:
+        """Check capacity and arm one notification under the queue counter lock."""
+        with self._capacity_lock:
+            # Install observation before the count read. A concurrent dequeue either
+            # precedes that read or sees this limit and checks under the same lock.
+            self._capacity_limit = limit
+            ready = self.closed or not self.attached or self.control_bytes <= limit
+            if ready:
+                self._capacity_limit = None
+            return ready
+
+    def cancel_capacity(self) -> None:
+        with self._capacity_lock:
+            self._capacity_limit = None
+
+    def _capacity_changed(self) -> None:
+        if self._capacity_limit is None:
+            return
+        with self._capacity_lock:
+            if self._capacity_limit is None or self.control_bytes > self._capacity_limit:
+                return
+            self._capacity_limit = None
+        if self.p.controls is not None:
+            self.p.controls.capacity_changed(self)
 
     def push(self, frame) -> bool:
         """Queue an encoded control frame (from any thread). A peer that keeps
@@ -372,6 +399,8 @@ class Link:
         self.attached = session is not None
         if self.attached != was:
             self.p.attached_changed(+1 if self.attached else -1)
+            if not self.attached and self.p.controls is not None:
+                self.p.controls.forget_capacity(self)
         self.queue_views()
         if self.attached and self.p.controls is not None:
             self.p.controls.on_attach(self)
@@ -505,6 +534,7 @@ class Link:
                 msg = self.p.views_msg(self) if self.attached else _wire.Views([], None)
                 return _wire.encode(msg), None
             self.control_bytes -= len(item)
+            self._capacity_changed()
             return item, None
         wait = None
         # series before snapshots; every subscription at its own rate
@@ -577,6 +607,8 @@ class Link:
         if self.closed:
             return
         self.closed = True
+        if self.p.controls is not None:
+            self.p.controls.forget_capacity(self)
         self.drop_all()
         if self.attached:
             self.attached = False

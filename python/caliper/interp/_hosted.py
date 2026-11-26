@@ -1425,17 +1425,22 @@ class HostedInference:
                 return bool(self.controls._npending or self.controls.queue or self.service.pending or due
                             or self.controls.state in (RUN_PAUSING, RUN_STEPPING))
             with _programs.inference_boundary():
+                with self.controls.cond:
+                    publication_event = self.controls.publication_event
                 # Inspect program state outside Controls.lock to preserve lock order.
-                publication = _programs.inference_pending() and not _programs.inference_blocked()
+                blocked = _programs.inference_blocked()
+                publication = _programs.inference_pending() and not blocked
                 with self.controls.cond:
                     if not publication:
                         with _programs.inference_excluded():
-                            self.controls.cond.wait_for(pending, timeout=1.)
+                            self.controls.cond.wait_for(
+                                lambda: pending() or self.controls.publication_event != publication_event,
+                                timeout=1.)
                     work = pending()
-                # A sender can drain during the existing condition timeout.
-                # Recheck outside Controls.lock before the next boundary.
+                # Events before or during the wait require a fresh capacity check.
                 if not publication:
-                    publication = _programs.inference_pending() and not _programs.inference_blocked()
+                    blocked = _programs.inference_blocked()
+                    publication = _programs.inference_pending() and not blocked
                 try:
                     with self._stop_boundary():
                         if work or publication:

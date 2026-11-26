@@ -242,6 +242,8 @@ struct Link {
     bool may_control = false;                 // 3.1: a CONTROL from it is accepted
     std::deque<QueuedFrame> after_views;      // 3.1: frames that follow the next VIEWS
     size_t control_bytes = 0;                 // the bytes in control and after_views, scene frames aside
+    uint64_t capacity_token = 0;              // one optional, one-shot capacity observation
+    size_t capacity_limit = 0;
     size_t scene_bytes = 0;                   // 3.2 draft: the bytes of the scene frames among them
     bool overflow = false;                    // past kMaxControlFrames/Bytes: closed with 1008
     bool pong_pending = false;                // one PONG at most, to the latest PING
@@ -406,12 +408,17 @@ public:
     // Wait up to timeout_ms (<0: until something arrives) for messages for Python.
     std::vector<Ctl> wait_control(int timeout_ms) {
         std::unique_lock<std::mutex> lk(cmu_);
-        auto ready = [this] { return !ctl_.empty() || ctl_wake_ || stop_.load(); };
+        auto ready = [this] { return !ctl_.empty() || !capacity_.empty() || ctl_wake_ || stop_.load(); };
         if (timeout_ms < 0) ccv_.wait(lk, ready);
         else ccv_.wait_for(lk, std::chrono::milliseconds(timeout_ms), ready);
         ctl_wake_ = false;
         std::vector<Ctl> out(std::make_move_iterator(ctl_.begin()), std::make_move_iterator(ctl_.end()));
         ctl_.clear();
+        for (const auto& [conn, token] : capacity_) {
+            const auto value = std::to_string(token);
+            out.push_back(Ctl{"capacity", conn, {value.begin(), value.end()}});
+        }
+        capacity_.clear();
         lk.unlock();                          // lock order: mu_ before cmu_, never the reverse
         if (!out.empty()) {
             std::lock_guard<std::mutex> g(mu_);
@@ -482,6 +489,22 @@ public:
         std::lock_guard<std::mutex> g(mu_);
         auto it = links_.find(c);
         return it == links_.end() ? 0 : it->second.control_bytes;
+    }
+
+    // Internal only. Arm and check under the queue mutex. A negative limit cancels.
+    // A true return consumes the observation. Otherwise control() receives its token
+    // once the queue reaches the limit. Rearm replaces both the threshold and event.
+    bool watch_capacity(ConnId c, int64_t limit, uint64_t token) {
+        std::lock_guard<std::mutex> g(mu_);
+        auto it = links_.find(c);
+        if (it == links_.end()) return true;
+        Link& l = it->second;
+        cancel_capacity(l);
+        if (limit < 0 || !token || !l.attached || l.closing || l.overflow ||
+            l.control_bytes <= static_cast<uint64_t>(limit)) return true;
+        l.capacity_limit = static_cast<size_t>(limit);
+        l.capacity_token = token;
+        return false;
     }
 
     static Json without_scenes(const Json& views) {
@@ -854,6 +877,7 @@ private:
                 continue;
             }
             push_ctl("closed", it->first);
+            cancel_capacity(it->second);
             if (it->second.attached) attached_.fetch_sub(1);
             it = links_.erase(it);
         }
@@ -886,6 +910,7 @@ private:
         return l.upstream ? (client_ && client_->send(f)) : server_->send(l.id, f);
     }
     void xclose(Link& l, uint16_t code, const std::string& reason) {
+        cancel_capacity(l);
         if (!l.upstream) server_->close(l.id, code, reason);
         else if (client_) client_->close(code, reason);
         l.closing = true;
@@ -911,9 +936,25 @@ private:
         ccv_.notify_all();
     }
 
+    // Under mu_, then cmu_. Capacity events occupy at most one entry per live link.
+    void cancel_capacity(Link& l) {
+        l.capacity_token = 0;
+        std::lock_guard<std::mutex> g(cmu_);
+        capacity_.erase(l.id);
+    }
+
+    void capacity_changed(Link& l) {
+        if (!l.capacity_token || l.control_bytes > l.capacity_limit) return;
+        std::lock_guard<std::mutex> g(cmu_);
+        capacity_[l.id] = l.capacity_token;
+        l.capacity_token = 0;
+        ccv_.notify_all();
+    }
+
     void set_attached(Link& l, bool on) {
         if (l.attached == on) return;
         l.attached = on;
+        if (!on) cancel_capacity(l);
         attached_.fetch_add(on ? 1 : -1);
         push_ctl(on ? "attached" : "detached", l.id);
     }
@@ -1107,6 +1148,7 @@ private:
                     for (auto sub = l.subs.begin(); sub != l.subs.end();) drop_sub(l, (sub++)->first);
                     if (l.attached) attached_.fetch_sub(1);
                     if (l.helloed) push_ctl("closed", l.id);
+                    cancel_capacity(l);
                     links_.erase(it);
                 }
                 break;
@@ -1362,6 +1404,7 @@ private:
                 l.control.pop_front();
                 size_t& bytes = scene ? l.scene_bytes : l.control_bytes;
                 bytes -= std::min(bytes, f->size());
+                if (!scene) capacity_changed(l);
             } else {
                 f = next_data(l, now, final);
             }
@@ -1566,6 +1609,7 @@ private:
                         drop_sub(it->second, (sub++)->first);
                     if (it->second.attached) attached_.fetch_sub(1);
                     push_ctl("closed", cid);
+                    cancel_capacity(it->second);
                     links_.erase(it);
                 }
                 client_.reset();
@@ -1629,6 +1673,7 @@ private:
     std::mutex cmu_;                          // the queue to Python
     std::condition_variable ccv_;
     std::deque<Ctl> ctl_;
+    std::map<ConnId, uint64_t> capacity_;      // coalesced, separate from peer messages
     bool ctl_wake_ = false;
 };
 
@@ -1708,6 +1753,8 @@ NB_MODULE(_netio, m) {
         .def("data_pending", &NetIO::data_pending, R())
         .def("queued", &NetIO::queued, R())
         .def("control_bytes", &NetIO::control_bytes, nb::arg("conn"), R())
+        .def("watch_capacity", &NetIO::watch_capacity, nb::arg("conn"), nb::arg("limit"),
+             nb::arg("token"), R())
         .def("sub_open", &NetIO::sub_open, nb::arg("conn"), nb::arg("sub"), nb::arg("view"), nb::arg("kind"),
              nb::arg("group"), nb::arg("data_view"), nb::arg("max_rate"), nb::arg("backfill"), R())
         .def("sub_close", &NetIO::sub_close, R())

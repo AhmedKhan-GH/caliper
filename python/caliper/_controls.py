@@ -1293,6 +1293,7 @@ class Controls:
     def __init__(self):
         self.lock = threading.Lock()
         self.cond = threading.Condition(self.lock)
+        self.publication_event = 0               # capacity events retain their identity across waits
         self._send = threading.RLock()           # orders broadcasts (taken before lock)
         self.busy = True                         # step() takes the slow path
         self.n = 0                               # the script's step number
@@ -1327,6 +1328,12 @@ class Controls:
         self._alone_since = None                 # no connection that may control since then,
                                                  # while an intervention acts or waits
         self._linger_next = 0.0                  # the next count of those connections
+
+    def publication_changed(self) -> None:
+        """Wake hosted publication after a subscribed transport event."""
+        with self.cond:
+            self.publication_event += 1
+            self.cond.notify_all()
 
     @contextmanager
     def _outside_lock(self):

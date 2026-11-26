@@ -103,6 +103,9 @@ class ControlsPort:
         self._posts: list = []                    # (link or None, frame, capability) to send
         self._unsent: dict = {}                   # link -> the bytes of its posts not queued yet
         self._unsent_all: dict = {}               # capability -> the same, of posts to every peer
+        self._capacity_waits: dict = {}           # link -> (total byte limit, program owners)
+        self._capacity_closed = False
+        self._capacity_notify = False            # deferred owner removal, outside program locks
         self.route = _controls.attach(self)
         self.programs = _net_programs.ProgramsPort(self)
         _controls.CONTROLS.wait_hooks.append(self._before_wait)
@@ -135,11 +138,72 @@ class ControlsPort:
         on it yet: a sender that bounds the queue of a peer adds them to its backlog, so that
         several posts before one flush are bounded together (from any thread)."""
         with self._lock:
-            n = self._unsent.get(link, 0)
-            for cap, b in self._unsent_all.items():
-                if cap in getattr(link, "caps", ()):
-                    n += b
-            return n
+            return self._unsent_bytes(link)
+
+    def _unsent_bytes(self, link) -> int:
+        n = self._unsent.get(link, 0)
+        for cap, b in self._unsent_all.items():
+            if cap in getattr(link, "caps", ()):
+                n += b
+        return n
+
+    def _capacity_ready(self, link, limit) -> bool:
+        """Check and arm under _lock. Posts retain their count until transfer ends."""
+        if link.closed or not link.attached:
+            link.cancel_capacity()
+            return True
+        unsent = self._unsent_bytes(link)
+        if unsent > limit:
+            # The transfer completion checks again, even if native queues are empty now.
+            link.cancel_capacity()
+            return False
+        return link.watch_capacity(limit - unsent)
+
+    def watch_capacity(self, requests) -> bool:
+        """Replace hosted observations. One threshold per link admits any owner."""
+        ready = False
+        with self._lock:
+            if self._capacity_closed:
+                return bool(requests)
+            for link in self._capacity_waits.keys() - requests.keys():
+                link.cancel_capacity()
+            self._capacity_waits = dict(requests)
+            for link, (limit, _) in list(self._capacity_waits.items()):
+                if self._capacity_ready(link, limit):
+                    del self._capacity_waits[link]
+                    ready = True
+        return ready
+
+    def capacity_changed(self, link, token=None) -> None:
+        """Consume one connection event. Never call program code on the sender thread."""
+        with self._lock:
+            request = self._capacity_waits.get(link)
+            if request is None or (token is not None and token != link._capacity_token):
+                return
+            if not self._capacity_ready(link, request[0]):
+                return
+            del self._capacity_waits[link]
+        self.route.ctl.publication_changed()
+
+    def forget_capacity(self, link) -> None:
+        with self._lock:
+            request = self._capacity_waits.pop(link, None)
+            link.cancel_capacity()
+        if request is not None:
+            self.route.ctl.publication_changed()
+
+    def remove_capacity_owner(self, program) -> None:
+        changed = False
+        with self._lock:
+            for link, (_, owners) in list(self._capacity_waits.items()):
+                if program in owners:
+                    # Other owners need a fresh threshold after this program disappears.
+                    del self._capacity_waits[link]
+                    link.cancel_capacity()
+                    changed = True
+            self._capacity_notify = self._capacity_notify or changed
+        if changed:
+            self._kick()
 
     def may_control(self, conn) -> bool:
         return bool(getattr(conn, "may_control", False)) and not getattr(conn, "closed", True)
@@ -219,7 +283,7 @@ class ControlsPort:
         """Something that the controls stored is not handed to the connections yet."""
         with self._lock:
             return (self._controls is not None or self._held is not None or bool(self._replies)
-                    or bool(self._selections) or bool(self._posts))
+                    or bool(self._selections) or bool(self._posts) or self._capacity_notify)
 
     def flush(self, final: bool = False) -> None:
         """Send what the controls stored: CONTROLS and SELECTION to the
@@ -237,11 +301,14 @@ class ControlsPort:
             selections, self._selections = self._selections, {}
             replies, self._replies = self._replies, []
             posts, self._posts = self._posts, []
+            capacity_notify, self._capacity_notify = self._capacity_notify, False
             if controls is not None and (self._after_data or self._held is not None):
                 if self._held is None:
                     self._held_until = time.monotonic() + ORDER_WAIT_S
                 self._held, controls = controls, None
                 self._after_data = False
+        if capacity_notify:
+            self.route.ctl.publication_changed()
         if self._held is not None:
             controls = self._release(final)
         if controls is None and not selections and not replies and not posts:
@@ -274,6 +341,21 @@ class ControlsPort:
                 with self._lock:
                     for ln, frame, cap in posts:
                         self._count(ln, cap, -len(frame))
+                    ready = []
+                    if self._capacity_waits:
+                        affected = set()
+                        for ln, _, cap in posts:
+                            if ln is None:
+                                affected.update(link for link in self._capacity_waits if cap in link.caps)
+                            elif ln in self._capacity_waits:
+                                affected.add(ln)
+                        # Only transfer completion examines subscriptions. No timer polls them.
+                        ready = [ln for ln in affected
+                                 if self._capacity_ready(ln, self._capacity_waits[ln][0])]
+                        for ln in ready:
+                            del self._capacity_waits[ln]
+                if ready:
+                    self.route.ctl.publication_changed()
 
     def _release(self, final: bool = False):
         """The held CONTROLS once the data sent before it has gone out (or the
@@ -308,6 +390,15 @@ class ControlsPort:
         return False
 
     def detach(self) -> None:
+        with self._lock:
+            self._capacity_closed = True
+            waiting = bool(self._capacity_waits) or self._capacity_notify
+            self._capacity_notify = False
+            for link in self._capacity_waits:
+                link.cancel_capacity()
+            self._capacity_waits.clear()
+        if waiting:
+            self.route.ctl.publication_changed()
         self.programs.close()
         self.route.detach()
         try:

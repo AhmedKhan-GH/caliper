@@ -83,6 +83,7 @@ class _NativeLink(Link):
     def __init__(self, producer: "_NativeProducer", conn: int):
         super().__init__(producer, peer=f"conn {conn}")
         self.conn = conn
+        self._capacity_token = 0
 
     def queue(self, msg) -> None:
         self.p.nio.send(self.conn, _wire.encode(msg))
@@ -96,6 +97,21 @@ class _NativeLink(Link):
             return int(self.p.nio.control_bytes(self.conn))
         except Exception:                         # an older module: no bound
             return 0
+
+    def watch_capacity(self, limit: int) -> bool:
+        """Atomically check native capacity or request one event, under the port lock."""
+        self._capacity_token += 1
+        watch = getattr(self.p.nio, "watch_capacity", None)
+        if watch is None:
+            # Older modules retain the hosted housekeeping timeout as their fallback.
+            return self.backlog() <= limit
+        return bool(watch(self.conn, limit, self._capacity_token))
+
+    def cancel_capacity(self) -> None:
+        self._capacity_token += 1
+        watch = getattr(self.p.nio, "watch_capacity", None)
+        if watch is not None:
+            watch(self.conn, -1, self._capacity_token)
 
 
 class _NativeProducer(_Producer):
@@ -393,10 +409,13 @@ class NativeServer(NetServer):
             if link.attached:
                 link.attached = False
                 p.attached_changed(-1)
+            p.controls.forget_capacity(link)
         elif kind == "closed":
             p.by_conn.pop(conn, None)
             p.links.discard(link)
             link.close()
+        elif kind == "capacity":
+            p.controls.capacity_changed(link, int(frame))
         elif kind == "msg":
             try:
                 link.handle(frame)
