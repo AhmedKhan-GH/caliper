@@ -343,6 +343,16 @@ class _Cadence:
 _CAD = _Cadence()
 
 
+def _reset_cadence() -> None:
+    """Restart cycle marks without erasing a live hosted clock or its cost history."""
+    if _CAD.inference or _INFERENCE_ACTIVE:
+        # Subscription and install calls can arrive on another thread. The live
+        # clocks and sender records still refer to this account and its totals.
+        _CAD.restart()
+    else:
+        _CAD.reset()
+
+
 class _Import:
     """One tensor of the script imported in place: its handle and the storage it binds."""
     __slots__ = ("name", "handle", "key")
@@ -875,7 +885,7 @@ def install(program_id: str, declaration: dict, wgsl: str, *, scene: str | None 
         if _ABANDONED:
             _reap()
         if not ACTIVE:
-            _CAD.reset()                             # the measurement starts again from this install
+            _reset_cadence()
             _STATE.update(dense=True, drained=0, short=0, long=0, switches=0)
             if _STATE["marks"]:
                 _STATE["marks"].clear()
@@ -1083,6 +1093,7 @@ class _InferenceClock:
 
     def __init__(self):
         self.measured = False
+        self.poll = None
         with _LOCK:
             _inference_sender(_VIEWS["ring"])
             self.sender = _CAD.inference_accounted
@@ -1094,17 +1105,18 @@ class _InferenceClock:
             _inference_sender(_VIEWS["ring"])
             sender = _CAD.inference_accounted
             now = _clock()
-            if self.measured:
-                _CAD.inference_s += max(0.0, now - self.started - (sender - self.sender))
+            elapsed = max(0.0, now - self.started - (sender - self.sender))
             self.sender = sender
             self.started = now
+            snapshots = 0.0
+            separate = not self.measured or self.poll is not None
             ring = _VIEWS["ring"]
             prior = _CAD.inference_gate
             if prior is not None and (prior[0][0] is not ring or not ring.gate_open):
                 # A subscription thread can replace the ring during an exclusion.
                 old = prior[0][0]
-                if not self.measured and old.gate_t == prior[0][2]:
-                    _CAD.inference_s += max(0.0, _inference_gate_cost(old) - prior[1])
+                if separate and old.gate_t == prior[0][2]:
+                    snapshots += max(0.0, _inference_gate_cost(old) - prior[1])
             if ring is not None and ring.gate_open:
                 # The gate identity survives a step renumber and detects a cost reset.
                 key = (ring, ring.gate_step, ring.gate_t)
@@ -1112,20 +1124,28 @@ class _InferenceClock:
                 before = prior[1] if prior is not None and prior[0] == key else 0.0
                 if cost < before:
                     before = 0.0
-                if not self.measured:
-                    _CAD.inference_s += max(0.0, cost - before)
+                if separate:
+                    snapshots += max(0.0, cost - before)
                 _CAD.inference_gate = (key, cost)
             else:
                 _CAD.inference_gate = None
+            _CAD.inference_s += snapshots
+            if self.measured:
+                if self.poll is None:
+                    _CAD.inference_s += elapsed
+                else:
+                    # Snapshot work is mandatory even when this poll finds no work.
+                    self.poll.seconds += max(0.0, elapsed - snapshots)
             return _CAD.inference_s
 
 
 @contextmanager
-def inference_boundary():
+def inference_boundary(*, measured=True):
     """Measure useful hosted work on this thread, with explicit action and wait exclusions.
 
     Nested boundaries share one clock. An enclosing exclusion remains in force.
     Runtime timestamps, action timers, and budget history retain their values.
+    An idle loop starts excluded and explicitly admits useful intervals.
     """
     previous = getattr(_INFERENCE, "clock", None)
     if previous is not None:
@@ -1135,7 +1155,7 @@ def inference_boundary():
     _INFERENCE.clock = clock
     try:
         clock.flush()                           # snapshots before this scope
-        clock.measured = True
+        clock.measured = measured
         yield
     finally:
         try:
@@ -1154,6 +1174,10 @@ def _inference_interval(measured):
         return
     clock.flush()
     previous, clock.measured = clock.measured, measured
+    prior_poll = clock.poll
+    if measured:
+        # Explicit publication intervals retain their cost inside an undecided poll.
+        clock.poll = None
     try:
         yield
     finally:
@@ -1161,11 +1185,49 @@ def _inference_interval(measured):
             clock.flush()
         finally:
             clock.measured = previous
+            clock.poll = prior_poll
 
 
 def inference_excluded():
     """Exclude an action or wait while retaining its snapshot charges."""
     return _inference_interval(False)
+
+
+class _InferencePoll:
+    """Ordinary readiness work awaits a decision to admit a hosted step."""
+
+    def __init__(self):
+        self.seconds = 0.0
+        self.accepted = False
+
+    def accept(self):
+        self.accepted = True
+
+
+@contextmanager
+def inference_poll():
+    """Retain ordinary poll time only when it admits work; always retain publication."""
+    poll = _InferencePoll()
+    clock = getattr(_INFERENCE, "clock", None)
+    if clock is None:
+        yield poll
+        return
+    clock.flush()
+    previous = clock.measured, clock.poll
+    clock.measured, clock.poll = True, poll
+    try:
+        yield poll
+    finally:
+        with _LOCK:
+            try:
+                clock.flush()
+            finally:
+                clock.measured, clock.poll = previous
+            if poll.accepted:
+                if clock.poll is not None:
+                    clock.poll.seconds += poll.seconds
+                else:
+                    _CAD.inference_s += poll.seconds
 
 
 def at_step(step: int) -> None:
@@ -1617,7 +1679,7 @@ def views(ring) -> None:
         if old is not None and old is not ring:
             old.release_gate()
         if ring is not None and old is None and not ACTIVE:
-            _CAD.reset()                             # the measurement starts again
+            _reset_cadence()
             _STATE.update(dense=True, drained=0, short=0, long=0, switches=0, floor=0)
             _STATE["pass"] = None
             if _STATE["marks"]:
@@ -1938,7 +2000,7 @@ def install_piece(program_id: str, *, piece: dict, manifest: dict, bind: dict | 
         if _ABANDONED:
             _reap()
         if not ACTIVE:
-            _CAD.reset()
+            _reset_cadence()
             _STATE.update(dense=True, drained=0, short=0, long=0, switches=0)
             if _STATE["marks"]:
                 _STATE["marks"].clear()

@@ -1417,7 +1417,9 @@ class HostedInference:
             if self.managed is not None:
                 if self.managed.stopping:
                     self.managed.exit()
-                self.managed._keep(self.model, None)
+                # Routine persistence follows its wall-clock policy, outside pass time.
+                with _programs.inference_excluded():
+                    self.managed._keep(self.model, None)
 
     def run(self):
         from .. import _programs
@@ -1431,33 +1433,35 @@ class HostedInference:
                           for iv in self.controls._ivs.values())
                 return bool(self.controls._npending or self.controls.queue or self.service.pending or due
                             or self.controls.state in (RUN_PAUSING, RUN_STEPPING))
-            with _programs.inference_boundary():
-                with self.controls.cond:
-                    publication_event = self.controls.publication_event
-                # Inspect program state outside Controls.lock to preserve lock order.
-                blocked = _programs.inference_blocked()
-                publication = _programs.inference_pending() and not blocked
-                with self.controls.cond:
-                    if not publication:
-                        with _programs.inference_excluded():
-                            self.controls.cond.wait_for(
-                                lambda: pending() or self.controls.publication_event != publication_event,
-                                timeout=1.)
-                    work = pending()
-                # Events before or during the wait require a fresh capacity check.
-                if not publication:
+            with _programs.inference_boundary(measured=False):
+                with _programs.inference_poll() as poll:
+                    with self.controls.cond:
+                        publication_event = self.controls.publication_event
+                    # Inspect program state outside Controls.lock to preserve lock order.
                     blocked = _programs.inference_blocked()
                     publication = _programs.inference_pending() and not blocked
-                try:
-                    with self._stop_boundary():
-                        if work or publication:
-                            self.boundary()
-                        else:
-                            # Reports and intervention expiry need no new prompt step or forward.
-                            # No step measures this routine work. Snapshots and any reentrant
-                            # publication checkpoint retain their own measured costs.
+                    with self.controls.cond:
+                        if not publication:
                             with _programs.inference_excluded():
-                                self.controls.checkpoint()
+                                self.controls.cond.wait_for(
+                                    lambda: pending() or self.controls.publication_event != publication_event,
+                                    timeout=1.)
+                        work = pending()
+                    # Events before or during the wait require a fresh capacity check.
+                    if not publication:
+                        blocked = _programs.inference_blocked()
+                        publication = _programs.inference_pending() and not blocked
+                    if work or publication:
+                        poll.accept()
+                try:
+                    if work or publication:
+                        with _programs._inference_interval(True), self._stop_boundary():
+                            self.boundary()
+                    else:
+                        # Idle maintenance advances no step. Snapshot and sender work,
+                        # plus any reentrant publication checkpoint, retain their costs.
+                        with self._stop_boundary():
+                            self.controls.checkpoint()
                 except CleanStop:
                     raise
                 except Exception as exc:

@@ -236,7 +236,7 @@ def test_normal_steps_keep_wall_clock_feedback(action_run, monkeypatch, failed_b
                 case.run.boundary()
     # The same gaps remain visible to the ordinary training entry point.
     from contextlib import nullcontext
-    monkeypatch.setattr(P, "inference_boundary", nullcontext)
+    monkeypatch.setattr(P, "inference_boundary", lambda **kwargs: nullcontext())
     monkeypatch.setattr(case.run, "boundary", caliper.step)
     case.drive()
     assert P._CAD.cost_s() == pytest.approx(.55002)

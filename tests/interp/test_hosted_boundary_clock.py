@@ -10,7 +10,7 @@ from .test_hosted_cadence import action_run
 
 
 @pytest.mark.parametrize("phase", ["checkpoint", "guard", "keep"])
-def test_hosted_clock_includes_non_action_boundary_work(action_run, monkeypatch, phase):
+def test_hosted_clock_classifies_non_action_boundary_work(action_run, monkeypatch, phase):
     case = action_run
     case.clock.idle_s = case.clock.action_s = .55
     calls = []
@@ -37,8 +37,10 @@ def test_hosted_clock_includes_non_action_boundary_work(action_run, monkeypatch,
     assert len(calls) == case.run.controls.n
     assert all(reply["status"] == "ok" for reply in case.replies)
     useful = case.clock.now - 8 * case.clock.action_s - 7 * case.clock.idle_s
+    if phase == "keep":
+        useful -= len(calls) * .0004
     assert P._CAD.inference_s == pytest.approx(useful)
-    assert P._CAD.step_s() == pytest.approx(.001)
+    assert P._CAD.step_s() == pytest.approx(.0006 if phase == "keep" else .001)
     assert P._CAD.cost_s() == pytest.approx(.00002)
     assert len(P._CAD.cost) == 7
 
