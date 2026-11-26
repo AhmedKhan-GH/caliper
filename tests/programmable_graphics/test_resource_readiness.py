@@ -340,3 +340,272 @@ def test_recompile_invalidates_each_viewers_static_admission(producer, monkeypat
     assert program.handle != old_handle
     assert_resources(viewer, program.id, {'result': struct.pack('<f', 14.), 'static': struct.pack('<f', 4.)})
     assert [r.step for r in viewer.whole if r.resource == 'static'] == [9, 12]
+
+
+def hosted_delivery(producer, monkeypatch, on_wait, *, start=9, limit=48):
+    """Drive the real hosted loop with finite sender and condition events."""
+    import caliper
+    from caliper._controls import Controls as RunControls
+    from caliper.interp._hosted import HostedInference
+
+    run = HostedInference.__new__(HostedInference)
+    run.controls = RunControls()
+    run.controls.n = start
+    run.model, run.guard, run._failure = producer.model, None, None
+    run.service = SimpleNamespace(pending=False)
+    errors, waits, keeps = [], [], []
+    run.status = SimpleNamespace(set=errors.append)
+
+    class Finished(BaseException):
+        pass
+
+    def keep(*args):
+        keeps.append(run.controls.n)
+        if run.controls.n >= limit:
+            raise Finished
+
+    run.managed = SimpleNamespace(stopping=False, _keep=keep)
+    monkeypatch.setattr(caliper, '_CTL', run.controls)
+
+    def wait_for(predicate, *, timeout):
+        assert timeout == 1.
+        if predicate():
+            return True
+        waits.append((run.controls.n, list(producer.runtime.runs)))
+        if len(waits) > 16:
+            raise Finished
+        run.controls.cond.release()
+        try:
+            if not on_wait(run, waits):
+                raise Finished
+        finally:
+            run.controls.cond.acquire()
+        return predicate()
+
+    monkeypatch.setattr(run.controls.cond, 'wait_for', wait_for)
+    for name in ('inference_pending', 'inference_blocked'):
+        original = getattr(P, name)
+
+        def readiness(original=original):
+            assert run.controls.lock.acquire(blocking=False), 'readiness holds Controls.lock'
+            run.controls.lock.release()
+            return original()
+
+        monkeypatch.setattr(P, name, readiness)
+    with pytest.raises(Finished):
+        run.run()
+    assert not errors
+    return waits, keeps
+
+
+def test_hosted_run_waits_for_resource_drain_without_unchanged_passes(producer, monkeypatch):
+    viewer = Viewer()
+    program, expected = install(producer, monkeypatch, Controls(viewer))
+    warmup(producer)
+    producer.step(9)
+    assert id(viewer) in P._OUTBOX and P.inference_pending()
+    version = _publish._VERSION
+
+    def on_wait(run, waits):
+        if not P.inference_pending():
+            return False
+        if len(waits) == 3:
+            # The sender drains only at this controlled timeout event.
+            viewer.queued = viewer.unsent = 0
+        return True
+
+    waits, keeps = hosted_delivery(producer, monkeypatch, on_wait, limit=18)
+    print({'boundaries': keeps, 'passes': producer.runtime.runs, 'waits': waits})
+    assert waits, 'HostedInference.run never waited while the outbox was blocked'
+    assert waits[:3] == [(9, [9])] * 3
+    assert producer.runtime.runs == [9]
+    assert not P.inference_pending() and not P._OUTBOX
+    assert _publish._VERSION == version
+    assert_resources(viewer, program.id, expected)
+
+
+@pytest.mark.parametrize('queue', ['queued', 'unsent'])
+def test_hosted_behind_viewer_keeps_controls_and_latest_inputs(producer, monkeypatch, queue):
+    from caliper._controls import Route
+
+    viewer = Viewer()
+    program, _ = install(producer, monkeypatch, Controls(viewer), count=1)
+    warmup(producer)
+    producer.step(9)
+    viewer.queued = 0
+    setattr(viewer, queue, P.RESOURCE_BACKLOG_BYTES)
+    publish('trace.node_f', torch.tensor([11.]))
+    for number in (10, 11, 12):
+        producer.step(number)
+    assert viewer in program.behind and not P._OUTBOX
+    actions, replies = [], []
+
+    def on_wait(run, waits):
+        if not P.inference_pending():
+            return False
+        if len(waits) == 1:
+            run.controls.action('record', lambda: actions.append(run.controls.n))
+            route = Route(run.controls, SimpleNamespace(
+                may_control=lambda conn: True, reply=lambda conn, meta: replies.append(meta)))
+            assert route.on_control(None, w.Control(1, 'run', name='record').to_meta())['status'] == 'queued'
+        elif len(waits) == 2:
+            assert actions == [13]
+            publish('trace.node_f', torch.tensor([19.]))
+        elif len(waits) == 3:
+            assert producer.runtime.runs == [9, 12]
+            viewer.queued = viewer.unsent = 0
+        return True
+
+    waits, keeps = hosted_delivery(producer, monkeypatch, on_wait, start=12)
+    assert [step for step, _ in waits[:3]] == [12, 13, 13]
+    assert keeps == [13, 14, 15] and producer.runtime.runs == [9, 12, 15]
+    assert replies[0]['status'] == 'ok' and actions == [13]
+    assert not P.inference_pending() and viewer not in program.behind
+    assert_resources(viewer, program.id, {'result': struct.pack('<f', 19.)})
+
+
+@pytest.mark.parametrize('static_count', [0, LARGE_COUNT])
+def test_hosted_late_viewer_completes_chunks_without_a_new_prompt(producer, monkeypatch, static_count):
+    first, late = Viewer(), Viewer()
+    ctl = Controls(first)
+    program, expected = install(producer, monkeypatch, ctl, static_count=static_count)
+    warmup(producer)
+    producer.step(9)
+    version = _publish._VERSION
+
+    def on_wait(run, waits):
+        if not P.inference_pending():
+            return False
+        if len(waits) == 1:
+            ctl.server.producer.links.append(late)
+        elif len(waits) == 2:
+            assert producer.runtime.runs == [9, 12]
+            assert id(first) in P._OUTBOX and id(late) in P._OUTBOX
+        else:
+            for link in (first, late):
+                link.queued = link.unsent = 0
+        return True
+
+    waits, _ = hosted_delivery(producer, monkeypatch, on_wait)
+    assert waits[1] == waits[2]  # No step or derive while both senders remain blocked.
+    assert not P.inference_pending() and not P._OUTBOX
+    assert _publish._VERSION == version
+    for link in (first, late):
+        assert_resources(link, program.id, expected)
+        assert not link.parts.open
+        assert (link.parts.dropped, link.parts.discarded, link.parts.expired) == (0, 0, 0)
+        if static_count:
+            assert len([r for r in link.whole if r.resource == 'static']) == 1
+
+
+@pytest.mark.parametrize('action', ['detach', 'close', 'remove'])
+def test_hosted_blocked_outbox_cleans_up_after_departure(producer, monkeypatch, action):
+    viewer = Viewer()
+    program, _ = install(producer, monkeypatch, Controls(viewer))
+    warmup(producer)
+    producer.step(9)
+
+    def on_wait(run, waits):
+        if len(waits) > 1:
+            return False
+        if action == 'remove':
+            P.remove(program.id)
+        elif action == 'detach':
+            viewer.attached = False
+        else:
+            viewer.closed = True
+        return True
+
+    hosted_delivery(producer, monkeypatch, on_wait)
+    assert not P.inference_pending() and not P._OUTBOX
+    assert producer.runtime.runs == [9] and not viewer.whole
+    if action == 'remove':
+        assert not P.ACTIVE
+
+
+@pytest.mark.parametrize('every', [1, 5])
+def test_hosted_shared_outbox_delivers_each_program_once_after_recovery(producer, monkeypatch, every):
+    viewer = Viewer()
+    ctl = Controls(viewer)
+    programs = [install(producer, monkeypatch, ctl, pid='first', static_count=1),
+                install(producer, monkeypatch, ctl, pid='second', static_count=1, every=every)]
+    warmup(producer)
+    producer.step(9)
+    version = _publish._VERSION
+    assert viewer in programs[1][0].behind
+
+    def on_wait(run, waits):
+        if not P.inference_pending():
+            return False
+        assert P.inference_blocked()
+        viewer.queued = viewer.unsent = 0
+        return True
+
+    hosted_delivery(producer, monkeypatch, on_wait)
+    assert producer.runtime.runs == [9, 9, 9 + max(P.N_MIN, every)]
+    assert not P.inference_pending() and not P._OUTBOX
+    assert _publish._VERSION == version
+    for program, expected in programs:
+        assert_resources(viewer, program.id, expected)
+    assert len(viewer.whole) == 4 and not viewer.parts.open
+
+
+def test_hosted_ready_compute_does_not_repeat_a_blocked_piece(producer, monkeypatch):
+    viewer = Viewer()
+    program, expected = install(producer, monkeypatch, Controls(viewer))
+    warmup(producer)
+    producer.step(9)
+    publish('trace.edge_f', torch.tensor([23.]))
+    P.install('compute', {
+        'inputs': [{'var': 'payload', 'source': 'live:trace.edge_f'}],
+        'output': {'kind': 'tensor', 'shape': [1]},
+    }, 'CPU fixture')
+    assert not P.inference_blocked()
+
+    def on_wait(run, waits):
+        if not P.inference_pending():
+            return False
+        assert P.inference_blocked()
+        assert [float(t.item()) for t in producer.shown] == [23.]
+        assert producer.runtime.runs == [9, 18]
+        viewer.queued = viewer.unsent = 0
+        return True
+
+    hosted_delivery(producer, monkeypatch, on_wait)
+    assert producer.runtime.runs == [9, 18]
+    assert not P.inference_pending() and not P._OUTBOX
+    assert_resources(viewer, program.id, expected)
+
+
+@pytest.mark.parametrize('handle_valid', [True, False])
+def test_hosted_terminal_piece_finishes_or_discards_its_outbox(producer, monkeypatch, handle_valid):
+    viewer = Viewer()
+    program, expected = install(producer, monkeypatch, Controls(viewer))
+    warmup(producer)
+    producer.step(9)
+    program.state = 'stopped'
+    code = 'program.over_time' if handle_valid else 'program.over_budget'
+    program.error = {'code': code}
+    handle = program.handle
+    if not handle_valid:
+        program.handle = None
+    P._set_active()
+
+    def on_wait(run, waits):
+        if not P.inference_pending():
+            return False
+        viewer.queued = viewer.unsent = 0
+        return True
+
+    try:
+        _, keeps = hosted_delivery(producer, monkeypatch, on_wait, limit=18)
+        assert not P._OUTBOX and not P.inference_pending()
+        assert keeps == [10] and producer.runtime.runs == [9]
+        assert program.state == 'stopped' and program.error['code'] == code
+        assert not P.ACTIVE
+        if handle_valid:
+            assert_resources(viewer, program.id, expected)
+        else:
+            assert not viewer.whole
+    finally:
+        program.handle = handle

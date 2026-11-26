@@ -760,8 +760,9 @@ def _compile(p: _Program) -> None:
 
 def _set_active() -> None:
     global ACTIVE
+    # Admitted chunks need checkpoints even after the last program stops.
     ACTIVE = (any(p.state in ("waiting", "compiled", "running") for p in _PROGS.values())
-              or _VIEWS["ring"] is not None)
+              or _VIEWS["ring"] is not None or bool(_OUTBOX))
     _prune_act_hooks()
 
 
@@ -956,10 +957,10 @@ def _remove(program_id: str, *, clear_output=False):
         p.bound = {}
         p.act_dirty = False
         _release_unused()
-        _set_active()
         if not _PROGS:
             _drop_act_hooks()
         _retire_output(p, clear_output)
+        _set_active()
     return p
 
 
@@ -1188,30 +1189,68 @@ def inference_pending() -> bool:
     Missing inputs wait for publication. Warmup, cadence, and runtime limits still
     apply in at_step. This query does not load or call the native runtime.
     """
-    from .interp import _publish
     with _LOCK:
-        links = [ln for ctl in _controls_ports() for ln in _resource_links(ctl)]
-        for p in _PROGS.values():
-            if p.state not in ("waiting", "compiled", "running"):
-                continue
-            delivery = p.output_retry or (p.kind == "piece" and any(
-                ln not in p.relayed or ln in p.behind for ln in links))
-            changed = delivery or p.params_dirty or p.act_dirty or any(
-                _publish._VERSIONS.get(src[len("live:"):], -1) > p.input_version
-                for _, src in p.inputs)
-            if not changed:
-                continue
-            try:
-                # Piece buffers and unbound optional tensors have no producer source.
-                inputs = [(var, src) for var, src in p.inputs if src] if p.kind == "piece" else p.inputs
-                _resolve_inputs(inputs)
-            except _Waiting:
-                continue
-            except _Refused:
-                pass  # Let the scheduled pass publish the refusal.
+        links = [(ctl, ln) for ctl in _controls_ports() for ln in _resource_links(ctl)]
+        if any(_inference_work(p, links) for p in _PROGS.values()):
             return True
     with _OUTBOX_LOCK:
         return bool(_OUTBOX)
+
+
+def _inference_work(p: _Program, links, *, ready=False) -> bool:
+    """Check pending inputs and, when requested, conservative delivery admission."""
+    from .interp import _publish
+    if p.state not in ("waiting", "compiled", "running"):
+        return False
+    changed = p.output_retry or p.params_dirty or p.act_dirty or any(
+        _publish._VERSIONS.get(src[len("live:"):], -1) > p.input_version
+        for _, src in p.inputs)
+    delivery = [(ctl, ln) for ctl, ln in links
+                if p.kind == "piece" and (ln not in p.relayed or ln in p.behind)]
+    if not changed and not delivery:
+        return False
+    try:
+        # Piece buffers and unbound optional tensors have no producer source.
+        inputs = [(var, src) for var, src in p.inputs if src] if p.kind == "piece" else p.inputs
+        _resolve_inputs(inputs)
+    except _Waiting:
+        return False
+    except _Refused:
+        return True  # A scheduled refusal needs no transport capacity.
+    if ready and p.kind == "piece":
+        candidates = links if changed else delivery
+        if candidates and (any(r["publish"] for r in p.resources) or delivery):
+            # The next snapshot has no known encoded size. Wait for an empty queue
+            # before a new snapshot to avoid repeated readbacks while the sender is busy.
+            with _OUTBOX_LOCK:
+                return any(id(ln) not in _OUTBOX and _backlog(ctl, ln) == 0
+                           for ctl, ln in candidates)
+    return True
+
+
+def inference_blocked() -> bool:
+    """Whether all known publication work must wait for transport capacity.
+
+    Call outside Controls.lock. The hosted condition timeout retries delivery when
+    the sender has no drain notification. No blocked retry creates a new step.
+    """
+    pending = False
+    with _LOCK:
+        links = [(ctl, ln) for ctl in _controls_ports() for ln in _resource_links(ctl)]
+        for p in _PROGS.values():
+            if _inference_work(p, links):
+                pending = True
+                if _inference_work(p, links, ready=True):
+                    return False
+        with _OUTBOX_LOCK:
+            for ln, ctl, p, chunks in _OUTBOX.values():
+                pending = True
+                # Obsolete outboxes also need one checkpoint for cleanup.
+                if getattr(ln, "closed", True) or not getattr(ln, "attached", False) or \
+                        _PROGS.get(p.id) is not p or p.handle is None or not chunks or \
+                        _backlog(ctl, ln) + chunks[0][0] <= RESOURCE_BACKLOG_BYTES:
+                    return False
+    return pending
 
 
 def _marks():
@@ -1306,6 +1345,9 @@ def _at_step(step: int) -> None:
         budget = _STATE.get("pass_budget", True)
         live = [p for p in _PROGS.values() if p.state in ("waiting", "compiled", "running")]
         due = [p for p in live if p.warm <= 0 and _every_ok(p, step)] if is_pass and budget else []
+        links = [(ctl, ln) for ctl in _controls_ports() for ln in _resource_links(ctl)] if inference else []
+        if inference:
+            due = [p for p in due if p.kind != "piece" or _inference_work(p, links, ready=True)]
         for p in live:
             if p.warm > 0:
                 p.warm -= 1
@@ -1413,7 +1455,9 @@ def _at_step(step: int) -> None:
         _STATE["pass"] = None
         nxt = step + 1
         if _CAD.due(nxt):                            # the decision for the next step
-            if any(p.warm <= 0 and _every_ok(p, nxt) for p in live) or \
+            if any(p.warm <= 0 and _every_ok(p, nxt) and
+                   (not inference or p.kind != "piece" or _inference_work(p, links, ready=True))
+                   for p in live) or \
                     (ring is not None and ring.wants_pass(now)):
                 _CAD.passed(nxt)
                 _STATE["pass"] = nxt

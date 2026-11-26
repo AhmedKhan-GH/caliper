@@ -75,6 +75,9 @@ def test_new_program_gets_a_measured_trial_with_viewer(exhausted_run, piece, hos
     assert program.state == "compiled"
     assert program.warm == P.WARMUP_STEPS - 1
     for _ in range(1500):
+        if piece and hosted:
+            # A hosted piece needs a new input version for each measured pass.
+            publish("output.probs", torch.tensor([float(_ + 2)]))
         case.tick(hosted=hosted)
         if program.state == "stopped" or program.runs >= P.COST_SAMPLES + 3:
             break
