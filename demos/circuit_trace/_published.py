@@ -249,6 +249,19 @@ def preparation(root, replication):
 
 
 def validate_case(root, status, cell, *, previous_sequence, preparation_id=None):
+    """Authorize the next serialized case through its current committed status."""
+    return _validate_case(root, status, cell, previous_sequence=previous_sequence,
+                          preparation_id=preparation_id, consecutive=True)
+
+
+def validate_live_case(root, status, cell, *, previous_sequence, preparation_id):
+    """Authorize a newer live case after earlier attempts become superseded."""
+    require(preparation_id is not None, "The live case has no established preparation identity.")
+    return _validate_case(root, status, cell, previous_sequence=previous_sequence,
+                          preparation_id=preparation_id, consecutive=False)
+
+
+def _validate_case(root, status, cell, *, previous_sequence, preparation_id, consecutive):
     """Authorize private arrays only through the current committed status."""
     try:
         state, replication = replication_state(status)
@@ -257,7 +270,8 @@ def validate_case(root, status, cell, *, previous_sequence, preparation_id=None)
         record = replication.get("result")
         require(isinstance(record, dict), "The published action has no committed result.")
         sequence = record.get("sequence")
-        require(type(sequence) is int and sequence == previous_sequence + 1,
+        require(type(sequence) is int and sequence > previous_sequence
+                and (not consecutive or sequence == previous_sequence + 1),
                 "The published action result is stale or has a missing sequence.")
         require(replication.get("active_cell") == cell and replication.get("last_attempt") == {
             "case_id": action_name(cell), "sequence": sequence, "status": "ok"}, "The published action failed or is no longer active.")

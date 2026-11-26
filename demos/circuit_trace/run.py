@@ -578,38 +578,67 @@ class Bridge:
         self.selection_generation += 1
         save(s.out / "selected-examples.json", self.last_examples)
 
+    def published_action(self, event):
+        """Use action events as wakeups for the latest committed attempt."""
+        s = self.session
+        handled = getattr(s, "published_handled_events", [])
+        if any(event is item for item in handled):
+            s.published_handled_events = [item for item in handled if item is not event]
+            return
+        status = s.events.complete("trace.status")
+        state, replication = published.replication_state(status)
+        try:
+            prepared = published.preparation(s.private_output_directory, replication)
+        except (KeyError, TypeError, ValueError, OSError) as error:
+            raise Failure(f"Invalid live preparation evidence: {error}") from error
+        published.require(prepared["id"] == getattr(s, "published_preparation_id", None),
+                          "The live action changed preparation identity.")
+        attempt = replication.get("last_attempt")
+        published.require(isinstance(attempt, dict) and set(attempt) == {"case_id", "sequence", "status"}
+                          and isinstance(attempt.get("case_id"), str)
+                          and attempt.get("case_id") in {published.action_name(cell) for cell in published.CASES}
+                          and type(attempt.get("sequence")) is int and attempt["sequence"] > 0
+                          and attempt.get("status") in ("ok", "error"),
+                          "The live action has no valid committed attempt.")
+        previous = getattr(s, "published_last_sequence", 0)
+        sequence = attempt["sequence"]
+        # Events carry no attempt sequence. A duplicate or superseded event cannot
+        # authorize another increment or give its name to the current result.
+        if sequence == previous and state == getattr(s, "published_live_state", None):
+            return
+        published.require(sequence > previous, "The live action status is stale.")
+        evidence = None
+        if attempt["status"] == "ok":
+            cell = replication.get("active_cell")
+            published.action_name(cell)
+            evidence = published.validate_live_case(s.private_output_directory, status, cell,
+                previous_sequence=previous, preparation_id=s.published_preparation_id)
+            published.require(evidence["baseline_array_sha256"] == getattr(s, "published_baseline_hash", None),
+                              "The live case changed baseline arrays.")
+        # A status read can itself wait while more actions commit. Refuse that
+        # race and let the next event recover from the unchanged local sequence.
+        current = s.events.complete("trace.status")
+        published.require(current.get("inference") == state, "The live output changed during case publication.")
+        if evidence is None:
+            # A failed attempt leaves older arrays in place. Do not publish them
+            # or borrow error text from an event without an attempt sequence.
+            s.mcp.body("state.set", id="published_status", value=f"{attempt['case_id']}: Action failed.")
+        else:
+            from _published_ui import display_result
+            display_result(s, evidence)
+            save(s.out / "live-case.json", evidence)
+        s.published_last_sequence = sequence
+        s.published_live_state = state
+
     def handle(self, event):
         s = self.session
         if getattr(s, "replication_profile", None) == published.PROFILE:
-            from _published_ui import display_result, group_text
+            from _published_ui import group_text
             if event["kind"] == "control" and event.get("control") == "published_group":
                 s.mcp.body("state.set", id="published_members", value=group_text(int(event["value"])))
                 return
             if event["kind"] == "run" and event.get("change") == "action" and event.get("name", "").startswith(published.PROFILE + "."):
-                handled = getattr(s, "published_handled_events", [])
-                if any(event is item for item in handled):
-                    s.published_handled_events = [item for item in handled if item is not event]
-                    return
-                status = s.events.complete("trace.status")
-                _, replication = published.replication_state(status)
-                sequence = getattr(s, "published_last_sequence", 0)
-                if event.get("status") != "ok":
-                    published.require(replication.get("last_attempt") == {
-                        "case_id": event["name"], "sequence": sequence + 1, "status": "error"},
-                        "The live action failure belongs to another attempt.")
-                    s.published_last_sequence = sequence + 1
-                    s.mcp.body("state.set", id="published_status", value=f"{event['name']}: {event.get('text', 'Action failed.')}")
-                    return
-                record = replication.get("result") or {}
-                published.require(record.get("case_id") == event["name"], "The live case publication is stale.")
-                evidence = published.validate_case(s.private_output_directory, status, record["cell"],
-                                                   previous_sequence=sequence,
-                                                   preparation_id=getattr(s, "published_preparation_id", None))
-                published.require(evidence["baseline_array_sha256"] == s.published_baseline_hash,
-                                  "The live case changed baseline arrays.")
-                s.published_last_sequence = record["sequence"]
-                display_result(s, evidence)
-                save(s.out / "live-case.json", evidence)
+                self.published_action(event)
                 return
         if event["kind"] == "pick" and event.get("panel") == "graph":
             fields = event.get("fields") or {}
@@ -922,6 +951,7 @@ def published_action(session, cell, preparation_id, *, display=True):
         if display:
             from _published_ui import display_result
             display_result(s, evidence)
+        s.published_live_state = status["inference"]
     except Exception as error:
         entry["completed"] = False
         entry["error"] = error_detail(error)
