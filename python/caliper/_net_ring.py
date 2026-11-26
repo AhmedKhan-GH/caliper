@@ -192,14 +192,23 @@ class _SenderMeter:
 
     @contextmanager
     def measure(self, ring):
-        start = time.thread_time()
+        thread = (threading.get_ident(), threading.get_native_id())
         with _COST_LOCK:
-            self.thread = (threading.get_ident(), threading.get_native_id())
-            try:
-                self.watch(self.account, start)
-            except BaseException:
-                self.thread = None
-                raise
+            nested = self.thread == thread
+            if self.thread is not None and not nested:
+                raise RuntimeError("Sender CPU scopes must run on one thread.")
+            if not nested:
+                start = time.thread_time()
+                self.thread = thread
+                try:
+                    self.watch(self.account, start)
+                except BaseException:
+                    self.thread = None
+                    raise
+        if nested:
+            # The outer scope owns CPU through reentrant control callbacks.
+            yield
+            return
         try:
             yield
         finally:
@@ -209,6 +218,33 @@ class _SenderMeter:
                 self.published_s += cost
                 self.settle()
                 self.thread = None
+
+
+class _SenderAwaitable:
+    """Measure coroutine CPU between suspensions, with no socket wait cost."""
+
+    def __init__(self, ring, awaitable):
+        self.ring, self.awaitable = ring, awaitable
+
+    def __await__(self):
+        iterator = self.awaitable.__await__()
+        advance, value = iterator.send, None
+        try:
+            while True:
+                try:
+                    with self.ring.sender_cost():
+                        pending = advance(value)
+                except StopIteration as result:
+                    return result.value
+                try:
+                    value = yield pending
+                except BaseException as error:
+                    advance, value = iterator.throw, error
+                else:
+                    advance = iterator.send
+        finally:
+            with self.ring.sender_cost():
+                iterator.close()
 
 
 def _torch():
@@ -393,6 +429,9 @@ class NetRing:
 
     def sender_cost(self):
         return self._sender.measure(self)
+
+    def sender_task(self, awaitable):
+        return _SenderAwaitable(self, awaitable)
 
     def sender_untracked(self):
         """Retain counter-only costs from older producers without fabricated interval evidence."""
