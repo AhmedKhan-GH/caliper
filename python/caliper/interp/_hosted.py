@@ -1003,10 +1003,18 @@ class HostedInference:
             # Original-coordinate reference traces require an unchanged baseline.
             # Consume the toggle without a default-profile trace or another output
             # comparison. The completed case owns its published tensors and identity.
-            self._retrace = self.retrace.value
-            self.status.set("Automatic retrace is unsupported for published actions. The current graph is unchanged."
-                            if self._retrace else "ready")
+            self._sync_published_retrace(completed=True)
         return f"{result['label']} completed. Evidence: {result['metadata_file']}"
+
+    def _sync_published_retrace(self, *, completed=False):
+        """Report the unsupported toggle without a change to the accepted trace."""
+        notice = "Automatic retrace is unsupported for published actions. The current graph is unchanged."
+        self._retrace = self.retrace.value
+        if self._retrace:
+            if self.status.value != notice:
+                self.status.set(notice)
+        elif completed or self.status.value == notice:
+            self.status.set("ready")
 
     def _check_watch(self):
         """Require this watch and stable resources with the Controls lock held."""
@@ -1297,12 +1305,16 @@ class HostedInference:
             self._output_key = deepcopy(key)
             self._output_action_id = action_id
             self.status.set("ready")
-        if self.retrace.value and (changed or not self._retrace):
+        published = self.replication_profile == "published_dallas_v1"
+        if published:
+            self._sync_published_retrace()
+        elif self.retrace.value and (changed or not self._retrace):
             if (self.traced_prompt, self.traced_specifications) != key:
                 response = self.service._retrace({"prompt": key[0]}, self.controls.n)
                 if response is not None and response[0] == "error":
                     self.status.set(response[2]["message"])
-        self._retrace = self.retrace.value
+        if not published:
+            self._retrace = self.retrace.value
         self._sync_clamp_control()
         if self.guard is not None:
             self.guard.check("inference boundary", force=False)

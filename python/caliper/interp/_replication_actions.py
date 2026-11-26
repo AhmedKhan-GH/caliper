@@ -185,9 +185,11 @@ class PublishedCases:
             full_identity=self._model_identity)
 
     def _check_hooks(self):
-        if self._hook_snapshot is None:
-            raise ValueError('published preparation has no hook identity')
-        self._hook_snapshot.check()
+        from .. import _programs
+        with _programs._LOCK:
+            if self._hook_snapshot is None:
+                raise ValueError('published preparation has no hook identity')
+            self._hook_snapshot.check()
 
     def _write_json(self, name, value):
         target = self.directory / name
@@ -415,6 +417,14 @@ class PublishedCases:
                 yield
 
     def run(self, cell, *, prepare=None, check=None):
+        """Serialize the action with program activation hook changes."""
+        from .. import _programs
+        # A prepared publication acquires the program lock before the Controls
+        # lock at commit. A direct action needs that outer lock here instead.
+        with _programs._LOCK if prepare is None else nullcontext():
+            return self._run(cell, prepare=prepare, check=check)
+
+    def _run(self, cell, *, prepare=None, check=None):
         """Execute a fresh forward and commit only after all candidate checks pass."""
         self.sequence += 1
         sequence, started = self.sequence, time.perf_counter()
@@ -437,16 +447,20 @@ class PublishedCases:
                 self._reserve(self.model.config.vocab_size * 64)
                 from ._replication_native import observe_features, write_native
                 observations = {}
-                self._check_hooks()
-                hooks = forward_hooks(self.model)
-                with (observe_features(self.model, executor.dictionary, GROUPS['Say Victoria'],
-                                       input_shape=inputs['input_ids'].shape, guard=self.guard,
-                                       reserve=self._reserve) if cell == 29 else nullcontext(observations)) as observations:
-                    with attention_patterns(self.model, self.patterns):
-                        logits = forward_logits(self.model, inputs, guard=self.guard)[0, -1]
-                if not self._model_matches() or forward_hooks(self.model) != hooks:
-                    raise ValueError('published model changed during the case forward')
-                self._check_hooks()
+                from .. import _programs
+                # Controls releases its lock before evaluate. Program hooks must
+                # remain stable through both snapshots and the complete forward.
+                with _programs._LOCK:
+                    self._check_hooks()
+                    hooks = forward_hooks(self.model)
+                    with (observe_features(self.model, executor.dictionary, GROUPS['Say Victoria'],
+                                           input_shape=inputs['input_ids'].shape, guard=self.guard,
+                                           reserve=self._reserve) if cell == 29 else nullcontext(observations)) as observations:
+                        with attention_patterns(self.model, self.patterns):
+                            logits = forward_logits(self.model, inputs, guard=self.guard)[0, -1]
+                    if not self._model_matches() or forward_hooks(self.model) != hooks:
+                        raise ValueError('published model changed during the case forward')
+                    self._check_hooks()
                 pair = torch.stack((self.baseline_logits, logits))
                 probabilities = pair.softmax(-1)
                 top_probs, top_ids = probabilities.topk(5, dim=-1)
