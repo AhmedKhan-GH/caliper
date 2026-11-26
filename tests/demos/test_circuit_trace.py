@@ -193,12 +193,24 @@ def test_prompt_change_and_show_more_retrace_with_pruning_and_regenerate():
             return {}
 
     class FakeEvents:
+        def wait(self, _timeout=0.05):
+            return []
+
+        def until(self, description, read, *, timeout=120.0):
+            val = read()
+            if val:
+                return val
+            raise AssertionError(f"Timed out in fake until: {description}")
+
         def complete(self, name: str, **kwargs):
             if name == "trace.run":
                 trace_calls.append(kwargs)
                 return {"seconds": 0.01}
             if name == "trace.status":
-                return {"prompt": trace_calls[-1]["prompt"] if trace_calls else run_mod.DEFAULT_PROMPT}
+                return {
+                    "state": "done" if trace_calls else "idle",
+                    "prompt": trace_calls[-1]["prompt"] if trace_calls else run_mod.DEFAULT_PROMPT,
+                }
             raise AssertionError(f"Unexpected complete call: {name}")
 
     s = run_mod.Session.__new__(run_mod.Session)
@@ -298,6 +310,321 @@ def test_show_mode_error_keeps_window_alive(monkeypatch):
     s.close(stop_app=True)
     assert len(stopped_procs) == 1
     assert stopped_procs[0][1] == {"group": True}
+
+
+def test_startup_waits_for_automatic_trace_and_show_mode_recovers_panels(monkeypatch):
+    run_mod = _load_demo_module("run")
+
+    trace_run_calls: list[dict] = []
+    timeline: list[str] = []
+    status_polls = 0
+
+    def _default_spec(spec_id: str = "circuit-trace") -> dict:
+        return {
+            "applet": {"id": spec_id},
+            "state": [{"id": "selected_node", "default": -1}, {"id": "activation_max", "default": 1.0}],
+            "panel": [
+                {"id": "graph", "primitive": "text", "options": {"text": "The trace is not available."}},
+                {"id": "output", "primitive": "text", "options": {"text": "The trace is not available."}},
+                {"id": "examples", "primitive": "text", "options": {"text": "No feature is selected."}},
+            ],
+            "control": [
+                {"id": "clamp_status", "kind": "readout"},
+                {"id": "clamp_status_value", "kind": "text"},
+            ],
+            "program": [],
+        }
+
+    class FakeMCP:
+        def __init__(self, *, open_spec: bool = True):
+            self.calls: list[tuple[str, dict]] = []
+            self.open = open_spec
+            self.spec = _default_spec()
+
+        def body(self, cmd: str, /, **kwargs):
+            self.calls.append((cmd, kwargs))
+            timeline.append(cmd if cmd != "piece.show" else f"piece.show:{kwargs.get('name')}")
+            if cmd == "spec.new":
+                self.open = True
+                self.spec = {
+                    "applet": {"id": kwargs["id"]},
+                    "state": [],
+                    "panel": [],
+                    "control": [],
+                    "program": [],
+                }
+                return {}
+            if cmd == "panel.create":
+                self.spec["panel"].append(
+                    {"id": kwargs["id"], "primitive": kwargs["primitive"], "options": dict(kwargs.get("options") or {})}
+                )
+                return {}
+            if cmd == "panel.patch":
+                for panel in self.spec["panel"]:
+                    if panel["id"] == kwargs["id"]:
+                        opts = dict(panel.get("options") or {})
+                        opts.update((kwargs.get("patch") or {}).get("options") or {})
+                        panel["options"] = opts
+                return {}
+            if cmd == "state.create":
+                self.spec["state"].append({"id": kwargs["id"], "default": kwargs.get("default")})
+                return {}
+            if cmd == "piece.show":
+                return {"from": "library", "piece": {"hash": "sha256:00"}}
+            if cmd == "spec.set_text":
+                text = kwargs.get("text", "")
+                progs = []
+                for pid, panel_id in (
+                    ("attribution", "graph"),
+                    ("probabilities", "output"),
+                    ("example_tokens", "examples"),
+                ):
+                    if f'"{pid}"' in text:
+                        progs.append({"id": pid, "panel": panel_id})
+                        for panel in self.spec["panel"]:
+                            if panel["id"] == panel_id:
+                                panel["primitive"] = "scene"
+                self.spec["program"] = progs
+                return {}
+            if cmd == "run.state":
+                return {
+                    "attached": True,
+                    "params": [
+                        {"name": "prompt", "value": run_mod.DEFAULT_PROMPT, "pending": None},
+                        {"name": "selected_node", "value": -1, "pending": None},
+                        {"name": "clamp", "value": 0.0, "pending": None},
+                        {"name": "retrace", "value": False, "pending": None},
+                        {"name": "show_more", "value": False, "pending": None},
+                        {"name": "output.status", "value": "ready", "pending": None},
+                    ],
+                    "actions": [{"name": n} for n in ("run", "generate", "reset", "apply_clamp")],
+                }
+            if cmd == "run.list":
+                return {"runs": [{"id": "circuit-trace", "state": "running"}]}
+            if cmd == "program.status":
+                return {"programs": []}
+            if cmd == "spec.get":
+                if not self.open:
+                    return {"open": False}
+                return {
+                    "open": True,
+                    "id": self.spec["applet"]["id"],
+                    "json": json.loads(json.dumps(self.spec)),
+                }
+            return {}
+
+    class FakeEvents:
+        def __init__(self, *, pending_events: list[dict] | None = None):
+            self.pending = list(pending_events or [])
+
+        def wait(self, _timeout=0.05):
+            return []
+
+        def until(self, description, read, *, timeout=120.0):
+            for _ in range(5):
+                val = read()
+                if val:
+                    return val
+            raise run_mod.Failure(f"Timed out: {description}")
+
+        def complete(self, name: str, **kwargs):
+            nonlocal status_polls
+            timeline.append(name)
+            if name == "trace.status":
+                status_polls += 1
+                if status_polls == 1:
+                    return {
+                        "state": "running",
+                        "seconds": 0.0,
+                        "inference": {"state": "tracing", "traced_prompt": None, "traced_show_more": None},
+                    }
+                return {
+                    "state": "done",
+                    "seconds": 1.25,
+                    "inference": {
+                        "state": "ready",
+                        "traced_prompt": run_mod.DEFAULT_PROMPT,
+                        "traced_show_more": False,
+                        "selected_node": 2,
+                    },
+                }
+            if name == "trace.run":
+                trace_run_calls.append(kwargs)
+                raise AssertionError("ensure_trace must reuse the completed automatic trace without calling trace.run")
+            if name == "trace.read":
+                return {
+                    "counts": {"nodes": 3, "edges": 2, "tokens": 2, "layers": 2},
+                    "nodes": [{"index": 2, "kind": "feature", "layer": 1, "feature": 7, "position": 1}],
+                    "edges": [],
+                    "next_node_offset": None,
+                    "next_edge_offset": None,
+                }
+            if name == "feature.show":
+                return {"maximum": 5.0}
+            if name == "feature.examples":
+                return {"examples": [{"example_id": 0}]}
+            raise AssertionError(f"Unexpected complete({name})")
+
+    def _make_session(mcp: FakeMCP, events: FakeEvents):
+        s = run_mod.Session.__new__(run_mod.Session)
+        s.args = type("Args", (), {"prompt": run_mod.DEFAULT_PROMPT, "model": "gemma-2-2b", "browser_capture": False, "acceptance": False})()
+        s.show = True
+        s.mcp = mcp
+        s.events = events
+        s.started = True
+        s.run_id = "circuit-trace"
+        s.current_prompt = run_mod.DEFAULT_PROMPT
+        s.show_more = False
+        s.progress = "ready"
+        s.selected_node = -1
+        s.instrument_built = False
+        s.base_programs_installed = False
+        s.examples_installed = False
+        s.initial_ready = False
+        s.error_shown = False
+        s.last_error = None
+        s.applet_saved = False
+        s.load_seconds = 0.5
+        s.hosted_params = {"prompt", "selected_node", "clamp", "retrace", "show_more", "output.status"}
+        s.hosted_actions = {"run", "apply_clamp", "reset", "generate"}
+        s.set_param = lambda *_a, **_kw: {}
+        s.wait_programs_rendered = lambda *_a, **_kw: {}
+        s.capture_native = lambda name, **_kw: Path(f"/nonexistent/{name}.png")
+        return s
+
+    class OneShotApp:
+        def __init__(self, target):
+            self.target = target
+            self.polls = 0
+
+        def poll(self):
+            self.polls += 1
+            if (
+                getattr(self.target, "initial_ready", False)
+                and not getattr(self.target, "error_shown", False)
+                and self.polls >= 4
+            ):
+                return 0
+            return None if self.polls <= 30 else 0
+
+    def fake_build(sess, **_kw):
+        sess.mcp.open = True
+        sess.mcp.spec = _default_spec("circuit-trace")
+        return None
+
+    s = _make_session(FakeMCP(open_spec=False), FakeEvents())
+    s.app = OneShotApp(s)
+    monkeypatch.setattr(run_mod, "build_instrument", fake_build)
+
+    summary = run_mod.run_standard(s)
+    assert "error" not in summary
+    assert trace_run_calls == []
+    assert status_polls >= 2
+    assert s.base_programs_installed is True
+    assert s.examples_installed is True
+    assert s.initial_ready is True
+    # All three programs must be installed and finalized before the first trace status or run call.
+    first_trace_idx = timeline.index("trace.status")
+    for piece_event in ("piece.show:attribution_graph", "piece.show:logit_bars", "piece.show:token_strip"):
+        assert timeline.index(piece_event) < first_trace_idx
+    assert timeline.index("spec.set_text") < first_trace_idx
+    assert timeline.index("applet.save") < first_trace_idx
+    assert timeline.index("applet.open") < first_trace_idx
+
+    # Verify ensure_trace handles an interpret.busy race by waiting and reusing the completed trace.
+    busy_calls = 0
+
+    class BusyOnceEvents(FakeEvents):
+        def complete(self, name: str, **kwargs):
+            nonlocal busy_calls
+            if name == "trace.status":
+                if busy_calls == 0:
+                    return {
+                        "state": "idle",
+                        "seconds": 0.0,
+                        "inference": {"state": "ready", "traced_prompt": None, "traced_show_more": None},
+                    }
+                return {
+                    "state": "done",
+                    "seconds": 0.8,
+                    "inference": {"state": "ready", "traced_prompt": run_mod.DEFAULT_PROMPT, "traced_show_more": False},
+                }
+            if name == "trace.run":
+                busy_calls += 1
+                if busy_calls == 1:
+                    raise run_mod.Failure('trace.run: {"error":{"code":"interpret.busy","message":"A trace already waits for completion."}}')
+                raise AssertionError("trace.run must not be called a second time once the trace completed")
+            return super().complete(name, **kwargs)
+
+    s_busy = _make_session(FakeMCP(), BusyOnceEvents())
+    s_busy.hosted_actions = {"generate", "reset", "apply_clamp"}
+    res = s_busy.ensure_trace(run_mod.DEFAULT_PROMPT, show_more=False)
+    assert res["state"] == "done"
+    assert busy_calls == 1
+
+    # Verify keep_alive recovers from circuit-trace-error fallback when build_instrument fails transiently twice.
+    s2 = _make_session(FakeMCP(open_spec=False), FakeEvents())
+    s2.app = OneShotApp(s2)
+
+    attempts = 0
+
+    def flaky_build(sess, **kw):
+        nonlocal attempts
+        attempts += 1
+        if attempts <= 2:
+            raise run_mod.Failure("transient build failure")
+        return fake_build(sess, **kw)
+
+    monkeypatch.setattr(run_mod, "build_instrument", flaky_build)
+    monkeypatch.setattr(run_mod.time, "monotonic", lambda: 1e9)
+    summary2 = run_mod.run_standard(s2)
+    assert summary2["error"] == "transient build failure"
+    assert attempts >= 3
+    assert any(cmd == "spec.new" and kw.get("id") == "circuit-trace-error" for cmd, kw in s2.mcp.calls)
+    assert s2.mcp.spec["applet"]["id"] == "circuit-trace"
+    assert s2.instrument_built is True
+    assert s2.base_programs_installed is True
+    assert s2.examples_installed is True
+    assert s2.initial_ready is True
+    assert s2.error_shown is False
+    assert {p["id"] for p in s2.mcp.spec["program"]} == {"attribution", "probabilities", "example_tokens"}
+
+    # Verify show_error writes state into unbound text panels when program installation fails,
+    # unrelated events do not clear the error, and keep_alive retries until panels are bound.
+    install_attempts = 0
+    orig_install = run_mod.install_programs
+
+    def flaky_install(sess, **kw):
+        nonlocal install_attempts
+        install_attempts += 1
+        if install_attempts <= 2:
+            raise run_mod.Failure("piece library temporarily unavailable")
+        return orig_install(sess, **kw)
+
+    monkeypatch.setattr(run_mod, "build_instrument", fake_build)
+    monkeypatch.setattr(run_mod, "install_programs", flaky_install)
+    s3_mcp = FakeMCP(open_spec=False)
+    s3 = _make_session(s3_mcp, FakeEvents(pending_events=[{"kind": "spec", "event": "do"}]))
+    s3.app = OneShotApp(s3)
+    # Also verify an unrelated event does not claim handled or wipe error state before recovery.
+    s3.error_shown = True
+    assert s3.handle_event({"kind": "spec", "event": "do"}, None) is False
+    assert s3.error_shown is True
+    s3.error_shown = False
+
+    summary3 = run_mod.run_standard(s3)
+    assert summary3["error"] == "piece library temporarily unavailable"
+    patched_panels = {kw["id"]: kw["patch"]["options"]["text"] for cmd, kw in s3_mcp.calls if cmd == "panel.patch"}
+    assert set(patched_panels) == {"graph", "output", "examples"}
+    for text in patched_panels.values():
+        assert "piece library temporarily unavailable" in text
+        assert "Retrying" in text
+    assert install_attempts >= 3
+    assert s3.base_programs_installed is True
+    assert s3.examples_installed is True
+    assert s3.initial_ready is True
+    assert s3.error_shown is False
+    assert {p["id"] for p in s3_mcp.spec["program"]} == {"attribution", "probabilities", "example_tokens"}
 
 
 @pytest.mark.skipif(sys.platform != "darwin" or not torch.backends.mps.is_available(), reason="requires macOS Metal")
