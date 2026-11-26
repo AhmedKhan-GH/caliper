@@ -68,6 +68,7 @@ nlohmann::json draw_status_json(const DrawStatus& s) {
                         {"memory_limit_bytes", s.memory_limit_bytes},
                         {"resource_step", s.resource_step < 0 ? nlohmann::json(nullptr) : nlohmann::json(s.resource_step)},
                         {"resource_steps", s.resource_steps},
+                        {"params", s.params},
                         {"frames", s.frames},
                         {"error", nullptr}};
     if (!s.error.ok()) {

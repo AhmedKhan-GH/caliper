@@ -525,6 +525,7 @@ const std::pair<const char*, const char*> kFragments[] = {
                    "memory_limit_bytes": {"type": "integer", "minimum": 0, "description": "Its draw.memory_mb in bytes."},
                    "resource_step": {"type": ["integer", "null"], "description": "The step of the newest resource version that a frame drew, or null."},
                    "resource_steps": {"type": "object", "additionalProperties": {"type": "integer"}, "description": "The step of each bound resource in the last encoded frame. Unbound optional inputs are absent."},
+                   "params": {"type": "object", "additionalProperties": {"type": "number"}, "description": "Effective scalar parameters of the last successfully encoded frame, after defaults and type conversion. Empty before the first frame or after reset. Nonfinite f32 values are absent."},
                    "frames": {"type": "integer", "minimum": 0, "description": "The number of encoded frames since this draw instance was installed."},
                    "error": {"type": ["object", "null"], "additionalProperties": false, "required": ["code", "message", "where"], "description": "The draw half's last error, or null.",
                              "properties": {
@@ -2210,6 +2211,7 @@ std::string command_table_json_text() {
 std::vector<std::pair<std::string, std::string>> command_table_open_paths() {
     return {{"spec.get", "result.json"}, {"panel.data", "result.data"},
             {"program.status", "result.programs[].draw.resource_steps"},
+            {"program.status", "result.programs[].draw.params"},
             {"feature.dictionary", "result.result"}, {"feature.show", "result.result"},
             {"feature.examples", "result.result"}, {"trace.run", "result.result"},
             {"trace.status", "result.result"}, {"trace.read", "result.result"},

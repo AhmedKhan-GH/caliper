@@ -17,8 +17,10 @@
 
 #include "../../../../tests/gfx/example_draw.h"
 
+#include <algorithm>
 #include <array>
 #include <cstring>
+#include <limits>
 
 namespace cd = caliper_draw;
 namespace cp = caliper_builder::programs;
@@ -99,7 +101,172 @@ const gfx::DrawList& list_of(const gfx::Frame& f, std::size_t i) {
     return std::get<gfx::RenderPass>(f.passes()[i]).list;
 }
 
+cs::Piece parameter_field() {
+    cs::Piece p = ex::attention_field();
+    p.params[2].default_value = 0.1;
+    p.params.push_back({"selected_node", cs::ParamType::i32, -1});
+    p.params.push_back({"mask", cs::ParamType::u32, 4294967295.0});
+    return p;
+}
+
 }  // namespace
+
+TEST_CASE("encoded draw params start empty and expose converted defaults after a frame") {
+    Host h;
+    cd::DrawRuntime rt(h.gfx, true, checks());
+    const cs::Piece piece = parameter_field();
+    CHECK(cd::draw_status_json(rt.status())["params"] == nlohmann::json::object());
+    REQUIRE(rt.install(piece, {}, 1).ok());
+    CHECK(rt.status().params.empty());
+    CHECK(frame(h, rt).empty());
+    CHECK(rt.status().frames == 0);
+    CHECK(rt.status().resource_steps.empty());
+    CHECK(rt.status().params.empty());
+    REQUIRE(rt.set_resource(version("pattern", std::vector<float>{1}, 7)).ok());
+    REQUIRE(frame(h, rt).size() == 1);
+    const std::map<std::string, double> expected = {
+        {"layer", 0}, {"head", 0}, {"gain", double(0.1f)}, {"selected_node", -1}, {"mask", 4294967295.0}};
+    CHECK(rt.status().params == expected);
+    CHECK(rt.status().resource_steps.at("pattern") == 7);
+    CHECK(rt.status().frames == 1);
+    CHECK(nlohmann::json::parse(cd::draw_status_json(rt.status()).dump())["params"] == expected);
+
+    rt.remove();
+    CHECK(rt.status().params.empty());
+    CHECK(rt.status().resource_steps.empty());
+    CHECK(rt.status().frames == 0);
+    REQUIRE(rt.install(piece, {}, 1).ok());
+    CHECK(rt.status().params.empty());
+    REQUIRE(rt.set_resource(version("pattern", std::vector<float>{1}, 8)).ok());
+    REQUIRE(frame(h, rt).size() == 1);
+    REQUIRE(rt.install(piece, {}, 1).ok());
+    CHECK(rt.status().params.empty());
+    CHECK(rt.status().resource_steps.empty());
+    CHECK(rt.status().frames == 0);
+}
+
+TEST_CASE("encoded draw params advance on parameter-only and same-value frames") {
+    Host h;
+    cd::DrawRuntime rt(h.gfx, true, checks());
+    const cs::Piece piece = parameter_field();
+    REQUIRE(rt.install(piece, {}, 1).ok());
+    REQUIRE(rt.set_resource(version("pattern", std::vector<float>{1}, 7)).ok());
+    REQUIRE(frame(h, rt).size() == 1);
+    const auto resources = rt.status().resource_steps;
+    const auto versions = rt.internals().versions;
+    cd::FrameInputs in;
+    in.params = ex::pack({1, 3, 0.2, -2147483648.0, 0}, piece);
+    const std::uint32_t mask = 0x80000001u;
+    std::memcpy(in.params.data() + 16, &mask, 4);
+    CHECK(rt.status().params.at("selected_node") == -1);
+    REQUIRE(frame(h, rt, in).size() == 1);
+    const std::map<std::string, double> expected = {
+        {"layer", 1}, {"head", 3}, {"gain", double(0.2f)},
+        {"selected_node", -2147483648.0}, {"mask", 2147483649.0}};
+    CHECK(rt.status().params == expected);
+    CHECK(rt.status().frames == 2);
+    CHECK(rt.status().resource_steps == resources);
+    CHECK(rt.internals().versions == versions);
+    const auto bytes = h.gfx.buffer_bytes(rt.internals().params);
+    REQUIRE(bytes.size() >= in.params.size());
+    CHECK(std::equal(in.params.begin(), in.params.end(), bytes.begin()));
+    REQUIRE(frame(h, rt, in).size() == 1);
+    CHECK(rt.status().params == expected);
+    CHECK(rt.status().frames == 3);
+    CHECK(rt.status().resource_steps == resources);
+    CHECK(rt.internals().versions == versions);
+}
+
+TEST_CASE("encoded draw params describe effective bytes with missing short or excess input") {
+    Host h;
+    cd::DrawRuntime rt(h.gfx, true, checks());
+    const cs::Piece piece = parameter_field();
+    REQUIRE(rt.install(piece, {}, 1).ok());
+    REQUIRE(rt.set_resource(version("pattern", std::vector<float>{1}, 7)).ok());
+    cd::FrameInputs in;
+    in.params = ex::pack({1, 3, 0.2, 42, 8}, piece);
+    SUBCASE("missing input") { in.params.clear(); }
+    SUBCASE("whole scalar prefix") { in.params.resize(4); }
+    SUBCASE("partial scalar prefix") { in.params.resize(9); }
+    SUBCASE("extra bytes") { in.params.resize(24, 0xff); }
+    REQUIRE(frame(h, rt, in).size() == 1);
+    const auto bytes = h.gfx.buffer_bytes(rt.internals().params);
+    REQUIRE(bytes.size() >= 20);
+    std::int32_t layer, head, selected;
+    std::uint32_t mask;
+    float gain;
+    std::memcpy(&layer, bytes.data(), 4);
+    std::memcpy(&head, bytes.data() + 4, 4);
+    std::memcpy(&gain, bytes.data() + 8, 4);
+    std::memcpy(&selected, bytes.data() + 12, 4);
+    std::memcpy(&mask, bytes.data() + 16, 4);
+    const std::map<std::string, double> expected = {
+        {"layer", layer}, {"head", head}, {"gain", gain}, {"selected_node", selected}, {"mask", mask}};
+    CHECK(rt.status().params == expected);
+    if (in.params.size() <= 9) {
+        CHECK(rt.status().params.at("selected_node") == -1);
+        CHECK(rt.status().params.at("mask") == 4294967295.0);
+    }
+}
+
+TEST_CASE("encoded draw params omit nonfinite floats without changing packed bytes") {
+    Host h;
+    cd::DrawRuntime rt(h.gfx, true, checks());
+    const cs::Piece piece = parameter_field();
+    REQUIRE(rt.install(piece, {}, 1).ok());
+    REQUIRE(rt.set_resource(version("pattern", std::vector<float>{1}, 7)).ok());
+    REQUIRE(frame(h, rt).size() == 1);
+    REQUIRE(rt.status().params.count("gain") == 1);
+    float value = std::numeric_limits<float>::quiet_NaN();
+    SUBCASE("NaN") {}
+    SUBCASE("positive infinity") { value = std::numeric_limits<float>::infinity(); }
+    SUBCASE("negative infinity") { value = -std::numeric_limits<float>::infinity(); }
+    cd::FrameInputs in;
+    in.params = ex::pack({1, 3, 1, 42, 8}, piece);
+    std::memcpy(in.params.data() + 8, &value, 4);
+    REQUIRE(frame(h, rt, in).size() == 1);
+    CHECK(rt.status().params.count("gain") == 0);
+    CHECK(rt.status().params.at("selected_node") == 42);
+    CHECK(rt.status().frames == 2);
+    CHECK(rt.status().resource_steps.at("pattern") == 7);
+    const auto bytes = h.gfx.buffer_bytes(rt.internals().params);
+    REQUIRE(bytes.size() >= 12);
+    CHECK(std::memcmp(bytes.data() + 8, &value, 4) == 0);
+    const auto encoded = nlohmann::json::parse(cd::draw_status_json(rt.status()).dump());
+    CHECK(!encoded["params"].contains("gain"));
+    for (const auto& number : encoded["params"]) CHECK(number.is_number());
+}
+
+TEST_CASE("encoded draw params retain the last successful frame after encoding fails") {
+    Host h;
+    cd::DrawRuntime rt(h.gfx, true, checks());
+    cs::Piece piece = ex::attention_arcs();
+    piece.draw->passes.resize(1);
+    piece.params.push_back({"selected_node", cs::ParamType::i32, -1});
+    const auto installed = rt.install(piece, {}, 1);
+    REQUIRE_MESSAGE(installed.ok(), installed.message);
+    auto resources = ex::arc_resources();
+    give_arcs(rt, resources, 7);
+    REQUIRE(frame(h, rt).size() == 1);
+    const auto before = rt.status();
+    cd::FrameInputs in;
+    in.params = ex::pack({0.2, 2, 42}, piece);
+    give_arcs(rt, resources, 8);
+    cd::HostTarget target = h.target;
+    SUBCASE("invalid target") { target.width = 0; }
+    SUBCASE("no encoded passes") {
+        resources.arcs.clear();
+        REQUIRE(rt.set_resource(version("arcs", resources.arcs, 8)).ok());
+    }
+    SUBCASE("parameter upload failure") { h.gfx.release(rt.internals().params); }
+    std::vector<gfx::Frame> frames;
+    CHECK(!rt.encode(&frames, in, target));
+    CHECK(frames.empty());
+    CHECK(rt.status().params == before.params);
+    CHECK(rt.status().resource_steps == before.resource_steps);
+    CHECK(rt.status().resource_step == before.resource_step);
+    CHECK(rt.status().frames == before.frames);
+}
 
 TEST_CASE("the field installs, waits for its resource, then draws one full-screen triangle") {
     for (bool webgpu : modes()) {
@@ -1271,7 +1438,7 @@ TEST_CASE("the draw host gives each panel its programs, packs params and refuses
     // Its states reach the events: compiled once, then stopped with the pass and the entry.
     host.feed("pattern")->status(rt);
     host.feed("pattern")->status(rt);
-    REQUIRE(frame(h, rt).size() == 1);
+    REQUIRE(frame(h, rt, in).size() == 1);
     rt.frame_pending(5000.5);
     host.feed("pattern")->status(rt);
     REQUIRE(sink.events.size() == 3);
@@ -1284,6 +1451,7 @@ TEST_CASE("the draw host gives each panel its programs, packs params and refuses
     CHECK(j["error"]["code"] == cp::kProgramDrawTimeout);
     CHECK(j["frame_limit_ms"] == 4.0);
     CHECK(j["resource_steps"] == nlohmann::json{{"pattern", 64}});
+    CHECK(j["params"] == nlohmann::json{{"layer", 1}, {"head", 3}, {"gain", 2}});
     CHECK(j["frames"] == 1);
 
     // A program that leaves the spec leaves its panel; a changed piece gets a new revision.

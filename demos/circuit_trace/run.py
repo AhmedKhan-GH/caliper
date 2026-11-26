@@ -265,21 +265,24 @@ class Session:
         if not expected_steps or set(expected_steps) - CAPTURE_RESOURCES.keys():
             raise Failure("Capture requires known circuit programs and their resource steps.")
         expected_steps = dict(expected_steps)
-        selection_step = getattr(getattr(self, "bridge", None), "selection_step", None)
-        if "attribution" in expected_steps and selection_step is not None:
-            expected_steps["attribution"] = max(expected_steps["attribution"], selection_step)
+        selected_node = None
+        if "attribution" in expected_steps:
+            bridge = getattr(self, "bridge", None)
+            if bridge is None:
+                raise Failure("Attribution capture requires the selection bridge.")
+            selected_node = bridge.last_selection if bridge.last_selection is not None else -1
         cursor = self.mcp.body("cursor.get")["cursor"]
         def current_cursor():
             self._capture_status(expected_steps)
             current = self.mcp.body("cursor.get")["cursor"]
-            # A derive pass can finish after the selection acknowledgment step.
-            # Do not hold a cursor that predates the resources required for selection.
+            # A control acknowledgement does not require a new resource publication.
+            # Hold complete resources, then check the selection in an encoded frame.
             steps = self._capture_resources(expected_steps, current["latest"])
             return current if steps else False
-        current = self.events.until("capture cursor step", current_cursor)
         try:
+            current = self.events.until("capture cursor step", current_cursor)
             held = self.mcp.body("cursor.set", step=current["latest"], live=False, playing=False)["cursor"]
-            return self._capture_held(name, expected_steps, held["step"])
+            return self._capture_held(name, expected_steps, held["step"], selected_node)
         finally:
             restore = {key: cursor[key] for key in ("live", "playing", "speed")}
             if not cursor["live"]:
@@ -310,7 +313,7 @@ class Session:
             resources[identifier] = steps
         return resources
 
-    def _capture_held(self, name, expected_steps, cursor_step):
+    def _capture_held(self, name, expected_steps, cursor_step, selected_node):
         initial = self._capture_status(expected_steps)
         first_frames = {p["id"]: (p.get("draw") or {}).get("frames", 0) for p in initial["programs"]}
         resource_steps = {}
@@ -337,6 +340,12 @@ class Session:
                     return False
                 if program.get("last_step") is None or program["last_step"] < max(steps.values()):
                     return False
+                if identifier == "attribution":
+                    params = draw.get("params")
+                    if not isinstance(params, dict) or "selected_node" not in params:
+                        raise Failure("The attribution draw status lacks encoded selection parameters.")
+                    if params["selected_node"] != selected_node:
+                        return False
                 resource_steps[identifier] = steps
             return status
         status = self.events.until("rendered circuit resources", rendered)
@@ -348,10 +357,18 @@ class Session:
                                                      **{"from": pin.get("from", "library")})["piece"]
         snapshot = {"status": status, "pieces": pieces, "expected_steps": expected_steps,
                     "resource_steps": resource_steps, "cursor_step": cursor_step,
+                    "selected_node": selected_node,
                     "phase": "after the resource barrier and before capture.frame"}
         self.program_evidence[name] = snapshot
         save(self.out / (name + "-program-status.json"), snapshot)
         reply = self.mcp.call("capture.frame")
+        # The capture command requests another frame. Reject any observed change
+        # while it was pending before the image becomes accepted evidence.
+        captured = rendered()
+        if not captured:
+            raise Failure("The captured frame no longer satisfies the circuit resource and selection barrier.")
+        snapshot["capture_status"] = captured
+        save(self.out / (name + "-program-status.json"), snapshot)
         image = next((b for b in reply.get("content", []) if b.get("type") == "image"), None)
         encoded = image["data"] if image else reply["structuredContent"]["png_base64"]
         png = self.out / (name + ".png")
@@ -534,6 +551,7 @@ class Bridge:
         self.session = session
         self.last_examples = None
         self.last_selection = None
+        # This control acknowledgement is not an attribution resource version.
         self.selection_step = None
         self.selection_generation = 0
         self.examples_present = False

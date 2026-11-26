@@ -194,6 +194,8 @@ struct DrawStatus {
     std::uint64_t memory_limit_bytes = 0;
     std::int64_t resource_step = -1; // the step of the resources of the last frame
     std::map<std::string, std::int64_t> resource_steps; // bound resources of the last encoded frame
+    // Effective scalar values of that frame. Nonfinite f32 values are absent.
+    std::map<std::string, double> params;
     std::uint64_t frames = 0;
     Verdict error;                   // the refusal or the stop; `where` names the pass, e.g. "draw.passes[2]"
     int pass = -1;                   // the index of the pass that the error names, or -1

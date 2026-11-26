@@ -2008,7 +2008,7 @@ def test_mcp_journal_records_request_duration(monkeypatch):
 
 
 class CaptureResources:
-    """The fixture separates received versions from displayed versions."""
+    """Separate resource versions from the proposed encoded draw parameters."""
     def __init__(self, tmp_path, monkeypatch):
         from types import SimpleNamespace
         import _mcp
@@ -2017,11 +2017,12 @@ class CaptureResources:
         self.session.show = True
         self.session.capture_number = 0
         self.session.program_evidence = {}
-        self.session.bridge = SimpleNamespace(selection_step=2)
+        self.session.bridge = SimpleNamespace(selection_step=2, last_selection=4)
         self.session.mcp = self
         self.cursor = dict(step=2, latest=2, live=True, playing=False, speed=10)
         self.received = {p: dict.fromkeys(resources, 2) for p, resources in driver.CAPTURE_RESOURCES.items()}
         self.shown = deepcopy(self.received)
+        self.draw_params = {"selected_node": 4}
         self.frames = 8
         self.stage = 0
         self.clock = 0
@@ -2061,6 +2062,7 @@ class CaptureResources:
                      last_pass_ms=.1 if self.derive_ready else None, piece={"name": p},
                      draw=dict(resource_step=max((v or 0) for v in self.shown[p].values()),
                                resource_steps=dict(self.shown[p]), frames=self.frames, frame_ms=.2,
+                               params=dict(self.draw_params) if p == "attribution" else {},
                                state="stopped" if self.stopped else "running"))
                 for p in self.received]}
         if command == "piece.show":
@@ -2071,7 +2073,8 @@ class CaptureResources:
         assert command == "capture.frame"
         assert not self.cursor["live"] and not self.cursor["playing"]
         assert all(len(set(steps.values())) == 1 for steps in self.shown.values())
-        assert min(self.shown["attribution"].values()) >= self.session.bridge.selection_step
+        selected = self.session.bridge.last_selection
+        assert self.draw_params["selected_node"] == (selected if selected is not None else -1)
         assert self.derive_ready
         self.captures.append((self.stage, deepcopy(self.shown)))
         # A later resource must not move the held capture to another step.
@@ -2080,8 +2083,8 @@ class CaptureResources:
         assert self.cursor["step"] == held
         return {"structuredContent": {"png_base64": "cG5n"}}
 
-    def capture(self, name="before"):
-        return self.session.capture(name, dict.fromkeys(driver.CAPTURE_RESOURCES, 1))
+    def capture(self, name="before", *, minimum_step=1):
+        return self.session.capture(name, dict.fromkeys(driver.CAPTURE_RESOURCES, minimum_step))
 
 
 def test_capture_waits_for_received_and_displayed_resources_after_selection(tmp_path, monkeypatch):
@@ -2097,7 +2100,7 @@ def test_capture_waits_for_received_and_displayed_resources_after_selection(tmp_
         else:
             harness.shown["attribution"]["strings"] = 2
     harness.advance = advance
-    png, metadata = harness.capture()
+    png, metadata = harness.capture(minimum_step=2)
     assert png.read_bytes() == b"png" and metadata is None
     assert harness.captures[0][0] == len(driver.CAPTURE_RESOURCES["attribution"]) + 1
     assert harness.cursor["live"]
@@ -2151,23 +2154,21 @@ def test_new_selection_requires_a_new_frame_after_an_existing_capture(tmp_path, 
     first = harness.session.program_evidence["first"]["status"]["programs"][0]["draw"]["frames"]
     harness.cursor.update(step=3, latest=3)
     harness.session.bridge.selection_step = 3
+    harness.session.bridge.last_selection = 7
+    received = deepcopy(harness.received)
     start = harness.stage
     def advance():
-        index = harness.stage - start - 1
-        if index < len(driver.CAPTURE_RESOURCES["attribution"]):
-            resource = driver.CAPTURE_RESOURCES["attribution"][index]
-            harness.received["attribution"][resource] = 3
-            if resource != "strings":
-                harness.shown["attribution"][resource] = 3
-        else:
-            harness.shown["attribution"]["strings"] = 3
+        if harness.stage >= start + 2:
+            harness.draw_params["selected_node"] = 7
     harness.advance = advance
     harness.capture("second")
     second = harness.session.program_evidence["second"]["status"]["programs"][0]["draw"]["frames"]
     assert second > first
-    assert [stage for stage, _ in harness.captures] == [1, len(driver.CAPTURE_RESOURCES["attribution"]) + 2]
-    assert harness.session.program_evidence["second"]["resource_steps"]["attribution"] == dict.fromkeys(
-        driver.CAPTURE_RESOURCES["attribution"], 3)
+    assert [stage for stage, _ in harness.captures] == [1, 3]
+    assert harness.received == received
+    evidence = harness.session.program_evidence["second"]
+    assert evidence["resource_steps"]["attribution"] == received["attribution"]
+    assert evidence["selected_node"] == 7
 
 
 @pytest.mark.parametrize("failure", ["capture", "cursor", "stopped"])
@@ -2239,7 +2240,9 @@ def test_demo_flows_use_the_complete_selection_capture_barrier(tmp_path, monkeyp
     monkeypatch.setattr(driver, "published_action", lambda *a: {
         "completed": True, "evidence": {"result": {"argmax_token_ids": [1, 1]}}})
     def select(bridge, row):
-        bridge.selection_step = 2
+        bridge.selection_step = 3
+        bridge.last_selection = row
+        harness.draw_params["selected_node"] = -1
         harness.received["attribution"]["strings"] = 1
         harness.shown["attribution"]["strings"] = 1
         return {"examples": []}
@@ -2249,6 +2252,7 @@ def test_demo_flows_use_the_complete_selection_capture_barrier(tmp_path, monkeyp
             harness.received["attribution"]["strings"] = 2
         if harness.stage >= 3:
             harness.shown["attribution"]["strings"] = 2
+            harness.draw_params["selected_node"] = 0
     harness.advance = advance
     def reached(command):
         CaptureResources.call(harness, command)

@@ -46,6 +46,7 @@ struct DrawStatus {
     std::uint64_t memory_limit_bytes = 0;         // the piece's draw.memory_mb in bytes
     std::optional<std::int64_t> resource_step;    // the step of the newest resource version that a frame drew
     std::map<std::string, std::int64_t> resource_steps; // bound resources of the last encoded frame
+    std::map<std::string, double> params;         // effective finite scalar values of that frame
     std::uint64_t frames = 0;
     std::optional<ProgramError> error;            // the last refusal or stop
     std::string error_where;                      // the pass of the error, such as "draw.passes[1]"; empty when none

@@ -1575,8 +1575,13 @@ bool DrawRuntime::encode(std::vector<caliper_gfx::Frame>* frames, const FrameInp
     }
     std::vector<std::uint8_t> params = m.params_default;
     if (m.params_bytes) {
-        std::memcpy(params.data(), in.params.data(), std::min<std::size_t>(params.size(), in.params.size()));
-        g.write_buffer(m.params, 0, params.data(), params.size());
+        if (!in.params.empty())
+            std::memcpy(params.data(), in.params.data(), std::min<std::size_t>(params.size(), in.params.size()));
+        if (!g.write_buffer(m.params, 0, params.data(), params.size())) {
+            stop(m, cp::kProgramLayerRefused,
+                 "The graphics layer refused the draw parameters: " + g.last_error(), -1, "params");
+            return false;
+        }
     }
     if (m.counts_bytes) {
         std::vector<std::uint8_t> counts(m.counts_bytes, 0);
@@ -1664,6 +1669,26 @@ bool DrawRuntime::encode(std::vector<caliper_gfx::Frame>* frames, const FrameInp
     }
     if (frames->size() == first_frame) return false;
     m.params_shown = std::move(params);
+    m.status.params.clear();
+    for (std::size_t i = 0; i < m.piece.params.size(); ++i) {
+        const cs::PieceParam& param = m.piece.params[i];
+        const std::uint8_t* at = m.params_shown.data() + 4 * i;
+        double value = 0;
+        if (param.type == cs::ParamType::f32) {
+            float v;
+            std::memcpy(&v, at, 4);
+            value = v;
+        } else if (param.type == cs::ParamType::i32) {
+            std::int32_t v;
+            std::memcpy(&v, at, 4);
+            value = v;
+        } else {
+            std::uint32_t v;
+            std::memcpy(&v, at, 4);
+            value = v;
+        }
+        if (std::isfinite(value)) m.status.params[param.name] = value;
+    }
 
     // What the frame shows, for the item map, the text table and the reset rules: a new copy for
     // each new version, also one at the same step, and the copy a pick of an earlier frame holds

@@ -14460,6 +14460,13 @@
                       "minimum": 0,
                       "type": "integer"
                     },
+                    "params": {
+                      "additionalProperties": {
+                        "type": "number"
+                      },
+                      "description": "Effective scalar parameters of the last successfully encoded frame, after defaults and type conversion. Empty before the first frame or after reset. Nonfinite f32 values are absent.",
+                      "type": "object"
+                    },
                     "resource_step": {
                       "description": "The step of the newest resource version that a frame drew, or null.",
                       "type": [

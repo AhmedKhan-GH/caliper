@@ -66,10 +66,11 @@ void property_names(const json& schema, std::set<std::string>& out) {
     if (schema.contains("items")) property_names(schema["items"], out);
 }
 
-std::string open_path_of(const std::string& name) {
+std::vector<std::string> open_paths_of(const std::string& name) {
+    std::vector<std::string> paths;
     for (const auto& p : cb::command_table_open_paths())
-        if (p.first == name) return p.second;
-    return {};
+        if (p.first == name) paths.push_back(p.second);
+    return paths;
 }
 
 }  // namespace
@@ -106,9 +107,7 @@ TEST_CASE("every schema is closed, lists its required properties and describes e
         CHECK(cb::check_command_schema(d.result).ok());
         const auto args = cb::check_closed_command_schema(d.args, "args");
         CHECK_MESSAGE(args.ok(), (args.where + ": " + args.message));
-        std::vector<std::string> open;
-        if (!open_path_of(d.name).empty()) open.push_back(open_path_of(d.name));
-        const auto result = cb::check_closed_command_schema(d.result, "result", open);
+        const auto result = cb::check_closed_command_schema(d.result, "result", open_paths_of(d.name));
         CHECK_MESSAGE(result.ok(), (result.where + ": " + result.message));
         CHECK(d.summary.size() > 40);
         CHECK(d.summary.size() < 1200);
@@ -134,6 +133,28 @@ TEST_CASE("no command takes or returns a value named like a secret") {
         for (const char* bad : {"token", "secret", "password", "api_key", "apikey", "authorization", "key"})
             CHECK(n.find(bad) == std::string::npos);
     }
+}
+
+TEST_CASE("program.status permits optional numeric encoded draw params and keeps the draw object closed") {
+    const auto* status = cb::find_command_descriptor("program.status");
+    REQUIRE(status);
+    const auto& schema = status->result.at("properties").at("programs").at("items").at("properties").at("draw");
+    json draw = {{"state", "waiting"}, {"frame_ms", nullptr}, {"frame_limit_ms", 4},
+                 {"memory_bytes", 0}, {"memory_limit_bytes", 1024}, {"resource_step", nullptr}, {"error", nullptr}};
+    CHECK(cb::validate_command_value(schema, draw).ok());
+    draw["params"] = json::object();
+    CHECK(cb::validate_command_value(schema, draw).ok());
+    draw["params"] = {{"selected_node", -1}, {"mask", 4294967295.0}, {"gain", double(0.1f)}};
+    CHECK(cb::validate_command_value(schema, draw).ok());
+    draw["params"]["selected_node"] = "requested";
+    CHECK_FALSE(cb::validate_command_value(schema, draw).ok());
+    draw["params"]["selected_node"] = nullptr;
+    CHECK_FALSE(cb::validate_command_value(schema, draw).ok());
+    draw["params"] = json::array();
+    CHECK_FALSE(cb::validate_command_value(schema, draw).ok());
+    draw["params"] = json::object();
+    draw["requested_params"] = json::object();
+    CHECK_FALSE(cb::validate_command_value(schema, draw).ok());
 }
 
 TEST_CASE("the flags follow the design page") {

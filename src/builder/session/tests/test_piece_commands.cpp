@@ -664,6 +664,7 @@ TEST_CASE("pieces: program.status takes an instance's draw object from the viewe
     CHECK(status["programs"][0]["draw"]["state"] == "waiting");
     CHECK(status["programs"][0]["draw"]["frame_ms"].is_null());
     CHECK(status["programs"][0]["draw"]["resource_steps"] == json::object());
+    CHECK(status["programs"][0]["draw"]["params"] == json::object());
     CHECK(status["programs"][0]["draw"]["frames"] == 0);
 
     ViewerHost viewer;
@@ -680,6 +681,7 @@ TEST_CASE("pieces: program.status takes an instance's draw object from the viewe
     d.memory_limit_bytes = 64u << 20;
     d.resource_step = 120;
     d.resource_steps = {{"pattern", 120}, {"labels", 119}};
+    d.params = {{"selected_node", -1}, {"mask", 4294967295.0}, {"gain", double(0.1f)}};
     d.frames = 9;
     d.error = ProgramError{"program.draw_over_time", "The pass draw.passes[0] took 6.5 ms of its 4 ms.", 0, 0};
     d.error_where = "draw.passes[0]";
@@ -693,6 +695,8 @@ TEST_CASE("pieces: program.status takes an instance's draw object from the viewe
     CHECK(draw["memory_bytes"] == 1024);
     CHECK(draw["resource_step"] == 120);
     CHECK(draw["resource_steps"] == json{{"pattern", 120}, {"labels", 119}});
+    CHECK(draw["params"] == d.params);
+    CHECK(json::parse(status.dump())["programs"][0]["draw"]["params"] == d.params);
     CHECK(draw["frames"] == 9);
     CHECK(draw["error"]["code"] == "program.draw_over_time");
     CHECK(draw["error"]["where"] == "draw.passes[0]");
