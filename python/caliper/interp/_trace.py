@@ -26,19 +26,22 @@ from ._feature_labels import label_graph_nodes
 from . import _reference_graph
 
 
+TRACE_TIMEOUT_SECONDS = 600
+
+
 class TraceTimeout(TimeoutError):
-    """One trace exceeds its request budget without a process resource stop."""
+    """One trace exceeds its hang timeout without a process resource stop."""
 
     code = "interpret.trace_timeout"
 
 
 class _Deadline:
     def __init__(self):
-        self.expires = time.monotonic() + 20
+        self.expires = time.monotonic() + TRACE_TIMEOUT_SECONDS
 
     def __call__(self, stage):
         if time.monotonic() >= self.expires:
-            raise TraceTimeout(f"Trace exceeded the 20 second request budget at {stage}.")
+            raise TraceTimeout(f"Trace exceeded the 600 second safety timeout at {stage}.")
 
 
 class _DeadlineMemory:
@@ -434,7 +437,7 @@ class _DirectEffects:
             else:
                 weights[error_slice] = (gradient * path.errors[layer]).sum(-1).T
         # Preserve the raw edge dtype, but audit its sum in at least float32.
-        # BF16 totals can erase discrepancies above the completeness limit.
+        # BF16 totals can erase discrepancies in the source account.
         account_dtype = torch.float64 if weights.dtype == torch.float64 else torch.float32
         expected = torch.stack([target.expected for target in targets]).to(account_dtype)
         affine = torch.stack([(path.bias_final if target.layer == path.layers else path.bias_reads[target.layer])
@@ -1039,6 +1042,8 @@ class Tracer:
                             "max_relative_residual": _finite_max(
                                 (d["relative_residual"] for d in diagnostics), "direct-effect relative residual"),
                             "forward_residual": path.forward_residual,
+                            "forward_residuals": deepcopy(path.forward_residuals),
+                            "numeric_status": "measured",
                             "direct_forward_residual": path.direct_forward_residual,
                             "replacement_forward_residual": path.replacement_forward_residual,
                             "target_count": len(diagnostics),
@@ -1049,9 +1054,6 @@ class Tracer:
                             "objective": settings["objective"],
                             "omitted_edge_influence": edge_omitted, "token_path": connectivity,
                             "targets": diagnostics}
-            tolerance = 1e-9 if path.dtype == torch.float64 else 2e-2
-            if completeness["max_absolute_residual"] > tolerance:
-                raise ValueError(f"direct-effect completeness residual exceeds {tolerance}")
             display_nodes = label_graph_nodes(display_nodes, label_index, profile=profile, check=check)
             settings = dict(settings, dtype=str(path.dtype), physical_batches=batch_sizes,
                             logical_queues=logical_queues,

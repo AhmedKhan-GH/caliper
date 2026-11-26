@@ -354,13 +354,13 @@ def test_dictionary_hash_deadline_reports_stage_and_preserves_publication(monkey
     def expired(value, **kwargs):
         if boundary == "complete":
             result = weights_hash(value, **kwargs)
-        clock.now += 20
+        clock.now += _trace.TRACE_TIMEOUT_SECONDS
         return weights_hash(value, **kwargs) if boundary == "chunk" else result
 
     monkeypatch.setattr(_trace, "weights_hash", expired)
     monkeypatch.setattr(model, "forward", lambda *a, **kw: pytest.fail("expired hash reached the forward"))
     stage = "model_identity" if boundary == "chunk" else "complete"
-    with pytest.raises(_trace.TraceTimeout, match="20 second request budget at dictionary content " + stage):
+    with pytest.raises(_trace.TraceTimeout, match="600 second safety timeout at dictionary content " + stage):
         tracer.trace("AB", max_targets=0)
     assert tracer._cache == cache
     assert all(_publish._TENSORS[name] is value for name, value in published.items())

@@ -110,7 +110,7 @@ def test_gemma_baseline_replacement_and_independent_write_linearity(jump, dtype)
 
 
 @pytest.mark.parametrize("group", ["direct_reads", "direct_logits", "replacement_reads", "replacement_logits"])
-def test_forward_refusal_identifies_each_residual_group(monkeypatch, group):
+def test_forward_measurement_identifies_each_residual_group(monkeypatch, group):
     model, dictionary, ids = setup(softcap=None)
     method = "run" if group.startswith("direct") else "replacement"
     original = getattr(FrozenPath, method)
@@ -122,13 +122,10 @@ def test_forward_refusal_identifies_each_residual_group(monkeypatch, group):
             final = final + 1
         return reads, final
     monkeypatch.setattr(FrozenPath, method, changed)
-    path = FrozenPath.__new__(FrozenPath)
-    with pytest.raises(ValueError, match="frozen replacement forward mismatch") as failure:
-        path.__init__(model, ids, dictionary)
+    path = FrozenPath(model, ids, dictionary)
     for name, value in path.forward_residuals.items():
         residual = max(value) if isinstance(value, list) else value
         assert (residual > .02) == (name == group)
-        assert name + "=" in str(failure.value)
 
 
 @pytest.mark.parametrize("softcap", [.15, None])

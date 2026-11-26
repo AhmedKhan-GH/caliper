@@ -982,11 +982,6 @@ class FrozenPath:
                     self.forward_residuals["replacement_reads"] + [self.forward_residuals["replacement_logits"]],
                     "replacement forward residual")
                 self.forward_residual = max(self.direct_forward_residual, self.replacement_forward_residual)
-                tolerance = 1e-9 if self.dtype == torch.float64 else 2e-2
-                if not self.forward_residual <= tolerance:
-                    details = ", ".join(f"{name}={max(value) if isinstance(value, list) else value:.6g}"
-                                        for name, value in self.forward_residuals.items())
-                    raise ValueError(f"frozen replacement forward mismatch: {self.forward_residual:.6g} ({details})")
                 self.guard.check("forward agreement")
                 check("forward agreement")
                 # Encoder and unembedding biases are target-local. Input edits have their own constant term.

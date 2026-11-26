@@ -184,7 +184,7 @@ def test_later_reference_label_batch_failure_preserves_publication(capacity_case
 
     monkeypatch.setattr(case.index, "labels", fail_later)
     error, message = {"index": (RuntimeError, "later index batch failed"),
-                      "deadline": (_trace.TraceTimeout, "20 second request budget"),
+                      "deadline": (_trace.TraceTimeout, "600 second safety timeout"),
                       "memory": (CleanStop, "feature label allocation")}[failure]
     with pytest.raises(error, match=message):
         graph = case.tracer.trace("A", **OPTIONS)

@@ -541,7 +541,7 @@ def test_real_trace_deadline_cancels_snapshot_comparison(published, monkeypatch)
         return raw(left) == raw(right)
     monkeypatch.setattr(_intervene, '_cpu_byte_equal', compare)
     monkeypatch.setattr(_intervene, '_SNAPSHOT_COMPARE_BYTES', 1024)
-    with pytest.raises(_trace.TraceTimeout, match='20 second request budget'):
+    with pytest.raises(_trace.TraceTimeout, match='600 second safety timeout'):
         _dictionary.model_identity(model, memory=IdentityGuard(), check=deadline)
     assert sizes == [1024] and runtime._model_snapshot._public is None
 

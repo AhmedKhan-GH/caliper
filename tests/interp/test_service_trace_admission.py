@@ -248,7 +248,7 @@ def test_first_request_admission_refusals_keep_publication_atomic(case, monkeypa
     def expire(owner, current):
         if current == stage:
             seen.append(current)
-            clock.now += 20
+            clock.now += _trace.TRACE_TIMEOUT_SECONDS
         deadline(owner, current)
 
     def stop(current):

@@ -180,7 +180,7 @@ def test_real_deadline_failure_is_bounded_and_next_trace_recovers(hosted_run, mo
 
     def expire(owner, stage):
         if stage == "dictionary admission":
-            clock.now += 20
+            clock.now += _trace.TRACE_TIMEOUT_SECONDS
             stages.append(stage)
         deadline(owner, stage)
 

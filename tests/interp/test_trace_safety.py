@@ -51,7 +51,7 @@ def test_forward_timeout_stops_at_first_layer_and_removes_hooks(monkeypatch, clo
     model, tokenizer, dictionary = resources()
     tracer = Tracer(model, tokenizer, dictionary)
     def expire(*args):
-        clock.now += 20
+        clock.now += _trace.TRACE_TIMEOUT_SECONDS
     first = model.layers[0].register_forward_hook(expire)
     second = model.layers[1].register_forward_pre_hook(lambda *a: pytest.fail("expired trace reached the next layer"))
     try:
@@ -72,7 +72,7 @@ def test_backward_timeout_precedes_edge_products_and_recovers(monkeypatch, clock
     grad = torch.autograd.grad
     def expire(*args, **kwargs):
         result = grad(*args, **kwargs)
-        clock.now += 20
+        clock.now += _trace.TRACE_TIMEOUT_SECONDS
         return result
     with monkeypatch.context() as patch:
         patch.setattr(torch.autograd, "grad", expire)
@@ -89,7 +89,7 @@ def test_indexless_labels_check_request_deadline(clock, stage):
     deadline = _trace._Deadline()
     def check(current):
         if current == stage:
-            clock.now += 20
+            clock.now += _trace.TRACE_TIMEOUT_SECONDS
         deadline(current)
     nodes = [{"kind": "feature", "layer": 0, "feature": 1, "label": "prior"}]
     with pytest.raises(_trace.TraceTimeout):
@@ -116,7 +116,7 @@ def test_deadline_stages_preserve_prior_publication_and_recover(monkeypatch, clo
     def check(self, current):
         seen.append(current)
         if current == stage:
-            clock.now += 20
+            clock.now += _trace.TRACE_TIMEOUT_SECONDS
         deadline(self, current)
     prompt = "A" if stage == "cached publication" else "B"
     with monkeypatch.context() as patch:
@@ -171,7 +171,7 @@ def test_service_timeout_preserves_queue_status_and_recovery(monkeypatch, tmp_pa
         deadline = _trace._Deadline.__call__
         def check(self, current):
             if current == stage:
-                clock.now += 20
+                clock.now += _trace.TRACE_TIMEOUT_SECONDS
             deadline(self, current)
         prompt = "A" if stage == "cached publication" else "B"
         with monkeypatch.context() as patch:
