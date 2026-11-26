@@ -111,6 +111,60 @@ def forward_hooks(model, *, exclude=(), references=None):
             tuple((name, id(module), entries(module, fields)) for name, module in model.named_modules()))
 
 
+class _ManagedForkHook:
+    """Admit one hosted watch hook until its managed restore completes."""
+
+    @classmethod
+    def capture(cls, owner):
+        from .. import _managed
+        managed = _managed.current()
+        if type(managed) is not _managed.ManagedRun or managed._first is None:
+            return None
+        hosted = managed.inference
+        if (hosted is None or hosted.replication is not owner or hosted.model is not owner.model
+                or hosted.interventions is not owner.interventions):
+            return None
+        result = cls()
+        result.managed, result.hosted, result.watch = managed, hosted, hosted.handle
+        result.service, result.model, result.package = owner.interventions, owner.model, managed._pkg
+        result.handle, result.key = managed._first, managed._first.id
+        result.registry, result.flags = owner.model._forward_pre_hooks, owner.model._forward_pre_hooks_with_kwargs
+        result.callback = result.registry.get(result.key)
+        result.function = _managed.ManagedRun._intervene_on_forward
+        result.code = result.function.__code__
+        result.retired = False
+        return result
+
+    def current(self, owner):
+        from .. import _managed
+        managed, hosted, handle = self.managed, self.hosted, self.handle
+        extras = tuple(ref() for ref in handle.extra_dict_ref)
+        if (owner is None or _managed.current() is not managed or managed.inference is not hosted
+                or managed._pkg is not self.package or self.package._CTL is not self.service._ctl
+                or hosted.managed is not managed or hosted.handle is not self.watch
+                or hosted.replication is not owner or hosted.model is not self.model
+                or hosted.interventions is not self.service or hosted.controls is not self.service._ctl
+                or not any(item is handle for item in self.watch._handles)
+                or handle.id != self.key or handle.hooks_dict_ref() is not self.registry
+                or self.model._forward_pre_hooks is not self.registry
+                or self.model._forward_pre_hooks_with_kwargs is not self.flags
+                or len(extras) != 1 or extras[0] is not self.flags or self.key in self.flags
+                or getattr(self.callback, '__self__', None) is not managed
+                or getattr(self.callback, '__func__', None) is not self.function
+                or self.function.__code__ is not self.code):
+            raise ValueError('published preparation hooks changed; close and prepare again')
+        if managed._first is handle:
+            if self.retired or hosted._inference_ready or self.registry.get(self.key) is not self.callback:
+                raise ValueError('published preparation hooks changed; close and prepare again')
+            return handle
+        # Successful restore clears pending state and removes this exact registration.
+        if (managed._first is not None or self.key in self.registry or managed._intervening
+                or managed._restored_interventions is not _managed.NONE):
+            raise ValueError('published preparation hooks changed; close and prepare again')
+        self.retired = True
+        return None
+
+
 class _PublishedHookSnapshot:
     """Bind user registrations and admit explicit Caliper hook lifecycles.
 
@@ -153,6 +207,7 @@ class _PublishedHookSnapshot:
         self.program_code, = (code for code in _programs._resolve.__code__.co_consts
                               if isinstance(code, type(_programs._resolve.__code__))
                               and code.co_name == '<lambda>')
+        self.managed_hook = _ManagedForkHook.capture(owner)
         self.references = []
         self.original = self._current(references=self.references)
 
@@ -215,6 +270,10 @@ class _PublishedHookSnapshot:
 
     def _current(self, *, references=None):
         handles = [handle for handle, owner in self._owned_handles() if self._permitted(handle, owner)]
+        if self.managed_hook is not None:
+            handle = self.managed_hook.current(self.owner())
+            if handle is not None:
+                handles.append(handle)
         return forward_hooks(self.model, exclude=handles, references=references)
 
     def check(self):
