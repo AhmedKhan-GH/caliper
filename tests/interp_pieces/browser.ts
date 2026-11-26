@@ -49,7 +49,7 @@ function compare(size: number, app: Uint8Array, aIds: Uint32Array, web: Uint8Arr
 }
 
 export function registerInterpPieceTests(test: typeof import('../../web/node_modules/@playwright/test/index').test, expect: Expect) {
-  for (const variant of ['', 'density', 'density_narrow', 'narrow_cells']) test(
+  for (const variant of ['', 'density', 'density_narrow', 'narrow_cells', 'connected_cells']) test(
     `interpretation pieces preserve native colors and picks in the browser${variant ? ` (${variant})` : ''}`, async ({ page }, info) => {
     test.skip(info.project.name === 'canvas2d', 'Piece draws require WebGPU.');
     const fixture = path.join(process.env.CALIPER_INTERP_PIECES_OUT ?? path.join(REPO, 'cmake-build-release/tests/interp_pieces/out'), variant);
@@ -67,11 +67,11 @@ export function registerInterpPieceTests(test: typeof import('../../web/node_mod
     const plan = JSON.parse(fs.readFileSync(path.join(fixture, 'plan.json'), 'utf8'));
     const picks = JSON.parse(fs.readFileSync(path.join(fixture, 'picks.json'), 'utf8'));
     const frames = fs.readFileSync(path.join(fixture, 'frames.bin')).toString('base64');
-    const rasterCount = variant === 'narrow_cells' ? 16 : 512;
+    const rasterCount = variant === 'narrow_cells' ? 16 : variant === 'connected_cells' ? 93 : 512;
     expect(plan.programs.map((p: { id: string }) => p.id).sort()).toEqual(
       variant ? ['graph_dense'] : ['examples_0', 'examples_1', 'graph', 'graph_selected', 'logits', 'recovery']);
     if (variant) {
-      expect(plan.size).toBe(variant === 'density' ? 512 : 256);
+      expect(plan.size).toBe(variant === 'density' || variant === 'connected_cells' ? 512 : 256);
       expect(picks.graph_dense).toHaveLength(rasterCount);
       expect(new Set(picks.graph_dense.map(([x, y]: number[]) => `${x},${y}`)).size).toBe(rasterCount);
     }
@@ -140,7 +140,8 @@ export function registerInterpPieceTests(test: typeof import('../../web/node_mod
             visible.set(webIds[p + 1], (visible.get(webIds[p + 1]) ?? 0) + 1);
           }
           expect([...visible.keys()].sort((a, b) => a - b)).toEqual(Array.from({ length: rasterCount }, (_, i) => i));
-          expect([...visible.values()].every((count) => count === 1), 'Each density marker occupies one pixel.').toBe(true);
+          const markers = [...visible.entries()].filter(([id]) => variant !== 'connected_cells' || id < 91);
+          expect(markers.every(([, count]) => count === 1), 'Each density marker occupies one pixel.').toBe(true);
         }
         for (const [x, y, item] of picks[pp.id]) {
           const p = 2 * (y * plan.size + x);

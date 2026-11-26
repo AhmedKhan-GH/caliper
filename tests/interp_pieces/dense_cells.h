@@ -188,6 +188,37 @@ TEST_CASE("Connected Cell Raster Coverage") {
         // The same producer resources support a second view size.
         const auto taller=dense_cells::render(metal,piece,data,1355,520,"connected-520");
         REQUIRE(taller.samples.size()==93);
+        // Export the connected fallback case for the existing browser parity checks.
+        {
+            mr::PieceDraw draw(*metal.backend,size);
+            set_resources(draw,piece,data);
+            Json params=Json::object(); params.set("selected_node",10);
+            REQUIRE(draw.draw(frame(piece,params)));
+            std::map<unsigned,std::pair<unsigned,unsigned>> samples;
+            std::map<unsigned,unsigned> counts;
+            for (unsigned y=0; y<size; ++y) for (unsigned x=0; x<size; ++x) {
+                const auto item=mr::identity_of(draw.ids,size,x,y);
+                if (item) { samples.emplace(unsigned(item-1),std::make_pair(x,y)); ++counts[unsigned(item-1)]; }
+            }
+            REQUIRE(samples.size()==93);
+            Json picks=Json::array();
+            bool relocated=false;
+            for (unsigned i=0; i<93; ++i) {
+                REQUIRE(samples.count(i)==1);
+                const auto [x,y]=samples.at(i);
+                if (i<91) {
+                    CHECK(counts.at(i)==1);
+                    const auto original=pixel(scalar<float>(nodes,i,0,48),scalar<float>(nodes,i,4,48));
+                    relocated=relocated || int(x)!=original.first || int(y)!=original.second;
+                }
+                Json row=Json::array(); row.push(x); row.push(y); row.push(std::uint64_t(i));
+                picks.push(row);
+            }
+            CHECK(relocated);
+            Export output(size,"connected_cells");
+            output.add("graph_dense",piece,data,draw,params,picks);
+            output.finish();
+        }
         // One isolated edge must reach the moved feature, not its old producer position.
         auto edge_piece=piece;
         edge_piece.draw->passes.pop_back();

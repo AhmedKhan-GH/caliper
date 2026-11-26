@@ -70,6 +70,13 @@ fn edge_vs(@builtin(instance_index) i: u32, @builtin(vertex_index) v: u32) -> Ed
     if (end) { p = b; }
     var out: EdgeOut;
     out.position = camera::offset_pixels(p, normal*side*0.5*width);
+    // Share a subpixel grid across rasterizers before additive overlap accumulates.
+    // A vertex moves at most 1/32 pixel per axis. The width formula stays above.
+    let screen = (out.position.xy/out.position.w*vec2<f32>(1.0,-1.0)+1.0)*
+                 caliper_view.viewport.zw*0.5+caliper_view.viewport.xy;
+    let sample = floor(screen*16.0+0.5)/16.0;
+    out.position = vec4<f32>(((sample-caliper_view.viewport.xy)/caliper_view.viewport.zw*2.0-1.0)*
+                            vec2<f32>(1.0,-1.0)*out.position.w,out.position.zw);
     var color = vec3<f32>(0.15,0.55,0.95);
     if (c.weight < 0.0) { color = vec3<f32>(0.95,0.25,0.12); }
     var alpha = 0.16+0.54*abs(c.normalized);
