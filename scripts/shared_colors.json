@@ -62,13 +62,13 @@
       {
         "id": 3,
         "name": "greys",
-        "live_wire_v3": false,
+        "live_wire_v3": true,
         "kind": "grey_ramp"
       },
       {
         "id": 4,
         "name": "cividis",
-        "live_wire_v3": false,
+        "live_wire_v3": true,
         "kind": "lut256",
         "source": "matplotlib",
         "rgba8": [
@@ -109,7 +109,7 @@
       {
         "id": 5,
         "name": "inferno",
-        "live_wire_v3": false,
+        "live_wire_v3": true,
         "kind": "lut256",
         "source": "matplotlib",
         "rgba8": [
@@ -150,7 +150,7 @@
       {
         "id": 6,
         "name": "plasma",
-        "live_wire_v3": false,
+        "live_wire_v3": true,
         "kind": "lut256",
         "source": "matplotlib",
         "rgba8": [
@@ -191,7 +191,7 @@
       {
         "id": 7,
         "name": "turbo",
-        "live_wire_v3": false,
+        "live_wire_v3": true,
         "kind": "lut256",
         "source": "matplotlib",
         "rgba8": [
@@ -232,7 +232,7 @@
       {
         "id": 8,
         "name": "twilight",
-        "live_wire_v3": false,
+        "live_wire_v3": true,
         "kind": "lut256",
         "source": "matplotlib",
         "rgba8": [
@@ -273,7 +273,7 @@
       {
         "id": 9,
         "name": "coolwarm",
-        "live_wire_v3": false,
+        "live_wire_v3": true,
         "kind": "lut256",
         "source": "matplotlib",
         "rgba8": [
@@ -314,7 +314,7 @@
       {
         "id": 10,
         "name": "batlow",
-        "live_wire_v3": false,
+        "live_wire_v3": true,
         "kind": "lut256",
         "source": "cmcrameri",
         "rgba8": [
@@ -355,7 +355,7 @@
       {
         "id": 11,
         "name": "vik",
-        "live_wire_v3": false,
+        "live_wire_v3": true,
         "kind": "lut256",
         "source": "cmcrameri",
         "rgba8": [
@@ -396,7 +396,7 @@
       {
         "id": 12,
         "name": "roma",
-        "live_wire_v3": false,
+        "live_wire_v3": true,
         "kind": "lut256",
         "source": "cmcrameri",
         "rgba8": [
@@ -437,7 +437,7 @@
       {
         "id": 13,
         "name": "oslo",
-        "live_wire_v3": false,
+        "live_wire_v3": true,
         "kind": "lut256",
         "source": "cmcrameri",
         "rgba8": [
@@ -478,7 +478,7 @@
       {
         "id": 14,
         "name": "lajolla",
-        "live_wire_v3": false,
+        "live_wire_v3": true,
         "kind": "lut256",
         "source": "cmcrameri",
         "rgba8": [
@@ -519,7 +519,7 @@
       {
         "id": 15,
         "name": "berlin",
-        "live_wire_v3": false,
+        "live_wire_v3": true,
         "kind": "lut256",
         "source": "cmcrameri",
         "rgba8": [

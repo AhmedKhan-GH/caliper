@@ -1,5 +1,6 @@
 #include "tensor_bridge.h"
 #include "gfx/colormap_coeffs.h"
+#include "gfx/colormap_tables.h"
 #include "renderer/host_renderer.h"
 #include <caliper/services/log_v1.h>
 
@@ -144,7 +145,10 @@ const uint32_t* colormap_lut(int32_t cm) {
         case CALIPER_CMAP_VIRIDIS: return luts().viridis;
         case CALIPER_CMAP_MAGMA:   return luts().magma;
         case CALIPER_CMAP_RDBU:    return luts().rdbu;
-        default:                   return nullptr;
+        default:
+            return (cm >= 3 && cm < caliper_gfx::cmap::kBuiltinColormaps)
+                ? caliper_gfx::cmap::builtin_lut(cm)
+                : nullptr;
     }
 }
 

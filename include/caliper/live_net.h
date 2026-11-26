@@ -219,10 +219,23 @@ typedef enum CaliperNetEncoding {
     CALIPER_NET_ENCODING_ARROW_IPC = 1    /* reserved for a future table kind; unused  */
 } CaliperNetEncoding;
 
-/* --- colormaps (values of CaliperColormap, caliper/embed.h) --------------- */
-#define CALIPER_NET_COLORMAP_VIRIDIS 0
-#define CALIPER_NET_COLORMAP_MAGMA   1
-#define CALIPER_NET_COLORMAP_RDBU    2
+/* --- colormaps (ids 0..15 of the shared colormap table) ------------------- */
+#define CALIPER_NET_COLORMAP_VIRIDIS  0
+#define CALIPER_NET_COLORMAP_MAGMA    1
+#define CALIPER_NET_COLORMAP_RDBU     2
+#define CALIPER_NET_COLORMAP_GREYS    3
+#define CALIPER_NET_COLORMAP_CIVIDIS  4
+#define CALIPER_NET_COLORMAP_INFERNO  5
+#define CALIPER_NET_COLORMAP_PLASMA   6
+#define CALIPER_NET_COLORMAP_TURBO    7
+#define CALIPER_NET_COLORMAP_TWILIGHT 8
+#define CALIPER_NET_COLORMAP_COOLWARM 9
+#define CALIPER_NET_COLORMAP_BATLOW   10
+#define CALIPER_NET_COLORMAP_VIK      11
+#define CALIPER_NET_COLORMAP_ROMA     12
+#define CALIPER_NET_COLORMAP_OSLO     13
+#define CALIPER_NET_COLORMAP_LAJOLLA  14
+#define CALIPER_NET_COLORMAP_BERLIN   15
 
 /* --- snapshot flags (metadata "flags"; values of CALIPER_LIVE_SNAP_*) ------ */
 #define CALIPER_NET_SNAP_AUTO_VMIN 0x1u   /* vmin = stats[0], else the fixed "vmin" */

@@ -4,6 +4,8 @@ import path from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 
+import { COLORMAPS } from '../src/protocol/messages.js';
+import { colormapLut } from '../src/render/colormap.js';
 import { FLAT_POINT, SPEC_COLORMAP_NAMES, isSpecColormapName, specColormapLut } from '../src/render/colormaps.gen.js';
 import { CATEGORICAL, HOUSE_PIGMENTS, TOKENS } from '../src/render/palette.gen.js';
 import { lut, preparePanel } from '../src/spec/prepare.js';
@@ -27,18 +29,22 @@ function encodeF32(values: number[]): string {
   return buf.toString('base64');
 }
 
-test('specColormapLut and prepare.lut expose all 16 colormaps matching shared_colors.json', () => {
+test('live wire COLORMAPS, colormapLut, specColormapLut, and prepare.lut expose all 16 colormaps matching shared_colors.json', () => {
   const wantNames = shared.colormaps.entries.map((e) => e.name);
   assert.deepEqual([...SPEC_COLORMAP_NAMES], wantNames);
+  assert.deepEqual([...COLORMAPS], wantNames);
   assert.equal(isSpecColormapName('cividis'), true);
   assert.equal(isSpecColormapName('berlin'), true);
   assert.equal(isSpecColormapName('jet'), false);
 
   for (const entry of shared.colormaps.entries) {
-    const a = specColormapLut(entry.name as (typeof SPEC_COLORMAP_NAMES)[number]);
+    const name = entry.name as (typeof SPEC_COLORMAP_NAMES)[number];
+    const a = specColormapLut(name);
     const b = lut(entry.name);
+    const c = colormapLut(name);
     assert.equal(a.length, 1024, entry.name);
     assert.deepEqual(b, a, entry.name);
+    assert.deepEqual(c, a, `live ${entry.name}`);
     if (entry.kind === 'lut256' && entry.rgba8) {
       for (let i = 0; i < 256; i++) {
         const packed: number = Number.parseInt(entry.rgba8[i], 16) >>> 0;

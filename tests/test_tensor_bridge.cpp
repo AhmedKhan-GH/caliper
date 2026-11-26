@@ -114,11 +114,14 @@ TEST_CASE("colormap_lut: valid ids resolve, out-of-range is null") {
     CHECK(colormap_lut(CALIPER_CMAP_MAGMA)   != nullptr);
     CHECK(colormap_lut(CALIPER_CMAP_RDBU)    != nullptr);
     CHECK(colormap_lut(-1) == nullptr);
-    CHECK(colormap_lut(3)  == nullptr);
-    // All 256 entries opaque (alpha == 255) in every LUT.
-    for (int cm = 0; cm <= 2; ++cm)
+    CHECK(colormap_lut(16) == nullptr);
+    // All 16 built-in colormaps resolve and every entry is opaque (alpha == 255).
+    for (int cm = 0; cm < 16; ++cm) {
+        const uint32_t* lut = colormap_lut(cm);
+        REQUIRE(lut != nullptr);
         for (int i = 0; i < 256; ++i)
-            CHECK(((colormap_lut(cm)[i] >> 24) & 0xff) == 0xffu);
+            CHECK(((lut[i] >> 24) & 0xff) == 0xffu);
+    }
 }
 
 TEST_CASE("map_f32_to_rgba8: index math incl. .5-rounding, clamp, NaN->0") {

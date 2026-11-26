@@ -1329,8 +1329,8 @@ TEST_CASE("live_views/gates: every refusal is specific; nothing is created") {
     refuse(snap("g", CALIPER_LIVE_KIND_HISTOGRAM, &rgb), "histogram wants a 1-D f32");
     {
         CaliperLiveSnapshot x = s;
-        x.colormap = 7;
-        refuse(x, "bad colormap 7");
+        x.colormap = 16;
+        refuse(x, "bad colormap 16");
     }
     std::vector<float> p3(12), aux3(3);
     CaliperTensor n3 = tensor(p3.data(), CALIPER_DT_F32, {4, 3}, CALIPER_DEV_CPU);

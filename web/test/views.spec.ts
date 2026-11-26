@@ -124,9 +124,9 @@ test.describe('heatmap', () => {
     await check(7);
   });
 
-  test('takes vmin and vmax from stats when the AUTO flags are set, with magma and rdbu', async ({ harness: page }) => {
+  test('takes vmin and vmax from stats when the AUTO flags are set, with live wire colormaps', async ({ harness: page }) => {
     await mount(page, 'h', 'heatmap');
-    for (const [name, cm] of [['magma', 1], ['rdbu', 2]] as const) {
+    for (const [name, cm] of [['magma', 1], ['rdbu', 2], ['greys', 3], ['cividis', 4], ['berlin', 15]] as const) {
       await push(page, 'h', { data: [-1, 0, 1, 3], shape: [1, 4], colormap: cm, flags: 3, stats: [-1, 3], vmin: 0, vmax: 1 });
       const d = await dbg(page, 'h');
       const { px } = await bodyPixels(page, '#h');

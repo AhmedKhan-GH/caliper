@@ -53,8 +53,10 @@ export function kindName(id: number): Kind | null {
   return null;
 }
 
-export type ColormapName = 'viridis' | 'magma' | 'rdbu';
-export const COLORMAPS: readonly ColormapName[] = ['viridis', 'magma', 'rdbu'];
+import { SPEC_COLORMAP_NAMES, type SpecColormapName } from '../render/colormaps.gen.js';
+
+export type ColormapName = SpecColormapName;
+export const COLORMAPS: readonly ColormapName[] = SPEC_COLORMAP_NAMES;
 
 export const DTYPE = { f32: 0, f16: 1, bf16: 2, i64: 3, i32: 4, u8: 5, u16: 6 } as const;
 export const DTYPE_SIZE: Record<number, number> = { 0: 4, 1: 2, 2: 2, 3: 8, 4: 4, 5: 1, 6: 2 };

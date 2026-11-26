@@ -219,7 +219,7 @@ def render_colormap_tables_h(data: dict[str, Any]) -> str:
         "// half to even. An entry packs r | g << 8 | b << 16 | 0xff << 24.",
         "#pragma once",
         "",
-        '#include "tensor_bridge.h"   // caliper_host::colormap_lut and CALIPER_CMAP_*',
+        '#include "gfx/colormap_ref.h"   // caliper_host::colormap_lut and CALIPER_CMAP_*',
         "",
         "#include <cstdint>",
         "",
@@ -407,6 +407,11 @@ def render_palette_gen_ts(data: dict[str, Any]) -> str:
 
 def render_colormaps_gen_ts(data: dict[str, Any]) -> str:
     entries = data["colormaps"]["entries"]
+    by_name = {e["name"]: e for e in entries}
+    v_coeffs = by_name["viridis"]["coefficients"]
+    m_coeffs = by_name["magma"]["coefficients"]
+    rdbu = by_name["rdbu"]["anchors"]
+    rdbu_flat = [x for row in rdbu for x in row]
     names = [e["name"] for e in entries]
     sampled = [e for e in entries if e["kind"] == "lut256"]
     untok = {u["name"]: u["rgba"] for u in data["theme"]["untokenized"]}
@@ -414,10 +419,66 @@ def render_colormaps_gen_ts(data: dict[str, Any]) -> str:
 
     lines = [
         f"// {GEN_BANNER}",
-        "// All 16 built-in spec colormaps (ids 0 to 15), matching src/host/gfx/colormap_tables.h.",
+        "// All 16 built-in colormaps (ids 0 to 15), matching src/host/gfx/colormap_tables.h.",
         "",
-        "import { colormapLut } from './colormap.js';",
         "import type { Rgb } from './palette.gen.js';",
+        "",
+        "const f = Math.fround;",
+        "",
+        "// Quantizes one channel the way pack_rgba does: clamp to [0, 1], then",
+        "// (uint32_t)(x * 255.0f + 0.5f) in float32.",
+        "function q(x: number): number {",
+        "  let v = f(x);",
+        "  if (v < 0) v = 0;",
+        "  if (v > 1) v = 1;",
+        "  return Math.trunc(f(f(v * 255) + 0.5));",
+        "}",
+        "",
+        "// viridis and magma: degree-6 polynomial fits to matplotlib's tables; c[k] is",
+        "// the RGB coefficient of t^k. Evaluated in float32 like gen_poly.",
+        "const VIRIDIS: readonly number[] = [",
+        *[f"  {row[0]!r}, {row[1]!r}, {row[2]!r}," for row in v_coeffs],
+        "];",
+        "const MAGMA: readonly number[] = [",
+        *[f"  {row[0]!r}, {row[1]!r}, {row[2]!r}," for row in m_coeffs],
+        "];",
+        "// RdBu: the ColorBrewer 11-class anchors, piecewise linear.",
+        "const RDBU: readonly number[] = [",
+        "  " + ", ".join(str(x) for x in rdbu_flat[:18]) + ",",
+        "  " + ", ".join(str(x) for x in rdbu_flat[18:]) + ",",
+        "];",
+        "",
+        "function polyLut(c: readonly number[]): Uint8Array {",
+        "  const out = new Uint8Array(256 * 4);",
+        "  for (let i = 0; i < 256; i++) {",
+        "    const t = f(i / 255);",
+        "    let r = f(c[0]), g = f(c[1]), b = f(c[2]), tp = f(1);",
+        "    for (let k = 1; k < 7; k++) {",
+        "      tp = f(tp * t);",
+        "      r = f(r + f(f(c[3 * k]) * tp));",
+        "      g = f(g + f(f(c[3 * k + 1]) * tp));",
+        "      b = f(b + f(f(c[3 * k + 2]) * tp));",
+        "    }",
+        "    out.set([q(r), q(g), q(b), 255], i * 4);",
+        "  }",
+        "  return out;",
+        "}",
+        "",
+        "function rdbuLut(): Uint8Array {",
+        "  const out = new Uint8Array(256 * 4);",
+        "  for (let i = 0; i < 256; i++) {",
+        "    const p = f(f(i / 255) * 10);",
+        "    let lo = Math.trunc(p);",
+        "    if (lo > 9) lo = 9;",
+        "    const fr = f(p - lo);",
+        "    const ch = (k: number) => {",
+        "      const a = RDBU[lo * 3 + k], b = RDBU[(lo + 1) * 3 + k];",
+        "      return f(f(a + f(f(b - a) * fr)) / 255);",
+        "    };",
+        "    out.set([q(ch(0)), q(ch(1)), q(ch(2)), 255], i * 4);",
+        "  }",
+        "  return out;",
+        "}",
         "",
         "/** Default colour of points without per-item colour (sternbild::col::flat_point). */",
         f"export const FLAT_POINT: Rgb = [{flat[0]}, {flat[1]}, {flat[2]}];",
@@ -466,12 +527,17 @@ def render_colormaps_gen_ts(data: dict[str, Any]) -> str:
         "  return out;",
         "}",
         "",
-        "/** The 256-entry RGBA table of any of the 16 built-in spec colormaps. */",
+        "/** The 256-entry RGBA table of any of the 16 built-in colormaps. */",
         "export function specColormapLut(name: SpecColormapName): Uint8Array {",
-        "  if (name === 'viridis' || name === 'magma' || name === 'rdbu') return colormapLut(name);",
         "  let table = specCache.get(name);",
         "  if (table) return table;",
-        "  if (name === 'greys') {",
+        "  if (name === 'viridis') {",
+        "    table = polyLut(VIRIDIS);",
+        "  } else if (name === 'magma') {",
+        "    table = polyLut(MAGMA);",
+        "  } else if (name === 'rdbu') {",
+        "    table = rdbuLut();",
+        "  } else if (name === 'greys') {",
         "    table = new Uint8Array(256 * 4);",
         "    for (let i = 0; i < 256; i++) table.set([i, i, i, 255], i * 4);",
         "  } else {",
@@ -480,30 +546,6 @@ def render_colormaps_gen_ts(data: dict[str, Any]) -> str:
         "  specCache.set(name, table);",
         "  return table;",
         "}",
-    ]
-    return "\n".join(lines) + "\n"
-
-
-def render_colormap_ts_block(data: dict[str, Any]) -> str:
-    by_name = {e["name"]: e for e in data["colormaps"]["entries"]}
-    v_coeffs = by_name["viridis"]["coefficients"]
-    m_coeffs = by_name["magma"]["coefficients"]
-    rdbu = by_name["rdbu"]["anchors"]
-    rdbu_flat = [x for row in rdbu for x in row]
-
-    lines = [
-        f"// {GEN_BANNER}",
-        "const VIRIDIS: readonly number[] = [",
-        *[f"  {row[0]!r}, {row[1]!r}, {row[2]!r}," for row in v_coeffs],
-        "];",
-        "const MAGMA: readonly number[] = [",
-        *[f"  {row[0]!r}, {row[1]!r}, {row[2]!r}," for row in m_coeffs],
-        "];",
-        "// RdBu: the ColorBrewer 11-class anchors, piecewise linear.",
-        "const RDBU: readonly number[] = [",
-        "  " + ", ".join(str(x) for x in rdbu_flat[:18]) + ",",
-        "  " + ", ".join(str(x) for x in rdbu_flat[18:]) + ",",
-        "];",
     ]
     return "\n".join(lines) + "\n"
 
@@ -563,10 +605,13 @@ def render_python_colors_gen(data: dict[str, Any]) -> str:
         "",
         "COLORMAP_IDS: dict[str, int] = {name: idx for idx, name in enumerate(COLORMAP_NAMES)}",
         "",
-        "# Live wire protocol v3 supports ids 0 to 2 (include/caliper/live_net.h).",
-        "LIVE_COLORMAPS: dict[str, int] = {"
-        + ", ".join(f"{k!r}: {v}" for k, v in live.items())
-        + "}",
+        "# Live wire protocol v3 supports all 16 shared colormaps (ids 0 to 15, include/caliper/live_net.h).",
+        "LIVE_COLORMAPS: dict[str, int] = {",
+        *[
+            "    " + ", ".join(f"{k!r}: {v}" for k, v in list(live.items())[i:i + 4]) + ","
+            for i in range(0, len(live), 4)
+        ],
+        "}",
         "",
         "# 256-entry packed RGBA8 LUTs (r | g << 8 | b << 16 | 0xff << 24) for all 16 colormaps.",
         "COLORMAP_LUTS: dict[str, tuple[int, ...]] = {",
@@ -625,12 +670,6 @@ FULL_TARGETS = (
 )
 
 BLOCK_TARGETS = (
-    (
-        "web/src/render/colormap.ts",
-        "// BEGIN generated colormap tables",
-        "// END generated colormap tables",
-        render_colormap_ts_block,
-    ),
     (
         "web/src/page/index.html",
         "    /* BEGIN generated theme tokens */",

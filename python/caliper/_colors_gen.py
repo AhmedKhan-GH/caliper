@@ -8,8 +8,13 @@ COLORMAP_NAMES: tuple[str, ...] = (
 
 COLORMAP_IDS: dict[str, int] = {name: idx for idx, name in enumerate(COLORMAP_NAMES)}
 
-# Live wire protocol v3 supports ids 0 to 2 (include/caliper/live_net.h).
-LIVE_COLORMAPS: dict[str, int] = {'viridis': 0, 'magma': 1, 'rdbu': 2}
+# Live wire protocol v3 supports all 16 shared colormaps (ids 0 to 15, include/caliper/live_net.h).
+LIVE_COLORMAPS: dict[str, int] = {
+    'viridis': 0, 'magma': 1, 'rdbu': 2, 'greys': 3,
+    'cividis': 4, 'inferno': 5, 'plasma': 6, 'turbo': 7,
+    'twilight': 8, 'coolwarm': 9, 'batlow': 10, 'vik': 11,
+    'roma': 12, 'oslo': 13, 'lajolla': 14, 'berlin': 15,
+}
 
 # 256-entry packed RGBA8 LUTs (r | g << 8 | b << 16 | 0xff << 24) for all 16 colormaps.
 COLORMAP_LUTS: dict[str, tuple[int, ...]] = {

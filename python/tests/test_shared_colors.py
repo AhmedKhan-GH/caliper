@@ -19,19 +19,21 @@ EXPECTED_NAMES = (
 )
 
 
-def test_colormap_names_ids_and_live_subset():
+def test_colormap_names_ids_and_live_set():
     assert _colors_gen.COLORMAP_NAMES == EXPECTED_NAMES
     assert _colors_gen.COLORMAP_IDS == {n: i for i, n in enumerate(EXPECTED_NAMES)}
-    assert _colors_gen.LIVE_COLORMAPS == {"viridis": 0, "magma": 1, "rdbu": 2}
+    assert _colors_gen.LIVE_COLORMAPS == _colors_gen.COLORMAP_IDS
     assert _convert.CMAPS == _colors_gen.LIVE_COLORMAPS
     for name, idx in _colors_gen.LIVE_COLORMAPS.items():
         assert _convert.cmap_index(name) == idx
         assert _convert.cmap_index(name.upper()) == idx
         assert _convert.cmap_index(idx) == idx
     with pytest.raises(ValueError):
-        _convert.cmap_index("cividis")
+        _convert.cmap_index("jet")
     with pytest.raises(ValueError):
-        _convert.cmap_index(3)
+        _convert.cmap_index(16)
+    with pytest.raises(ValueError):
+        _convert.cmap_index(-1)
 
 
 def test_colormap_luts_structure_and_samples():
