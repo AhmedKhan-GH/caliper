@@ -499,7 +499,6 @@ class PublishedCases:
                                       'shape': list(probabilities.shape), 'rows': ['baseline', 'case'],
                                       'storage_dtype': 'float32',
                                       'native_values_preserved': pair.dtype in (torch.bfloat16, torch.float16, torch.float32)}
-                result['compute_export_seconds'] = time.perf_counter() - started
                 metadata = self.directory / f'cell{cell}-{sequence}.json'
                 evidence.append(metadata)
                 self._write_json(metadata.name, result)

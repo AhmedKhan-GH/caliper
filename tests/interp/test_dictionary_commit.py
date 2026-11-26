@@ -186,7 +186,8 @@ def test_final_scan_follows_callbacks_and_commits_unchanged(transaction, monkeyp
     assert len(case.service.specifications()) == (5 if case.runtime is not None else 3)
     if case.runtime is not None:
         assert case.runtime.last_result == result
-        assert result['action_seconds'] >= result['compute_export_seconds']
+        assert result['action_seconds'] >= 0
+        assert 'compute_export_seconds' not in result
 
 
 @pytest.mark.parametrize('publication', [False, True])
