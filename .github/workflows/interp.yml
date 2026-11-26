@@ -117,6 +117,7 @@ jobs:
               sys.executable, "-m", "pytest", "-q", "tests/interp",
               "tests/demos/test_circuit_trace.py", "tests/demos/test_gemma_acceptance.py",
               "tests/demos/test_circuit_completion.py", "tests/demos/test_circuit_visible.py",
+              "tests/demos/test_circuit_capture_selection.py",
               *published,
               "tests/demos/test_circuit_visual.py", "python/tests/test_controls_budget.py",
               "python/tests/test_controls_step_admission.py", "python/tests/test_wire_standalone.py",
