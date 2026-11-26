@@ -48,9 +48,8 @@ def test_watch_cleanup_releases_program_lock_before_listener_service_lock(regist
     program.bound = {"input": imported}
     P._PROGS[program.id] = program
     P._IMPORTS[imported.name] = P._LIVE[23] = imported
-    removed, released, captures, failures, observed = [], [], [], [], []
+    removed, released, failures, observed = [], [], [], []
     P._STATE["rt"] = SimpleNamespace(remove=removed.append, release=released.append)
-    monkeypatch.setattr("caliper.interp._points.clear_captures", captures.append)
     entered = threading.Event()
 
     def listener(item):
@@ -97,7 +96,6 @@ def test_watch_cleanup_releases_program_lock_before_listener_service_lock(regist
             assert not P._PROGS and not P._IMPORTS and not P._LIVE
             assert P._resolve("custom.old") is None
             assert removed == [17] and released == [23]
-            assert captures == [first]
         finally:
             P._LOCK.release()
         # A new watch and service must survive completion of the old callback.

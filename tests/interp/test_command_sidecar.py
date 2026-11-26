@@ -118,7 +118,7 @@ def test_offline_command_sidecar(actual, tmp_path, monkeypatch):
             assert not reply.get("isError"), reply
             return reply["structuredContent"]["result"]
 
-        assert complete("feature.dictionary", {})["metadata"]["layers"] == 4
+        assert complete("feature.dictionary", {})["metadata"]["layers"] == 2
         feature = int(actual.index.counts[0].argmax())
         assert complete("feature.show", {"layer": 0, "feature": feature})["feature"] == feature
         examples = complete("feature.examples", {"layer": 0, "feature": feature})

@@ -505,18 +505,28 @@ def test_close_leaves_the_controls_to_a_pump_thread_that_still_runs(monkeypatch)
     thread that did not end within PUMP_END_S flushes them itself, and two flushes at once
     would hand over the same stored messages twice."""
     import types
+    import weakref
     from caliper import _net, _net_native
     monkeypatch.setattr(_net, "_unroute", lambda server: None)
+    monkeypatch.setattr(_net_native, "_SERVERS", weakref.WeakSet())
     flushes = []
+
+    class Server:
+        def __init__(self, **attributes):
+            self.__dict__.update(attributes)
 
     def closed(alive):
         ns = types.SimpleNamespace
         ctl = ns(flush=lambda final=False: flushes.append((alive, final)))
-        srv = ns(closed=False, _stream_file=None, transport=ns(n_attached=1),
-                 ring=ns(flush=lambda timeout: 0, close=lambda: None),
-                 producer=ns(busy=lambda: False, controls=ctl, _event_q=None),
-                 nio=ns(wake=lambda: None, close=lambda: None),
-                 _thread=ns(join=lambda timeout=None: None, is_alive=lambda: alive))
+        srv = Server(closed=False, _stream_file=None, transport=ns(n_attached=1),
+                     ring=ns(flush=lambda timeout: 0, close=lambda: None),
+                     producer=ns(busy=lambda: False, controls=ctl, _event_q=None),
+                     nio=ns(wake=lambda: None, close=lambda: None),
+                     _thread=ns(join=lambda timeout=None: None, is_alive=lambda: alive))
+        _net_native._SERVERS.add(srv)
+        assert srv in _net_native._SERVERS
+        _net_native.NativeServer.close(srv)
+        assert srv not in _net_native._SERVERS
         _net_native.NativeServer.close(srv)
         return srv
 
@@ -540,17 +550,13 @@ def test_step_stays_cheap_with_a_viewer(server, ctl):
 
 
 def test_interpretation_capability_and_real_service_round_trip(mode, ctl, make_server, tmp_path, monkeypatch):
-    from tests.interp.test_dictionary import write_fixture
-    from tests.interp.fixture import TinyTokenizer
-    from caliper.interp import load_dictionary
+    from caliper.interp._backend import make_tiny_backend
     from caliper.interp._index import FeatureIndex, build_index
     from caliper.interp._service import register_service, unregister_service
-    import caliper.interp
 
-    model, _ = write_fixture(tmp_path)
-    tokenizer = TinyTokenizer()
-    dictionary = load_dictionary(tmp_path, model=model)
-    build_index(tmp_path, [("fixture", [65, 66, 67] * 16)], model=model, tokenizer=tokenizer,
+    backend = make_tiny_backend()
+    model, tokenizer, dictionary = backend.model, backend.tokenizer, backend.dictionary
+    build_index(tmp_path, [("fixture", [2, 37, 38, 39] * 16)], model=model, tokenizer=tokenizer,
                 dictionary=dictionary, provenance={"partition": "fixture"}, context_length=17)
     index = FeatureIndex(tmp_path, model=model, tokenizer=tokenizer, dictionary=dictionary)
     feature = int(index.counts[0].argmax())
@@ -571,11 +577,20 @@ def test_interpretation_capability_and_real_service_round_trip(mode, ctl, make_s
                 reply = await viewer.expect(w.ControlReply, lambda x: x.request_id == rid)
                 if method != "trace.status":
                     assert reply.status == "queued"
-                    # The socket thread has returned. Execute only at a run boundary.
                     ctl.step(rid)
                     reply = await viewer.expect(w.ControlReply, lambda x: x.request_id == rid and x.status != "queued")
                 assert reply.status == "ok", reply.error
                 assert reply.result
+            for rid, method, params in (
+                (10, "trace.validate", {}),
+                (11, "patch.sweep", {"clean_prompt": "AB", "corrupted_prompt": "AC",
+                                     "metric": {"positive_token": 1, "negative_token": 2}}),
+            ):
+                await viewer.send(w.Control(rid, "interpret", interpretation={"version": 1, "method": method, "params": params}))
+                assert (await viewer.expect(w.ControlReply, lambda x: x.request_id == rid)).status == "queued"
+                ctl.step(rid)
+                refused = await viewer.expect(w.ControlReply, lambda x: x.request_id == rid and x.status != "queued")
+                assert refused.status == "error" and refused.error["code"] == "interpret.unsupported"
         async with Viewer(server) as old:
             await old.send(w.Control(20, "interpret", interpretation={"version": 1, "method": "trace.status", "params": {}}))
             reply = await old.expect(w.ControlReply, lambda x: x.request_id == 20)
@@ -631,12 +646,10 @@ def test_legacy_choice_controls_keep_short_text(mode, ctl, make_server):
 
 def test_interpretation_ack_precedes_early_completion(mode, ctl, make_server, tmp_path, monkeypatch):
     from caliper import _net_controls
-    from caliper.interp import load_dictionary
+    from caliper.interp._backend import make_tiny_backend
     from caliper.interp._service import register_service, unregister_service
-    from tests.interp.test_dictionary import write_fixture
 
-    model, _ = write_fixture(tmp_path)
-    dictionary = load_dictionary(tmp_path, model=model)
+    dictionary = make_tiny_backend().dictionary
     acknowledged = threading.Event()
     sent = []
     original_send = _net_controls.ControlsPort._send

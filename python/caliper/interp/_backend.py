@@ -967,7 +967,7 @@ class Backend:
                 max_nodes=max_nodes, max_edges=max_edges, trace_id=trace_id, guard=active_guard,
             )
 
-        with suspend(self.model), internal_forward(), autorelease_scope(self.device):
+        with internal_forward(), autorelease_scope(self.device):
             if active_guard is not None:
                 active_guard.check("attribute start")
             ct_graph = attribute(
@@ -1360,7 +1360,17 @@ def load_backend(
     if str(model_ref) == "tiny-lm":
         dev = torch.device(device) if device is not None else torch.device("cpu")
         dt = dtype if dtype is not None else torch.float32
-        return make_tiny_backend(device=dev, dtype=dt, guard=guard)
+        backend = make_tiny_backend(device=dev, dtype=dt, guard=guard)
+        if dictionary_ref is not None:
+            p = Path(str(dictionary_ref))
+            if p.is_dir() and (p / "layer_0.safetensors").is_file():
+                tc_set = _load_local_transcoder_set(p, int(backend.model.cfg.n_layers), device=dev, dtype=dt)
+                backend.model._configure_replacement_model(tc_set)
+                backend.dictionary = DictionaryView(
+                    tc_set, kind="transcoder", n_model_layers=int(backend.model.cfg.n_layers),
+                    dictionary_id="tiny-lm", device=dev,
+                )
+        return backend
 
     dev = torch.device(device) if device is not None else default_device()
     dt = dtype if dtype is not None else (torch.bfloat16 if dev.type in ("mps", "cuda") else torch.float32)
@@ -1454,6 +1464,7 @@ def load_backend(
                 fold_ln=False,
                 center_writing_weights=False,
                 center_unembed=False,
+                fold_value_biases=False,
                 device=dev,
                 dtype=dt,
             )
@@ -1464,6 +1475,7 @@ def load_backend(
                 fold_ln=False,
                 center_writing_weights=False,
                 center_unembed=False,
+                fold_value_biases=False,
                 device=dev,
                 dtype=dt,
             )

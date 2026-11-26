@@ -352,3 +352,123 @@ class Graph:
                 next_edge_offset=None,
             )
         return json.dumps(result, allow_nan=False, separators=(",", ":"))
+
+
+class Tracer:
+    """Cached circuit attribution and atomic tensor publication over ``Backend``."""
+
+    def __init__(self, model, tokenizer, dictionary=None, *, backend=None, controls=None, index=None, guard=None):
+        from collections import OrderedDict
+        from .. import _controls
+        from ._backend import Backend, DictionaryView
+
+        self.model = model
+        self.tokenizer = tokenizer
+        if backend is None:
+            view = dictionary
+            if dictionary is not None and not isinstance(dictionary, DictionaryView):
+                kind = "transcoder" if hasattr(dictionary, "transcoders") else "sae"
+                n_layers = int(getattr(getattr(model, "cfg", None), "n_layers", 1))
+                dev = next(model.parameters()).device
+                view = DictionaryView(dictionary, kind=kind, n_model_layers=n_layers, dictionary_id="default", device=dev)
+            param = next(model.parameters(), None)
+            dev = param.device if param is not None else torch.device("cpu")
+            dt = param.dtype if param is not None and param.is_floating_point() else torch.float32
+            backend = Backend(model, tokenizer, view, device=dev, dtype=dt, guard=guard)
+        self.backend = backend
+        self.dictionary = dictionary if dictionary is not None else backend.dictionary
+        self.controls = _controls.CONTROLS if controls is None else controls
+        self.guard = guard
+        self.index = None
+        self._cache: OrderedDict = OrderedDict()
+        self._seq = 0
+        if index is not None:
+            self.bind_index(index)
+
+    def bind_index(self, index) -> None:
+        if index is None:
+            self.index = None
+            return
+        for field_name in ("model", "tokenizer", "dictionary"):
+            if getattr(index, field_name, None) is not getattr(self, field_name):
+                raise ValueError(f"trace index must share the same {field_name}")
+        self.index = index
+
+    def _active_signature(self) -> str:
+        with self.controls.lock:
+            active = [
+                iv.applied_spec if iv.applied_spec is not None else iv.spec
+                for iv in self.controls._ivs.values()
+                if iv.hook is not None and not getattr(iv.hook, "removed", False)
+            ]
+        return json.dumps(active, sort_keys=True, separators=(",", ":"))
+
+    def _trace(self, prompt: str, **kwargs) -> Graph:
+        return self.backend.attribute_and_prune(prompt, **kwargs)
+
+    def trace(
+        self,
+        prompt: str,
+        *,
+        max_targets: int = 5000,
+        max_nodes: int = LARGE_NODE_CAP,
+        max_edges: int = LARGE_EDGE_CAP,
+        max_n_logits: int = 10,
+        desired_logit_prob: float = 0.95,
+        node_threshold: float = 0.8,
+        edge_threshold: float = 0.98,
+        batch_size: int | None = None,
+        update_interval: int = 8,
+    ) -> Graph:
+        from ._feature_labels import label_graph_nodes
+        from ._publish import _publication_scope
+
+        with _publication_scope(self.model):
+            sig = self._active_signature()
+            label_id = getattr(self.index, "label_identity", None) if self.index is not None else None
+            cache_key = (
+                prompt,
+                sig,
+                max_targets,
+                max_nodes,
+                max_edges,
+                max_n_logits,
+                float(desired_logit_prob),
+                float(node_threshold),
+                float(edge_threshold),
+                batch_size,
+                update_interval,
+                label_id,
+            )
+            cached = self._cache.get(cache_key)
+            if cached is not None:
+                self._cache.move_to_end(cache_key)
+                if self.guard is not None:
+                    self.guard.check("cached publication")
+                return cached.publish()
+
+            self._seq += 1
+            trace_id = f"trace-{self._seq}"
+            graph = self._trace(
+                prompt,
+                max_feature_nodes=max_targets,
+                max_nodes=max_nodes,
+                max_edges=max_edges,
+                max_n_logits=max_n_logits,
+                desired_logit_prob=desired_logit_prob,
+                node_threshold=node_threshold,
+                edge_threshold=edge_threshold,
+                batch_size=batch_size,
+                update_interval=update_interval,
+                trace_id=trace_id,
+                index=None,
+                guard=self.guard,
+            )
+            if self.index is not None:
+                graph.nodes = label_graph_nodes(graph.nodes, self.index)
+            graph.publish()
+            self._cache[cache_key] = graph
+            while len(self._cache) > 16:
+                self._cache.popitem(last=False)
+            return graph
+

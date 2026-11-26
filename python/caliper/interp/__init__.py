@@ -1,6 +1,6 @@
 """Live interpretability publication and attribution bridges for Caliper LIB."""
 
-__all__ = ["publish", "Graph"]
+__all__ = ["publish", "Graph", "Tracer", "load_backend", "make_tiny_backend", "make_tiny_sae_backend"]
 
 
 def publish(name, tensor):
@@ -10,7 +10,14 @@ def publish(name, tensor):
 
 
 def __getattr__(name):
-    if name == "Graph":
-        from ._graph import Graph
-        return Graph
+    if name in ("Graph", "Tracer"):
+        from ._graph import Graph, Tracer
+        return {"Graph": Graph, "Tracer": Tracer}[name]
+    if name in ("load_backend", "make_tiny_backend", "make_tiny_sae_backend"):
+        from ._backend import load_backend, make_tiny_backend, make_tiny_sae_backend
+        return {
+            "load_backend": load_backend,
+            "make_tiny_backend": make_tiny_backend,
+            "make_tiny_sae_backend": make_tiny_sae_backend,
+        }[name]
     raise AttributeError(name)

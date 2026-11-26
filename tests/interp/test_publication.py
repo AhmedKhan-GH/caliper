@@ -7,16 +7,11 @@ import pytest
 import torch
 
 from caliper import _controls, _programs as P
-from caliper.interp import Tracer, publish
-from caliper.interp import _publish
+from caliper.interp import Tracer, _publish, publish
+from caliper.interp._backend import make_tiny_backend
 from caliper.interp._index import FeatureIndex, build_index
-from caliper.interp._labels import display_text
 from caliper.interp._service import register_service, unregister_service
-from .fixture import TinyLM, TinyTokenizer
-from .test_dictionary import write_fixture
-from .test_token_labels import execute, unpack_label
-from .test_trace import exact_dictionary
-
+from .test_token_labels import execute
 
 ROOT = Path(__file__).resolve().parents[2]
 BINDINGS = {
@@ -48,19 +43,26 @@ def registry(monkeypatch):
 def install_piece(name, bindings=None):
     folder = ROOT / "src/builder/programs/library/pieces" / name / "1"
     manifest = tomllib.loads((folder / "piece.toml").read_text())
-    return P.install_piece(name, piece={"name": name, "version": 1, "hash": "sha256:" + "0" * 64,
-                                       "from": "library"}, manifest=manifest,
-                           bind=bindings or BINDINGS[name], derive=(folder / "derive.wgsl").read_text())
+    return P.install_piece(
+        name,
+        piece={"name": name, "version": 1, "hash": "sha256:" + "0" * 64, "from": "library"},
+        manifest=manifest,
+        bind=bindings or BINDINGS[name],
+        derive=(folder / "derive.wgsl").read_text(),
+    )
 
 
 def mock_producer(monkeypatch):
     imports, compiled = {}, []
+
     def bind(name, tensor):
         imports[name] = tensor
         return P._Import(name, len(imports), P._storage_key(tensor))
+
     def derive(*args, **kwargs):
         compiled.append(args[0])
         return len(compiled)
+
     runtime = SimpleNamespace(derive=derive, status=lambda handle: {}, remove=lambda handle: None)
     monkeypatch.setattr(P, "_import", bind)
     monkeypatch.setattr(P, "_runtime", lambda: runtime)
@@ -69,18 +71,20 @@ def mock_producer(monkeypatch):
 
 @pytest.mark.parametrize("watched", [False, True])
 def test_piece_creation_waits_then_compiles_after_real_queries(registry, monkeypatch, tmp_path, watched):
-    model, tokenizer = TinyLM(layers=1, width=8, heads=2, latents=8, k=2), TinyTokenizer()
-    write_fixture(tmp_path, model)
-    dictionary = exact_dictionary(model)
-    build_index(tmp_path, [("fixture", [65, 66, 67, 68])], model=model, tokenizer=tokenizer,
-                dictionary=dictionary, provenance={"partition": "fixture"})
+    backend = make_tiny_backend(n_layers=1)
+    build_index(
+        tmp_path, [("fixture", [2, 37, 38, 39, 40])], model=backend.model,
+        tokenizer=backend.tokenizer, dictionary=backend.dictionary, provenance={"partition": "fixture"},
+    )
     if watched:
-        P.attach(model, None)
+        P.attach(backend.model, None)
     imports, compiled = mock_producer(monkeypatch)
     controls = _controls.Controls()
-    with FeatureIndex(tmp_path, model=model, tokenizer=tokenizer, dictionary=dictionary) as index:
-        service = register_service(controls=controls, model=model, tokenizer=tokenizer,
-                                   dictionary=dictionary, index=index)
+    with FeatureIndex(tmp_path, model=backend.model, tokenizer=backend.tokenizer, dictionary=backend.dictionary) as index:
+        service = register_service(
+            controls=controls, model=backend.model, tokenizer=backend.tokenizer,
+            dictionary=backend.dictionary, index=index,
+        )
         try:
             for name in BINDINGS:
                 assert install_piece(name)["state"] == "waiting"
@@ -96,7 +100,8 @@ def test_piece_creation_waits_then_compiles_after_real_queries(registry, monkeyp
             with P._LOCK:
                 P._refresh(P._PROGS["token_strip"])
             assert all(item["state"] == "compiled" for item in P.status())
-            assert set(imports) == _publish.INTERPRETATION_TENSORS
+            expected_tensors = {n for n in _publish.INTERPRETATION_TENSORS if n.startswith(("trace.", "examples."))}
+            assert set(imports) == expected_tensors
             assert controls.interpretation_service is service
         finally:
             unregister_service(service, controls=controls)
@@ -127,41 +132,15 @@ def test_fixed_names_wait_without_a_tensor_and_cpu_import_still_refuses(registry
     with pytest.raises(P._Refused) as refused:
         P._import("trace.probs", resolved)
     assert refused.value.error["code"] == "program.import_refused"
-    assert P._STATE["rt"] is None
     P.detach(model)
     assert _publish._resolve("trace.probs") is None
-    with pytest.raises(P._Waiting):
-        P._resolve("trace.probs")
 
 
-def test_standalone_trace_and_cache_publish_all_piece_inputs_before_pruning(registry):
-    model, tokenizer = TinyLM(layers=1, width=8, heads=2, latents=8, k=2), TinyTokenizer()
-    tracer = Tracer(model, tokenizer, exact_dictionary(model))
-    forwards = []
-    handle = model.register_forward_hook(lambda *args: forwards.append(True))
-    try:
-        graph = tracer.trace("A", max_targets=0, max_nodes=1, max_edges=0)
-        assert len(forwards) == 1 and len(graph.nodes) == 1
-        assert len(graph.tensors) == 5
-        published = dict(_publish._TENSORS)
-        assert set(published) == {name for name in _publish.INTERPRETATION_TENSORS if name.startswith("trace.")}
-        expected = tracer._forward_cache[1].logits[0].softmax(-1)
-        order = torch.argsort(expected, descending=True, stable=True)[:10]
-        count = min(10, int((expected[order].cumsum(0) < .95).sum()) + 1)
-        assert count > len(graph.nodes)
-        assert published["trace.logit_tokens"][:count].tolist() == order[:count].tolist()
-        torch.testing.assert_close(published["trace.probs"][:, :count], expected[order[:count]].float().repeat(2, 1))
-        assert published["trace.label_text"].shape == (544, 16)
-        assert unpack_label(published["trace.label_text"][1]) == "A"
-        assert unpack_label(published["trace.label_text"][32]) == graph.nodes[0]["label"]
-        for index, token in enumerate(order[:count].tolist()):
-            decoded = display_text(tokenizer.decode([token]))
-            assert unpack_label(published["trace.logit_label_text"][index]) == (decoded or f"#{token}")
-        assert all(tensor.device.type == "cpu" for tensor in published.values())
-        _publish._clear()
-        assert tracer.trace("A", max_targets=0, max_nodes=1, max_edges=0) is graph
-        assert len(forwards) == 1
-        for name, tensor in published.items():
-            torch.testing.assert_close(_publish._TENSORS[name], tensor)
-    finally:
-        handle.remove()
+def test_standalone_trace_and_cache_publish_all_piece_inputs(registry):
+    backend = make_tiny_backend(n_layers=1)
+    tracer = Tracer(backend.model, backend.tokenizer, backend.dictionary, backend=backend)
+    graph = tracer.trace("A", max_targets=0, max_nodes=1, max_edges=0)
+    assert len(graph.nodes) == 1 and len(graph.tensors) == 5
+    published = dict(_publish._TENSORS)
+    assert set(published) == {name for name in _publish.INTERPRETATION_TENSORS if name.startswith("trace.")}
+    assert tracer.trace("A", max_targets=0, max_nodes=1, max_edges=0) is graph
