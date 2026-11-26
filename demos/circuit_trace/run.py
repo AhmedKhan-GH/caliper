@@ -615,6 +615,7 @@ class Bridge:
                 previous_sequence=previous, preparation_id=s.published_preparation_id)
             published.require(evidence["baseline_array_sha256"] == getattr(s, "published_baseline_hash", None),
                               "The live case changed baseline arrays.")
+            published_bars(s, status, evidence)
         # A status read can itself wait while more actions commit. Refuse that
         # race and let the next event recover from the unchanged local sequence.
         current = s.events.complete("trace.status")
@@ -900,6 +901,52 @@ def live_demo(session, args, result):
 
 
 
+def published_bars(session, status, evidence):
+    """Require coherent bar resources for one committed output comparison."""
+    s = session
+
+    def program_status():
+        programs = s.mcp.body("program.status")["programs"]
+        program = next((item for item in programs if item["id"] == "probabilities"), None)
+        published.require(program is not None, "The probabilities program is unavailable.")
+        draw = program.get("draw") or {}
+        published.require(program.get("state") in ("compiled", "running")
+                          and not program.get("error") and not draw.get("error")
+                          and draw.get("state") not in ("refused", "stopped"),
+                          "The probabilities program cannot display the current case.")
+        return program
+
+    program_status()
+    step = status["inference"]["comparison"]["completed_step"]
+    reply = s.read("probabilities", "cells", minimum_step=step)
+    # A later derive pass can publish the same committed model output.
+    published.require(type(reply.get("step")) is int and reply["step"] >= step,
+                      "The probabilities resource predates the current output step.")
+
+    def completed_program():
+        program = program_status()
+        # Resource frames can precede the periodic cached status update.
+        last = program.get("last_step")
+        return program if type(last) is int and last >= reply["step"] else False
+
+    s.events.until("current probabilities program status", completed_program)
+    # Resource and status reads can wait while another case commits.
+    current = s.events.complete("trace.status")
+    published.require(current.get("inference") == status["inference"],
+                      "The output changed during case publication.")
+    bars = bar_rows(reply)
+    comparison_evidence(status, published.PROMPT, bars)
+    import numpy as np
+    with np.load(published.private_path(s.private_output_directory, evidence["result"]["evidence"]["file"]),
+                 allow_pickle=False) as archive:
+        probabilities = archive["probabilities"]
+        published.require(all(0 <= row["token"] < probabilities.shape[1]
+                              and abs(row["baseline"] - float(probabilities[0, row["token"]])) <= 1e-7
+                              and abs(row["probability"] - float(probabilities[1, row["token"]])) <= 1e-7
+                              for row in bars), "Displayed output differs from the private case arrays.")
+    return {"bars": bars, "publication_step": reply["step"]}
+
+
 def published_action(session, cell, preparation_id, *, display=True):
     """Measure a real callback through terminal reply and current publication."""
     s = session
@@ -929,20 +976,9 @@ def published_action(session, cell, preparation_id, *, display=True):
         s.published_baseline_hash = evidence["baseline_array_sha256"]
         s.published_last_sequence = sequence + 1
         s.published_preparation_id = evidence["preparation"]["id"]
-        # The array publication and its case metadata must refer to one output step.
+        # The resource values and metadata must refer to one committed case.
         if getattr(s, "published_programs_ready", False):
-            reply = s.read("probabilities", "cells", minimum_step=step)
-            bars = bar_rows(reply)
-            comparison_evidence(status, published.PROMPT, bars)
-            import numpy as np
-            with np.load(published.private_path(s.private_output_directory, evidence["result"]["evidence"]["file"]),
-                         allow_pickle=False) as archive:
-                probabilities = archive["probabilities"]
-                published.require(all(0 <= row["token"] < probabilities.shape[1]
-                                      and abs(row["baseline"] - float(probabilities[0, row["token"]])) <= 1e-7
-                                      and abs(row["probability"] - float(probabilities[1, row["token"]])) <= 1e-7
-                                      for row in bars), "Displayed output differs from the private case arrays.")
-            entry.update(bars=bars, publication_step=reply["step"])
+            entry.update(published_bars(s, status, evidence))
         current = s.events.complete("trace.status")
         published.require(current["inference"] == status["inference"], "The output changed during case publication.")
         entry["attachment_after"] = s.mcp.body("run.state", run=s.run_id)

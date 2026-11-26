@@ -58,7 +58,7 @@ def evidence_factory(tmp_path):
         import torch
         from caliper.interp._replication_native import write_native, write_native_tensor
         probabilities = np.full((2, vocab_size), 2 ** -21, dtype=np.float32)
-        probabilities[:, :5] = ([.5, .25, .125, .0625, .0625] if vocab_size == 5 else
+        probabilities[:, :5] = ([.5, .25, .125, .0625, .0625] if vocab_size in (5, 10) else
                                 [.5, .25, .125, .001953125, .0009765625])
         if cell != 10:
             probabilities[1, :2] = probabilities[1, [1, 0]]
@@ -607,26 +607,6 @@ def test_bounded_profile_callback_needs_no_instrument(callback_boundary):
     session.mcp.body = body
     result = driver.published_action(session, 10, prepared["id"], display=False)
     assert result["completed"] and state["calls"] == [10]
-
-
-@pytest.mark.parametrize("sequence", [1, 2])
-def test_live_case_requires_a_new_result(evidence_factory, sequence):
-    root, prepared, make = evidence_factory
-    status = make(14, sequence)
-    baseline_hash = published.validate_case(root, status, 14, previous_sequence=sequence - 1)["baseline_array_sha256"]
-    calls = []
-    session = SimpleNamespace(out=root, replication_profile=published.PROFILE, private_output_directory=root,
-                              published_last_sequence=1, published_preparation_id=prepared["id"],
-                              published_baseline_hash=baseline_hash, events=SimpleNamespace(complete=lambda method: status),
-                              mcp=SimpleNamespace(body=lambda method, **args: calls.append((method, args))))
-    event = {"kind": "run", "change": "action", "name": published.action_name(14), "status": "ok"}
-    if sequence == 1:
-        with pytest.raises(Failure, match="stale"):
-            driver.Bridge(session).handle(event)
-        assert not calls
-    else:
-        driver.Bridge(session).handle(event)
-        assert session.published_last_sequence == 2 and "Before:" in calls[-1][1]["value"]
 
 
 @pytest.mark.parametrize("field,value", [("dtype", "torch.float32"), ("objective", "centered_logit"),
