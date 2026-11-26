@@ -562,7 +562,7 @@ endif()
 # Vulkan HostRenderer backend and compile cuda_driver.cpp in (the backend refs
 # it, and the CUDA tests build device tensors through it).
 if(WIN32)
-    target_sources(caliper_gfx_tests PRIVATE ${CMAKE_SOURCE_DIR}/src/host/cuda_driver.cpp)
+    target_sources(caliper_gfx_tests PRIVATE ${CMAKE_SOURCE_DIR}/src/host/renderer/cuda_driver.cpp)
     target_link_libraries(caliper_gfx_tests PRIVATE caliper_vulkan_backend)
     target_compile_definitions(caliper_gfx_tests PRIVATE CALIPER_HAVE_VULKAN=1)
 endif()

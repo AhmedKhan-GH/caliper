@@ -38,7 +38,6 @@
 #include "frame_watchdog.h"
 #include "renderer/host_renderer.h"
 #include "tensor_bridge.h"   // TensorBridge (views), colormap_lut, bridge_last_reject
-#include "live/live_views_state.h"   // the views' grid (layout_views)
 
 #include <caliper/abi.h>
 #include <caliper/services/log_v1.h>   // CaliperLogLevel (applet log routing)

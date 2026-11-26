@@ -1,6 +1,6 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <doctest/doctest.h>
-#include "spec_runtime/label_layout.h"
+#include "scene/label_layout.h"
 
 using namespace caliper_host;
 

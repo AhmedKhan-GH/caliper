@@ -8,7 +8,7 @@
 // CALIPER_SPEC_TEST_DUMP=<folder> each image is kept as a PNG, to look at.
 #include "spec_runtime/spec_annotations.h"
 
-#include "spec_runtime/label_layout.h"
+#include "scene/label_layout.h"
 #include "spec_runtime/spec_layout.h"
 #include "live/scene_overlays.h"
 #include "scene/labels.h"

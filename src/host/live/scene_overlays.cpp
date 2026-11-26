@@ -15,7 +15,7 @@
 
 #include "live/live_views_scene.h"   // DrawnLabel
 #include "scene/labels.h"
-#include "spec_runtime/label_layout.h"
+#include "scene/label_layout.h"
 
 #include <algorithm>
 #include <cmath>

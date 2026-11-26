@@ -11,7 +11,7 @@
 // inside the panel and overlaps no obstacle. A label that finds none is not
 // shown, and its caller shows only the anchor. Labels past kMaxLabels in the
 // order are not shown either.
-#include "spec_runtime/label_layout.h"
+#include "scene/label_layout.h"
 
 #include <algorithm>
 #include <cmath>

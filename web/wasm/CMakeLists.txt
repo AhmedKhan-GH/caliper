@@ -64,7 +64,7 @@ target_include_directories(caliper_view_layer PUBLIC
 target_sources(caliper_view_layer PRIVATE
     ${CALIPER_ROOT}/src/host/live/live_views_scene.cpp
     ${CALIPER_ROOT}/src/host/live/scene_overlays.cpp
-    ${CALIPER_ROOT}/src/host/spec_runtime/label_layout.cpp
+    ${CALIPER_ROOT}/src/host/scene/label_layout.cpp
     ${CALIPER_ROOT}/src/host/live/live_scene.cpp ${CALIPER_ROOT}/src/host/live/scene_legacy.cpp
     ${CALIPER_ROOT}/src/host/live/scene_piece_form.cpp
     ${CALIPER_ROOT}/src/host/live/live_points.cpp

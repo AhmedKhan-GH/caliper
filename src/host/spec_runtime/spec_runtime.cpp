@@ -10,7 +10,7 @@
 #include "live/live_views_scene.h"   // a scene drawn into a scene panel's rectangle
 #include "live/live_scene.h"         // the scene view of a panel's entities
 #include "spec_runtime/spec_entities.h"
-#include "spec_runtime/label_layout.h"   // fit_with_ellipsis
+#include "scene/label_layout.h"   // fit_with_ellipsis
 #include "draw/draw_host.h"                 // the programs of the scene panels
 #include "scene/scene.h"   // kPalette
 

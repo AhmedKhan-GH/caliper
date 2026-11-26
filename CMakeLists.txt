@@ -286,7 +286,7 @@ else()
     # NVIDIA driver fall through to the same CPU defaults as the old stub.
     target_sources(caliper_host_lib PRIVATE
         src/host/device_query_cuda.cpp
-        src/host/cuda_driver.cpp)
+        src/host/renderer/cuda_driver.cpp)
     if(UNIX)
         target_link_libraries(caliper_host_lib PRIVATE ${CMAKE_DL_LIBS})
     endif()
@@ -379,6 +379,7 @@ add_library(caliper_scene STATIC
     src/host/scene/scene_tree.cpp
     src/host/scene/camera.cpp
     src/host/scene/labels.cpp
+    src/host/scene/label_layout.cpp
     src/host/scene/pick.cpp
     src/host/scene/scale_bar.cpp)
 target_include_directories(caliper_scene PUBLIC ${CMAKE_SOURCE_DIR}/src/host)
@@ -541,9 +542,6 @@ add_library(libcaliper STATIC
     src/host/core_lifecycle.cpp
     src/host/embed/embed_core.cpp
     src/host/embed/embed_views.cpp
-    # The label placement of the scene overlays (live/scene_overlays.cpp),
-    # which the spec runtime shares through this library.
-    src/host/spec_runtime/label_layout.cpp
     ${CALIPER_LIVE_SOURCES}
 )
 if(APPLE)
@@ -639,12 +637,12 @@ set_target_properties(caliper_sternbild_ui PROPERTIES CXX_STANDARD 17 CXX_STANDA
 add_executable(caliper
     src/main.cpp
     # The landing screen, drawn with ImGui on every renderer backend.
-    src/host/ui/landing_screen.cpp
+    src/host/pages/landing_screen.cpp
     # The applet page (page bar, status bar, dock space, docking by role, the
     # applet's frame, the jobs tray), drawn by the app and by `caliper shot`,
     # which renders it into an offscreen canvas and writes a PNG.
-    src/host/ui/applet_page.cpp
-    src/host/shot.cpp
+    src/host/pages/applet_page.cpp
+    src/host/app/shot.cpp
     # Caliper API v0 for the app and for `caliper shot` (--api), and the
     # spec page's Open in browser, which hands the viewer's link to the
     # default browser.

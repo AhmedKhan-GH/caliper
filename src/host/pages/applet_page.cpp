@@ -1,6 +1,6 @@
-#include "ui/applet_page.h"
+#include "pages/applet_page.h"
 
-#include "ui/landing_screen.h"   // draw_host_status_items
+#include "pages/landing_screen.h"   // draw_host_status_items
 #include "ui/sternbild_theme.h"
 #include "ui/ui_recovery.h"
 #include "host_services.h"

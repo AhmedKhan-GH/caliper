@@ -25,7 +25,7 @@
 
 #include <emscripten/emscripten.h>
 
-#include "tensor_bridge.h"   // colormap_thresholds, from the colormap's reference
+#include "gfx/colormap_ref.h"   // colormap_thresholds, from the colormap's reference
 
 #include <cmath>
 #include <cstdio>

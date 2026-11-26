@@ -731,6 +731,8 @@ void window_after(CaliperCore* core, const std::string& name) {
     if (moved || ImGui::IsWindowDocked()) v->off_grid = true;
 }
 
+int window_flags() { return kWindowFlags; }
+
 bool set_toggle(CaliperCore* core, const char* name, const char* toggle, bool on) {
     View* v = core ? find(core, name) : nullptr;
     if (!v || !toggle) return false;

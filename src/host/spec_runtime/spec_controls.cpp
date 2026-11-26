@@ -49,7 +49,7 @@
 #include <caliper_builder/text/bound_text.h>
 
 #include "spec_runtime/spec_annotations.h"
-#include "spec_runtime/label_layout.h"   // fit_with_ellipsis
+#include "scene/label_layout.h"   // fit_with_ellipsis
 
 #include <algorithm>
 #include <array>

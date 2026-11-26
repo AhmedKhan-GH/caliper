@@ -7,7 +7,7 @@
 // Defined in scene_overlays.cpp.
 #include <imgui.h>
 
-#include "spec_runtime/label_layout.h"   // LabelRect
+#include "scene/label_layout.h"   // LabelRect
 
 #include <vector>
 

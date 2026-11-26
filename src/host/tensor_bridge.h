@@ -9,6 +9,7 @@
 // This lives in the exe / gfx-test link scope, NOT caliper_host_lib: it depends
 // on the HostRenderer interface only (header), so unit tests drive it with a
 // stub renderer and no window.
+#include "gfx/colormap_ref.h"
 #include <caliper/tensor.h>
 #include <caliper/services/tensor_bridge_v1.h>
 #include <caliper/services/tensor_bridge_v1_1.h>
@@ -23,36 +24,9 @@ namespace caliper_host {
 
 class HostRenderer;
 
-// ---- Built-in 256-entry RGBA8 colormap LUTs -------------------------------
-// Packed little-endian as r | g<<8 | b<<16 | a<<24 — the exact byte layout the
-// CPU staging path writes and the Metal compute path uploads, so both backends
-// emit identical bytes (Phase-2C colormaps v1). Returned by value-stable
-// pointer; nullptr for an out-of-range colormap id.
-const uint32_t* colormap_lut(int32_t colormap);
-
-// ---- CPU reference conversions (single source of truth for §16) -----------
-// Colormap a row-major (h,w) f32 buffer through lut256 into a tightly-packed
-// RGBA8 dst (w*h*4 bytes). Index rule, byte-identical to the Metal shader:
-//   idx = clamp((v - vmin)/(vmax - vmin), 0, 1) * 255 + 0.5   (truncated)
-// with vmax==vmin -> t=0, and NaN -> index 0 (never a misinterpreted texel);
-// a NaN t, from an infinite end or span, is index 0 as well.
-void map_f32_to_rgba8(const float* src, int w, int h,
-                      const uint32_t* lut256, float vmin, float vmax,
-                      uint8_t* dst);
-
-// The thresholds that give map_f32_to_rgba8's index with exact float
-// comparisons alone, for GPU shaders whose division is not exact (WGSL allows
-// 2.5 ULP of error; Metal's default fast math too): for k in 1..255, T[k] is
-// the first float whose index is k or more for an increasing range (mode 1),
-// the last one for a decreasing range (mode 2), and the index of v is the
-// number of thresholds it has passed. Mode 0 is a range whose width is zero,
-// infinite or NaN, where the reference gives every value index 0. NaN is
-// index 0 in every mode. Writes T[0..255] (T[0] unused) and returns the mode.
-uint32_t colormap_thresholds(float vmin, float vmax, float* T);
-
-// Expand a row-major (h,w,c) u8 buffer (c in 1..4) into tightly-packed RGBA8:
-//   c==1 -> gray replicated to RGB, a=255;  c==3 -> RGB, a=255;  c==4 -> copy.
-void expand_u8_to_rgba8(const uint8_t* src, int w, int h, int c, uint8_t* dst);
+// ---- Built-in 256-entry RGBA8 colormap LUTs & CPU reference conversions ----
+// Declared in gfx/colormap_ref.h (included above) so gfx headers depend
+// downward on gfx/ rather than pulling tensor_bridge.h back up.
 
 // Host-internal diagnostics (embed v1.2 views): the text of the most recent
 // bridge rejection on THIS thread ("" if none since the last clear), so the
