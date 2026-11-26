@@ -113,9 +113,6 @@ public:
     }
 
     void frame(DrawRuntime& rt, FrameInputs* in) override {
-        // Publish the previous frame even when only a resource below the maximum step changed.
-        // SceneView can suppress its status callback when the maximum and timing stay unchanged.
-        host_.report(rt.instance().program, id_, rt.status());
         const Record* r = nullptr;
         for (const Record& rec : host_.records_)
             if (rec.program == rt.instance().program) r = &rec;

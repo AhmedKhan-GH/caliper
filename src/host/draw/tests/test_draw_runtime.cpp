@@ -1465,7 +1465,7 @@ TEST_CASE("the draw host gives each panel its programs, packs params and refuses
     CHECK(host.status().count("head_pattern") == 0);
 }
 
-TEST_CASE("the draw host reports resource completion when the maximum step stays unchanged") {
+TEST_CASE("the draw host refreshes encoded status only through its status callback") {
     cd::DrawHost host;
     host.set_resolver([](const cs::Spec&, const cs::Program&, cs::Piece* out) {
         *out = named_tags();
@@ -1489,6 +1489,9 @@ TEST_CASE("the draw host reports resource completion when the maximum step stays
     CHECK(host.status().at("tags").resource_steps.at("names") == 1);
     cd::FrameInputs inputs;
     feed->frame(rt, &inputs);
+    CHECK(host.status().at("tags").resource_steps.at("names") == 1);
+    CHECK(host.status().at("tags").frames == 1);
+    feed->status(rt);
     CHECK(host.status().at("tags").resource_step == 2);
     CHECK(host.status().at("tags").resource_steps.at("names") == 2);
     CHECK(host.status().at("tags").frames == 2);

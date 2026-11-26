@@ -7,8 +7,8 @@
 // its panel draws, on its own backend, and asks a DrawFeed for the programs
 // and for each frame's values beside its own camera, time and target: the
 // resource versions at the cursor, the packed params, the selection, the
-// cursor and the epoch. The view reports each change of a program's state
-// back to the feed.
+// cursor and the epoch. The view reports status after each encode attempt
+// and each change of state or completed draw timing.
 //
 // DrawHost is the app's feed for every scene panel: it takes the programs of
 // a spec with a pinned piece and a panel, resolves each pin to its piece
@@ -63,7 +63,8 @@ public:
     // (DrawRuntime::set_resource) and fills the values that the view does not own (params,
     // selection, cursor, latest step, live, cursor_moved and epoch).
     virtual void frame(DrawRuntime& runtime, FrameInputs* in) = 0;
-    // The program's state changed (installed, refused, running, stopped).
+    // Report after each encode attempt, or a change of state or completed draw timing.
+    // Include params, resource steps, and frame count from the last encoded frame.
     virtual void status(const DrawRuntime& runtime) = 0;
     // The checks that the view's runtimes run before they make anything.
     virtual DrawChecks checks() const { return DrawChecks::pieces(); }

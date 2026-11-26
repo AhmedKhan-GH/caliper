@@ -637,13 +637,13 @@ Aabb program_box() {
     return b;
 }
 
-// The feed receives changes of state, resource step, and completed draw timing.
-// A timing can arrive after the report of its resource step. The host emits
-// an event only when the state changes.
+// Refresh the cache after each encode attempt with params, resource steps, and frame count.
+// Polls report changes of state, maximum resource step, or completed draw timing.
+// The host emits an event only when the state changes.
 void report_state(caliper_draw::DrawFeed* feed, int* reported, int64_t* reported_step, double* reported_ms,
-                  const caliper_draw::DrawRuntime& rt) {
+                  const caliper_draw::DrawRuntime& rt, bool refresh = false) {
     const caliper_draw::DrawStatus st = rt.status();
-    if (int(st.state) == *reported && st.resource_step == *reported_step && st.frame_ms == *reported_ms) return;
+    if (!refresh && int(st.state) == *reported && st.resource_step == *reported_step && st.frame_ms == *reported_ms) return;
     *reported = int(st.state);
     *reported_step = st.resource_step;
     *reported_ms = st.frame_ms;
@@ -818,7 +818,7 @@ void SceneView::draw_programs() {
                 d->pending.emplace_back(s, std::chrono::steady_clock::now());
             }
         }
-        report_state(feed, &d->reported, &d->reported_step, &d->reported_ms, *d->runtime);
+        report_state(feed, &d->reported, &d->reported_step, &d->reported_ms, *d->runtime, true);
     }
     refresh_piece_notes();
 #endif

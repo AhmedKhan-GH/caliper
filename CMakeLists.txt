@@ -921,8 +921,12 @@ if(CALIPER_WITH_BUILDER)
     target_link_libraries(libcaliper PUBLIC caliper_draw_host)
     target_compile_definitions(libcaliper PRIVATE CALIPER_HAVE_DRAW=1)
     if(BUILD_TESTS)
-        add_executable(caliper_gfx_draw_tests src/host/draw/tests/test_draw_runtime.cpp)
+        add_executable(caliper_gfx_draw_tests src/host/draw/tests/test_draw_runtime.cpp
+            src/host/draw/tests/test_scene_status.cpp
+            src/host/live/live_scene.cpp src/host/live/scene_legacy.cpp src/host/live/scene_piece_form.cpp
+            src/host/tensor_bridge.cpp)
         target_link_libraries(caliper_gfx_draw_tests PRIVATE caliper_draw_host doctest::doctest)
+        target_compile_definitions(caliper_gfx_draw_tests PRIVATE CALIPER_HAVE_DRAW=1)
         add_test(NAME caliper_gfx_draw_tests COMMAND caliper_gfx_draw_tests)
         set_tests_properties(caliper_gfx_draw_tests PROPERTIES LABELS "gfx")
         # The graphics suite draws the two worked examples of pieces on Metal
