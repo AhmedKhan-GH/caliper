@@ -1,6 +1,7 @@
 """Bounded loopback evidence for the internal native capacity interface."""
 from types import SimpleNamespace
 import json
+import socket
 
 import pytest
 
@@ -84,3 +85,31 @@ def test_native_detach_cancels_an_observation(connection):
     viewer.expect(lambda msg: isinstance(msg, w.Views), "VIEWS")
     assert nio.control(0) == []
     assert nio.watch_capacity(conn, 0, 2)
+
+
+def test_native_capacity_waits_for_close_with_undrained_bytes(connection):
+    nio, viewer, conn = connection
+    size = queued_resources(nio, conn)
+    assert not nio.watch_capacity(conn, 0, 1)
+    # Wait for the first frame without a drain of the bounded receive buffer.
+    assert viewer.s.recv(1, socket.MSG_PEEK) == b"\x82"
+    # BYE starts the native close handshake. RawViewer sends no close reply.
+    viewer.send(w.Bye(w.BYE_NORMAL))
+    viewer.expect(lambda msg: isinstance(msg, w.Resource), "RESOURCE")
+    assert viewer.next() is None
+    assert viewer.close_code == w.CLOSE_NORMAL
+    # The first frame reached the socket. The second stays in the native queue.
+    assert nio.control_bytes(conn) == size
+    assert nio.queued(conn) == 1
+    assert nio.control(0) == []
+    assert not nio.send(conn, w.encode(w.Ping(1)))
+    assert not nio.watch_capacity(conn, 0, 2)
+    assert nio.watch_capacity(conn, -1, 3)
+    assert nio.control(0) == []
+    assert not nio.watch_capacity(conn, 0, 4)
+    # The existing close timeout releases the wait without a capacity event.
+    assert nio.control(3000) == [("closed", conn, b"")]
+    assert nio.control_bytes(conn) == 0
+    assert nio.queued(conn) == 0
+    assert nio.watch_capacity(conn, 0, 5)
+    assert nio.control(0) == []

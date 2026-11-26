@@ -494,13 +494,14 @@ public:
     // Internal only. Arm and check under the queue mutex. A negative limit cancels.
     // A true return consumes the observation. Otherwise control() receives its token
     // once the queue reaches the limit. Rearm replaces both the threshold and event.
+    // A close handshake can retain queued bytes. Its closed event releases the wait.
     bool watch_capacity(ConnId c, int64_t limit, uint64_t token) {
         std::lock_guard<std::mutex> g(mu_);
         auto it = links_.find(c);
         if (it == links_.end()) return true;
         Link& l = it->second;
         cancel_capacity(l);
-        if (limit < 0 || !token || !l.attached || l.closing || l.overflow ||
+        if (limit < 0 || !token || !l.attached || l.overflow ||
             l.control_bytes <= static_cast<uint64_t>(limit)) return true;
         l.capacity_limit = static_cast<size_t>(limit);
         l.capacity_token = token;
