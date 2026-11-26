@@ -32,7 +32,7 @@ def test_startup_is_saved_without_replacing_the_final_instrument():
             state["dirty"] = False
         else:
             state["dirty"] = True
-    session = SimpleNamespace(mcp=SimpleNamespace(body=body), family="fixture", quality_override=None)
+    session = SimpleNamespace(mcp=SimpleNamespace(body=body), family="fixture")
     startup_instrument(session)
     driver.instrument(session)
     session.mcp.body("applet.save")

@@ -6,7 +6,7 @@ import hashlib
 import json
 import re
 
-from _qualification import (GEMMA_HASH, GEMMA_ID, GEMMA_REVISION, INDEX_TOKENS, _digest,
+from _qualification import (GEMMA_HASH, GEMMA_ID, GEMMA_REVISION, _digest,
                             _gemma_index_context, _gemma_provenance, _integer, _require, _same_json)
 
 PROFILE = "published_dallas_v1"
@@ -175,14 +175,14 @@ def _index_evidence(metadata, response, source):
              and index.get("threshold_policy") == "live_input_v1"
              and _same_json(index.get("reference_input"), REFERENCE_INPUT),
              "Published index requires version 2 and original-coordinate encoding.")
-    _require(index.get("complete") is True and _integer(index.get("tokens"), INDEX_TOKENS)
-             and _integer(index.get("token_budget"), INDEX_TOKENS)
+    _require(index.get("complete") is True and type(index.get("tokens")) is int and index["tokens"] > 0
+             and type(index.get("token_budget")) is int and index["token_budget"] >= index["tokens"]
              and _integer(index.get("layers"), 26) and _integer(index.get("features"), 16384)
              and _integer(index.get("top_examples"), 16) and _integer(index.get("window_tokens"), 33)
              and index.get("tie_order") == "activation_desc,global_offset_asc"
              and _integer(index.get("vocab_size"), VOCAB_SIZE)
-             and type(index.get("documents")) is int and 0 < index["documents"] <= INDEX_TOKENS,
-             "Published Gemma requires a complete 2000000-position reference index and exact example policy.")
+             and type(index.get("documents")) is int and 0 < index["documents"] <= index["tokens"],
+             "Published Gemma requires a complete reference index with valid source counts and exact example policy.")
     _gemma_index_context(index)
     provenance = index.get("provenance")
     expected_source = {**source, "partition": "index", "publisher_training_overlap": "unknown"}
@@ -203,7 +203,7 @@ def _index_evidence(metadata, response, source):
     return identity
 
 
-def published_dictionary_qualification(response, *, family, profile, quality_override=None):
+def published_dictionary_qualification(response, *, family, profile):
     """Keep resource qualification separate from historical quality and D12 gates."""
     result = {"qualified": False, "scope": None, "status": "unverified", "quality_gates_blocking": False,
               "acceptance_policy": "published_replication", "research_sample_required": False,
@@ -214,17 +214,18 @@ def published_dictionary_qualification(response, *, family, profile, quality_ove
                   "reason": "Decisions 8 and 10 keep research quality as separate comparison evidence. "
                             "Historical F32 measurements do not describe these BF16 resources. No new research sample is required."}}
     try:
-        _require(family == "gemma" and profile == PROFILE and quality_override is None,
-                 "Published resource qualification requires the explicit Gemma Dallas profile without a quality override.")
+        _require(family == "gemma" and profile == PROFILE,
+                 "Published resource qualification requires the explicit Gemma Dallas profile.")
         _require(isinstance(response, dict), "The feature.dictionary response is absent.")
         response = _restore_index(response)
         metadata = response["metadata"]
         source = _import_evidence(metadata, response)
         identity = _index_evidence(metadata, response, source)
         result.update(qualified=True, scope="all_layers", status="published_resources_verified", identity=dict(identity),
+                      index_measurements={key: response["index"][key] for key in ("tokens", "token_budget", "documents")},
                       reference_profile=REFERENCE_PROFILE, dtype="bfloat16", import_binding_version=2,
                       acceptance_reason="Current resource evidence qualifies the published profile. "
-                                        "Every Decision 12 replication and external review gate remains required.")
+                                        "Published outcomes, complete evidence, and independent review remain required.")
     except (KeyError, TypeError, ValueError, AttributeError, OverflowError) as error:
         result["reason"] = str(error)
     return result

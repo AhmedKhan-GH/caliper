@@ -54,16 +54,17 @@ def evidence_factory(tmp_path):
 
     native_archives = {}
 
-    def make(cell=14, sequence=1, *, vocab_size=5):
+    def make(cell=14, sequence=1, *, vocab_size=5, probability_scale=1.):
         import torch
         from caliper.interp._replication_native import write_native, write_native_tensor
         probabilities = np.full((2, vocab_size), 2 ** -21, dtype=np.float32)
         probabilities[:, :5] = ([.5, .25, .125, .0625, .0625] if vocab_size in (5, 10) else
                                 [.5, .25, .125, .001953125, .0009765625])
+        probabilities *= probability_scale
         if cell != 10:
             probabilities[1, :2] = probabilities[1, [1, 0]]
         # Identical arrays share files within one fixture. Metadata retains each sequence.
-        archive = tmp_path / f"arrays-{vocab_size}-{'baseline' if cell == 10 else 'case'}.npz"
+        archive = tmp_path / f"arrays-{vocab_size}-{probability_scale}-{'baseline' if cell == 10 else 'case'}.npz"
         if archive not in native_archives:
             np.savez(archive, logits=probabilities, probabilities=probabilities)
             native_archives[archive] = write_native(
@@ -84,8 +85,8 @@ def evidence_factory(tmp_path):
         record = {"case_id": published.action_name(cell), "cell": cell, "label": published.CASES[cell]["label"],
             "producer": "caliper", "preparation_id": prepared["id"], "sequence": sequence, "group_values": members,
             "argmax_token_ids": probabilities.argmax(axis=1).tolist(), "top_token_ids": [row[0]["id"] for row in top],
-            "top_five": top, "baseline_top_text": " Austin", "baseline_top_probability": .5,
-            "logits_dtype": "torch.bfloat16", "softmax_dtype": "torch.bfloat16", "compute_export_seconds": .01,
+            "top_five": top, "baseline_top_text": " Austin", "baseline_top_probability": float(probabilities[0].max()),
+            "logits_dtype": "torch.bfloat16", "softmax_dtype": "torch.bfloat16",
             "evidence": {**published.descriptor(tmp_path, archive), "shape": [2, vocab_size], "rows": ["baseline", "case"],
                          "storage_dtype": "float32", "native_values_preserved": True}}
         record["native_evidence"] = deepcopy(native_archives[archive])
@@ -100,7 +101,7 @@ def evidence_factory(tmp_path):
         record.update(metadata_file=metadata.name, action_seconds=.02)
         comparison = {"prompt_hash": published.text_hash(published.PROMPT), "interventions_hash": "c" * 64,
                       "case_id": record["case_id"], "argmax_token_ids": record["argmax_token_ids"],
-                      "baseline_top_text": " Austin", "baseline_top_probability": .5, "completed_step": sequence}
+                      "baseline_top_text": " Austin", "baseline_top_probability": float(probabilities[0].max()), "completed_step": sequence}
         return {"state": "done", "inference": {
             "state": "ready", "prompt_hash": comparison["prompt_hash"], "interventions_hash": comparison["interventions_hash"],
             "comparison": comparison, "replication": {"protocol": published.PROFILE, "prepared": True,
@@ -302,7 +303,7 @@ def test_actual_callback_boundary_and_output_publication(evidence_factory):
                                     until=lambda name, callback: callback(), complete=lambda method: deepcopy(state["value"]))
     entry = driver.published_action(session, 26, prepared["id"])
     assert entry["completed"] and entry["prior_sequence"] == 1
-    assert entry["full_action_seconds"] >= entry["callback_seconds"] >= 0
+    assert entry["full_action_seconds"] >= 0
     assert json.loads((root / "action-2.json").read_text())["completed"]
 
 
@@ -385,7 +386,7 @@ def reviewed_collection(callback_boundary, request):
     actions = [driver.published_action(session, 10, prepared["id"])]
     for cell, before, case in driver.published_cases(session, prepared["id"]):
         actions.extend((before, case))
-    names = {"trace_time", "completeness", "complete_graph", "process_memory", "bounded_memory", "dictionary_identity_stable",
+    names = {"trace_time", "completeness_evidence", "complete_graph", "process_memory", "bounded_memory", "dictionary_identity_stable",
              "example_page_1_records", "example_page_2_records"}
     for name in ["cell" + str(cell) for cell in published.CASES] + ["examples-page-2"]:
         names.update(name + "." + suffix for suffix in (
@@ -398,7 +399,7 @@ def reviewed_collection(callback_boundary, request):
             "graph_framing", "graph_panel_share", "compact_disclosures", "output_label_count"))
         for program in ("attribution", "probabilities", "example_tokens"):
             names.update(name + "." + program + "." + metric for metric in (
-                "derive_time_ms", "derive_memory_bytes", "draw_time_ms", "draw_memory_bytes"))
+                "ready", "derive_time_ms", "derive_memory_bytes", "draw_time_ms", "draw_memory_bytes"))
     result = {"mode": "gemma", "replication_profile": published.PROFILE, "evidence_collection_complete": True,
               "pixel_evidence_collected": True, "preparation_id": prepared["id"], "published_actions": actions,
               "checks": [check(name, True, 0, "Synthetic external process receipt") for name in sorted(names)],
@@ -410,14 +411,21 @@ def reviewed_collection(callback_boundary, request):
     transport.trace["counts"].update(nodes=3, edges=3)
     result["trace"] = deepcopy(transport.trace)
     graph, _ = published.read_graph(SimpleNamespace(events=transport), transport.trace)
-    graph["settings"].update(physical_batches=[3], logical_queues=[[0, 1, 2]])
-    result["trace"]["settings"].update(physical_batch_count=1, logical_queue_count=1, schedule_in_full_export=True)
-    graph["completeness"]["targets"] = [{"target": 1, "absolute_residual": .001}]
-    graph["completeness"]["target_count"] = result["trace"]["completeness"]["target_count"] = 1
+    from test_completeness_evidence import complete_accounts
+    accounts = complete_accounts()
+    graph["settings"].update(accounts["settings"])
+    graph["logits"] = accounts["logits"]
+    graph["completeness"] = accounts["completeness"]
+    result["trace"]["settings"].update(physical_batch_count=2, logical_queue_count=2, schedule_in_full_export=True)
+    result["trace"]["completeness"] = {key: value for key, value in graph["completeness"].items() if key != "targets"}
     write_json(root / f"trace-{graph['trace_id']}.json", graph)
     for gate in result["checks"]:
         if gate["name"] in ("process_memory", "bounded_memory"):
             gate["measured"] = 20_000_000_000
+        elif gate["name"] == "completeness_evidence":
+            gate["measured"] = deepcopy(result["trace"]["completeness"])
+        elif gate["name"] == "trace_time":
+            gate["measured"] = result["trace"]["seconds"]
     out = root / "driver"
     out.mkdir()
     write_json(out / "result.json", result)
@@ -429,24 +437,35 @@ def reviewed_collection(callback_boundary, request):
     review = {"schema": "caliper.published-dallas.review.v1", "protocol": published.PROFILE,
         "source_manifest_sha256": published.MANIFEST_SHA256, "collection_sha256": published.file_hash(out / "collection.json"),
         "reference": {"producer": "circuit-tracer", "source_revision": published.SOURCE["source_revision"], "prompt": published.PROMPT,
-                      "dtype": "bfloat16", "trace_request": published.TRACE_REQUEST, "evidence": evidence},
+                      "dtype": "bfloat16", "trace_request": published.TRACE_REQUEST, "evidence": evidence,
+                      "timing": {"machine_scope": "same_mac", "trace_seconds": 25.,
+                                 "trace_scope": "reference trace and canonical pruning",
+                                 "action_scope": "reference intervention and output export"}},
         "probability_policy": {"name": published.PROBABILITY_POLICY,
                                "absolute_tolerance": published.PROBABILITY_ABSOLUTE_TOLERANCE},
         "graph": {"caliper_trace_id": result["trace"]["trace_id"], "feature_node_jaccard": .9,
-                  "maximum_edge_tolerance_ratio": 1., "edge_absolute_tolerance": 1e-6, "edge_relative_tolerance": .001,
+                  "maximum_edge_absolute_error": .1,
                   "union_edges_compared": 3, "absent_edges_counted_as_zero": True},
         "cases": [{"case_id": published.action_name(cell), "caliper_sequence": cases[cell]["sequence"],
                    "caliper_npz_sha256": cases[cell]["evidence"]["sha256"], "reference_top_token_ids": cases[cell]["top_token_ids"],
                    "reference_top_text": [row[0]["text"] for row in cases[cell]["top_five"]],
                    "probabilities_compared": 2 * state["vocab_size"],
-                   "maximum_probability_absolute_error": .015, "published_outcome": {"reference": True, "caliper": True}}
+                   "reference_action_seconds": 2., "maximum_probability_absolute_error": .015, "published_outcome": {"reference": True, "caliper": True}}
                   for cell in published.CASES], "british_columbia_ineffective": True,
         "browser": {"program_views": True, "attached_before": True, "attached_after": True, "evidence": evidence},
         "capture_inspection": {"native": True, "browser": True, "all_case_controls": True, "group_ids": True,
-                               "actual_outputs": True, "evidence": evidence},
-        "parity": {"interior_over": 0, "interior_id_mismatch": 0, "maximum_interior_difference": 2, "edge_share": .01, "evidence": evidence},
+                               "actual_outputs": True, "lead_inspected": True, "evidence": evidence},
+        "parity": {"content_identity_verified": True, "interior_over": 0, "interior_id_mismatch": 0, "maximum_interior_difference": 2, "edge_share": .01, "evidence": evidence},
         "memory": {"peak_process_bytes": 40_000_000_000, "bounded_peak_bytes": 40_000_000_000,
                    "minimum_host_available_bytes": 8_000_000_000, "evidence": evidence}}
+    from _completeness import account_evidence
+    measured = account_evidence(graph)
+    review["completeness"] = {
+        "caliper_trace_id": graph["trace_id"], "full_graph_sha256": published.file_hash(root / f"trace-{graph['trace_id']}.json"),
+        "target_ids_sha256": measured["target_ids_sha256"], "target_count": measured["target_count"],
+        "numeric_status": "measured", "disposition": "reviewed", "source_inventory_complete": True,
+        "bias_inventory_complete": True, "account_definition_checked": True, "residuals_preserved": True,
+        "lead_inspected": True, "evidence": evidence}
     write_json(root / "review.json", review)
     return root, review, result
 
@@ -467,7 +486,6 @@ def test_review_cli_separates_complete_collection_from_acceptance(reviewed_colle
                  "--review", "review.json", "--out", str(root / "verified.json")]) == 0
     verified = json.loads((root / "verified.json").read_text())
     assert verified["accepted_replication"] and verified["gemma_acceptance"] and verified["acceptance_complete"]
-    assert not verified["qwen_acceptance"]
     assert not json.loads((root / "driver/collection.json").read_text())["accepted_replication"]
 
 
@@ -489,9 +507,9 @@ def test_review_cli_separates_complete_collection_from_acceptance(reviewed_colle
     ("top_id", "full-vocabulary reference agreement failed"),
     ("published_outcome", "full-vocabulary reference agreement failed"),
     ("british_columbia", "full-vocabulary reference agreement failed"),
-    ("node_overlap", "Independent graph comparison failed or is incomplete"),
-    ("edge_tolerance", "Independent graph comparison failed or is incomplete"),
-    ("edge_coverage", "Independent graph comparison failed or is incomplete"),
+    ("node_overlap", "Independent graph measurements are invalid or incomplete"),
+    ("edge_tolerance", "Independent graph measurements are invalid or incomplete"),
+    ("edge_coverage", "Independent graph measurements are invalid or incomplete"),
     ("artifact", "Private evidence hash differs"),
     ("collection_file", "Private evidence hash differs"),
 ])
@@ -514,8 +532,8 @@ def test_required_external_evidence_cannot_be_missing_or_stale(reviewed_collecti
     elif fault == "top_id": review["cases"][1]["reference_top_token_ids"] = [0, 0]
     elif fault == "published_outcome": review["cases"][1]["published_outcome"]["reference"] = False
     elif fault == "british_columbia": review["cases"][-1]["reference_top_text"][1] = " Victoria"
-    elif fault == "node_overlap": review["graph"]["feature_node_jaccard"] = .89
-    elif fault == "edge_tolerance": review["graph"]["maximum_edge_tolerance_ratio"] = 1.01
+    elif fault == "node_overlap": review["graph"]["feature_node_jaccard"] = 1.01
+    elif fault == "edge_tolerance": review["graph"]["maximum_edge_absolute_error"] = -1
     elif fault == "edge_coverage": review["graph"]["union_edges_compared"] = 2
     elif fault == "artifact": (root / "external-receipt.json").write_text("changed")
     elif fault == "collection_file": (root / "driver/result.json").write_text("{}")
@@ -690,3 +708,123 @@ def test_external_review_cannot_replace_current_bf16_resource_evidence(reviewed_
     assert "dictionary_qualification" in refused["failed_checks"]
     external = next(gate for gate in refused["checks"] if gate["name"] == "external_replication_review")
     assert external["passed"]
+
+
+def rewrite_review_collection(root, review, result):
+    """Refresh receipt hashes after an intentional synthetic evidence change."""
+    write_json(root / "driver/result.json", result)
+    write_collection(root / "driver", root, result)
+    review["collection_sha256"] = published.file_hash(root / "driver/collection.json")
+    write_json(root / "review.json", review)
+
+
+def test_decision_15_reports_large_times_and_graph_differences(reviewed_collection):
+    root, review, result = reviewed_collection
+    result["trace"]["seconds"] = 250.
+    next(gate for gate in result["checks"] if gate["name"] == "trace_time")["measured"] = 250.
+    for action in result["published_actions"]:
+        action["full_action_seconds"] = 12.
+    review["graph"].update(feature_node_jaccard=.1, maximum_edge_absolute_error=100.)
+    rewrite_review_collection(root, review, result)
+    verified = verify_review(root, "driver/collection.json", "review.json")
+    measurements = verified["measurements"]
+    assert verified["verified"]
+    assert measurements["caliper_trace_seconds"] == 250.
+    assert measurements["reference_timing"]["trace_seconds"] == 25.
+    assert measurements["graph"]["feature_node_jaccard"] == .1
+    assert measurements["graph"]["maximum_edge_absolute_error"] == 100.
+    assert {row["caliper_full_action_seconds"] for row in measurements["actions"]} == {12.}
+    assert {row["reference_action_seconds"] for row in measurements["actions"]} == {2.}
+
+
+@pytest.mark.parametrize("fault", ["missing_graph_metric", "boolean_graph_metric", "string_graph_metric",
+    "missing_reference_trace", "negative_reference_trace", "missing_reference_action", "missing_scope",
+    "missing_caliper_trace", "missing_action_time", "incomplete_action", "incomplete_collection",
+    "missing_draw_measurement", "invalid_derive_measurement", "stale_trace_measurement"])
+def test_decision_15_still_requires_complete_measurements(reviewed_collection, fault):
+    root, review, result = reviewed_collection
+    if fault == "missing_graph_metric": review["graph"].pop("maximum_edge_absolute_error")
+    elif fault == "boolean_graph_metric": review["graph"]["feature_node_jaccard"] = True
+    elif fault == "string_graph_metric": review["graph"]["maximum_edge_absolute_error"] = "0"
+    elif fault == "missing_reference_trace": review["reference"]["timing"].pop("trace_seconds")
+    elif fault == "negative_reference_trace": review["reference"]["timing"]["trace_seconds"] = -1
+    elif fault == "missing_reference_action": review["cases"][1].pop("reference_action_seconds")
+    elif fault == "missing_scope": review["reference"]["timing"]["action_scope"] = ""
+    elif fault == "missing_caliper_trace": result["trace"].pop("seconds")
+    elif fault == "missing_action_time": result["published_actions"][1].pop("full_action_seconds")
+    elif fault == "incomplete_action": result["published_actions"][1]["completed"] = False
+    elif fault == "incomplete_collection": result["evidence_collection_complete"] = False
+    elif fault == "missing_draw_measurement":
+        next(gate for gate in result["checks"] if gate["name"].endswith("draw_time_ms")).pop("measured")
+    elif fault == "invalid_derive_measurement":
+        next(gate for gate in result["checks"] if gate["name"].endswith("derive_time_ms"))["measured"] = True
+    elif fault == "stale_trace_measurement":
+        next(gate for gate in result["checks"] if gate["name"] == "trace_time")["measured"] = 999.
+    rewrite_review_collection(root, review, result)
+    with pytest.raises(Failure):
+        verify_review(root, "driver/collection.json", "review.json")
+
+
+@pytest.mark.parametrize("value", [None, True, "1", -1, float("nan"), float("inf")])
+def test_timing_measurements_reject_missing_or_malformed_values(value):
+    from _checks import timing_check
+    gate = timing_check("trace_time", value, "synthetic CPU contract")
+    assert gate["required"] and not gate["passed"]
+
+
+@pytest.mark.parametrize("value", [0, 1.1, 25, 250])
+def test_timing_measurements_have_no_performance_threshold(value):
+    from _checks import timing_check
+    gate = timing_check("steering_time", value, "synthetic CPU contract")
+    assert gate["passed"] and gate["measured"] == value
+    assert gate["policy"] == "decision_15_measurement"
+
+
+@pytest.mark.parametrize("field", ["source_inventory_complete", "bias_inventory_complete", "account_definition_checked",
+    "residuals_preserved", "lead_inspected", "full_graph_sha256", "target_ids_sha256", "target_count", "numeric_status", "disposition", "evidence"])
+def test_finite_accounts_cannot_replace_independent_source_inspection(reviewed_collection, field):
+    root, review, result = reviewed_collection
+    review["completeness"].pop(field)
+    write_json(root / "review.json", review)
+    with pytest.raises(Failure):
+        verify_review(root, "driver/collection.json", "review.json")
+
+
+def test_large_pixel_errors_and_residuals_remain_visible_after_review(reviewed_collection):
+    root, review, result = reviewed_collection
+    review["parity"].update(interior_over=9999, maximum_interior_difference=200, edge_share=.8)
+    write_json(root / "review.json", review)
+    evidence = verify_review(root, "driver/collection.json", "review.json")
+    measured = evidence["measurements"]
+    assert measured["parity"]["maximum_interior_difference"] == 200
+    assert measured["parity"]["edge_share"] == .8
+    accounts, = measured["completeness"]
+    assert accounts["summary"]["max_absolute_residual"] == 3.
+    assert accounts["summary"]["forward_residual"] == 7.
+    assert accounts["reference_equivalence"] == "not_established"
+
+
+@pytest.mark.parametrize("owner,field,value", [
+    ("parity", "content_identity_verified", False), ("parity", "interior_id_mismatch", 1),
+    ("parity", "interior_id_mismatch", False), ("parity", "maximum_interior_difference", None),
+    ("parity", "edge_share", -1), ("capture_inspection", "lead_inspected", False),
+])
+def test_pixel_measurements_do_not_replace_structural_parity_or_lead_inspection(reviewed_collection, owner, field, value):
+    root, review, result = reviewed_collection
+    review[owner][field] = value
+    write_json(root / "review.json", review)
+    with pytest.raises(Failure):
+        verify_review(root, "driver/collection.json", "review.json")
+
+
+@pytest.mark.parametrize("metric", ["derive_time_ms", "draw_time_ms"])
+def test_unavailable_gpu_timestamps_remain_explicit_measurements(reviewed_collection, metric):
+    root, review, result = reviewed_collection
+    gate = next(item for item in result["checks"] if item["name"].endswith(metric))
+    gate.update(measured=None, evidence="unavailable", reason="The runtime did not supply a GPU timestamp.")
+    rewrite_review_collection(root, review, result)
+    assert verify_review(root, "driver/collection.json", "review.json")["verified"]
+    gate.pop("reason")
+    rewrite_review_collection(root, review, result)
+    with pytest.raises(Failure):
+        verify_review(root, "driver/collection.json", "review.json")

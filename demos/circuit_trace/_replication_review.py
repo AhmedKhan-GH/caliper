@@ -6,6 +6,7 @@ from copy import deepcopy
 from pathlib import Path
 
 from _mcp import Failure
+from _completeness import account_evidence
 from _published_qualification import VOCAB_SIZE
 from _published import PROBABILITY_ABSOLUTE_TOLERANCE, PROBABILITY_POLICY
 from _published import (CASES, MANIFEST_SHA256, PROFILE, PROMPT, SOURCE, TRACE_REQUEST, action_name,
@@ -78,6 +79,7 @@ def _full_graph(path, evidence, trace):
     require(all(type(index) is int and 0 <= index < len(indices) for pair in pairs for index in pair)
             and len(set(pairs)) == len(pairs)
             and all(finite(edge.get("weight"), -float("inf")) for edge in graph["edges"]), "Full graph edges differ.")
+    return account_evidence(graph)
 
 
 def write_collection(out, root, result):
@@ -152,7 +154,7 @@ def verify_review(root, collection_path, review_path):
         cells = [10] + [item for cell in CASES if cell != 10 for item in (10, cell)]
         require([item.get("case_id") for item in actions] == [action_name(cell) for cell in cells],
                 "The collection lacks fresh baselines or all seven callbacks.")
-        sequence, cases, baseline_hash, graphs = 0, {}, None, set()
+        sequence, cases, baseline_hash, graphs = 0, {}, None, {}
         bounded = result.get("bounded_evidence", {}).get("evidence")
         if bounded:
             for item in _case_files(bounded, complete=False):
@@ -173,23 +175,19 @@ def verify_review(root, collection_path, review_path):
             graph_path = _graph_path(root, evidence, result["trace"])
             if graph_path not in graphs:
                 inventoried(descriptor(root, graph_path))
-                _full_graph(graph_path, evidence, result["trace"])
-                graphs.add(graph_path)
+                graphs[graph_path] = _full_graph(graph_path, evidence, result["trace"])
             require(baseline_hash is None or baseline_hash == evidence["baseline_array_sha256"],
                     "The collection changed baseline arrays between cases.")
             baseline_hash = evidence["baseline_array_sha256"]
             prior_step = (action["before_status"]["inference"].get("comparison") or {}).get("completed_step")
             require(prior_step is None or action["status"]["inference"]["comparison"]["completed_step"] > prior_step,
                     "A collected output publication is stale.")
-            require(finite(action.get("callback_seconds")) and finite(action.get("full_action_seconds"))
-                    and action["full_action_seconds"] >= action["callback_seconds"], "The complete action timer is absent.")
-            if cell != 10:
-                require(max(action["full_action_seconds"], evidence["result"]["action_seconds"]) <= 1,
-                        "A published case exceeds the one-second steering limit.")
+            require(finite(action.get("full_action_seconds")), "The complete action timer is absent.")
             cases.setdefault(cell, evidence["result"])
             sequence += 1
         checks = {item["name"]: item for item in result["checks"]}
-        required = {"trace_time", "completeness", "complete_graph", "process_memory", "bounded_memory", "dictionary_identity_stable",
+        require(len(checks) == len(result["checks"]), "The collection repeats a check identity.")
+        required = {"trace_time", "completeness_evidence", "complete_graph", "process_memory", "bounded_memory", "dictionary_identity_stable",
                     "example_page_1_records", "example_page_2_records"}
         for name in ["cell" + str(cell) for cell in CASES] + ["examples-page-2"]:
             required.update(name + "." + suffix for suffix in (
@@ -203,32 +201,62 @@ def verify_review(root, collection_path, review_path):
                 "graph_visible_nodes", "example_row_layout", "output_bar_layout"))
             for program in ("attribution", "probabilities", "example_tokens"):
                 required.update(name + "." + program + "." + metric for metric in (
-                    "derive_time_ms", "derive_memory_bytes", "draw_time_ms", "draw_memory_bytes"))
+                    "ready", "derive_time_ms", "derive_memory_bytes", "draw_time_ms", "draw_memory_bytes"))
         require(required <= checks.keys() and all(checks[key].get("passed") is True
                                                   and checks[key].get("required") is True for key in required),
                 "Required native, completeness, timing, or memory checks are absent or failed.")
+        require(all(finite(checks[key].get("measured")) or (
+                    "measured" in checks[key] and checks[key]["measured"] is None
+                    and checks[key].get("evidence") == "unavailable"
+                    and isinstance(checks[key].get("reason"), str) and checks[key]["reason"].strip())
+                    for key in required if key.endswith(("derive_time_ms", "draw_time_ms")))
+                and finite(checks["trace_time"].get("measured"))
+                and checks["trace_time"]["measured"] == result["trace"].get("seconds"),
+                "Collected timing measurements are absent, invalid, or stale.")
+        completeness = review["completeness"]
+        _artifacts(root, completeness)
+        for path, accounts in graphs.items():
+            require(completeness.get("caliper_trace_id") == result["trace"]["trace_id"]
+                    and completeness.get("full_graph_sha256") == file_hash(path)
+                    and completeness.get("target_ids_sha256") == accounts["target_ids_sha256"]
+                    and type(completeness.get("target_count")) is int
+                    and completeness["target_count"] == accounts["target_count"]
+                    and completeness.get("numeric_status") == "measured"
+                    and completeness.get("disposition") == "reviewed"
+                    and all(completeness.get(key) is True for key in (
+                        "source_inventory_complete", "bias_inventory_complete", "account_definition_checked",
+                        "residuals_preserved", "lead_inspected")),
+                    "Independent full-source account inspection is incomplete or stale.")
+            require(digest(checks["completeness_evidence"].get("measured")) == digest(accounts["summary"]),
+                    "Collected completeness measurements differ from the full export.")
         reference = review["reference"]
         require(reference.get("producer") == "circuit-tracer" and reference.get("source_revision") == SOURCE["source_revision"]
                 and reference.get("prompt") == PROMPT and reference.get("dtype") == "bfloat16"
                 and reference.get("trace_request") == TRACE_REQUEST, "Reference identity or parameters differ.")
         _artifacts(root, reference)
+        timing = reference.get("timing", {})
+        require(isinstance(timing, dict) and timing.get("machine_scope") == "same_mac"
+                and finite(timing.get("trace_seconds")) and finite(result["trace"].get("seconds"))
+                and all(isinstance(timing.get(key), str) and timing[key].strip()
+                        for key in ("trace_scope", "action_scope")),
+                "Local reference timing measurements or scope are absent or invalid.")
         policy = review.get("probability_policy", {})
         require(isinstance(policy, dict) and policy.get("name") == PROBABILITY_POLICY
                 and policy.get("absolute_tolerance") == PROBABILITY_ABSOLUTE_TOLERANCE,
                 "The probability comparison lacks the approved reference envelope.")
         graph = review["graph"]
         require(graph.get("caliper_trace_id") == result["trace"]["trace_id"]
-                and finite(graph.get("feature_node_jaccard")) and .9 <= graph["feature_node_jaccard"] <= 1
-                and finite(graph.get("maximum_edge_tolerance_ratio")) and graph["maximum_edge_tolerance_ratio"] <= 1
-                and graph.get("edge_absolute_tolerance") == 1e-6 and graph.get("edge_relative_tolerance") == .001
+                and finite(graph.get("feature_node_jaccard")) and graph["feature_node_jaccard"] <= 1
+                and finite(graph.get("maximum_edge_absolute_error"))
                 and type(graph.get("union_edges_compared")) is int
                 and graph["union_edges_compared"] >= result["trace"]["counts"]["edges"]
-                and graph.get("absent_edges_counted_as_zero") is True, "Independent graph comparison failed or is incomplete.")
+                and graph.get("absent_edges_counted_as_zero") is True, "Independent graph measurements are invalid or incomplete.")
         rows = review["cases"]
         require(isinstance(rows, list) and [row.get("case_id") for row in rows] == [action_name(cell) for cell in CASES],
                 "External case comparison coverage differs.")
         for cell, row in zip(CASES, rows):
             record = cases[cell]
+            require(finite(row.get("reference_action_seconds")), "A local reference action timer is absent or invalid.")
             expected = CASES[cell]["published_output_labels"][0].rsplit(" ", 1)[0]
             require(row.get("caliper_sequence") == record["sequence"]
                     and row.get("caliper_npz_sha256") == record["evidence"]["sha256"]
@@ -248,11 +276,13 @@ def verify_review(root, collection_path, review_path):
         require(all(browser.get(key) is True for key in ("program_views", "attached_before", "attached_after"))
                 and all(result["browser_assets"][name]["status"] == 200 for name in (
                     "caliper-views-loader.js", "caliper-views.js", "caliper-views.wasm")), "Browser evidence is incomplete.")
-        require(all(inspection.get(key) is True for key in ("native", "browser", "all_case_controls", "group_ids", "actual_outputs")),
+        require(all(inspection.get(key) is True for key in ("native", "browser", "all_case_controls", "group_ids", "actual_outputs", "lead_inspected")),
                 "Independent capture inspection is incomplete.")
-        require(parity.get("interior_over") == 0 and parity.get("interior_id_mismatch") == 0
-                and finite(parity.get("maximum_interior_difference")) and parity["maximum_interior_difference"] <= 2
-                and finite(parity.get("edge_share")) and parity["edge_share"] <= .01, "Native and browser parity failed.")
+        require(type(parity.get("interior_over")) is int and parity["interior_over"] >= 0
+                and type(parity.get("interior_id_mismatch")) is int and parity["interior_id_mismatch"] == 0
+                and finite(parity.get("maximum_interior_difference"))
+                and finite(parity.get("edge_share")) and parity["edge_share"] <= 1
+                and parity.get("content_identity_verified") is True, "Native and browser parity evidence failed.")
         require(finite(memory.get("peak_process_bytes"), 1) and memory["peak_process_bytes"] <= 40_000_000_000
                 and finite(memory.get("bounded_peak_bytes"), 1) and memory["bounded_peak_bytes"] <= 40_000_000_000
                 and finite(memory.get("minimum_host_available_bytes"), 8_000_000_000), "Memory or host reserve evidence failed.")
@@ -261,8 +291,23 @@ def verify_review(root, collection_path, review_path):
             require(all(finite(value) and value <= memory[field] for value in measurements),
                     "External memory evidence understates the driver measurement.")
         return {"verified": True, "collection_sha256": review["collection_sha256"],
-                "review_sha256": file_hash(private_path(root, review_path)), "cases": list(CASES)}
-    except (KeyError, TypeError, ValueError, OSError, IndexError) as error:
+                "review_sha256": file_hash(private_path(root, review_path)), "cases": list(CASES),
+                "measurements": {
+                    "policy": "decision_15_measurement",
+                    "completeness": list(graphs.values()),
+                    "parity": {key: parity[key] for key in ("interior_over", "interior_id_mismatch",
+                                                           "maximum_interior_difference", "edge_share")},
+                    "graph_scope": "feature node IDs and union edge weights; absent edges equal zero",
+                    "graph": {key: graph[key] for key in ("feature_node_jaccard", "maximum_edge_absolute_error",
+                                                         "union_edges_compared", "absent_edges_counted_as_zero")},
+                    "reference_timing": timing, "caliper_trace_seconds": result["trace"]["seconds"],
+                    "caliper_action_scope": "complete action, export, publication, and terminal checks; preparation excluded",
+                    "caliper_producer_action_scope": "model action, export, and atomic output preparation; caller terminal checks excluded",
+                    "actions": [{"case_id": row["case_id"], "reference_action_seconds": row["reference_action_seconds"],
+                                 "caliper_action_seconds": cases[cell]["action_seconds"],
+                                 "caliper_full_action_seconds": next(action["full_action_seconds"] for action in actions
+                                     if action["case_id"] == row["case_id"])} for cell, row in zip(CASES, rows)]}}
+    except (KeyError, TypeError, ValueError, OSError, IndexError, AttributeError) as error:
         raise Failure(f"Invalid external replication review: {error}") from error
 
 

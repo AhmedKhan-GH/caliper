@@ -17,11 +17,10 @@ import time
 from _mcp import Events, Failure, MCP, attempt, stop, wait_file
 from _checks import (FIXTURE_HASH, FIXTURE_PROMPT, MODEL_PROMPT, bar_direction_check, bar_rows, capture_checks,
                      check, dallas_preflight_check, finish, math_checks, program_budget_checks,
-                     secondary_selection, selected_feature)
+                     secondary_selection, selected_feature, timing_check)
 from _inference_evidence import (bound_completion, comparison_evidence, generation_baseline,
                                  generation_evidence, inference_state)
-from _qualification import (GEMMA_REVISION, MODEL_REVISION, dictionary_qualification,
-                             validate_quality_override)
+from _qualification import GEMMA_REVISION, dictionary_qualification
 from _spec import scene_programs
 from _visible import StartupFailure, check_assets, configure_assets, hold_after_error, startup_instrument
 import _published as published
@@ -80,10 +79,9 @@ class Session:
     """Own one app and one MCP process, plus the hosted run that MCP starts."""
     def __init__(self, args, out, *, show=False, interactive=False):
         self.out, self.show = out, show
-        self.quality_override = getattr(args, "quality_override", None)
         self.replication_profile = getattr(args, "replication_profile", None)
         self.private_output_directory = getattr(args, "private_output_directory", None)
-        self.family = getattr(args, "family", "fixture" if args.model == "tiny-lm" else "qwen")
+        self.family = getattr(args, "family", "fixture" if args.model == "tiny-lm" else "gemma")
         self.app = self.mcp = self.events = None
         self.app_process = None
         self.app_owner = None
@@ -461,13 +459,6 @@ def instrument(session):
             f"Research comparison uses {research['source_tokens']:,} source positions ({research['status']}). "
             f"FVU {research['fvu']:.6f}. Dead fraction {research['dead_fraction']:.6f}. "
             f"All-layer loss rise {research['cross_entropy_delta']:.6f} nats. Quality bars await calibration.")
-    override = getattr(session, "quality_override", None)
-    if override is not None:
-        override = validate_quality_override(override)
-        disclosures["dictionary_quality_override"] = (
-            f"Founder override. Quality remains failed. FVU {override['fvu']:.9f}. "
-            f"Dead fraction {override['dead_fraction']:.9f}. Cross-entropy rise {override['cross_entropy_delta']:.9f} nats.")
-        disclosures["dictionary_identity"] = "Dictionary SHA256: " + override["dictionary_fingerprint"]
     m.body("spec.new", id="circuit-trace", title="Circuit Trace", description=" ".join(disclosures.values()))
     for identifier, default, maximum in (("selected_node", -1, 511), ("example_page", 0, 1)):
         m.body("state.create", id=identifier, type="integer", default=default, min=default, max=maximum)
@@ -500,10 +491,9 @@ def instrument(session):
 
 
 def instrument_layout(session, *, expanded):
-    override = getattr(session, "quality_override", None)
     research = getattr(session, "family", None) == "gemma"
     # Flat control groups stay within the spec's eight-level layout limit.
-    ratio = .74 if expanded else (.90 if override or research else .95)
+    ratio = .74 if expanded else (.90 if research else .95)
     nodes = [{"id": "instrument", "split": "vertical", "ratio": ratio, "children": ["main", "methods"]},
              {"id": "main", "split": "vertical", "ratio": .10225, "children": ["header", "body"]},
              {"id": "header", "split": "vertical", "children": ["prompt", "clamp_status"]},
@@ -521,8 +511,6 @@ def instrument_layout(session, *, expanded):
     method_ids = ["method_details"]
     if expanded:
         method_ids.extend("method_" + name for name in METHOD_DISCLOSURES)
-    if override is not None:
-        method_ids.extend(["method_dictionary_quality_override", "method_dictionary_identity"])
     if research:
         method_ids.append("method_quality_measurements")
     if len(method_ids) == 1:
@@ -716,11 +704,6 @@ def acceptance(session, args, result):
     if getattr(session, "replication_profile", None) == published.PROFILE:
         return published_demo(session, args, result, collect=True)
     s = session
-    if result.get("dictionary_quality_override") is not None:
-        qualification = dictionary_qualification(s.events.complete("feature.dictionary"),
-                                                  quality_override=result["dictionary_quality_override"])
-        if not qualification["qualified"]:
-            raise Failure("The quality override does not qualify this dictionary: " + qualification.get("reason", "unknown"))
     instrument(s)
     trace = s.events.complete("trace.run", prompt=args.prompt)
     status = s.events.complete("trace.status")
@@ -755,7 +738,7 @@ def acceptance(session, args, result):
         result["checks"].append(prompt_confidence_check(args.prompt, before, baseline_top_token))
     expected_steps = {"attribution": trace["step"], "example_tokens": first_page["step"],
                       "probabilities": before_reply["step"]}
-    result["checks"].append(check("selection_only", all(abs(r["probability"] - r["baseline"]) <= 1e-7 for r in before),
+    result["checks"].append(check("selection_only", all(r["probability"] == r["baseline"] for r in before),
                                    before, "selection preserves the baseline"))
     before_png, before_meta = s.capture("before", dict(expected_steps))
     result["checks"].extend(dict(gate, name="before." + gate["name"])
@@ -851,8 +834,8 @@ def acceptance(session, args, result):
     reset = bar_rows(s.read("probabilities", "cells", minimum_step=previous + 1))
     save(s.out / "reset.json", reset)
     baseline = {r["token"]: r["baseline"] for r in before}
-    restored = all(r["token"] in baseline and abs(r["probability"] - baseline[r["token"]]) <= 1e-7 for r in reset)
-    result["checks"].append(check("reset", restored, reset, "baseline restored within 1e-7"))
+    restored = all(r["token"] in baseline and r["probability"] == baseline[r["token"]] for r in reset)
+    result["checks"].append(check("reset", restored, reset, "exact baseline resource restored"))
     current_dictionary = s.events.complete("feature.dictionary")
     result["checks"].append(check("dictionary_identity_stable", current_dictionary == result["dictionary_evidence"],
                                    current_dictionary.get("identity"), "the qualification evidence remains unchanged"))
@@ -900,7 +883,6 @@ def live_demo(session, args, result):
     return bridge
 
 
-
 def published_bars(session, status, evidence):
     """Require coherent bar resources for one committed output comparison."""
     s = session
@@ -941,8 +923,8 @@ def published_bars(session, status, evidence):
                  allow_pickle=False) as archive:
         probabilities = archive["probabilities"]
         published.require(all(0 <= row["token"] < probabilities.shape[1]
-                              and abs(row["baseline"] - float(probabilities[0, row["token"]])) <= 1e-7
-                              and abs(row["probability"] - float(probabilities[1, row["token"]])) <= 1e-7
+                              and row["baseline"] == float(probabilities[0, row["token"]])
+                              and row["probability"] == float(probabilities[1, row["token"]])
                               for row in bars), "Displayed output differs from the private case arrays.")
     return {"bars": bars, "publication_step": reply["step"]}
 
@@ -962,7 +944,6 @@ def published_action(session, cell, preparation_id, *, display=True):
         published.require(attachment.get("attached") is True, "The producer detached before the action.")
         entry["event"] = s.action(published.action_name(cell))
         s.published_handled_events = [*getattr(s, "published_handled_events", []), entry["event"]]
-        entry["callback_seconds"] = time.monotonic() - started
         status = s.events.complete("trace.status")
         entry["status"] = status
         evidence = published.validate_case(s.private_output_directory, status, cell,
@@ -1027,10 +1008,14 @@ def published_demo(session, args, result, *, collect):
     save(s.out / "graph-pages.json", pages)
     save(s.out / "graph.json", graph)
     result["trace"] = trace
+    from _completeness import summary_evidence
+    from _replication_review import _full_graph, _graph_path
+    # Pages carry the summary. The complete private export carries every account.
+    _full_graph(_graph_path(s.private_output_directory, baseline["evidence"], trace), baseline["evidence"], trace)
     result["checks"].extend([
-        check("trace_time", published.finite(trace.get("seconds")) and trace["seconds"] <= 20, trace.get("seconds"), 20),
-        check("completeness", published.finite(graph["completeness"].get("max_absolute_residual"))
-              and graph["completeness"]["max_absolute_residual"] <= .02, graph["completeness"], .02),
+        timing_check("trace_time", trace.get("seconds"), "Caliper trace; preparation excluded"),
+        check("completeness_evidence", True, summary_evidence(graph),
+              "complete account inventory; numerical residuals require independent inspection"),
         check("complete_graph", True, graph["counts"], "all node and edge pages with one trace identity"),
     ])
     programs(s)
@@ -1089,9 +1074,8 @@ def published_demo(session, args, result, *, collect):
             result["checks"].append(check(f"cell{cell}.current_evidence", fresh["completed"] and case["completed"],
                                            case.get("error"), "fresh baseline, callback, publication, private evidence, attachment"))
             if case["completed"]:
-                record = case["evidence"]["result"]
-                duration = max(case["full_action_seconds"], record["action_seconds"])
-                result["checks"].append(check(f"cell{cell}.steering_time", duration <= 1, duration, 1))
+                result["checks"].append(timing_check(f"cell{cell}.steering_time", case["full_action_seconds"],
+                    "Caliper complete action, including export, publication, and terminal checks; preparation excluded"))
                 steps["probabilities"] = case["publication_step"]
                 capture_case(f"cell{cell}", case["bars"])
             save(s.out.parent / "result.json", result)
@@ -1123,7 +1107,6 @@ def parser():
     p.add_argument("--model", required=True)
     p.add_argument("--dictionary", required=True)
     p.add_argument("--prompt")
-    p.add_argument("--quality-override", type=Path, help="Explicit founder decision for one dictionary and its measured quality")
     p.add_argument("--replication-profile", choices=[published.PROFILE])
     p.add_argument("--private-output-directory", type=Path, help="Existing private evidence root; --out must be beneath it")
     group = p.add_mutually_exclusive_group()
@@ -1140,7 +1123,6 @@ def acceptance_profile(model):
         return "fixture", 12_000_000_000
     snapshot = Path(model).resolve()
     for revision, repository, family, limit in (
-        (MODEL_REVISION, "models--Qwen--Qwen3.5-0.8B", "qwen", 12_000_000_000),
         (GEMMA_REVISION, "models--google--gemma-2-2b", "gemma", 40_000_000_000),
     ):
         if (snapshot.name == revision and snapshot.parent.name == "snapshots"
@@ -1153,10 +1135,6 @@ def main(argv=None):
     args = parser().parse_args(argv)
     family, memory_limit = acceptance_profile(args.model)
     args.family = family
-    if args.quality_override is not None:
-        if family != "qwen" or args.quality_override.stat().st_size > 4096:
-            raise Failure("A quality override requires Qwen and at most 4096 JSON bytes.")
-        args.quality_override = validate_quality_override(json.loads(args.quality_override.read_text(encoding="utf-8")))
     args.prompt = args.prompt or (FIXTURE_PROMPT if args.model == "tiny-lm" else MODEL_PROMPT)
     if bool(args.replication_profile) != bool(args.private_output_directory):
         raise Failure("The replication profile and private output directory must appear together.")
@@ -1177,9 +1155,7 @@ def main(argv=None):
               "method_disclosures": dict(METHOD_DISCLOSURES),
               "fixture_forward_hash": FIXTURE_HASH if args.model == "tiny-lm" else None,
               "checks": [], "acceptance_complete": False, "completed": False,
-              "passed": False, "qwen_acceptance": False, "gemma_acceptance": False}
-    if args.quality_override is not None:
-        result["dictionary_quality_override"] = args.quality_override
+              "passed": False, "gemma_acceptance": False}
     session = None
     completed = False
     try:

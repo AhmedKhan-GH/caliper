@@ -50,3 +50,6 @@ entries:
   - heading: Ordinary Checks
     item: Seeded CPU fixtures retain mathematical identity, intervention, and resource checks.
     reason: test
+  - heading: Acceptance Receipt
+    item: Complete account and capture receipts preserve pending final acceptance.
+    reason: test

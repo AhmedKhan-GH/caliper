@@ -120,6 +120,7 @@ def panel_composition(window, panel, color, ids, atlas, metadata):
     base = expected.copy()
     text_mask = np.zeros(shape, dtype=bool)
     label_regions = []
+    glyph_regions = []
     complete_labels = []
     labels = panel["labels"]
     if len(labels) > 512:
@@ -129,6 +130,7 @@ def panel_composition(window, panel, color, ids, atlas, metadata):
         if not isinstance(quads, list) or len(quads) > 512:
             raise Failure("The label lacks bounded reference glyphs.")
         label_box = None
+        glyphs = []
         complete = True
         for quad in quads:
             full = np.ceil(physical(quad["rect"], metadata) - .5).astype(int)
@@ -142,6 +144,7 @@ def panel_composition(window, panel, color, ids, atlas, metadata):
                          and xs.stop + bounds[0] == full[2] and ys.stop + bounds[1] == full[3])
             rgba = sample(atlas, u, v) * (np.asarray(quad["tint"], dtype=np.float32) / 255)
             alpha = rgba[:, :, 3:4] / 255
+            glyphs.append((region, rgba[:, :, 3] > 0))
             destination = expected[region]
             destination[:, :, :3] = rgba[:, :, :3] * alpha + destination[:, :, :3] * (1 - alpha)
             destination[:, :, 3:4] = rgba[:, :, 3:4] + destination[:, :, 3:4] * (1 - alpha)
@@ -153,6 +156,7 @@ def panel_composition(window, panel, color, ids, atlas, metadata):
             label_box = box if label_box is None else (min(label_box[0], box[0]), min(label_box[1], box[1]),
                                                        max(label_box[2], box[2]), max(label_box[3], box[3]))
         label_regions.append(label_box)
+        glyph_regions.append(glyphs)
         complete_labels.append(bool(complete))
     expected = np.rint(expected).astype(np.uint8)
     actual = window[bounds[1]:bounds[3], bounds[0]:bounds[2]]
@@ -162,31 +166,37 @@ def panel_composition(window, panel, color, ids, atlas, metadata):
     interior_over = int(np.count_nonzero(over & ~edge))
     edge_over = int(np.count_nonzero(over & edge))
     compared = int(visible.sum())
-    # Keep the existing two-channel-level / one-percent edge bounds. No area is
-    # excluded because the actual screenshot differs from the reference.
-    matched = visible & ~text_mask & (difference <= 2)
+    # The historical two-level counts remain measurements. Item coverage uses
+    # the actual transform and clip, independently of pixel similarity.
+    matched = visible & ~text_mask
     source_ids = {tuple(row) for row in np.unique(ids.reshape(-1, 2), axis=0) if row[0]}
     window_ids = {tuple(row) for row in np.unique(mapped[matched], axis=0) if row[0]}
     text_reports = []
-    for label, box, complete in zip(labels, label_regions, complete_labels):
-        passed, maximum, ink_pixels = False, None, 0
+    for label, box, complete, glyphs in zip(labels, label_regions, complete_labels, glyph_regions):
+        passed, maximum, ink_pixels, actual_ink_pixels = False, None, 0, 0
         if box is not None:
             x0, y0, x1, y1 = box
             local = np.s_[y0:y1, x0:x1]
             valid = visible[local]
-            ink = np.abs(expected[local].astype(np.float32) - base[local]).max(axis=2) > 2
+            ink = np.abs(expected[local].astype(np.float32) - base[local]).max(axis=2) > 0
             ink_pixels = int(np.count_nonzero(ink & valid))
             maximum = int(difference[local][valid].max()) if valid.any() else None
-            passed = complete and ink_pixels > 0 and maximum is not None and maximum <= 2
+            actual_ink = np.any(actual[local].astype(np.float32) != base[local], axis=2)
+            actual_ink_pixels = int(np.count_nonzero(actual_ink & ink & valid))
+            glyphs_visible = all(not mask.any() or np.any(mask & np.any(
+                actual[region].astype(np.float32) != base[region], axis=2)) for region, mask in glyphs)
+            passed = complete and glyphs_visible and ink_pixels > 0 and actual_ink_pixels > 0 and maximum is not None
         provenance = {key: label[key] for key in ("original_text", "fit") if key in label}
         text_reports.append({"text": label["text"], **provenance, "passed": passed, "maximum_difference": maximum,
-                             "ink_pixels": ink_pixels, "complete": complete})
-    summary = {"pixels": compared, "interior_over_two": interior_over,
+                             "ink_pixels": ink_pixels, "actual_ink_pixels": actual_ink_pixels, "complete": complete})
+    varied = bool((visible & ~text_mask).any()) and bool(np.any(np.ptp(actual[visible & ~text_mask, :3], axis=0) > 0))
+    summary = {"pixels": compared, "maximum_difference": int(difference[visible].max()),
+               "actual_pixel_variation": varied, "numeric_status": "measured", "reference_equivalence": "not_established", "interior_over_two": interior_over,
                "edge_over_two": edge_over, "edge_difference_share": edge_over / compared,
                "source_items": [[int(value) for value in row] for row in sorted(source_ids)],
                "window_items": [[int(value) for value in row] for row in sorted(window_ids)],
                "rect_pixels": rect.tolist(), "clip_pixels": clip}
-    return {"passed": interior_over == 0 and edge_over / compared <= .01 and source_ids <= window_ids,
+    return {"passed": varied and bool(source_ids) and source_ids <= window_ids and all(row["passed"] for row in text_reports),
             "summary": summary, "labels": text_reports, "ids": mapped,
             "actual": actual, "geometry": visible & ~text_mask, "height_scale": float(rect[3] - rect[1])}
 

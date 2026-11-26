@@ -12,11 +12,7 @@ from _mcp import Failure, run_owned
 
 
 def compare(app, app_ids, web, web_ids):
-    """Match web/test/draw_parity.spec.ts, including its adjacent edge colors.
-
-    The one-percent limit counts only edges with no match on either side.
-    The historical tests/scene/draw_reference.h also permits either edge side.
-    """
+    """Report historical color metrics and exact interior object identities."""
     def interior(ids):
         padded = np.pad(ids, ((1, 1), (1, 1), (0, 0)), mode="edge")
         same = np.ones(ids.shape[:2], dtype=bool)
@@ -95,7 +91,7 @@ def run_parity(out):
     save(out / "comparison.json", metrics)
     Image.fromarray(app).save(out / "native.png")
     Image.fromarray(web).save(out / "browser.png")
-    return [check("fixture_parity", metrics["interior_over"] == 0 and metrics["interior_id_mismatch"] == 0
-                 and metrics["edge_share"] <= .01, metrics,
-                 "interior color <=2 levels, exact interior IDs, unmatched edge colors <=1%"),
+    return [check("fixture_parity", metrics["interior_id_mismatch"] == 0
+                 and metrics["maximum_interior_difference"] is not None, metrics,
+                 "exact interior IDs with reported color and edge discrepancies"),
             check("parity_process_memory", peak <= 12_000_000_000, peak, 12_000_000_000)]

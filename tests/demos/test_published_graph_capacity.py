@@ -119,6 +119,11 @@ def capacity_graph(token_ids, *, feature_count, edge_count):
     return Graph.build(nodes=nodes, edges=edges, tokens=tokens, layers=26, trace_id="c" * 64, device="cpu",
                        omitted_influence=.1, error_share=0., feature_share=.9, logits=logits,
                        completeness={"target_count": len(diagnostics), "targets": diagnostics,
+                                     "feature_targets": feature_count, "logit_targets": len(logits),
+                                     "numeric_status": "measured", "objective": "centered_pre_softcap_logit",
+                                     "forward_residual": 0., "direct_forward_residual": 0., "replacement_forward_residual": 0.,
+                                     "forward_residuals": {"direct_reads": [0.] * 26, "direct_logits": 0.,
+                                                           "replacement_reads": [0.] * 26, "replacement_logits": 0.},
                                      "max_absolute_residual": 0., "max_relative_residual": 0.,
                                      "source_scope": "full_sources_before_reference_projection"},
                        settings=dict(published.TRACE_REQUEST, dtype="torch.bfloat16",
@@ -167,6 +172,11 @@ def test_capacity_graph_above_metadata_limit_reaches_collection_and_review(revie
     assert decoded["next_node_offset"] is None and decoded["next_edge_offset"] is None
     del decoded
     result["trace"].update(graph.read(node_limit=0, edge_limit=0))
+    next(gate for gate in result["checks"] if gate["name"] == "completeness_evidence")["measured"] = result["trace"]["completeness"]
+    from _completeness import account_evidence
+    accounts = account_evidence(published.read_full_graph(target))
+    review["completeness"].update(caliper_trace_id=graph.trace_id, full_graph_sha256=record["sha256"],
+                                  target_ids_sha256=accounts["target_ids_sha256"], target_count=accounts["target_count"])
     write_json(root / "driver/result.json", result)
     collection = write_collection(root / "driver", root, result)
     assert record in collection["files"]

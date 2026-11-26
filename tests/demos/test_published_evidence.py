@@ -267,7 +267,7 @@ def test_duplicate_memory_measurements_cannot_hide_a_peak(reviewed_collection):
     write_json(root / "driver/result.json", result)
     collection = write_collection(root / "driver", root, result)
     rebind_collection(root, review, collection)
-    with pytest.raises(Failure, match="External memory evidence understates the driver measurement"):
+    with pytest.raises(Failure, match="The collection repeats a check identity"):
         verify_review(root, "driver/collection.json", "review.json")
 
 
@@ -277,3 +277,20 @@ def test_review_memory_may_equal_driver_peaks(reviewed_collection):
         review["memory"][field] = next(gate["measured"] for gate in result["checks"] if gate["name"] == name)
     write_json(root / "review.json", review)
     assert verify_review(root, "driver/collection.json", "review.json")["verified"]
+
+
+@pytest.mark.parametrize("scale", [.125, 2.])
+def test_probability_sums_preserve_large_errors(evidence_factory, scale):
+    root, _, make = evidence_factory
+    status = make(14, probability_scale=scale)
+    result = published.validate_case(root, status, 14, previous_sequence=0)
+    assert result["probability_measurements"] == {
+        "numeric_status": "measured", "reference_equivalence": "not_established", "sum_dtype": "float64",
+        "row_sums": [scale, scale], "absolute_sum_errors": [abs(scale - 1)] * 2}
+
+
+@pytest.mark.parametrize("scale", [0., -1., 4.])
+def test_probability_measurements_refuse_invalid_ranges(evidence_factory, scale):
+    root, _, make = evidence_factory
+    with pytest.raises(Failure):
+        published.validate_case(root, make(14, probability_scale=scale), 14, previous_sequence=0)

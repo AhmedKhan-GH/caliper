@@ -258,15 +258,11 @@ def test_f32_comparison_and_index_cannot_authorize_bf16():
     assert not qualify(reference)["qualified"]
 
 
-@pytest.mark.parametrize("family,profile", [("qwen", PROFILE), ("fixture", PROFILE), ("gemma", "arbitrary"),
+@pytest.mark.parametrize("family,profile", [("fixture", PROFILE), ("gemma", "arbitrary"),
                                            ("gemma", "circuit_tracer_82996f14"), ("gemma", True), ("gemma", {})])
 def test_profile_marker_does_not_select_or_qualify_resources(family, profile):
     result = dictionary_qualification(published_reply(), family=family, replication_profile=profile)
     assert not result["qualified"]
-
-
-def test_quality_override_cannot_authorize_published_resources():
-    assert not qualify(published_reply(), quality_override={"authority": "founder"})["qualified"]
 
 
 def test_finish_keeps_external_review_required_after_resource_qualification():
@@ -396,7 +392,7 @@ def test_matching_but_incomplete_or_legacy_import_records_are_refused(fault):
 
 @pytest.mark.parametrize("path,value", [
     (("format_version",), 1), (("format_version",), 2.0), (("complete",), 1),
-    (("tokens",), 1999999), (("tokens",), 2000001), (("tokens",), 2000000.0), (("token_budget",), 1999999),
+    (("tokens",), 0), (("tokens",), 2000001), (("tokens",), 2000000.0), (("token_budget",), 1999999),
     (("layers",), 25), (("features",), 8192), (("top_examples",), 8), (("window_tokens",), 32),
     (("tie_order",), "activation_desc"), (("vocab_size",), 10), (("documents",), True),
     (("encoder_policy",), "live_input_v1"), (("threshold_policy",), "cast_to_float32"),
@@ -488,5 +484,26 @@ def test_wrapped_operations_retain_every_parent_hash():
     seal_index(response)
     assert qualify(response)["qualified"]
     hashes.pop(name.removesuffix(".__wrapped__"))
+    seal_index(response)
+    assert not qualify(response)["qualified"]
+
+
+@pytest.mark.parametrize("tokens,documents", [(8, 1), (1999999, 1000), (2000001, 2000001)])
+def test_index_size_is_a_measurement_with_exact_manifest_identity(tokens, documents):
+    response = published_reply()
+    response["index"].update(tokens=tokens, token_budget=tokens, documents=documents)
+    seal_index(response)
+    result = qualify(response)
+    assert result["qualified"], result
+    assert result["index_measurements"] == {"tokens": tokens, "token_budget": tokens, "documents": documents}
+    response["index"]["tokens"] += 1
+    assert not qualify(response)["qualified"]
+
+
+@pytest.mark.parametrize("field,value", [("tokens", 0), ("tokens", True), ("token_budget", None),
+    ("documents", 0), ("documents", True), ("documents", 2000001), ("complete", False)])
+def test_index_measurements_require_complete_valid_counts(field, value):
+    response = published_reply()
+    response["index"][field] = value
     seal_index(response)
     assert not qualify(response)["qualified"]

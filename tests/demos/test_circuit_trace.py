@@ -19,7 +19,7 @@ import run as driver
 from _checks import (bar_direction_check, check, finish, math_checks, program_budget_checks,
                      secondary_selection, selected_feature, token_path, FIXTURE_PROMPT)
 from _mcp import Failure
-from _qualification import dictionary_qualification, MODEL_ID, MODEL_REVISION, MODEL_HASH
+from _qualification import dictionary_qualification
 
 
 @pytest.fixture(scope="module")
@@ -101,8 +101,8 @@ def test_actual_fixture_gates_keep_semantics_separate(measured):
                            predicted_ablation_effect=-measured["selected"]["effect"])
     by_name = {g["name"]: g for g in semantic}
     assert by_name["steering_change_matches_prediction"]["required"] and by_name["validation"]["required"]
-    assert not by_name["trace_time"]["passed"]
-    assert not by_name["steering_time"]["passed"]
+    assert by_name["trace_time"]["passed"] and by_name["trace_time"]["measured"] == 21
+    assert by_name["steering_time"]["passed"] and by_name["steering_time"]["measured"] == 2
 
 
 def test_missing_feature_is_a_failure(measured):
@@ -201,257 +201,7 @@ def test_missing_top_bar_is_a_failure(measured):
 def test_finish_refuses_missing_evidence():
     result = {"mode": "fixture", "completed": True, "checks": []}
     assert finish(result) == 1
-    assert result["qwen_acceptance"] is False
-
-
-def qualification_reply(*, fallback=False, token_budget=20_000_000):
-    """Synthetic metadata exercises gates without model or index allocation."""
-    training = {"dataset_id": "test-source", "dataset_config": "test", "dataset_revision": "revision",
-                "split": "train", "source_id": "test-source:revision", "tokens": token_budget,
-                "token_budget": token_budget, "stop_reason": "token_budget",
-                "partitions": {"algorithm": "sha256-utf8-text-mod10000-v1", "train": [0, 9400],
-                               "quality": [9400, 9500], "index": [9500, 10000],
-                               "quality_tokens": 200_000, "index_tokens": 2_000_000}}
-    quality = {"status": "passed", "evaluated_tokens": 200_000, "partition": "quality", "stop_reason": "complete",
-               "dictionary_hash": "a" * 64, "all_mlps_replaced": 24,
-               "fvu": .4, "dead_fraction": .15, "cross_entropy_delta": .5,
-               "per_layer_fvu": [.4] * 24, "per_layer_dead_fraction": [.15] * 24,
-               "cross_entropy_tokens": 199_000, "original_cross_entropy": 2., "replaced_cross_entropy": 2.5}
-    metadata = {"model_id": MODEL_ID, "revision": MODEL_REVISION, "model_hash": MODEL_HASH,
-                "layers": 24, "latents": 8192, "training": training, "quality": quality}
-    identity = {"model_hash": MODEL_HASH, "dictionary_hash": "b" * 64,
-                "dictionary_fingerprint": "a" * 64, "index_hash": "c" * 64, "tokenizer_hash": "d" * 64}
-    index = {k: identity[k] for k in ("model_hash", "dictionary_hash", "index_hash", "tokenizer_hash")}
-    index.update(complete=True, tokens=2_000_000, token_budget=2_000_000, layers=24, features=8192,
-                 provenance={k: deepcopy(training[k]) for k in
-                             ("dataset_id", "dataset_config", "dataset_revision", "split", "source_id", "partitions")})
-    index["provenance"]["partition"] = "index"
-    response = {"metadata": metadata, "identity": identity, "index": index}
-    if fallback:
-        source = deepcopy(metadata)
-        source["quality"].update(status="failed", dictionary_hash="e" * 64,
-                                  fvu=.41, per_layer_fvu=[.41] * 24)
-        response["fallback_source"] = {
-            "metadata": source, "identity": {"model_hash": MODEL_HASH, "dictionary_fingerprint": "e" * 64},
-            "evaluation": {"version": 1, "count": 200_000, "pending_ids": None, "identity": "e" * 64,
-                           "settings": {"tokens": 200_000, "scope": "all_layers", "active_layers": list(range(24))},
-                           "stream": {"partition": "quality", "source_id": training["source_id"],
-                                      "partitions": deepcopy(training["partitions"])}}}
-        metadata["fallback_source"] = response["fallback_source"]
-        training["fallback"] = {"version": 1, "mode": "upper_half", "active_layers": list(range(12, 24)),
-                                "zero_layers": list(range(12)), "source_dictionary_hash": "e" * 64,
-                                "source_training_tokens": token_budget, "source_id": training["source_id"],
-                                "token_budget": token_budget, "warm_start": "upper_weights_fresh_adam",
-                                "lower_behavior": "zero_dictionary_original_mlp"}
-        del quality["all_mlps_replaced"]
-        quality.update(status="fallback_passed", scope="upper_half", active_layers=list(range(12, 24)),
-                       replaced_mlps=12, per_layer_status=["error_only"] * 12 + ["active"] * 12,
-                       per_layer_fvu=[None] * 12 + [.4] * 12, per_layer_dead_fraction=[None] * 12 + [.15] * 12)
-    return response
-
-
-@pytest.mark.parametrize("fallback", [False, True])
-@pytest.mark.parametrize("token_budget", [20_000_000, 40_000_000])
-def test_qualification_accepts_exact_complete_scope(fallback, token_budget):
-    response = qualification_reply(fallback=fallback, token_budget=token_budget)
-    qualified = dictionary_qualification(response)
-    assert qualified["qualified"] is True
-    assert qualified["scope"] == ("upper_half" if fallback else "all_layers")
-    assert qualified["status"] == ("fallback_passed" if fallback else "passed")
-    assert qualified["identity"] == response["identity"]
-
-
-@pytest.mark.parametrize("scope", ["all_layers", "upper_half", "fallback_source"])
-@pytest.mark.parametrize("fault", ["unfinished_count", "pilot_budget", "wrong_stop_reason"])
-def test_qualification_requires_completed_approved_training(scope, fault):
-    response = qualification_reply(fallback=scope != "all_layers")
-    current = response["metadata"]["training"]
-    training = response["fallback_source"]["metadata"]["training"] if scope == "fallback_source" else current
-    if fault == "unfinished_count":
-        training["tokens"] -= 1
-    elif fault == "pilot_budget":
-        training.update(tokens=100_000, token_budget=100_000)
-    else:
-        training["stop_reason"] = "memory_stop"
-    if scope == "upper_half":
-        current["fallback"]["token_budget"] = training["token_budget"]
-    elif scope == "fallback_source":
-        current["fallback"]["source_training_tokens"] = training["tokens"]
-    qualified = dictionary_qualification(response)
-    assert qualified["qualified"] is False
-    assert "complete training budget" in qualified["reason"]
-
-
-def test_qualification_rejects_fallback_budget_mismatch():
-    response = qualification_reply(fallback=True)
-    response["metadata"]["training"]["token_budget"] = 40_000_000
-    qualified = dictionary_qualification(response)
-    assert qualified["qualified"] is False
-    assert "complete training budget" in qualified["reason"]
-
-
-@pytest.mark.parametrize("field,value", [
-    ("status", "approved"), ("status", "partial"), ("evaluated_tokens", 199_999),
-    ("evaluated_tokens", "200000"), ("stop_reason", "memory_stop"), ("partition", "train"),
-    ("dictionary_hash", None), ("dictionary_hash", "f" * 64), ("all_mlps_replaced", 12),
-    ("fvu", float("nan")), ("cross_entropy_delta", float("inf")), ("cross_entropy_tokens", 0),
-])
-def test_qualification_rejects_incomplete_or_stale_quality(field, value):
-    response = qualification_reply()
-    response["metadata"]["quality"][field] = value
-    assert dictionary_qualification(response)["qualified"] is False
-
-
-@pytest.mark.parametrize("field,value", [("fvu", .401), ("dead_fraction", .151), ("cross_entropy_delta", .501)])
-def test_qualification_rejects_failed_metrics_under_passed_status(field, value):
-    response = qualification_reply()
-    quality = response["metadata"]["quality"]
-    quality[field] = value
-    if field == "cross_entropy_delta":
-        quality["replaced_cross_entropy"] = quality["original_cross_entropy"] + value
-    else:
-        quality["per_layer_" + field] = [value] * 24
-    assert dictionary_qualification(response)["qualified"] is False
-
-
-@pytest.mark.parametrize("section,field,value", [
-    ("index", "tokens", 1_999_999), ("index", "token_budget", 1_999_999), ("index", "complete", 1),
-    ("index", "model_hash", "other-model"), ("index", "dictionary_hash", "f" * 64),
-    ("index", "index_hash", "f" * 64), ("index", "tokenizer_hash", "f" * 64),
-    ("identity", "dictionary_fingerprint", "f" * 64), ("identity", "dictionary_hash", None),
-])
-def test_qualification_rejects_index_and_live_identity_mismatch(section, field, value):
-    response = qualification_reply()
-    response[section][field] = value
-    assert dictionary_qualification(response)["qualified"] is False
-
-
-@pytest.mark.parametrize("section", ["identity", "index", "metadata"])
-def test_qualification_requires_live_response_evidence(section):
-    response = qualification_reply()
-    del response[section]
-    assert dictionary_qualification(response)["qualified"] is False
-
-
-def test_qualification_rejects_overlapping_partitions():
-    response = qualification_reply()
-    response["metadata"]["training"]["partitions"]["quality"] = [0, 100]
-    response["index"]["provenance"]["partitions"]["quality"] = [0, 100]
-    assert dictionary_qualification(response)["qualified"] is False
-
-
-@pytest.mark.parametrize("fault", ["missing_source", "detached_source", "stale_source", "partial_source", "fake_failure",
-                                    "unfinished_training", "wrong_scope", "all_layer_claim", "lower_metrics"])
-def test_qualification_requires_authorized_fallback_evidence(fault):
-    response = qualification_reply(fallback=True)
-    source = response["fallback_source"]
-    quality = response["metadata"]["quality"]
-    if fault == "missing_source":
-        del response["fallback_source"]
-    elif fault == "detached_source":
-        del response["metadata"]["fallback_source"]
-    elif fault == "stale_source":
-        source["evaluation"]["identity"] = "f" * 64
-    elif fault == "partial_source":
-        source["evaluation"]["count"] -= 1
-    elif fault == "fake_failure":
-        source["metadata"]["quality"].update(fvu=.3, per_layer_fvu=[.3] * 24)
-    elif fault == "unfinished_training":
-        source["metadata"]["training"]["tokens"] -= 1
-    elif fault == "wrong_scope":
-        quality["active_layers"] = list(range(12))
-    elif fault == "all_layer_claim":
-        quality["all_mlps_replaced"] = 24
-    elif fault == "lower_metrics":
-        quality["per_layer_fvu"][0] = .3
-    assert dictionary_qualification(response)["qualified"] is False
-
-
-@pytest.mark.parametrize("fallback", [False, True])
-def test_finish_keeps_qwen_qualification_scope(fallback):
-    result = {"mode": "qwen", "completed": True, "checks": [check("synthetic_evidence", True, True, True)],
-              "pixel_evidence_collected": True, "dictionary_evidence": qualification_reply(fallback=fallback)}
-    assert finish(result) == 0
-    assert result["qwen_acceptance"] is True
-    assert result["qwen_full_mlp_acceptance"] is (not fallback)
-    assert result["qwen_acceptance_scope"] == ("upper_half" if fallback else "all_layers")
-    result["dictionary_evidence"]["metadata"]["quality"]["dictionary_hash"] = "f" * 64
-    assert finish(result) == 1
-    assert result["qwen_acceptance"] is False
-    assert result["qwen_full_mlp_acceptance"] is False
-    assert result["failed_checks"] == ["dictionary_qualification"]
-
-
-def test_finish_rejects_a_cached_qualification_without_evidence():
-    result = {"mode": "qwen", "completed": True, "pixel_evidence_collected": True,
-              "dictionary_qualification": {"qualified": True, "status": "passed"},
-              "checks": [check("dictionary_qualification", True, "passed", "passed")]}
-    assert finish(result) == 1
-    assert result["qwen_acceptance"] is False
-
-
-def test_finish_preserves_fixture_without_qwen_qualification():
-    result = {"mode": "fixture", "completed": True, "checks": [check("synthetic_fixture", True, True, True)]}
-    assert finish(result) == 0
-    assert result["qwen_acceptance"] is False
-
-
-def failed_quality_override():
-    response = qualification_reply(token_budget=40_000_000)
-    quality = response["metadata"]["quality"]
-    quality.update(status="failed", fvu=.329, dead_fraction=.261, cross_entropy_delta=1.18,
-                   per_layer_fvu=[.329] * 24, per_layer_dead_fraction=[.261] * 24,
-                   replaced_cross_entropy=quality["original_cross_entropy"] + 1.18)
-    record = {"version": 1, "authority": "founder", "dictionary_fingerprint": "a" * 64,
-              "evaluated_tokens": 200_000, "fvu": .329, "dead_fraction": .261,
-              "cross_entropy_delta": 1.18, "failed_gates": ["dead_fraction", "cross_entropy_delta"]}
-    return response, record
-
-
-def test_quality_override_retains_failures_and_cannot_override_causal_checks():
-    response, record = failed_quality_override()
-    original = deepcopy(response)
-    assert dictionary_qualification(response)["qualified"] is False
-    qualified = dictionary_qualification(response, quality_override=record)
-    assert qualified["qualified"] is True and qualified["status"] == "founder_override"
-    assert qualified["reported_status"] == "failed" and qualified["quality_override"] == record
-    assert response == original
-    result = {"mode": "qwen", "completed": True, "checks": [check("steering", False, .01, .05)],
-              "pixel_evidence_collected": True, "dictionary_evidence": response,
-              "dictionary_quality_override": record}
-    assert finish(result) == 1
-    assert result["failed_checks"] == ["steering"] and result["qwen_acceptance"] is False
-    result["checks"][0]["passed"] = True
-    assert finish(result) == 0 and result["qwen_acceptance"] is True
-    assert result["dictionary_evidence"]["metadata"]["quality"]["status"] == "failed"
-
-
-@pytest.mark.parametrize("key,value", [
-    ("version", True), ("authority", "unknown"), ("dictionary_fingerprint", "f" * 64),
-    ("evaluated_tokens", 199_999), ("fvu", .33), ("dead_fraction", .262),
-    ("cross_entropy_delta", 1.181), ("fvu", float("nan")), ("failed_gates", []),
-    ("failed_gates", ["dead_fraction"]), ("extra", True),
-])
-def test_quality_override_refuses_changed_identity_or_measurements(key, value):
-    response, record = failed_quality_override()
-    record[key] = value
-    assert dictionary_qualification(response, quality_override=record)["qualified"] is False
-
-
-@pytest.mark.parametrize("fault", ["index", "training", "evaluation", "model", "layer_metrics"])
-def test_quality_override_preserves_resource_and_evidence_requirements(fault):
-    response, record = failed_quality_override()
-    if fault == "index":
-        response["index"]["tokens"] -= 1
-    elif fault == "training":
-        response["metadata"]["training"]["tokens"] -= 1
-    elif fault == "evaluation":
-        response["metadata"]["quality"]["stop_reason"] = "interrupted"
-    elif fault == "model":
-        response["identity"]["model_hash"] = "other"
-    else:
-        response["metadata"]["quality"]["per_layer_fvu"][0] = .1
-    assert dictionary_qualification(response, quality_override=record)["qualified"] is False
+    assert result["accepted_replication"] is False
 
 
 def test_parity_retains_the_existing_edge_side_tolerance():
@@ -595,14 +345,15 @@ def test_comparison_uses_true_argmax_and_rejects_stale_metadata():
         comparison_evidence(status, prompt, bars)
 
 
-def test_semantic_token_change_requires_a_probability_direction(measured):
+def test_semantic_token_change_reports_zero_probability_change(measured):
     old = measured["argmax_token_ids"][0]
     other = next(row["token"] for row in measured["after"] if row["token"] != old)
     gates = math_checks(measured["graph"], measured["examples"], measured["before"], measured["before"],
                         measured["validation"], 0, 0, fixture=False, argmax_token_ids=[old, other],
                         predicted_ablation_effect=-measured["selected"]["effect"])
     steering = next(g for g in gates if g["name"] == "steering_change_matches_prediction")
-    assert not steering["passed"] and steering["measured"]["probability_change"] == 0
+    assert steering["passed"] and steering["measured"]["probability_change"] == 0
+    assert not steering["measured"]["direction_matches"]
 
 
 @pytest.fixture
@@ -628,14 +379,14 @@ def steering_case():
 @pytest.mark.parametrize("prediction", [0., -0., float("nan"), float("inf"), -float("inf")])
 @pytest.mark.parametrize("probability", [.1, .9])
 @pytest.mark.parametrize("new_top", [1, 2])
-def test_steering_requires_finite_nonzero_prediction(steering_case, prediction, probability, new_top):
+def test_steering_requires_finite_prediction(steering_case, prediction, probability, new_top):
     steering_case.update(predicted_ablation_effect=prediction, argmax_token_ids=[1, new_top])
     steering_case["after"][0]["probability"] = probability
     gates = math_checks(**steering_case)
     steering = next(g for g in gates if g["name"] == "steering_change_matches_prediction")
     pixels = bar_direction_check(50, int(probability * 100), predicted_ablation_effect=prediction, fixture=False)
     for gate in (steering, pixels):
-        assert gate["required"] and not gate["passed"]
+        assert gate["required"] and gate["passed"] is math.isfinite(prediction)
         assert gate["measured"]["predicted_direction"] is None
         assert gate["measured"]["prediction_finite"] is math.isfinite(prediction)
         assert not gate["measured"]["direction_matches"]
@@ -644,9 +395,9 @@ def test_steering_requires_finite_nonzero_prediction(steering_case, prediction, 
 
 @pytest.mark.parametrize("before,after,prediction,passed", [
     (.05, .1, 1., True), (.05, 0., -1., True),
-    (.05, .099, 1., False), (.05, .001, -1., False),
+    (.05, .099, 1., True), (.05, .001, -1., True),
 ])
-def test_steering_probability_threshold(steering_case, before, after, prediction, passed):
+def test_steering_probability_change_has_no_magnitude_gate(steering_case, before, after, prediction, passed):
     steering_case["before"][0]["baseline"] = before
     steering_case["after"][0]["probability"] = after
     steering_case["predicted_ablation_effect"] = prediction
@@ -663,9 +414,11 @@ def test_steering_requires_exact_original_token(steering_case, missing):
 
 
 @pytest.mark.parametrize("count,signs,spearman,passed", [
-    (10, 8, .6, True), (10, 7, 1., False), (10, 10, .599, False), (9, 9, 1., False),
+    (10, 8, .6, True), (10, 7, 1., True), (10, 10, .599, True), (9, 9, 1., False),
+    (10, 0, -1., True), (10, 11, 0., False), (10, True, 0., False), (10, 0, None, False),
+    (10, 0, float("nan"), False), (10, 0, float("inf"), False),
 ])
-def test_steering_correction_preserves_graph_thresholds(steering_case, count, signs, spearman, passed):
+def test_validation_requires_complete_finite_measurements(steering_case, count, signs, spearman, passed):
     steering_case["validation"] = dict(count=count, correct_signs=signs, spearman=spearman)
     gate = next(g for g in math_checks(**steering_case) if g["name"] == "validation")
     assert gate["required"] and gate["passed"] is passed
@@ -772,16 +525,16 @@ def test_composition_oracle_handles_dpi_clip_scaled_targets_and_glyphs(tmp_path)
         assert evidence["source_items"] == evidence["window_items"]
 
 
-@pytest.mark.parametrize("offset,passed", [(-2.01, False), (-1.99, True), (0., True), (1.99, True), (2.01, False)])
-def test_bar_height_preserves_two_pixel_tolerance(tmp_path, offset, passed):
+@pytest.mark.parametrize("offset", [-24., -2.01, 0., 2.01, 24.])
+def test_bar_height_preserves_large_finite_discrepancies(tmp_path, offset):
     from _checks import capture_checks
     metadata, graph, bars = synthetic_capture(tmp_path)
     bars[0]["probability"] = (32 + offset) / 64
     gates, measured = capture_checks(tmp_path, metadata, tmp_path / "capture.png", graph, bars, selected={"label": "B"}, baseline_top_token=7)
     gate = next(g for g in gates if g["name"] == "bar_height")
-    assert gate["passed"] is passed
+    assert gate["passed"]
     assert measured["height"] == 32
-    assert gate["threshold"] == "within 2 pixels"
+    assert gate["measured"]["absolute_difference"] == pytest.approx(abs(offset))
 
 
 @pytest.mark.parametrize("token", [None, True, -1, "7", 8])
@@ -802,10 +555,14 @@ def test_missing_window_composition_fails_with_valid_offscreen_targets(tmp_path,
 
 
 @pytest.mark.parametrize("fault", ["missing", "selected_missing", "wrong", "variation"])
-def test_independent_text_oracle_rejects_wrong_or_missing_glyphs(tmp_path, fault):
+def test_text_inventory_preserves_missing_glyph_refusals_and_pixel_discrepancies(tmp_path, fault):
     gates, _ = synthetic_gates(tmp_path, text_fault=fault)
     assert gates["capture_generation"]["passed"]
-    assert not gates["host_labels"]["passed"]
+    if fault in ("wrong", "variation"):
+        assert max(row["maximum_difference"] for row in gates["host_labels"]["measured"]["glyphs"]) > 2
+        assert gates["graph_composition"]["measured"]["reference_equivalence"] == "not_established"
+    else:
+        assert not gates["host_labels"]["passed"]
 
 
 def test_missing_panel_placement_is_a_failure(tmp_path):
@@ -938,7 +695,10 @@ def test_fitted_provenance_preserves_independent_pixel_and_overlap_checks(tmp_pa
     else: labels[1]["box"] = labels[0]["box"].copy()
     gates = fitted_gates(tmp_path, metadata, graph, bars, selected)
     assert gates["capture_generation"]["passed"]
-    assert not gates["graph_label_spacing" if fault == "overlap" else "host_labels"]["passed"]
+    if fault == "wrong_glyph":
+        assert max(row["maximum_difference"] for row in gates["host_labels"]["measured"]["glyphs"]) > 2
+    else:
+        assert not gates["graph_label_spacing" if fault == "overlap" else "host_labels"]["passed"]
 
 
 @pytest.mark.parametrize("original,visible,width", [
@@ -1021,26 +781,30 @@ def test_text_oracle_rejects_partial_glyphs_under_the_actual_clip(tmp_path):
 
 def test_visible_result_keeps_pixel_evidence_optional():
     # This pure contract case is not a measured application acceptance result.
-    result = {"mode": "qwen", "completed": True, "pixel_evidence_collected": False,
+    result = {"mode": "fixture", "completed": True, "pixel_evidence_collected": False,
               "checks": [check("hidden_capture_evidence", False, "not collected", "hidden only", required=False)]}
     assert finish(result) == 0
-    assert result["qwen_acceptance"] is False
+    assert result["accepted_replication"] is False
     result["checks"][0]["required"] = True
     assert finish(result) == 1
 
 
 @pytest.mark.parametrize("change,passed,evidence", [
     ({}, True, "measured"),
-    ({"last_pass_ms": None}, False, "unverified"),
-    ({"last_pass_ms": 50.01}, False, "measured"),
+    ({"last_pass_ms": None}, True, "unavailable"),
+    ({"last_pass_ms": 50.01}, True, "measured"),
+    ({"last_pass_ms": float("inf")}, False, "unverified"),
+    ({"last_pass_ms": True}, False, "unverified"),
+    ({"last_pass_ms": -1}, False, "unverified"),
     ({"memory_bytes": (64 << 20) + 1}, False, "measured"),
-    ({"frame_ms": None}, False, "unverified"),
-    ({"frame_ms": 4.01}, False, "measured"),
+    ({"frame_ms": None}, True, "unavailable"),
+    ({"frame_ms": 4.01}, True, "measured"),
+    ({"frame_ms": "4"}, False, "unverified"),
 ])
-def test_program_budgets_reject_missing_or_excess_measurements(change, passed, evidence):
+def test_program_measurements_retain_memory_caps(change, passed, evidence):
     # This pure validation input is not saved as acceptance evidence.
-    program = {"id": "attribution", "last_pass_ms": 50, "memory_bytes": 64 << 20,
-               "memory_limit_bytes": 64 << 20, "draw": {"frame_ms": 4, "frame_limit_ms": 4,
+    program = {"id": "attribution", "state": "running", "last_step": 1, "last_pass_ms": 50, "memory_bytes": 64 << 20,
+               "memory_limit_bytes": 64 << 20, "draw": {"state": "running", "frames": 1, "frame_ms": 4, "frame_limit_ms": 4,
                "memory_bytes": 64 << 20, "memory_limit_bytes": 64 << 20}}
     for key, value in change.items():
         (program["draw"] if key == "frame_ms" else program)[key] = value
@@ -1049,7 +813,10 @@ def test_program_budgets_reject_missing_or_excess_measurements(change, passed, e
                                            "draw": {"frame_ms": 4, "memory_mb": 64}}}}
     gates = program_budget_checks(snapshot)
     assert all(gate["passed"] for gate in gates) is passed
-    if change:
+    if evidence == "unavailable":
+        unavailable = [gate for gate in gates if gate.get("evidence") == "unavailable"]
+        assert len(unavailable) == 1 and unavailable[0]["measured"] is None and unavailable[0]["reason"]
+    if change and not passed:
         failed = [gate for gate in gates if not gate["passed"]]
         assert len(failed) == 1 and failed[0]["evidence"] == evidence
         assert failed[0]["measured"] == next(iter(change.values()))
@@ -1127,7 +894,7 @@ def test_bridge_creates_examples_after_an_early_refusal(tmp_path):
 
 def test_visible_bridge_continues_after_first_event():
     from unittest.mock import Mock
-    session = Mock(quality_override=None)
+    session = Mock(family="fixture")
     session.live.side_effect = [True, True, False]
     bridge = driver.Bridge(session)
     bridge.consume = Mock()
@@ -1371,7 +1138,7 @@ def test_acceptance_uses_explicit_ablation_and_retains_selection_gate(tmp_path, 
     before_reply = {"step": 9, "elements": [
         [0, 0, 0, 0, .1, .2 if selection_changed else .1, token, token - 1] for token in range(1, 11)]}
     after_reply = dict(before_reply, step=14)
-    session = Mock(out=tmp_path, run_id="circuit-trace", program_evidence={"before": {}}, quality_override=None)
+    session = Mock(out=tmp_path, run_id="circuit-trace", program_evidence={"before": {}})
     session.read.return_value = before_reply
     session.example_page.return_value = before_reply, before_reply
     session.ablate_selected.return_value = after_reply, after
@@ -1403,13 +1170,13 @@ def test_acceptance_uses_explicit_ablation_and_retains_selection_gate(tmp_path, 
     assert result["comparison"] == {"before": prior, "after": after}
 
 
-@pytest.mark.parametrize("effect,probability,new_top,height,steering_passed,pixels_passed", [
+@pytest.mark.parametrize("effect,probability,new_top,height,steering_direction,pixel_direction", [
     (-4.64, .5, 1, 50, True, True),
     (4.64, .1, 1, 10, True, True),
     (-4.64, .1, 1, 10, False, False),
     (4.64, .5, 1, 50, False, False),
-    (-4.64, .32, 1, 32, False, True),
-    (4.64, .28, 1, 28, False, True),
+    (-4.64, .32, 1, 32, True, True),
+    (4.64, .28, 1, 28, True, True),
     (-4.64, .32, 2, 32, True, True),
     (4.64, .28, 2, 28, True, True),
     (-4.64, .28, 2, 28, False, False),
@@ -1424,7 +1191,7 @@ def test_acceptance_uses_explicit_ablation_and_retains_selection_gate(tmp_path, 
     (0., .32, 2, 32, False, False),
 ])
 def test_acceptance_wires_zero_clamp_prediction_to_probability_and_pixels(
-        tmp_path, monkeypatch, steering_case, effect, probability, new_top, height, steering_passed, pixels_passed):
+        tmp_path, monkeypatch, steering_case, effect, probability, new_top, height, steering_direction, pixel_direction):
     from types import SimpleNamespace
     from unittest.mock import Mock
     prompt, _, status, _ = inference_fixture()
@@ -1449,7 +1216,7 @@ def test_acceptance_wires_zero_clamp_prediction_to_probability_and_pixels(
     after_reply = {"step": 14, "elements": list(reversed(after_rows))}
     folder = tmp_path / "acceptance"
     folder.mkdir()
-    session = Mock(out=folder, run_id="circuit-trace", show=False, quality_override=None,
+    session = Mock(out=folder, run_id="circuit-trace", show=False,
                    program_evidence={"before": {}, "after": {}})
     session.read.return_value = before_reply
     session.example_page.return_value = before_reply, before_reply
@@ -1480,7 +1247,7 @@ def test_acceptance_wires_zero_clamp_prediction_to_probability_and_pixels(
     monkeypatch.setattr(_checks, "example_page_check", lambda *args: {})
     result = {"checks": []}
     with pytest.raises(Failure, match="steering checks recorded"):
-        driver.acceptance(session, SimpleNamespace(prompt=prompt, model="local-qwen"), result)
+        driver.acceptance(session, SimpleNamespace(prompt=prompt, model="local-gemma"), result)
     session.ablate_selected.assert_called_once_with(prompt, minimum_step=10)
     saved = json.loads((tmp_path / "result.json").read_text())
     assert saved["selected_feature"] == selected
@@ -1488,8 +1255,10 @@ def test_acceptance_wires_zero_clamp_prediction_to_probability_and_pixels(
     gates = {gate["name"]: gate for gate in saved["checks"] if "name" in gate}
     steering = gates["steering_change_matches_prediction"]
     pixels = gates["bar_change_matches_prediction"]
-    assert steering["required"] and steering["passed"] is steering_passed
-    assert pixels["required"] and pixels["passed"] is pixels_passed
+    assert steering["required"] and steering["passed"]
+    assert pixels["required"] and pixels["passed"]
+    assert steering["measured"]["direction_matches"] is steering_direction
+    assert pixels["measured"]["direction_matches"] is pixel_direction
     for gate in (steering, pixels):
         assert gate["measured"]["predicted_ablation_effect"] == -effect
         expected_direction = "increase" if effect < 0 else "decrease" if effect > 0 else None
@@ -1549,7 +1318,7 @@ def test_acceptance_pixels_keep_original_argmax(tmp_path, monkeypatch, steering_
     after_reply = {"step": 14, "elements": after_rows}
     folder = tmp_path / "acceptance"
     folder.mkdir()
-    session = Mock(out=folder, run_id="circuit-trace", show=False, quality_override=None,
+    session = Mock(out=folder, run_id="circuit-trace", show=False,
                    program_evidence={"before": {}, "after": {}})
     session.read.return_value = before_reply
     session.example_page.return_value = before_reply, before_reply
@@ -1589,7 +1358,7 @@ def test_acceptance_pixels_keep_original_argmax(tmp_path, monkeypatch, steering_
     message = {None: "pixel checks recorded", "comparison": "actual argmax token IDs",
                "before": "omit an actual argmax", "after": "omit the original baseline top token"}[missing]
     with pytest.raises(Failure, match=message):
-        driver.acceptance(session, SimpleNamespace(prompt=prompt, model="local-qwen"), result)
+        driver.acceptance(session, SimpleNamespace(prompt=prompt, model="local-gemma"), result)
     if missing is not None:
         assert not any(g.get("name") == "bar_change_matches_prediction" for g in result["checks"])
         return
@@ -1597,7 +1366,7 @@ def test_acceptance_pixels_keep_original_argmax(tmp_path, monkeypatch, steering_
     assert captures == ["before", "examples-page-2", "after", "methods-expanded"]
     for name, height in (("before", 32), ("page-2", 32), ("after", 16), ("methods-expanded", 16)):
         gate = gates[name + ".bar_height"]
-        assert gate["passed"] and gate["threshold"] == "within 2 pixels"
+        assert gate["passed"] and gate["threshold"] == "finite bar measurements with exact resource identity"
         assert gate["measured"]["token"] == original
         assert gate["measured"]["pixels"] == height
         assert gate["measured"]["expected"] == pytest.approx(height)
@@ -1698,7 +1467,7 @@ def test_session_event_and_mcp_close_faults_preserve_app_cleanup(tmp_path):
         app.stdin.close()
 
 
-@pytest.mark.parametrize("model,display", [("tiny-lm", "1"), ("local-qwen", None)])
+@pytest.mark.parametrize("model,display", [("tiny-lm", "1"), ("local-gemma", None)])
 @pytest.mark.skipif(os.name == "nt", reason="This integration case uses a POSIX executable and process launcher.")
 def test_session_ready_failure_reaps_owned_standard_library_child(tmp_path, monkeypatch, model, display):
     from types import SimpleNamespace
@@ -1726,12 +1495,10 @@ def test_session_ready_failure_reaps_owned_standard_library_child(tmp_path, monk
     assert not psutil.pid_exists(probe["pid"])
 
 
-@pytest.mark.parametrize("override", [False, True])
-def test_instrument_uses_three_panels_and_confirmed_bindings(override):
+def test_instrument_uses_three_panels_and_confirmed_bindings():
     from unittest.mock import Mock
     import jsonschema
-    record = failed_quality_override()[1] if override else None
-    session = Mock(quality_override=record)
+    session = Mock(family="fixture")
     import tomllib
     spec = {"caliper_spec": 1, "panel": []}
     def body(method, **args):
@@ -1758,12 +1525,7 @@ def test_instrument_uses_three_panels_and_confirmed_bindings(override):
     description = next(call.kwargs["description"] for call in calls if call.args[0] == "spec.new")
     readouts = {call.kwargs["id"]: call.kwargs["options"]["format"] for call in calls
                 if call.args[0] == "control.create" and call.kwargs["kind"] == "readout"}
-    assert len(readouts) == (8 if override else 6)
-    if override:
-        assert record["dictionary_fingerprint"] in readouts["method_dictionary_identity"]
-        text = readouts["method_dictionary_quality_override"]
-        assert "Founder override" in text and "Quality remains failed" in text
-        assert all(f"{record[key]:.9f}" in text for key in ("fvu", "dead_fraction", "cross_entropy_delta"))
+    assert len(readouts) == 6
     for name, text in driver.METHOD_DISCLOSURES.items():
         assert text in description and readouts["method_" + name] == text
     controls = {call.kwargs["id"]: call.kwargs for call in calls if call.args[0] == "control.create"}
@@ -1790,7 +1552,7 @@ def test_instrument_uses_three_panels_and_confirmed_bindings(override):
     assert len(leaves) == len(set(leaves))
     hidden = {"clamp_status_value", *("method_" + name for name in driver.METHOD_DISCLOSURES)}
     assert set(leaves) == set(panels) | (set(controls) - hidden)
-    assert nodes["instrument"]["ratio"] == (.90 if override else .95)
+    assert nodes["instrument"]["ratio"] == .95
     assert nodes["body"]["children"] == ["plots", "examples"]
     assert nodes["body"]["ratio"] == .70
     assert nodes["plots"]["ratio"] == .67
@@ -1822,7 +1584,7 @@ def test_instrument_uses_three_panels_and_confirmed_bindings(override):
 
 def test_bridge_expands_and_collapses_method_details():
     from unittest.mock import Mock, patch
-    session = Mock(quality_override=None)
+    session = Mock(family="fixture")
     bridge = driver.Bridge(session)
     with patch.object(driver, "instrument_layout") as layout:
         for value in (True, False):
@@ -1908,11 +1670,9 @@ def hidden(tmp_path, model, dictionary):
     family = driver.acceptance_profile(model)[0]
     if family == "gemma":
         command.extend(["--replication-profile", "published_dallas_v1", "--private-output-directory", str(out.parent)])
-    if family == "qwen" and env.get("CALIPER_QWEN_QUALITY_OVERRIDE"):
-        command.extend(["--quality-override", env["CALIPER_QWEN_QUALITY_OVERRIDE"]])
     with subprocess.Popen(command, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True) as process:
         try:
-            stdout, stderr = process.communicate(timeout=540)
+            stdout, stderr = process.communicate(timeout=1800)
         except subprocess.TimeoutExpired:
             import psutil
             owned = psutil.Process(process.pid).children(recursive=True)
@@ -1950,18 +1710,7 @@ def test_hidden_fixture(tmp_path):
     folder = tmp_path / "dictionary"
     fixture_resources(folder)
     report = hidden(tmp_path, "tiny-lm", folder)
-    assert report["qwen_acceptance"] is False
-
-
-@pytest.mark.local_model
-def test_local_qwen_hidden(tmp_path):
-    model, dictionary = os.environ.get("CALIPER_QWEN_MODEL"), os.environ.get("CALIPER_QWEN_DICTIONARY")
-    if not model or not dictionary:
-        pytest.skip("Set both explicit local Qwen resource paths to opt in.")
-    assert not os.environ.get("CI"), "The local Qwen case must not run in CI."
-    assert Path(model).is_dir() and Path(dictionary).is_dir()
-    resources_and_device(fixture=False)
-    assert hidden(tmp_path, model, dictionary)["qwen_acceptance"]
+    assert report["accepted_replication"] is False
 
 
 @pytest.mark.local_model
@@ -1990,21 +1739,6 @@ def test_event_wait_bounds_completion_without_an_event(monkeypatch):
     reads = iter([False, False, {"step": 4}])
     assert events.until("resource", lambda: next(reads)) == {"step": 4}
     assert waits == [.05, .05]
-
-
-def test_mcp_journal_records_request_duration(monkeypatch):
-    import io
-    from unittest.mock import Mock
-    from demos.circuit_trace import _mcp
-    client = _mcp.MCP.__new__(_mcp.MCP)
-    client.request = Mock(return_value={"structuredContent": {"step": 4}})
-    client.journal = io.StringIO()
-    clock = iter([10., 10.125])
-    monkeypatch.setattr(_mcp.time, "monotonic", lambda: next(clock))
-    assert client.body("program.read", id="bars") == {"step": 4}
-    record = json.loads(client.journal.getvalue())
-    assert record["command"] == "program.read"
-    assert record["started_monotonic"] == 10. and record["seconds"] == .125
 
 
 class CaptureResources:
@@ -2224,6 +1958,10 @@ def test_demo_flows_use_the_complete_selection_capture_barrier(tmp_path, monkeyp
     selected = dict(index=0, id="feature:0:0:1", kind="feature", layer=0, feature=1, position=0,
                     influence=1, effect=1, label="Selected Feature")
     graph = dict(nodes=[selected], counts={"layers": 2}, completeness={"max_absolute_residual": 0})
+    import _replication_review, _completeness
+    monkeypatch.setattr(_replication_review, "_full_graph", lambda *args: {})
+    monkeypatch.setattr(_replication_review, "_graph_path", lambda *args: tmp_path / "synthetic-graph.json")
+    monkeypatch.setattr(_completeness, "summary_evidence", lambda graph: graph["completeness"])
     trace = dict(step=1, seconds=0, state="done", counts={"nodes": 1})
     session.events.complete = lambda *args, **kwargs: trace
     monkeypatch.setattr(driver, "check_assets", lambda s: {})
@@ -2263,3 +2001,65 @@ def test_demo_flows_use_the_complete_selection_capture_barrier(tmp_path, monkeyp
         entry(session, SimpleNamespace(prompt=driver.published.PROMPT, model="tiny-lm"), {"checks": []})
     assert harness.captures[0][0] == 3
     assert harness.cursor["live"]
+
+
+@pytest.mark.parametrize("fault", ["missing_program", "refused", "stopped_draw", "error", "missing_step", "stale_step", "no_frames"])
+def test_program_measurements_cannot_replace_readiness(fault):
+    program = {"id": "attribution", "state": "running", "last_step": 2, "last_pass_ms": 100,
+               "memory_bytes": 1024, "memory_limit_bytes": 64 << 20,
+               "draw": {"state": "running", "frames": 1, "frame_ms": 20, "frame_limit_ms": 4,
+                        "memory_bytes": 1024, "memory_limit_bytes": 64 << 20}}
+    if fault == "refused": program["state"] = "refused"
+    elif fault == "stopped_draw": program["draw"]["state"] = "stopped"
+    elif fault == "error": program["draw"]["error"] = {"code": "failed"}
+    elif fault == "missing_step": program.pop("last_step")
+    elif fault == "stale_step": program["last_step"] = 1
+    elif fault == "no_frames": program["draw"]["frames"] = 0
+    snapshot = {"status": {"programs": [] if fault == "missing_program" else [program]},
+                "expected_steps": {"attribution": 2}, "pieces": {"attribution": {
+                    "derive": {"time_ms": 50, "memory_mb": 64}, "draw": {"frame_ms": 4, "memory_mb": 64}}}}
+    checks = program_budget_checks(snapshot)
+    assert not next(gate for gate in checks if gate["name"] == "attribution.ready")["passed"]
+    assert finish({"mode": "fixture", "completed": True, "checks": checks}) == 1
+
+
+@pytest.mark.parametrize("share,passed", [(0, True), (.01, True), (1., True), (None, False),
+    (True, False), ("0.3", False), (-.1, False), (1.1, False), (float("nan"), False), (float("inf"), False)])
+def test_feature_share_requires_measurements_without_minimum(steering_case, share, passed):
+    steering_case["graph"]["feature_share"] = share
+    checks = {gate["name"]: gate for gate in math_checks(**steering_case)}
+    assert checks["feature_share"]["passed"] is passed
+    assert checks["graph_size"]["passed"] and checks["graph_size"]["measured"] == 4
+
+
+@pytest.mark.parametrize("value", [None, True, "0.5", -.1, 1.1, float("nan"), float("inf")])
+def test_steering_rejects_invalid_actual_probabilities(steering_case, value):
+    steering_case["after"][0]["probability"] = value
+    try:
+        checks = {gate["name"]: gate for gate in math_checks(**steering_case)}
+    except (TypeError, ValueError):
+        return
+    assert not checks["steering_change_matches_prediction"]["passed"]
+
+
+@pytest.mark.parametrize("command,completion,passed", [("trace.run", 150, True),
+    ("trace.run", 630, False), ("trace.validate", 150, False)])
+def test_trace_command_wait_uses_founder_safety_timeout(monkeypatch, command, completion, passed):
+    from types import SimpleNamespace
+    import _mcp
+    clock = [0.]
+    def body(name, **arguments):
+        assert name == command
+        if not arguments or clock[0] < completion:
+            return {"pending": True, "request_id": "fixture"}
+        return {"pending": False, "result": {"state": "done"}}
+    events = _mcp.Events(SimpleNamespace(body=body))
+    monkeypatch.setattr(_mcp, "time", SimpleNamespace(monotonic=lambda: clock[0]))
+    events.wait = lambda timeout: clock.__setitem__(0, clock[0] + 30)
+    if passed:
+        assert events.complete(command) == {"state": "done"}
+        assert clock[0] == 150
+    else:
+        with pytest.raises(Failure, match="Timed out"):
+            events.complete(command)
+        assert clock[0] == (600 if command == "trace.run" else 120)

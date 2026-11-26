@@ -5,7 +5,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from test_circuit_trace import driver, inference_fixture, qualification_reply, steering_case
+from test_circuit_trace import driver, inference_fixture, steering_case
 from test_gemma_acceptance import gemma_reply
 from _checks import MODEL_PROMPT, check, finish
 from _mcp import Failure
@@ -50,7 +50,7 @@ def completion_case(tmp_path, monkeypatch, steering_case):
             self.events = SimpleNamespace(complete=self.complete, until=lambda name, read: read(), history=[])
             self.program_evidence = {"before": {}, "after": {}}
             self.steered = self.generated = False
-            self.dictionary = gemma_reply() if args.family == "gemma" else qualification_reply()
+            self.dictionary = gemma_reply() if args.family == "gemma" else {}
             state.sessions.append(self)
 
         def complete(self, method, **kwargs):
@@ -169,7 +169,6 @@ def completion_case(tmp_path, monkeypatch, steering_case):
         nonlocal prompt, prior, status, params
         prompt, prior, status, params = inference_fixture(state.prompt)
         model = {"gemma": tmp_path / "models--google--gemma-2-2b" / "snapshots" / driver.GEMMA_REVISION,
-                 "qwen": tmp_path / "models--Qwen--Qwen3.5-0.8B" / "snapshots" / driver.MODEL_REVISION,
                  "fixture": "tiny-lm"}[state.family]
         return driver.main(["--model", str(model), "--dictionary", str(tmp_path / "dictionary"),
                             "--prompt", prompt, "--out", str(state.out), "--show" if state.show else "--hidden"])
@@ -198,21 +197,19 @@ def completion_case(tmp_path, monkeypatch, steering_case):
         real_close(session)
 
 
-@pytest.mark.parametrize("family", ["fixture", "qwen", "gemma"])
+@pytest.mark.parametrize("family", ["fixture", "gemma"])
 @pytest.mark.parametrize("completion", [None, False, 1, "true"])
 def test_finish_requires_explicit_completion(family, completion):
     result = {"mode": family, "checks": [check("partial", True, True, True)],
-              "dictionary_evidence": gemma_reply() if family == "gemma" else qualification_reply(),
-              "pixel_evidence_collected": True, "passed": True, "gemma_acceptance": True,
-              "qwen_acceptance": True, "qwen_full_mlp_acceptance": True}
+              "dictionary_evidence": gemma_reply() if family == "gemma" else {},
+              "pixel_evidence_collected": True, "passed": True, "gemma_acceptance": True}
     if completion is not None:
         result["completed"] = completion
     assert finish(result) == 1
-    assert not result["passed"] and not result["gemma_acceptance"] and not result["qwen_acceptance"]
-    assert not result["qwen_full_mlp_acceptance"] and result["qwen_acceptance_scope"] is None
+    assert not result["passed"] and not result["gemma_acceptance"]
 
 
-@pytest.mark.parametrize("family", ["fixture", "qwen", "gemma"])
+@pytest.mark.parametrize("family", ["fixture", "gemma"])
 def test_complete_driver_publishes_success_after_cleanup(completion_case, family):
     case = completion_case
     case.family = family
@@ -221,7 +218,6 @@ def test_complete_driver_publishes_success_after_cleanup(completion_case, family
     assert result["completed"] and result["acceptance_complete"]
     assert result["passed"] is (family != "gemma")
     assert not result["gemma_acceptance"]
-    assert result["qwen_acceptance"] is (family == "qwen")
     gates = {gate["name"] for gate in result["checks"]}
     assert {"validation", "generation", "reset", "dictionary_identity_stable", "process_memory"} <= gates
     assert all(s.app_log.closed and s.mcp_closed for s in case.sessions)
@@ -243,7 +239,7 @@ def test_capture_interruption_preserves_error_and_cleanup(completion_case, fault
     result = case.read()
     assert result["pixel_evidence_collected"] and result["dictionary_qualification"]["qualified"]
     assert not result["completed"] and not result["acceptance_complete"] and not result["passed"]
-    assert not result["gemma_acceptance"] and not result["qwen_acceptance"]
+    assert not result["gemma_acceptance"]
     assert result["error"] == detail
     assert "validation" not in case.calls and "generate" not in case.calls and "reset" not in case.calls
     assert all(s.app_log.closed and s.mcp_closed for s in case.sessions)
@@ -392,7 +388,7 @@ def test_visible_recovery_interruption_preserves_both_errors(completion_case, mo
     assert all(s.app_log.closed and s.mcp_closed for s in case.sessions)
 
 
-def test_complete_gemma_custom_prompt_retains_confidence_failure(completion_case):
+def test_complete_gemma_custom_prompt_reports_confidence_without_acceptance(completion_case):
     case = completion_case
     case.prompt = "A neutral custom prompt"
     assert case.run() == 1
@@ -400,7 +396,7 @@ def test_complete_gemma_custom_prompt_retains_confidence_failure(completion_case
     assert result["completed"] and result["acceptance_complete"]
     assert not result["passed"] and not result["gemma_acceptance"]
     gate = next(gate for gate in result["checks"] if gate["name"] == "prompt_confidence")
-    assert gate["required"] and not gate["passed"]
+    assert gate["required"] and gate["passed"]
     assert gate["measured"]["baseline_probability"] == .5
 
 
@@ -508,7 +504,7 @@ def test_stale_or_incomplete_dallas_evidence_stops_before_full_session(completio
     assert result["error"].startswith("Failure:")
 
 
-@pytest.mark.parametrize("family,prompt", [("fixture", MODEL_PROMPT), ("qwen", MODEL_PROMPT),
+@pytest.mark.parametrize("family,prompt", [("fixture", MODEL_PROMPT),
                                           ("gemma", "Custom fact"), ("gemma", MODEL_PROMPT + " ")])
 def test_dallas_preflight_scope_preserves_existing_prompt_behavior(completion_case, family, prompt):
     case = completion_case
@@ -521,7 +517,7 @@ def test_dallas_preflight_scope_preserves_existing_prompt_behavior(completion_ca
     assert not any(g["name"] == "dallas_preflight" for g in result["checks"])
     assert result["completed"]
     if family == "gemma":
-        assert result["failed_checks"] == ["prompt_confidence", "published_profile", "external_replication_review"]
+        assert result["failed_checks"] == ["published_profile", "external_replication_review"]
     else:
         assert result["passed"]
 

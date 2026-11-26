@@ -146,16 +146,13 @@ class MCP:
             return message["result"]
 
     def call(self, name, /, **args):
-        started = time.monotonic()
         result = self.request("tools/call", {"name": name.replace(".", "_"), "arguments": args})
-        seconds = time.monotonic() - started
         # Images remain separate artifacts. The command log contains no API token.
         logged = {k: v for k, v in result.items() if k != "content"}
         if "structuredContent" in logged:
             logged["structuredContent"] = {k: v for k, v in logged["structuredContent"].items()
                                             if k != "png_base64"}
-        self.journal.write(json.dumps({"command": name, "args": args, "reply": logged,
-                                      "started_monotonic": started, "seconds": seconds}) + "\n")
+        self.journal.write(json.dumps({"command": name, "args": args, "reply": logged}) + "\n")
         self.journal.flush()
         if result.get("isError"):
             raise Failure(f"{name}: {result.get('content')}")
@@ -223,4 +220,5 @@ class Events:
         def read():
             value = self.mcp.body(name, request_id=request_id)
             return (value["result"],) if not value["pending"] else None
-        return self.until(name, read)[0]
+        options = {"timeout": 600} if name == "trace.run" else {}
+        return self.until(name, read, **options)[0]

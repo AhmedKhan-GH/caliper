@@ -6,14 +6,13 @@ M7 adds model probes, transcoder dictionaries, feature examples, and attribution
 M8 adds interventions and a hosted inference run.
 The only acceptance model is Gemma 2 2B with the selected Gemma Scope transcoders.
 
-Qwen3.5-0.8B remains experimental, and generic Llama support remains deferred.
-Qwen CPU and fixture checks remain required, but further Qwen GPU runs, regrading, and acceptance attempts are outside this run.
-Its dictionary and index remain unchanged.
-
 The instrument shows one graph, its feature examples, and next-token probabilities.
 Published group actions test the Dallas example against the actual circuit-tracer reference.
-M8 remains held, with this target: reproduces the published circuit-tracer Gemma 2 2B Dallas example.
-Founder Decision 12 replaces the former causal bars and feature selection procedure.
+M8 remains held until Caliper reproduces the published circuit-tracer Gemma 2 2B Dallas example.
+
+Founder Decisions 12 and 14 define the published experiment and probability envelope.
+Decisions 15 through 18 remove invented numerical limits, diagnostic phase timers, and locally trained dictionary paths.
+The lead gate audit defines the current evidence policy. Final acceptance remains pending.
 
 ## Verified Base
 
@@ -23,48 +22,31 @@ The Dictionary Contract and Replacement Model sections describe the current Gemm
 
 ### Model And Dictionary
 
-The model is `Qwen/Qwen3.5-0.8B`, revision `2fc06364715b967f1860aea9cf38778875588b17`.
-Its [config](https://huggingface.co/Qwen/Qwen3.5-0.8B/blob/2fc06364715b967f1860aea9cf38778875588b17/config.json) has 24 decoder layers and a residual width of 1,024.
-The vocabulary has 248,320 entries. Six layers use full attention. The other 18 layers use Gated DeltaNet.
-Full attention also has an output gate. A text-only load uses `Qwen3_5ForCausalLM` with the checkpoint text config.
-The local environment uses PyTorch 2.15.0 and Transformers 5.24.0.
+The model is `google/gemma-2-2b`, revision `c5ebcd40d208330abc697524c919956e692655cf`.
+It has 26 layers, residual width 2,304, and vocabulary size 256,000.
+The model family interface supports Gemma 2 and the small synthetic CI model.
 
-The bounded dictionary search used Hugging Face queries for the exact model with `transcoder`, `clt`, and `sae`.
-The search also checked the [circuit-tracer model options](https://github.com/decoderesearch/circuit-tracer).
-No complete per-layer MLP transcoder set for this checkpoint was found.
-The [available Qwen SAEs](https://huggingface.co/decoderesearch/qwen-3.5-saes) cover selected residual layers.
-The [readout dictionaries](https://huggingface.co/hematteo/sparse-readout-prism) factor the unembedding matrix.
-Neither artifact supplies the required MLP input-to-output path. T2 trained the Qwen dictionary locally.
+The dictionary uses the published Gemma Scope transcoders at revision `50eec2f25c60545a9a74c1c3a26a0afdd0b4b872`.
+Its source encoder shape is `(2304, 16384)`. Its decoder shape is `(16384, 2304)`.
+Each layer includes encoder bias, decoder bias, and a JumpReLU threshold.
+Only published dictionaries qualify for model acceptance. Synthetic dictionaries support CPU tests.
 
-The text source is [FineWeb-Edu](https://huggingface.co/datasets/HuggingFaceFW/fineweb-edu), config `sample-10BT`, split `train`.
-The dataset revision is `87f09149ef4734204d70ed1d046ddc9ca3f2b8f9`.
-Document partitions for training, quality checks, and examples must be disjoint and reproducible.
-The manifest records those partitions. The trainer streams text and keeps no activation files.
-
-The fallback repository is [Gemma Scope transcoders](https://huggingface.co/google/gemma-scope-2b-pt-transcoders), revision `50eec2f25c60545a9a74c1c3a26a0afdd0b4b872`.
-Its file list covers all 26 Gemma 2 2B layers. A representative layer loads with `numpy.load(..., allow_pickle=False)`.
-Its encoder shape is `(2304, 16384)`. Its decoder shape is `(16384, 2304)`.
-It also holds encoder bias, decoder bias, and a JumpReLU threshold. A two-row encode and decode gives finite outputs.
-This verifies the artifact format, not a complete fallback model run.
+The local text source is FineWeb-Edu, config `sample-10BT`, split `train`.
+Its pinned revision is `87f09149ef4734204d70ed1d046ddc9ca3f2b8f9`.
+Quality and example partitions retain exact source identity and document separation.
+Their measured sizes do not define scientific adequacy.
 
 The source reads the RMS-normalized input before the learned pre-feedforward gain and predicts the output after the post-feedforward norm.
 The ordinary converter transposes the encoder and divides its input columns by that learned gain.
 The published profile requires a separate original-coordinate BF16 artifact.
 Historical F32 conversion does not qualify those new bytes, and Gemma acceptance remains pending.
 
-The founder accepted the existing Qwen dictionary for its recorded visual results and prohibited further dictionary training.
-The M8 acceptance target is Gemma 2 2B with the public Gemma Scope transcoders.
-M8 remains held until the actual reference comparison and every product check pass.
-The former 8/10 sign and Spearman 0.6 bars do not define published Gemma acceptance.
-The Qwen quality override does not apply to Gemma.
-
 ### Existing Interfaces
 
 `TorchAdapter.points` delegates to `_ablate.points`. It lists modules and supported attention heads.
 Semantic points require no CPU copy. Decoder block names come from the actual module tree.
-The fixture blocks use `layers.N`. The text-only Qwen wrapper uses `model.layers.N`.
+The fixture blocks use `layers.N`. Gemma uses `model.layers.N`.
 The probe suffixes are `resid_pre`, `mlp_in`, `mlp_out`, and `attn_pattern`.
-The Qwen DeltaNet pattern is a signed causal mixing operator, not a softmax probability matrix.
 Semantic probes retain the existing wire kind `module`. Their `probe` field identifies the semantic form.
 
 `_programs._resolve` reads parameters, buffers, gradients, and module outputs through `.act`.
@@ -89,7 +71,7 @@ An optimizer-free watch supplies producer attachment, program capabilities, and 
 The implemented text contract is in `docs/agents/pieces.md`, Text, and `src/builder/programs/piece_checks.cpp`.
 A text table holds 4,096 strings, with at most 64 UTF-8 bytes per string.
 The renderer places at most 512 labels per panel. Thus 16 rows of 33 token labels do not fit.
-The examples panel uses the specified fallback of eight rows and 25 displayed tokens.
+The examples panel uses eight rows and 25 displayed tokens.
 The API retains 16 examples with 33-token windows. Two pages expose all examples.
 
 The acceptance check counts eight visible row IDs on each page and verifies 16 distinct example IDs across both pages.
@@ -114,7 +96,7 @@ Registry status describes actual delivery and remains separate from M8 acceptanc
 
 ## Dictionary Contract
 
-The family map has explicit fixture, Qwen3.5 text, and Gemma 2 entries.
+The family map has explicit fixture and Gemma 2 entries.
 Gemma uses `google/gemma-2-2b` at revision `c5ebcd40d208330abc697524c919956e692655cf`.
 The model has 26 layers, residual width 2,304, and vocabulary size 256,000.
 It requires the official gated snapshot under the Gemma license.
@@ -171,12 +153,14 @@ Its identity and quality values cannot qualify new BF16 bytes, arithmetic, or in
 The published profile discloses absent or supplied historical quality evidence and adds no quality gate.
 The generic research protocol retains its identity, sample, context, and per-layer loss checks.
 
-The published index requires exactly 2,000,000 source positions, with 256 model positions per context with BOS.
+The published index records its actual source positions, document count, and source budget.
+It uses 256 model positions per context with BOS. No exact two-million-position acceptance requirement remains.
 It uses original-coordinate BF16 captures and format version 2 with encoder policy `gemma_scope_pre_gain_v1`.
+
 The complete artifact fingerprint and model execution identity bind every file, tensor, arithmetic operation, package version, dtype, device, and forward setting.
 The index retains 16 examples, 33 source slots per example, a separate BOS position, and stable tie order.
 Artifact qualification must precede index construction, and index compatibility does not replace source qualification.
-No new dictionary training or Qwen regrading is authorized.
+The converter, quality evaluator, and index builder retain the published source contract.
 
 The explicit Gemma process budget is at most 40 decimal GB.
 Standalone verification, dictionary loads, and traces retain a 12 GB default.
@@ -185,7 +169,7 @@ A supplied lower converter limit remains active.
 
 Only the pinned Gemma identity permits a larger verification or dictionary limit, and only the Gemma family permits a larger trace limit.
 Hosted Gemma inference and acceptance select 40 GB explicitly.
-Qwen and fixture limits remain 12 GB, and Qwen training retains 24 GB.
+The fixture process limit remains 12 GB.
 
 Shared Parquet admission requires at least 8 decimal GB of available host memory after the requested allocation.
 It also requires sufficient process headroom and retains historical peak checks.
@@ -196,7 +180,7 @@ The identity includes tied weights, effective settings, default RoPE buffers, an
 Random Gemma CPU tests cover these paths and semantic interventions.
 Independent CPU checks cover actual TransformerLens conversion at 33, 256, and 1,024 positions, plus right padding at 256 positions.
 They cover F32 and BF16, but small CPU models do not prove full model or device parity.
-The actual reference completed all published cases and CPU pruning.
+Prior reference evidence records all published cases and CPU pruning.
 
 Full Caliper comparison, index qualification, timing, memory, and product acceptance remain separate lead checks.
 
@@ -208,10 +192,10 @@ Its `metadata` holds the parsed manifest. Its `layers` hold the per-layer weight
 
 The folder holds `dictionary.json` and `layer_NN.safetensors` for each layer.
 The manifest records model ID, model hash, revision, layers, width, latents, activation, k, and probe names.
-It also records training text, partitions, token count, elapsed time, peak memory, and measured quality.
+It also records imported source provenance, evaluation partitions, token counts, peak memory, and measured quality.
 
 Each encoder has shape `(latents, width)`. Each decoder has the same shape.
-The TopK encoder computes `relu(x @ W_enc.T + b_enc)`, then keeps the largest k activations.
+The synthetic fixture uses TopK. Its encoder computes `relu(x @ W_enc.T + b_enc)`, then keeps the largest k activations.
 The decoder computes `a @ W_dec + b_dec`. The error is the original semantic MLP output minus the decoder output.
 
 The JumpReLU encoder computes `z = x @ W_enc.T + b_enc`, then `z * (z > threshold)`.
@@ -219,30 +203,11 @@ JumpReLU requires positive finite thresholds and `k=None`.
 Threshold equality produces zero, and every nonzero feature enters the attribution source set.
 Threshold bytes enter dictionary identity and evaluation evidence.
 
-The historical Qwen training plan used 16,384 latents per layer and k = 32.
-For 24 layers, its 805,724,160 parameters occupy about 3.223 GB in float32 or 1.611 GB in float16.
-The trainer uses 40 million tokens with context 256. It updates all layers after each model forward pass.
-It processes layer losses in sequence to bound temporary memory. Training does not allocate full-vocabulary logits.
-A ten-minute pilot measures throughput and peak memory with `/usr/bin/time -l` on a quiet machine.
+Model and tokenizer files must exist locally before evaluation or index construction.
+The dataset uses the pinned local source and its recorded partitions.
+Quality metrics remain measurements. Historical status labels do not impose new numerical acceptance limits.
+The evaluator records source positions, observation counts, per-layer values, and the current artifact identity.
 
-The historical fallback plan reduced latents to 8,192, then tokens to 20 million, if the pilot predicted more than ten hours.
-The hard limits remain ten hours and 24 GB.
-The trainer uses a 240-second checkpoint interval after each completed save and stops if the work interval reaches 270 seconds.
-Checkpoint writes consume additional time within the aggregate cap.
-The founder checkpoint rule overrides the earlier 30-minute interval.
-
-The external resource wrapper runs training at `nice -n 10`, with one heavy slot and exclusive GPU access.
-These requirements are run policy. Portable tools do not contain machine-specific lock paths.
-The process checks memory pressure and stops cleanly at the specified thresholds.
-Startup stops return a bounded structured result and a nonzero exit without a traceback.
-A stop before complete initialization or restore preserves existing checkpoints and creates no new checkpoint.
-
-Model and tokenizer files must exist locally before a tool starts.
-The dataset can use a pinned local Parquet manifest or the specifically approved public FineWeb-Edu stream.
-The stream uses the fixed revision and document partitions in the training metadata.
-
-Qwen quality uses 200,000 held-out tokens. Its revised mean unexplained variance limit is 0.40.
-Dead latents must not exceed 15 percent. Full MLP replacement must increase cross-entropy by at most 0.5 nats.
 Evaluation admission compares runtime tensor bytes with the artifact after the loader dtype conversion.
 The cursor binds those bytes, the dictionary fingerprint, and evaluation settings. Resume refuses a cursor without that tensor evidence.
 A stop before admission preserves the prior quality report and cursor. Stream creation alone does not admit evaluation.
@@ -250,29 +215,7 @@ After admission, an incomplete evaluation records `partial` and the current dict
 It emits `quality_end` and replaces any earlier passed report only when the final artifact verification succeeds.
 If memory admission prevents that verification, the evaluator preserves the prior published evidence.
 
-The 23 November decision accepts the 8,192-feature dictionary and supersedes the earlier quality fallback plan.
-That run completed 40 million tokens, quality evaluation, the example index, and the hidden Qwen captures.
-No new dictionary run or upper-half retraining is authorized. Failed causal checks remain failures and retain their captures.
-Those Qwen results retain their historical feature-share, graph-validation, parity, and budget checks.
-They do not define the later published Gemma replication procedure.
-
-The library retains upper-half dictionary support for existing artifacts.
-Such a dictionary represents the lower half through error nodes.
-For Qwen, layers 12 through 23 train, and layers 0 through 11 retain zero transcoders.
-The original lower MLPs remain in the quality evaluation.
-The fallback records the admitted source metadata, exact fingerprint, and completed evaluation cursor in `fallback_source`.
-
-Fallback quality has scope `upper_half` and status `fallback_passed`, `fallback_failed`, or `fallback_partial`.
-Upper-half acceptance does not establish all-layer acceptance or receive the all-layer `passed` status.
-Lower layers have no feature examples or feature intervention targets because their MLP contributions enter error nodes.
-This reduced coverage can increase error share and reduce feature share. Generic fallback checks retain a feature share of at least 0.30.
-The acceptance report must record both measured shares and the fallback scope.
-
-The original and fallback training jobs share the aggregate ten-hour cap, which includes model load, checkpoints, and export.
-The fallback adds no time beyond that cap. Its token budget and quality scope are separate from the aggregate time allowance.
-The detailed contract is in `docs/reference/upper-half-dictionaries.md`.
-
-The ordinary example index uses two million other held-out tokens and keeps the largest 16 activations per feature.
+The index builder retains source positions and the largest available activations for each feature.
 Its memory-mapped table records document, token position, activation count, and maximum.
 Version 2 binds the `live_input_v1` encoder policy in its manifest hash.
 It also binds tensor precision, device, effective forward settings, autocast, and float32 matmul precision.
@@ -291,13 +234,6 @@ RMSNorm denominators and attention mixing coefficients are constants from the pr
 Active feature masks are fixed for the local path. Encoder and decoder biases remain explicit terms.
 Without a final softcap, logit targets use the unembedding row minus the mean unembedding row.
 
-Qwen requires additional frozen factors to make this path linear.
-For full attention, freeze the softmax pattern and the sigmoid output gate.
-For DeltaNet, freeze queries, keys, decay, beta, the value SiLU gate, the output gate, and normalization denominators.
-Keep the value projection, causal convolution, recurrent value transport, and output projection linear.
-The value SiLU becomes its input times the recorded sigmoid factor.
-This extends the same frozen-attention definition to the actual hybrid architecture. It does not attribute attention routing decisions.
-
 Gemma captures actual eager attention probabilities after the attention softcap and alternating sliding-window masks.
 Capture restores the configured attention backend on exit.
 The frozen value path includes the post-attention norm at its actual location.
@@ -314,7 +250,9 @@ CPU tests check replacement agreement, independent-write linearity, completeness
 They also cover nonunit gains, short sliding windows, attention biases, small softcaps, and JumpReLU threshold boundaries.
 These tests do not establish learned-model quality or acceptance.
 
-The replacement output must equal the recorded output before any edge calculation.
+The tracer records direct and replacement forward residuals before edge calculation.
+All four diagnostic groups retain complete layer coverage and finite values.
+Their numerical status is `measured`. A finite residual does not establish forward equivalence.
 A test must also prove linearity under source perturbations. Ordinary nonlinear-model gradients do not satisfy this contract.
 The tracer never constructs a dense residual Jacobian.
 Input interventions at `resid_pre` and `mlp_in` also form part of this affine path.
@@ -343,6 +281,8 @@ The Dallas sources omit batch size, update interval, and offload settings.
 Reconstruction selects the pinned API defaults of 512, 4, and `None` respectively and identifies these as unpublished reconstruction choices.
 The request explicitly supplies all settings and uses ceilings of 8,192 nodes and 262,144 edges.
 An excess causes refusal without silent truncation of the pruned result.
+These settings define the published experiment. They remain exact and are not comparison gates.
+
 All settings and physical batch schedules enter the result, while cache identity binds the requested settings.
 The complete kept graph remains available through pages of at most 256 nodes and 256 edges.
 
@@ -380,7 +320,12 @@ Shared state `selected_node` selects the feature and dims unrelated edges.
 The text table shows prompt tokens and the hovered or selected label.
 The app and browser use the same piece files.
 
-The draw budget is 4 ms and 64 MB. The derive budget is eight passes, 50 ms, and 64 MB.
+The piece manifests declare 4 ms for draw and 50 ms for derive.
+These times came from the outline and do not define acceptance limits under Decision 15.
+The collection reports measured times and retains program readiness and memory checks.
+Trace and action reports use plain wall-clock durations with explicit scope. Diagnostic phase timers are absent.
+The resource limits remain eight derive passes and 64 MiB per half.
+
 The probe and dictionary implementations stay in Python. Graph layout and draw stay in WGSL.
 The app holds no model weights or dictionary weights.
 All commands enter `src/builder/commands/command_table.cpp`.
@@ -391,13 +336,9 @@ M8 extends the existing intervention commands and adds `patch.sweep` and `trace.
 Read commands do not mutate the model. Change commands use the existing approval and step-boundary paths.
 A missing dictionary gives a structured refusal.
 
-The outline reference `tests/scene/draw_reference.h` is absent on the base.
-The implemented cross-backend limits are in `web/test/draw_parity.spec.ts`.
-
-Interior pixels differ by at most two channel levels.
-The existing edge-side exemption accepts an edge pixel that matches an adjacent reference color.
-After this exemption, unmatched edge pixels occupy at most one percent of the image.
-Interior IDs must match exactly. The new piece checks retain these limits.
+The fixture harness retains mathematical and representation tests for the shared pieces.
+Published acceptance reports pixel differences without arbitrary color or area limits.
+Exact interior IDs, current resource identity, and actual lead inspection remain required.
 
 ## Intervention Contract
 
@@ -428,7 +369,7 @@ The hosted profile `published_dallas_v1` explicitly selects reference arithmetic
 `run.start` requires `replication_profile` and `private_output_directory` together for inference and rejects them for scripts.
 The caller creates the private directory before launch.
 The CLI preserves the pair as `--replication-profile` and `--private-output-directory`.
-Missing or incompatible source resources cause refusal without a profile fallback.
+Missing or incompatible source resources cause refusal without another profile.
 
 The prompt is exactly `Fact: the capital of the state containing Dallas is`.
 The pinned tutorial defines seven group actions in cells 14, 16, 18, 20, 24, 26, and 29.
@@ -456,26 +397,47 @@ One control applies each published case, and the instrument shows source group l
 ## Validation And Delivery
 
 M8 remains held until Caliper reproduces the actual pinned reference and every product check passes.
-The reference completed all seven cases and canonical CPU pruning.
+Prior reference evidence records all seven cases and canonical CPU pruning.
 All seven top tokens match published outcomes, but most rounded probability lists differ, while cell 26 matches.
 The numerical comparison uses the actual full outputs and kept graph, not rounded percentages alone.
 Source-library completeness scores do not replace Caliper completeness residuals.
 
-Feature-node Jaccard overlap must reach 0.9.
-Every union edge must satisfy `abs(caliper - reference) <= 1e-6 + 1e-3 * abs(reference)`, with missing edges equal to zero.
+Decision 15 requires graph agreement measurements without an acceptance threshold.
+The review reports feature-node Jaccard overlap and maximum absolute edge error across the union, with absent edges equal to zero.
+The former Jaccard 0.9 and edge absolute and relative tolerances have no pass condition.
+
 Every baseline and intervention comparison covers the full vocabulary, with absolute probability error at most 0.015 and exact top token IDs.
 The approved bound equals the largest reference deviation from the published top percentages.
 State suppression sets this bound: `abs(0.375 - 0.36) = 0.015`, or 1.5 percentage points.
 This reference envelope supersedes the earlier probability limit in the immutable source manifest.
-Graph tolerances remain unchanged.
+
 Both implementations must reproduce all published semantic outcomes.
 The ineffective British Columbia intervention remains part of that requirement.
 A failed reference outcome remains a failure and cannot establish a Caliper pass.
 
-Caliper completeness residuals must remain at most 0.02 per target.
-The trace limit remains 20 seconds, and each complete intervention action must finish within one second.
+Completeness requires every target, source term, bias account, queue, and graph page.
+The complete export retains each target's expected value, incoming sum, six bias terms, and original residuals.
+Logical queue order equals target order, and physical batches cover each queue without overlap or omission.
+The first queue equals the complete logit inventory. Feature and logit counts partition all targets.
+The summary maxima equal their recorded target and forward measurements.
+
+The former 0.02 residual limit has no acceptance role.
+A separate binary64 recomputation reports its discrepancy from the producer residual without a replacement bound.
+The report preserves large residuals and marks numerical status as `measured`.
+Inventory validation does not establish reference equivalence or prove each source contribution independently.
+The lead must inspect the complete source evidence and record its disposition in a receipt bound to the graph export.
+
+Decision 15 removes the trace and intervention performance limits.
+Decision 15 specifies a ten-minute safety timeout to catch hangs.
+The driver allows the same ten minutes for a pending trace command.
+The timeout protects against a hang. It is not a performance target.
+
 Action timing includes actual model work, output validation, export, publication, and terminal checks.
-Preparation time remains separate, and cached outputs cannot satisfy the action limit.
+Preparation time remains separate, and cached outputs cannot establish a completed action.
+The review retains measured Caliper and circuit-tracer times on the same Mac, with explicit trace and action scopes.
+Missing, malformed, negative, or non-finite measurements fail evidence validation.
+Measured durations and graph differences do not define performance or agreement pass thresholds.
+
 The process cap remains 40 decimal GB, with an 8 decimal GB host reserve.
 Visual, pixel, and app/browser parity checks remain mandatory.
 
@@ -496,23 +458,33 @@ The live path skips this acceptance batch and records only demo readiness.
 
 Independent review compares the actual Caliper and reference resources and inspects the captures.
 It also supplies browser, parity, and memory receipts bound to the collection hash.
-The separate verifier rechecks all file hashes, case identities, and required metrics before it can set acceptance complete.
+The separate verifier rechecks file hashes, case identities, complete account inventories, and required receipts before it can set acceptance complete.
 Resource qualification, cached flags, synthetic replies, and historical quality evidence cannot replace that review.
 The public procedure is in `docs/python/interpretability.md`.
 
 ### Visual And Resource Checks
 
-The pixel oracle maps graph, example, and probability resources through actual image quads, clips, and framebuffer scale.
-Every visible node needs its expected ID, and each bar height must match its current probability within two pixels.
+The pixel checker maps graph, example, and probability resources through actual image quads, clips, and framebuffer scale.
+Every visible node needs its expected ID. The report records each bar height, expected height, camera scale, and discrepancy.
 The two example pages retain eight visible rows each and 16 distinct example IDs in total.
+
 An independent text reference uses the actual font atlas and expected prompt and selected-label glyph quads.
-Each required label needs visible ink and pixels within two channel levels of the reference.
-Synthetic failures test these oracles but do not establish application acceptance.
+Each required label needs complete glyph coverage and visible ink. Its pixel discrepancy remains a measurement.
+Synthetic failures test these checks but do not establish application acceptance.
+
+Panel coverage, panel area, and footer size are measurements without percentage thresholds.
+Exact node IDs, visible rows and bars, text identity, and nonoverlap remain required.
+Independent capture inspection must assess legibility and layout.
 
 App/browser parity uses the actual published resources.
-Interior IDs must match exactly, interior colors differ by at most two channel levels, and unmatched edge pixels occupy at most one percent.
+Interior IDs must match exactly. Interior color differences and unmatched edge shares remain measurements.
+The lead verifies native and browser content, camera, selection, labels, glyphs, bars, and output generation.
+Large pixel errors remain in the report. Structural evidence and lead inspection must both pass.
 Browser evidence must show program views and attachment before and after capture.
-Derive limits remain 50 ms and 64 MiB, and draw limits remain 4 ms and 64 MiB.
+
+Derive and draw durations are measurements without acceptance limits.
+Both halves retain their declared 64 MiB memory caps.
+A refused or stopped program cannot establish readiness, even when its previous measurements remain available.
 Missing times, peak memory, host reserve, or capture evidence fails the corresponding required check.
 Local measurements do not establish public product performance before acceptance.
 
@@ -523,24 +495,23 @@ Its float64 CPU forward has a saved hash and requires no model download or GPU.
 Fixture completeness remains at most 1e-9, and finite-difference edges and power iteration retain their 1e-6 tolerances.
 Ordinary calls retain the 12 GB process limit, generic feature selection, clamps, generation, and diagnostic validation.
 Their CPU and fixture tests remain supported.
-Generic learned-model checks retain 20 to 512 nodes, feature share at least 0.30, and a token-to-logit path.
+Generic graphs must remain nonempty, fit their 512-row resources, and retain a token-to-logit path.
+Their node count, feature share, prompt confidence, and intervention effects are measurements without quality minima.
 
-The former largest-effect selection, five-point probability change, 8/10 signs, and Spearman 0.6 remain generic or historical diagnostics.
-They do not define published Gemma acceptance.
-The Qwen quality override cannot admit Gemma.
-M8 requires independent review, public-content checks, and green macOS and Windows CI after all acceptance checks pass.
+Generic validation requires all ten feature checks and finite measurements.
+Prediction direction remains visible without a causal pass condition.
+These generic diagnostics do not define published Gemma acceptance.
 
-### Historical Qwen Results
+### Acceptance Receipt
 
-Qwen3.5-0.8B remains experimental and shelved for further GPU runs, research regrading, and acceptance attempts.
-Its CPU paths, fixture tests, dictionary, index, and upper-half support remain available.
-The historical dictionary has 8,192 features per layer across 24 layers and records 40 million training tokens.
-Held-out FVU is 0.329109, dead fraction is 0.261149, and cross-entropy rise is 1.180439 nats.
-The explicit founder quality override admits that exact dictionary and preserves its failed quality measurements.
-Its historical index contains two million tokens.
+The immutable published manifest retains its historical bytes. Current acceptance policy applies outside that file.
+The receipt binds the collection hash, graph hash, target inventory hash, case arrays, and actual capture artifacts.
+Full-source inspection requires complete source and bias inventories, an account definition check, preserved residuals, and explicit lead inspection.
+Native and browser parity requires exact content identity and separate pixel measurements.
+Neither finite data nor a cached pass flag can replace these receipts.
 
-The historical graph result failed at 6/10 signs and Spearman correlation 0.539394.
-The historical requirements were 8/10 and 0.6, and the quality override did not change them.
-These results supply no Gemma acceptance evidence.
-The supported generic Qwen driver retains explicit fingerprint and measurement checks for its override.
-No new Qwen acceptance run follows from retention of these CPU paths.
+The full vocabulary comparison retains the 0.015 probability bound and exact top token identities for every published case.
+Probability row sums and their deviations remain measurements. Finite values, valid probability ranges, and exact native array identity remain required.
+Index and research sample sizes remain measurements with exact resource hashes and valid counts.
+Missing, stale, malformed, or failed evidence blocks acceptance.
+Final published reproduction, visual inspection, fresh review, and green macOS and Windows CI remain pending lead verification.

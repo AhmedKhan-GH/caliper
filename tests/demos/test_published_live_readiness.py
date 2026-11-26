@@ -27,9 +27,10 @@ def live_driver(tmp_path, monkeypatch):
         return {}
 
     def capture(name, steps):
-        program = {"id": "probabilities", "last_pass_ms": 51 if state["fault"] == "budget" else 1,
+        program = {"id": "probabilities", "last_pass_ms": None if state["fault"] == "missing_time" else 51,
+                   "state": "refused" if state["fault"] == "refused" else "running", "last_step": 1,
                    "memory_bytes": 1024, "memory_limit_bytes": 64 << 20,
-                   "draw": {"frame_ms": 1, "frame_limit_ms": 4,
+                   "draw": {"frame_ms": 5, "frame_limit_ms": 4, "state": "running", "frames": 1,
                             "memory_bytes": 1024, "memory_limit_bytes": 64 << 20}}
         session.program_evidence[name] = {"status": {"programs": [program]},
             "expected_steps": {"probabilities": 1}, "pieces": {"probabilities": {
@@ -65,7 +66,14 @@ def live_driver(tmp_path, monkeypatch):
         example_page=lambda page: ({"step": 1}, {}),
         read=lambda *args, **kwargs: {"step": 1, "elements": [[0, 0, 1, 1, .5, .5, 0, i] for i in range(10)]},
         events=SimpleNamespace(complete=lambda *args, **kwargs: {"step": 1, "seconds": 21}))
-    graph = {"counts": {}, "completeness": {"max_absolute_residual": .03}}
+    from test_completeness_evidence import complete_accounts
+    from _completeness import account_evidence
+    import _replication_review
+    graph = complete_accounts()
+    measured = account_evidence(graph)
+    graph["completeness"].pop("targets")
+    monkeypatch.setattr(_replication_review, "_full_graph", lambda *args: measured)
+    monkeypatch.setattr(_replication_review, "_graph_path", lambda *args: tmp_path / "synthetic-graph.json")
     monkeypatch.setattr(driver, "Session", launch)
     monkeypatch.setattr(driver, "check_assets", lambda s: {"fixture": {"status": 200}})
     monkeypatch.setattr(driver, "instrument", lambda s: None)
@@ -93,7 +101,7 @@ def live_driver(tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize("fault,check", [("labels", "cell10.output_label_count"),
-                                         ("budget", "cell10.probabilities.derive_time_ms"),
+                                         ("refused", "cell10.probabilities.ready"),
                                          ("metadata", "cell10.native_pixels")])
 def test_hidden_live_refuses_completed_failed_display(live_driver, fault, check):
     code, result, out, state = live_driver(fault)
@@ -109,13 +117,18 @@ def test_live_display_readiness_is_separate_from_scientific_acceptance(live_driv
     code, result, out, state = live_driver(show=show)
     assert code == 0 and result["demo_ready"]
     assert (out / "demo-ready.json").exists()
-    assert {"trace_time", "completeness", "external_replication_review"} <= set(result["failed_checks"])
+    assert {"external_replication_review"} <= set(result["failed_checks"])
+    assert "trace_time" not in result["failed_checks"]
     assert not result["accepted_replication"] and not result["gemma_acceptance"]
     assert state["holds"] == [False] and state["closed"]
 
 
-def test_visible_live_refuses_a_measured_budget_failure(live_driver):
-    code, result, out, state = live_driver("budget", show=True)
-    assert code == 1 and not result.get("demo_ready")
-    assert not (out / "demo-ready.json").exists()
-    assert state["holds"] == [True] and state["closed"]
+@pytest.mark.parametrize("show", [False, True])
+def test_live_display_reports_unavailable_gpu_timestamps(live_driver, show):
+    code, result, out, state = live_driver("missing_time", show=show)
+    assert code == 0 and result["demo_ready"]
+    assert (out / "demo-ready.json").exists()
+    gate = next(item for item in result["checks"] if item["name"] == "cell10.probabilities.derive_time_ms")
+    assert gate["passed"] and gate["measured"] is None and gate["evidence"] == "unavailable"
+    assert not result["accepted_replication"]
+    assert state["holds"] == [False] and state["closed"]

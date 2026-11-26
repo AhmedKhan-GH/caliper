@@ -58,20 +58,24 @@ def test_visual_gates_reject_projection_and_text_defects(name, defect):
 
 
 @pytest.mark.parametrize("name", ["graph", "examples", "output"])
-def test_visual_gates_reject_small_geometry_cluster(name):
+def test_visual_coverage_is_reported_without_a_size_threshold(name):
     panel, ids, metadata = scene(name)
     small = np.zeros_like(ids)
     small[40:60, 40:60] = ids[::5, ::5]
     gates = visual_checks(name, panel, small, metadata, node_count=3)
     expected = {"graph": "graph_framing", "examples": "example_row_layout", "output": "output_bar_layout"}[name]
-    assert not next(gate for gate in gates if gate["name"] == expected)["passed"]
+    gate = next(gate for gate in gates if gate["name"] == expected)
+    assert gate["passed"]
+    coverage = gate["measured"] if name == "graph" else gate["measured"]["coverage"]
+    assert max(coverage) < .3
 
 
-def test_visual_gates_reject_large_disclosure_footer():
+def test_visual_footer_share_has_no_size_threshold():
     panel, ids, metadata = scene("graph")
     metadata["height"] = 250
     gates = visual_checks("graph", panel, ids, metadata, node_count=3)
-    assert not next(gate for gate in gates if gate["name"] == "compact_disclosures")["passed"]
+    gate = next(gate for gate in gates if gate["name"] == "compact_disclosures")
+    assert gate["passed"] and gate["measured"] == pytest.approx(.28)
 
 
 def test_visual_gates_reject_invisible_output_token():
@@ -93,3 +97,11 @@ def test_expanded_details_keep_output_labels_required():
     gates = visual_checks("graph", panel, ids, metadata, node_count=3, expanded=True)
     assert all(gate["passed"] for gate in gates)
     assert {"graph_panel_share", "compact_disclosures"}.isdisjoint(gate["name"] for gate in gates)
+
+
+@pytest.mark.parametrize("name", ["graph", "examples", "output"])
+def test_visual_measurements_do_not_admit_blank_geometry(name):
+    panel, ids, metadata = scene(name)
+    gates = visual_checks(name, panel, np.zeros_like(ids), metadata, node_count=3)
+    expected = {"graph": "graph_visible_nodes", "examples": "example_row_layout", "output": "output_bar_layout"}[name]
+    assert not next(gate for gate in gates if gate["name"] == expected)["passed"]
