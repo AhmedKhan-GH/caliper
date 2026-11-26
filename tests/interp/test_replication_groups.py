@@ -1,5 +1,6 @@
 """Bounded CPU checks for atomic published feature groups."""
 from copy import deepcopy
+import warnings
 
 import pytest
 import torch
@@ -32,6 +33,86 @@ def test_positioned_identity_preserves_legacy_scope():
     spec = clamp(1, 2)
     del spec['positions']
     assert intervention_key(spec) == ('layers.0.mlp_out', 'clamp')
+
+
+def test_ordinary_group_position_failure_ends_members_and_reports_once(grouped):
+    model, tokenizer, ctl, service = grouped
+    ids = tokenizer('A')['input_ids']
+    longer = tokenizer('AB')['input_ids']
+    observer = model.layers[0].mlp.register_forward_hook(lambda _module, _args, output: output + .01)
+    try:
+        baseline = model(ids).logits
+        for feature in (1, 2):
+            service.set(clamp(feature, 2, 0))
+        ctl.step()
+        hooks = [record.hook for record in ctl._ivs.values()]
+        group = service.executor._feature_groups['layers.0.mlp_out']
+        assert len(group.members) == 2
+        model(longer)
+        torch.testing.assert_close(model(ids).logits, baseline, rtol=0, atol=0)
+        entries = ctl.controls_meta()['interventions']['active']
+        assert len(entries) == 2
+        assert all(entry['state'] == 'ended' and entry['error_code'] == 'intervene.hook_failed'
+                   and 'selected position is outside the live tensor' in entry['error'] for entry in entries)
+        assert all(hook.calls == 2 and hook.errors == 1 and hook.removed for hook in hooks)
+        assert not group.handles and not group.members and not service.executor._feature_groups
+        assert not service.specifications()
+        assert observer.id in model.layers[0].mlp._forward_hooks
+        torch.testing.assert_close(model(ids).logits, baseline, rtol=0, atol=0)
+        assert all(hook.calls == 2 for hook in hooks)
+        with warnings.catch_warnings(record=True) as reports:
+            warnings.simplefilter('always')
+            ctl.step()
+            assert len(reports) == 2  # Each failed intervention reports once at this boundary.
+            assert all(item.category is RuntimeWarning and 'failed and ended' in str(item.message)
+                       for item in reports)
+            ctl.step()
+            assert len(reports) == 2
+        assert all(not record.report for record in ctl._ivs.values())
+    finally:
+        observer.remove()
+
+
+@pytest.mark.parametrize('member_count', [1, 2])
+def test_group_clean_stop_propagates_after_member_cleanup(grouped, monkeypatch, member_count):
+    from caliper.interp._memory import CleanStop
+    model, tokenizer, ctl, service = grouped
+    for feature in range(member_count):
+        service.set(clamp(feature, 1))
+    ctl.step()
+    hooks = [record.hook for record in ctl._ivs.values()]
+    stop = CleanStop('group resource limit')
+
+    def refuse(*args):
+        raise stop
+
+    monkeypatch.setattr('caliper.interp._intervene._trace_features', refuse)
+    with pytest.raises(CleanStop) as error:
+        model(**tokenizer('AB'))
+    assert error.value is stop
+    assert all(hook.errors == 1 and hook.removed for hook in hooks)
+    assert not service.specifications() and not service.executor._feature_groups
+    assert all(record.state == 'ended' and record.error_code == 'intervene.hook_failed'
+               for record in ctl._ivs.values())
+
+
+def test_group_failure_preserves_muted_member_at_the_same_point(grouped):
+    from caliper.interp._intervene import _mute_hooks
+    model, tokenizer, _, service = grouped
+    ids = tokenizer('AB')['input_ids']
+    baseline = model(ids).logits
+    prior = service.executor.install(clamp(3, 1, 2))
+    expected = model(ids).logits
+    assert not torch.equal(expected, baseline)
+    group = prior.group
+    failed = [service.executor.install(clamp(feature, 31)) for feature in (1, 2)]
+    with _mute_hooks([prior]):
+        torch.testing.assert_close(model(ids).logits, baseline, rtol=0, atol=0)
+    assert all(hook.removed and hook.errors == 1 for hook in failed)
+    assert not prior.removed and prior.errors == 0 and prior.calls == 1
+    assert group.members == [prior]
+    assert service.executor._feature_groups['layers.0.mlp_out'] is group
+    torch.testing.assert_close(model(ids).logits, expected, rtol=0, atol=0)
 
 
 def test_atomic_collision_group_restore_replay_fork_and_clear(grouped):
@@ -275,6 +356,39 @@ def test_published_failure_has_no_success_or_partial_case(published, monkeypatch
         runtime.run(10, prepare=prepare)
     assert service.state_dict() == saved
     assert all(ctl._ivs[key] is record for key, record in records.items())
+    assert runtime.last_result == first
+    assert runtime.last_attempt['status'] == 'error'
+    assert set(runtime.directory.iterdir()) == files
+
+
+def test_published_group_error_aborts_forward_and_restores_prior_case(published, monkeypatch):
+    from caliper.interp import _replication_actions as actions
+    _, _, ctl, service, runtime = published
+    first = runtime.run(26)
+    saved, records = service.state_dict(), dict(ctl._ivs)
+    groups = dict(service.executor._feature_groups)
+    files = set(runtime.directory.iterdir())
+    completed = []
+    forward_logits = actions.forward_logits
+
+    def forward(*args, **kwargs):
+        result = forward_logits(*args, **kwargs)
+        completed.append(True)
+        return result
+
+    def refuse(*args):
+        assert service.executor._published_forward_depth > 0
+        raise InterventionError('group encoder refusal')
+
+    monkeypatch.setattr(actions, 'forward_logits', forward)
+    monkeypatch.setattr('caliper.interp._intervene._trace_features', refuse)
+    with pytest.raises(InterventionError, match='group encoder refusal'):
+        runtime.run(26, prepare=lambda _: pytest.fail('publication after a failed group'))
+    assert not completed
+    assert service.executor._published_forward_depth == 0
+    assert service.state_dict() == saved
+    assert service.executor._feature_groups == groups
+    assert all(ctl._ivs[key] is record and not record.hook.removed for key, record in records.items())
     assert runtime.last_result == first
     assert runtime.last_attempt['status'] == 'error'
     assert set(runtime.directory.iterdir()) == files

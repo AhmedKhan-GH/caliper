@@ -1497,8 +1497,8 @@ class _PositionedFeatures(Intervention):
         except Exception as error:
             for member in members:
                 member._failed(error)
-            # A group failure must abort the forward. A partial case is never output.
-            if len(members) > 1 or self.service._published_forward_depth or isinstance(error, CleanStop):
+            # Published forwards abort here. Atomic replacement checks failed hooks before commit.
+            if self.service._published_forward_depth or isinstance(error, CleanStop):
                 raise
             return None
 
