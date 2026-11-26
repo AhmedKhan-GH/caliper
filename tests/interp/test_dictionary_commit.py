@@ -20,6 +20,15 @@ def patch(prompt):
 @pytest.fixture(params=['generic', 'published'])
 def transaction(request, monkeypatch):
     grouped_values = request.getfixturevalue('grouped')
+    observer = SimpleNamespace(callback=None)
+
+    def observe(model, args):
+        if observer.callback is not None:
+            observer.callback(model, args)
+
+    # Admit the observer before preparation, then arm it for each transaction.
+    handle = grouped_values[0].register_forward_pre_hook(observe)
+    request.addfinalizer(handle.remove)
     if request.node.callspec.params.get('mode', 'snapshot') == 'snapshot':
         # The published preparation pins this snapshot object as part of ownership.
         grouped_values[3].executor._prepare_dictionary_identity()
@@ -48,7 +57,8 @@ def transaction(request, monkeypatch):
                                       evaluate, prepare=prepare, check=check)
 
     return SimpleNamespace(model=model, service=service, executor=service.executor,
-                           controls=controls, runtime=runtime, run=run, prepare=prepare)
+                           controls=controls, runtime=runtime, run=run, prepare=prepare,
+                           observer=observer)
 
 
 def saved_state(case):
@@ -106,7 +116,7 @@ def test_dictionary_change_refuses_before_commit(transaction, mode, phase, chang
     case = transaction
     executor = case.executor
     assert executor._dictionary_status()['mode'] == mode
-    calls, handle = [], None
+    calls = []
 
     def mutate():
         change_dictionary(executor, change)
@@ -120,7 +130,7 @@ def test_dictionary_change_refuses_before_commit(transaction, mode, phase, chang
         if phase == 'forward':
             mutate()
 
-    handle = case.model.register_forward_pre_hook(forward)
+    case.observer.callback = forward
     saved = saved_state(case)
     before = executor._dictionary_status()['checks']
 
@@ -145,7 +155,7 @@ def test_dictionary_change_refuses_before_commit(transaction, mode, phase, chang
         # Refusal preserves external edits and the next admission still rejects them.
         assert not executor._dictionary_matches()
     finally:
-        handle.remove()
+        case.observer.callback = None
 
 
 @pytest.mark.parametrize('mode', ['hash', 'snapshot'])
