@@ -128,7 +128,7 @@ If both keys appear with different values, `FeatureIndex` raises `ValueError`.
 `Tracer(model, tokenizer, dictionary, backend=backend).trace(prompt)` runs `circuit_tracer.attribute`, transfers the graph to CPU, runs `prune_graph`, and publishes graph tensors.
 Prompts accept up to 32 model tokens with BOS and refuse longer inputs without truncation.
 Default settings select up to 10 logit targets (`desired_logit_prob=0.95`), up to `5,000` feature targets, `node_threshold=0.7`, and `edge_threshold=0.9`.
-Pass `show_more=True` to relax pruning to `node_threshold=0.85` and `edge_threshold=0.96`.
+Pass `show_more=True` to relax pruning to `node_threshold=0.78` and `edge_threshold=0.93`.
 
 After a standalone `tracer.trace(prompt)` call, invoke `caliper.step()` once so derive programs process the published tensors.
 In a hosted inference run, `trace.run` executes and publishes automatically at the next run boundary.

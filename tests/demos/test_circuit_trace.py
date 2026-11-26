@@ -239,8 +239,8 @@ def test_prompt_change_and_show_more_retrace_with_pruning_and_regenerate():
 
     assert len(trace_calls) == 2
     assert trace_calls[1]["prompt"] == new_prompt
-    assert trace_calls[1]["node_threshold"] == 0.85
-    assert trace_calls[1]["edge_threshold"] == 0.96
+    assert trace_calls[1]["node_threshold"] == 0.78
+    assert trace_calls[1]["edge_threshold"] == 0.93
     assert actions_run == ["reset", "generate", "reset", "generate"]
     assert progress_log == ["tracing", "ready", "tracing", "ready"]
 

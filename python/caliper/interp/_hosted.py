@@ -761,7 +761,8 @@ class HostedInference:
             )
             act = node.get("activation", 0.0)
             act_val = abs(float(act)) if isinstance(act, (int, float)) and math.isfinite(act) else 0.0
-            return (inf_val, act_val, -idx)
+            non_initial_layer = 1 if int(node.get("layer", 0)) > 0 else 0
+            return (non_initial_layer, inf_val, act_val, -idx)
 
         best_idx, _ = max(features, key=score)
         return best_idx

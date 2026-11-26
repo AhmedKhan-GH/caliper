@@ -19,8 +19,9 @@ KINDS = {"token": 0, "feature": 1, "error": 2, "logit": 3}
 
 DEFAULT_NODE_THRESHOLD = 0.7
 DEFAULT_EDGE_THRESHOLD = 0.9
-SHOW_MORE_NODE_THRESHOLD = 0.85
-SHOW_MORE_EDGE_THRESHOLD = 0.96
+SHOW_MORE_NODE_THRESHOLD = 0.78
+SHOW_MORE_EDGE_THRESHOLD = 0.93
+LAYOUT_PAIR_BUDGET = 50_000_000
 
 
 def bounded_integer(value, name, low, high):
@@ -50,7 +51,7 @@ def resolve_pruning_thresholds(
     """Return validated ``(node_threshold, edge_threshold)`` for ``prune_graph``.
 
     Uses published profile thresholds (``0.7`` node, ``0.9`` edge) by
-    default and relaxes them when ``show_more=True`` (``0.85`` node, ``0.96``
+    default and relaxes them when ``show_more=True`` (``0.78`` node, ``0.93``
     edge) unless explicit thresholds are provided.
     """
     if type(show_more) is not bool:
@@ -305,14 +306,17 @@ class Graph:
 
         endpoints = edge_mask.nonzero().tolist()
         weights = adj[edge_mask].tolist()
-        if len(endpoints) > max_edges:
-            if max_edges == 0:
+        effective_edge_cap = max_edges
+        if nodes and eff_edge_threshold < 1.0 and max_edges > 0:
+            effective_edge_cap = min(max_edges, max(EDGE_CAP, LAYOUT_PAIR_BUDGET // len(nodes)))
+        if len(endpoints) > effective_edge_cap:
+            if effective_edge_cap == 0:
                 endpoints, weights = [], []
             else:
                 paired = sorted(
                     zip(endpoints, weights),
                     key=lambda item: (-abs(item[1]), item[0][0], item[0][1]),
-                )[:max_edges]
+                )[:effective_edge_cap]
                 endpoints = [p[0] for p in paired]
                 weights = [p[1] for p in paired]
 

@@ -407,6 +407,7 @@ class Session:
         best = max(
             features,
             key=lambda n: (
+                1 if int(n.get("layer", 0)) > 0 else 0,
                 abs(float(n.get("influence", 0.0) or 0.0)),
                 abs(float(n.get("activation", 0.0) or 0.0)),
                 -int(n["index"]),
