@@ -107,6 +107,97 @@ endfunction()
 # Public headers are included as <caliper_builder/<module>/<header>.h>.
 set(CALIPER_BUILDER_INCLUDE_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/include")
 
+# One Python interpreter for the Python loader, session scope-parity and
+# caliper-agent tests across src/builder/ and src/host/builder/. When empty,
+# auto-select a local venv (or CALIPER_ACCEPTANCE_PYTHON) that already has the
+# builder and agent test dependencies. When set explicitly, verify those
+# dependencies at configure time so test_context_bundle and builder_agent_py
+# cannot fail later with a missing pydantic_ai import.
+set(CALIPER_BUILDER_TEST_PYTHON "" CACHE FILEPATH
+    "A Python interpreter with numpy, pyarrow, and caliper-agent[test] dependencies for the builder tests")
+if(BUILD_TESTS)
+    function(_caliper_probe_builder_python py_exe out_ok out_err)
+        execute_process(
+            COMMAND "${py_exe}" -I -c "import numpy, pydantic_ai, anthropic, openai, pytest, acp.schema"
+            RESULT_VARIABLE _rc
+            OUTPUT_QUIET
+            ERROR_VARIABLE _err
+            ERROR_STRIP_TRAILING_WHITESPACE)
+        if(_rc EQUAL 0)
+            set(${out_ok} TRUE PARENT_SCOPE)
+            set(${out_err} "" PARENT_SCOPE)
+        else()
+            set(${out_ok} FALSE PARENT_SCOPE)
+            set(${out_err} "${_err}" PARENT_SCOPE)
+        endif()
+    endfunction()
+
+    if(NOT CALIPER_BUILDER_TEST_PYTHON)
+        if(WIN32)
+            set(_venv_py "Scripts/python.exe")
+        else()
+            set(_venv_py "bin/python")
+        endif()
+        set(_builder_py_candidates
+            "${CMAKE_CURRENT_SOURCE_DIR}/agent/.venv/${_venv_py}"
+            "${CMAKE_SOURCE_DIR}/.venv/${_venv_py}")
+        if(CALIPER_ACCEPTANCE_PYTHON)
+            list(APPEND _builder_py_candidates "${CALIPER_ACCEPTANCE_PYTHON}")
+        endif()
+        foreach(_cand IN LISTS _builder_py_candidates)
+            if(EXISTS "${_cand}")
+                _caliper_probe_builder_python("${_cand}" _cand_ok _cand_err)
+                if(_cand_ok)
+                    set(CALIPER_BUILDER_TEST_PYTHON "${_cand}" CACHE FILEPATH
+                        "A Python interpreter with numpy, pyarrow, and caliper-agent[test] dependencies for the builder tests"
+                        FORCE)
+                    message(STATUS "caliper_builder: auto-selected CALIPER_BUILDER_TEST_PYTHON=${CALIPER_BUILDER_TEST_PYTHON}")
+                    break()
+                endif()
+            endif()
+        endforeach()
+        if(NOT CALIPER_BUILDER_TEST_PYTHON)
+            message(STATUS
+                "caliper_builder: CALIPER_BUILDER_TEST_PYTHON is not set and no local venv with "
+                "caliper-agent[test] dependencies was found; Python loader and agent tests will skip")
+        endif()
+    else()
+        if(NOT IS_ABSOLUTE "${CALIPER_BUILDER_TEST_PYTHON}")
+            get_filename_component(_builder_py_abs "${CALIPER_BUILDER_TEST_PYTHON}" ABSOLUTE BASE_DIR "${CMAKE_SOURCE_DIR}")
+            if(EXISTS "${_builder_py_abs}")
+                set(CALIPER_BUILDER_TEST_PYTHON "${_builder_py_abs}" CACHE FILEPATH
+                    "A Python interpreter with numpy, pyarrow, and caliper-agent[test] dependencies for the builder tests"
+                    FORCE)
+            endif()
+        endif()
+        if(NOT EXISTS "${CALIPER_BUILDER_TEST_PYTHON}")
+            message(FATAL_ERROR
+                "caliper_builder: CALIPER_BUILDER_TEST_PYTHON does not exist: ${CALIPER_BUILDER_TEST_PYTHON}")
+        endif()
+        _caliper_probe_builder_python("${CALIPER_BUILDER_TEST_PYTHON}" _builder_py_ok _builder_py_err)
+        if(NOT _builder_py_ok)
+            message(FATAL_ERROR
+                "caliper_builder: CALIPER_BUILDER_TEST_PYTHON (${CALIPER_BUILDER_TEST_PYTHON}) "
+                "lacks required builder/agent test dependencies "
+                "(numpy, pydantic_ai, anthropic, openai, pytest, acp.schema): ${_builder_py_err}\n"
+                "Install them into that interpreter:\n"
+                "  uv pip install --python \"${CALIPER_BUILDER_TEST_PYTHON}\" "
+                "-e \"${CMAKE_CURRENT_SOURCE_DIR}/agent[test]\" numpy pyarrow")
+        endif()
+    endif()
+    if(CALIPER_BUILDER_TEST_PYTHON)
+        execute_process(
+            COMMAND "${CALIPER_BUILDER_TEST_PYTHON}" -I -c "import pyarrow.parquet"
+            RESULT_VARIABLE _pyarrow_rc
+            OUTPUT_QUIET ERROR_QUIET)
+        if(NOT _pyarrow_rc EQUAL 0)
+            message(STATUS
+                "caliper_builder: ${CALIPER_BUILDER_TEST_PYTHON} lacks pyarrow; "
+                "Parquet cases in the Python loader tests will skip")
+        endif()
+    endif()
+endif()
+
 foreach(_module spec programs text operators catalog commands loaders acp session mcp agent)
     if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/${_module}/CMakeLists.txt")
         add_subdirectory(${_module})

@@ -89,8 +89,7 @@ if(BUILD_TESTS AND NOT WIN32 AND TARGET caliper_builder_session_host AND TARGET 
 endif()
 
 if(BUILD_TESTS)
-    set(CALIPER_BUILDER_TEST_PYTHON "" CACHE FILEPATH
-        "A Python interpreter with caliper-agent's test extras, to run the caliper-agent tests")
+    # CALIPER_BUILDER_TEST_PYTHON is defined and validated in src/builder/CMakeLists.txt.
     if(CALIPER_BUILDER_TEST_PYTHON)
         add_test(NAME builder_agent_py
             COMMAND "${CALIPER_BUILDER_TEST_PYTHON}" -m pytest -q -p no:cacheprovider

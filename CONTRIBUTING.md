@@ -15,6 +15,39 @@ The GPU suites skip when the machine has no usable device, and ctest reports the
 
 Every pull request is built and tested on macOS and Windows. [Continuous integration](docs/development/ci.md) describes what runs, what is cached, and how to handle a failed run.
 
+### Python and Builder Tests
+
+The suites in `python/tests/` and the builder suites (`builder_session` and `builder_agent_py`) require a Python 3.12 virtual environment. Create the environment from the repository root and install the same packages that CI installs:
+
+```sh
+uv venv --python 3.12 .venv
+uv pip install --python .venv/bin/python \
+  -e "src/builder/agent[test]" \
+  torch numpy pyarrow pyyaml anywidget Pillow websockets nanobind pytest jsonschema
+.venv/bin/python scripts/build_netio.py
+```
+
+Install the pinned interpretability packages from `[project.optional-dependencies]` in `pyproject.toml` to run the interpretability suites in `tests/interp/` and `python/tests/test_net_controls.py`.
+
+CMake uses `CALIPER_BUILDER_TEST_PYTHON` for the Python loader, session scope, and `caliper-agent` tests. When `CALIPER_BUILDER_TEST_PYTHON` is empty, CMake selects `src/builder/agent/.venv`, `.venv`, or `CALIPER_ACCEPTANCE_PYTHON` if that interpreter imports the required agent packages. When you pass `-DCALIPER_BUILDER_TEST_PYTHON` explicitly, CMake stops at configure time if that interpreter lacks `numpy`, `pydantic_ai`, `anthropic`, `openai`, `pytest`, or `acp.schema`. Pass both variables to match the macOS CI lane:
+
+```sh
+cmake --preset release \
+  -DCALIPER_ACCEPTANCE_PYTHON="$PWD/.venv/bin/python" \
+  -DCALIPER_BUILDER_TEST_PYTHON="$PWD/.venv/bin/python"
+cmake --build --preset release
+ctest --test-dir cmake-build-release -R "^(builder_session|builder_agent_py)$" --output-on-failure
+```
+
+Run the Python tests with `PYTHONPATH=python`. Use the marker filter below to run the CPU subset from `.github/workflows/build.yml`. Omit `-m` to include the local Metal GPU tests:
+
+```sh
+PYTHONPATH=python CALIPER_TEST_CALIPER_EXE="$PWD/cmake-build-release/caliper" \
+  CALIPER_VIEWER="$PWD/cmake-build-release/caliper_viewer" \
+  .venv/bin/python -m pytest -q python/tests \
+  -m "not gpu and not window and not notebook and not timing" --strict-markers
+```
+
 The shaders of the graphics layer are written once in WGSL under `src/host/gfx/shaders/`, and their MSL and SPIR-V are generated and committed. After changing one, run `python3 tools/shaders/generate.py` (it needs a Rust toolchain) and commit the generated files with it; [Shader Authoring](docs/applets/shader-authoring.md) describes the generator and its checks.
 
 To check the documentation, build it the way the Docs workflow does, from the repository root and with the versions of `requirements-docs.txt`. The first command builds the docs site. Its API reference comes from the code: mkdocstrings renders the Python calls from the docstrings of Caliper LIB, and the hook `docs-theme/hooks/c_reference.py` renders the C tables from the `/** */` comments of the headers. `python3 scripts/check_api_reference.py` fails when a public symbol has no docstring or comment, or no page. The second command checks the design pages, which are built apart from the docs site and are not published.
