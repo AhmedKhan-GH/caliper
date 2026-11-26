@@ -297,7 +297,7 @@ export type ParamValue = number | boolean | string;
 export type ControlOp = 'pause' | 'resume' | 'step' | 'set' | 'run' | 'intervene' | 'interpret';
 export const CONTROL_OPS: readonly ControlOp[] = ['pause', 'resume', 'step', 'set', 'run', 'intervene', 'interpret'];
 
-/** M7 structured metadata limits (python/caliper/_interpret_protocol.py). */
+/** Structured metadata limits (python/caliper/_interpret_protocol.py). */
 export const INTERPRET_LIMITS = {
   maxBytes: 262144, maxString: 4096, maxList: 512, maxFields: 64, maxDepth: 8, maxValues: 16384,
 } as const;
@@ -305,11 +305,14 @@ export type InterpretationValue = null | boolean | number | string | Interpretat
 export interface InterpretationResult { [key: string]: InterpretationValue }
 type FeatureSelector = { node: number; layer?: never; feature?: never } | { node?: never; layer: number; feature: number };
 export type InterpretationRequest = { version: 1 } & (
-  | { method: 'feature.dictionary' | 'trace.status'; params: Record<string, never> }
+  | { method: 'feature.dictionary' | 'trace.status' | 'trace.validate'; params: Record<string, never> }
   | { method: 'feature.show'; params: FeatureSelector }
   | { method: 'feature.examples'; params: FeatureSelector & { limit?: number } }
-  | { method: 'trace.run'; params: { prompt: string; max_targets?: number; max_nodes?: number; max_edges?: number } }
+  | { method: 'trace.run'; params: { prompt: string; max_targets?: number; max_nodes?: number; max_edges?: number;
+      max_n_logits?: number; desired_logit_prob?: number;
+      node_threshold?: number; edge_threshold?: number; batch_size?: number | null; update_interval?: number } }
   | { method: 'trace.read'; params: { node_offset?: number; node_limit?: number; edge_offset?: number; edge_limit?: number } }
+  | { method: 'patch.sweep'; params: { clean_prompt: string; corrupted_prompt: string; metric: { positive_token: number; negative_token: number } } }
 );
 
 export interface RunInfo { state: RunState; step?: number; steps_left?: number }
@@ -338,7 +341,7 @@ export interface ControlMsg {
   count?: number;
   /** 3.2 draft, op 'intervene': exactly one of set, clear and clear_all. */
   intervene?: InterveneRequest;
-  /** M7, capability 'interpretation': a version 1 request. */
+  /** Capability 'interpretation': a version 1 request. */
   interpretation?: InterpretationRequest;
 }
 export interface ControlReplyMsg {
@@ -823,6 +826,21 @@ export const PROGRAM_STATES: readonly string[] = ['waiting', 'review', 'compiled
 export const PROGRAM_ARRAYS: readonly string[] = ['positions', 'colors', 'values', 'radii'];
 /** The states of an entry of CONTROLS "interventions" "active". */
 export const INTERVENTION_STATES: readonly string[] = ['pending', 'active', 'ended'];
+/** Intervention specification limits (python/caliper/_intervention_protocol.py). */
+export const INTERVENTION_LIMITS = { maxVector: 16384, maxPositions: 32, maxBytes: 262144 } as const;
+
+type InterventionTag<K extends string> = { kind: K; op?: K | null } | { op: K; kind?: K | null };
+type FeatureIntervention = { feature: number; dictionary?: string; positions?: number[] };
+export type InterventionSpec = { point: string; from_step?: number | null; until_step?: number | null } & (
+  | InterventionTag<'ablate'> | InterventionTag<'steer'>
+  | (InterventionTag<'add'> & { vector: number[]; coefficient: number; positions?: number[] })
+  | (InterventionTag<'scale'> & FeatureIntervention & { multiplier: number })
+  | (InterventionTag<'clamp'> & FeatureIntervention & { value: number })
+  | (InterventionTag<'patch'> & { source_prompt: string; source_position?: number; positions?: number[] })
+);
+export type InterventionStatus = InterventionSpec & {
+  state: 'pending' | 'active' | 'ended'; since_step?: number | null; error?: string; error_code?: string;
+};
 
 /** The declaration of a program, checked on decode as the Python codec checks it and re-emitted unchanged (`design/gpu-programs.md`). */
 export type ProgramDeclaration = Record<string, unknown>;
@@ -830,12 +848,12 @@ export type ProgramDeclaration = Record<string, unknown>;
 export type ProgramStatus = Record<string, unknown>;
 /** CONTROL "intervene": exactly one of set, clear and clear_all. */
 export interface InterveneRequest {
-  set?: { point: string; op: string; from_step?: number | null; until_step?: number | null };
-  clear?: string;
-  clear_all?: true;
+  set?: InterventionSpec | null;
+  clear?: string | null;
+  clear_all?: true | null;
 }
 /** CONTROLS "interventions": the points an intervention may use and the interventions in force. Re-emitted unchanged. */
-export interface InterventionsInfo { points: Record<string, unknown>[]; active: Record<string, unknown>[] }
+export interface InterventionsInfo { points: Record<string, unknown>[]; active: InterventionStatus[] }
 
 /** Viewer to producer: install or replace (op set), remove (op remove) or change the parameters of (op params) one GPU program. A set carries the declaration without its source, the scene of a geometry output, the SHA-256 of the source and the section "wgsl". */
 export interface ProgramMsg {
@@ -853,8 +871,8 @@ export interface ProgramMsg {
   sha256?: string;
   /** set: the scene of a geometry output's panel. */
   scene?: string;
-  /** Instance of a piece, set: the pin {name, version, hash}, where the hash is "sha256:" and 64 lowercase hex digits. */
-  piece?: { name: string; version: number; hash?: string };
+  /** Instance of a piece, set: the pin {name, version, hash, from?}, where the hash is "sha256:" and 64 lowercase hex digits. */
+  piece?: { name: string; version: number; hash?: string; from?: 'library' | 'workspace' | 'inline' };
   /** Instance of a piece, set: the piece's manifest. */
   manifest?: Record<string, unknown>;
   /** Instance of a piece, set: an input name to "live:<tensor>" or "program:<id>/<resource>". */

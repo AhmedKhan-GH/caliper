@@ -156,8 +156,8 @@ bool operator==(const ControlOptions& a, const ControlOptions& b) {
 }
 
 bool operator==(const Control& a, const Control& b) {
-    return a.id == b.id && a.kind == b.kind && a.title == b.title && a.bind == b.bind && a.options == b.options &&
-           a.x == b.x;
+    return a.id == b.id && a.kind == b.kind && a.title == b.title && a.closable == b.closable &&
+           a.bind == b.bind && a.options == b.options && a.x == b.x;
 }
 
 }  // namespace caliper_builder::spec

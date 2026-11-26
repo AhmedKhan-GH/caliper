@@ -9,7 +9,10 @@
 // the script then does comes back as a run event, never as this result.
 #include <caliper_builder/session/run_control.h>
 
+#include <algorithm>
+#include <chrono>
 #include <cmath>
+#include <cstdio>
 #include <exception>
 #include <utility>
 
@@ -194,6 +197,95 @@ json run_state_json(const RunState& state) {
         actions.push_back(json{{"name", a.name}, {"help", a.help}, {"running", a.running}, {"queued", a.queued}});
     out["actions"] = std::move(actions);
     return out;
+}
+
+namespace {
+
+double current_epoch_seconds() {
+    using namespace std::chrono;
+    return duration<double>(system_clock::now().time_since_epoch()).count();
+}
+
+}  // namespace
+
+nlohmann::json RunControl::progress_state() {
+    const RunState st = state();
+    if (!st.attached) return nullptr;
+    for (const RunParam& p : st.params) {
+        if (p.name != "output.progress" || !p.value.is_string()) continue;
+        const std::string& raw = p.value.get_ref<const std::string&>();
+        if (raw.empty()) continue;
+        json parsed = json::parse(raw, nullptr, false);
+        if (parsed.is_object()) return parsed;
+    }
+    for (const RunParam& p : st.params) {
+        if (p.name != "output.status" || !p.value.is_string()) continue;
+        const std::string& s = p.value.get_ref<const std::string&>();
+        if (s.empty() || s == "ready") return nullptr;
+        return json{{"state", s == "tracing" ? "tracing" : "running"},
+                    {"stage", s == "tracing" ? "attribution" : "running"},
+                    {"label", s},
+                    {"done", nullptr},
+                    {"total", nullptr},
+                    {"started_at", nullptr},
+                    {"elapsed_s", 0.0},
+                    {"error", nullptr},
+                    {"panels", json::object()}};
+    }
+    return nullptr;
+}
+
+double progress_elapsed_seconds(const nlohmann::json& progress, double now_epoch_s) {
+    if (!progress.is_object()) return -1.0;
+    const std::string state = progress.value("state", std::string());
+    if (state == "ready" || state == "idle" || state.empty()) return -1.0;
+    double elapsed = -1.0;
+    if (progress.contains("elapsed_s") && progress["elapsed_s"].is_number()) {
+        const double v = progress["elapsed_s"].get<double>();
+        if (std::isfinite(v) && v >= 0.0) elapsed = v;
+    }
+    if (state != "error" && progress.contains("started_at") && progress["started_at"].is_number()) {
+        const double started = progress["started_at"].get<double>();
+        const double now = now_epoch_s >= 0.0 ? now_epoch_s : current_epoch_seconds();
+        if (std::isfinite(started) && std::isfinite(now) && now >= started) {
+            const double wall = now - started;
+            if (wall < 86400.0) elapsed = std::max(elapsed, wall);
+        }
+    }
+    return elapsed;
+}
+
+std::string format_elapsed_seconds(double seconds) {
+    if (!std::isfinite(seconds) || seconds < 0.0) return {};
+    char buf[32];
+    if (seconds < 60.0) {
+        std::snprintf(buf, sizeof buf, "%.1fs", seconds);
+    } else {
+        const int total = static_cast<int>(std::floor(seconds));
+        std::snprintf(buf, sizeof buf, "%dm %02ds", total / 60, total % 60);
+    }
+    return buf;
+}
+
+std::string format_progress_status(const nlohmann::json& progress, double now_epoch_s) {
+    if (!progress.is_object()) return {};
+    const std::string state = progress.value("state", std::string());
+    if (state.empty() || state == "ready" || state == "idle") return {};
+    if (state == "error") {
+        if (progress.contains("error") && progress["error"].is_string()) {
+            const std::string err = progress["error"].get<std::string>();
+            if (!err.empty()) return err;
+        }
+        return progress.value("label", std::string("Error"));
+    }
+    std::string label = progress.value("label", std::string());
+    if (label.empty()) label = state;
+    const double elapsed = progress_elapsed_seconds(progress, now_epoch_s);
+    if (elapsed >= 0.0) {
+        const std::string dur = format_elapsed_seconds(elapsed);
+        if (!dur.empty()) label += "  \xC2\xB7  " + dur;
+    }
+    return label;
 }
 
 CommandOutput run_command(const CommandContext& context, RunControl* control) {

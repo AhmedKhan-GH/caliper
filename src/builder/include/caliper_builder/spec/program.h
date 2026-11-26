@@ -51,7 +51,7 @@ inline constexpr std::uint32_t kWorkgroupInvocations = 256;     // x * y * z of 
 inline constexpr std::uint32_t kWorkgroupsPerDimension = 65535; // `workgroups`, each
 inline constexpr std::uint32_t kFrameUniformBytes = 32;         // the uniform `caliper` (CaliperFrame)
 inline constexpr std::uint32_t kOverTimePasses = 3;             // passes over time_ms in a row that stop a program
-inline constexpr double kRuntimeShare = 0.04;                   // the runtime's share of the step time (Cadence)
+inline constexpr double kRuntimeShare = 0.04;                   // the runtime's target share of training step time (Cadence; training runs only)
 }  // namespace program_limits
 
 // The names that a program's WGSL uses for its fixed bindings.

@@ -15,7 +15,7 @@ import re
 
 import torch
 
-from .memory_limits import CleanStop
+from caliper.interp._memory import CleanStop
 
 
 DATASET_ID = "HuggingFaceFW/fineweb-edu"

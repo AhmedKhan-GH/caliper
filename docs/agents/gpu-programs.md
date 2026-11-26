@@ -83,25 +83,25 @@ Without the compiler library, `program.create` applies the edit with the warning
 |---|---|
 | `id`, `kind`, `host`, `state` | The id, the kind (`geometry`, `pixels`, `tensor`, `operator` or `piece`), the host and the state (`waiting`, `review`, `compiled`, `running`, `refused` or `stopped`) |
 | `every`, `every_min` | The steps between two passes of the program, which is the shared cadence N or a multiple of N for a larger declared `every`, and the `every` of the declaration |
-| `last_pass_ms`, `last_cost_ms`, `step_ms` | The GPU time of the last pass, the overhead `D` of a pass, which is the time that a pass adds to the run's wall clock and is shared by all programs, and the base step time `b`, which is the time of a training step far from a pass |
-| `overhead_share`, `passes_per_s` | The measured share `D / (N * b)` of the training time that the passes take, and the passes of the program a second on the run's wall clock over its last 8 passes. Both are null before they are measured, and `passes_per_s` is also null while the program does not run |
+| `last_pass_ms`, `last_cost_ms`, `step_ms` | The GPU time of the last pass, the pass cost `D` (in training runs, the overhead added to the wall clock; in interpretability runs, the program work time), and the base training step time `b` (null in interpretability runs) |
+| `overhead_share`, `passes_per_s` | The measured share `D / (N * b)` of training time (null in interpretability runs or before measurement), and the passes a second over the last 8 passes |
 | `last_step`, `runs` | The step of the last pass, and the count of passes |
 | `memory_bytes`, `memory_limit_bytes` | The memory in use and its budget |
-| `error`, `sha256` | The last error as `code`, `message`, `line` and `column`, and the SHA-256 of the source that the host runs |
+| `error`, `warning`, `sha256` | The last error and any active warning as `code`, `message`, `line` and `column`, and the SHA-256 of the source that the host runs |
 
 The state `review` belongs to a spec from someone else. The object `provenance` of the spec marks such a spec, and a program in it runs only when its SHA-256 is in the list `reviewed`. No command writes `provenance`. The review card that adds a hash is not built yet.
 
 ## Program Events
 
-The tool `events_wait` takes the kind `program`. The keys of the event are `program` (the id of the status item), `change`, `host`, `code`, `message`, `line` and `column`, and the common key `panel` holds the target panel. The change `compiled` means that a host compiled the program. The change `refused` means that a check refused it, and the change `stopped` means that the watchdog, the memory budget, the budget of the cadence or a lost device stopped it. An agent waits for the event instead of a fixed time.
+The tool `events_wait` takes the kind `program`. The keys of the event are `program` (the id of the status item), `change`, `host`, `code`, `message`, `line` and `column`, and the common key `panel` holds the target panel. The change `compiled` means that a host compiled the program. The change `warned` means that a program went over a budget such as `program.over_budget` or `program.draw_over_time` while it keeps running. The change `refused` means that a check refused it, and the change `stopped` means that a timeout, the memory budget, `limits.time_ms` or a lost device stopped it. An agent waits for the event instead of a fixed time.
 
 ## Cadence
 
-A program does not run on each step. It runs every N steps, and the script sets N by feedback from the time that the passes add to the run's wall clock. The aim is that the passes take at most 4 % of the training time. The rest of a 5 % loss stays for the hooks of `caliper.watch(model, optimizer)` and the publish path.
+A program in a training run does not run on each step. It runs every N steps, and the script sets N by feedback from the time that the passes add to the wall clock. The aim is that the passes take at most 4 % of the training time. The rest of a 5 % loss stays for the hooks of `caliper.watch(model, optimizer)` and the publish path.
 
 While a program is installed, the script records a `torch.mps.Event` at each step. The record gives the queued work of torch to the GPU without a wait. The script reads with `query()` which marks completed, and it takes the completion times from these reads. A step without a pass never waits.
 
-From the completion times, it measures two times for each cycle between two passes. The base step time `b` is the median of the last 9 cycles. The overhead `D` is the mean of the last 8 cycles without the largest and the smallest. It is the time that a pass adds to the run's wall clock.
+From the completion times, it measures two times for each cycle between two passes. The base step time `b` is the median of the last 9 cycles. The overhead `D` is the mean of the last 8 cycles without the largest and the smallest. It is the time that a pass adds to the wall clock. Control pauses, actions and interpretation requests inside `caliper.step()` reset the open cycle so they do not count as program overhead.
 
 Then N follows from this rule:
 
@@ -113,7 +113,9 @@ target = min(max(N_want, 3), N_max)
 
 N moves up by at most a factor of 2 for each update. It moves down by at most a factor of 1.5, and only when it is more than 25 % above the target. N is at least 3, and it is 3 before the first measured pass. The first pass of a program runs 8 steps after its install.
 
-All programs share the pass steps, and one pass runs every due program. A declared `every` asks for a slower cadence and never for a faster one. When `N_want` stays above `N_max` for 3 updates in a row, and the smallest declared `every` is below `N_want` too, every program stops with `program.over_budget`. Training goes on, and the next install measures again. A loop that already waits for the GPU at each step, for example with `loss.item()`, gets a mark only every 8 steps, before a pass and at the pass.
+All programs share the pass steps, and one pass runs every due program. A declared `every` asks for a slower cadence and never for a faster one. When `N_want` stays above `N_max` for 3 updates in a row, and the smallest declared `every` is below `N_want` too, programs other than built-in library pieces get a recoverable `program.over_budget` warning and keep running. Built-in library pieces get no hard stop and no `program.over_budget` warning. A real GPU hang still stops every program with `program.timeout`. A loop that already waits for the GPU at each step, for example with `loss.item()`, gets a mark only every 8 steps, before a pass and at the pass.
+
+The training-overhead cadence and `program.over_budget` do not apply to interpretability runs, where a step is not a training step. In an interpretability run, `step_ms` and `overhead_share` stay null, `last_cost_ms` measures only program work, and passes run without training-budget throttling.
 
 `program.status` shows N as `every`, `D` as `last_cost_ms`, `b` as `step_ms`, the share of the training time as `overhead_share` and the rate of passes as `passes_per_s`.
 

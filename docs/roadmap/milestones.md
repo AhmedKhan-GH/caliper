@@ -13,8 +13,8 @@ This page lists the milestones of Caliper's current trajectory, Agent-Built Play
 | M4, Hosted Runs | Start, fork and stop a model's run from Caliper and over MCP | Done | [#26](https://github.com/AhmedKhan-GH/caliper/pull/26) |
 | M5, Programmable Graphics | Pieces with a derive half in the run and a draw half in the viewer, written by the agent, in the app and the browser | Done | [#34](https://github.com/AhmedKhan-GH/caliper/pull/34) |
 | M6, Graphics Consolidation | Library scene pieces, typed resources, dashboard parity, and removal of the built-in draw route | Done | [#42](https://github.com/AhmedKhan-GH/caliper/pull/42) |
-| M7, Derivation Catalog | Model probes, feature dictionaries, a dataset index of top examples, and attribution graphs with their layout as library pieces and commands | Done | [#45](https://github.com/AhmedKhan-GH/caliper/pull/45) |
-| M8, Steering and Intervention | Steer, scale, clamp and patch on a live model, with a traced and steered circuit on a 0.8B language model as the acceptance demo | Planned | |
+| M7, Derivation Catalog | Model probes, SAELens and circuit-tracer dictionaries, example indexes, and attribution graphs as library pieces and commands | Done | [#45](https://github.com/AhmedKhan-GH/caliper/pull/45), [#51](https://github.com/AhmedKhan-GH/caliper/pull/51) |
+| M8, Steering and Intervention | Feature steering, scaling, clamping, and activation patching on TransformerLens models, with the Gemma 2 2B Circuit Trace instrument | Done | [#51](https://github.com/AhmedKhan-GH/caliper/pull/51) |
 | M9, Saved and Editable Instruments | Saved instruments with their pieces, and the node editor | Planned | |
 | M10, Browser Parity | The rest of an instrument in the browser | Planned | |
 | M11, Training Debugger | First acceptance demo | Planned | |
@@ -64,6 +64,10 @@ Library pieces now own every scene draw, and each sender uses the piece form for
 
 The library tests check pixels and picks, and the app and browser comparison tests cover each piece. The earlier acceptance tests pass, and the Arc Tower dashboard comparison checks the app and browser against the same recorded data. [Testing](../development/testing.md) describes the test suites.
 
+## Circuit Tracing and Steering
+
+M7 and M8 connect live tensor publication and controls to TransformerLens, circuit-tracer, and SAELens. Dictionary adapters load sparse autoencoders and transcoders, and disk or live indexes resolve top 33-token feature examples. Circuit attribution runs circuit-tracer with published pruning thresholds and publishes graphs, examples, and paired probabilities to library pieces. Live interventions clamp, scale, add, ablate, and patch activations while the Circuit Trace instrument updates graphs, bars, examples, and continuations.
+
 ## Later Milestones
 
-M7 adds model probes, transcoder features, top examples from a dataset and attribution graphs, as library pieces and commands. M8 adds steering, scaling, clamping and patching, and ends with circuit tracing on a small language model: a prompt, its attribution graph, and an output that changes when a feature changes. Generic projections wait for a demo that needs them. M9 adds saved and editable instruments with the node editor. M10 completes browser parity beyond the dashboard viewer. M11 to M14 cover the two acceptance demos, image data and vector drawing. M15 and M16 defer recordings, timelines and custom WebAssembly views.
+M9 adds saved and editable instruments with the node editor. M10 completes browser parity beyond the dashboard viewer. M11 to M14 cover the two acceptance demos, image data, and vector drawing. M15 and M16 defer recordings, timelines, and custom WebAssembly views.

@@ -923,9 +923,11 @@ protected:
     }
 
     void on_take_readback(uint32_t readback_slot, std::vector<uint8_t>* out) override {
-        id<MTLBuffer> b = readbacks_[readback_slot];
-        const uint8_t* p = static_cast<const uint8_t*>(b.contents);
-        out->assign(p, p + b.length);
+        @autoreleasepool {
+            id<MTLBuffer> b = readbacks_[readback_slot];
+            const uint8_t* p = static_cast<const uint8_t*>(b.contents);
+            out->assign(p, p + b.length);
+        }
     }
 
     uint64_t on_imgui_texture_id(uint32_t slot) override {

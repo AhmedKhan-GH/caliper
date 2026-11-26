@@ -1,11 +1,22 @@
-// Fixed trace shapes and valid counts gate every pass. Padding never becomes a node.
-fn node_count() -> u32 {
-    if (shapes.graph_counts.w != 4u || shapes.node_i.z != 512u || shapes.node_i.w != 4u ||
-        shapes.node_f.z != 512u || shapes.node_f.w != 4u || shapes.edge_i.z != 8192u ||
-        shapes.edge_i.w != 2u || shapes.edge_f.z != 8192u || shapes.edge_f.w != 2u) { return 0u; }
-    return u32(clamp(graph_counts[0], 0, 512));
+// Legacy and reference tensors retain their own capacities. Counts drive the work.
+fn valid_graph() -> bool {
+    let legacy = shapes.node_i.z == 512u && shapes.edge_i.z == 8192u;
+    let reference = shapes.node_i.z == 8192u && shapes.edge_i.z == 262144u;
+    if ((!legacy && !reference) || shapes.graph_counts.w != 4u || shapes.node_i.w != 4u ||
+        shapes.node_f.z != shapes.node_i.z || shapes.node_f.w != 4u ||
+        shapes.edge_i.w != 2u || shapes.edge_f.z != shapes.edge_i.z || shapes.edge_f.w != 2u) { return false; }
+    // Reject inconsistent counts instead of a partial graph.
+    return graph_counts[0] >= 0 && graph_counts[0] <= i32(shapes.node_i.z) &&
+        graph_counts[1] >= 0 && graph_counts[1] <= i32(shapes.edge_i.z);
 }
-fn edge_count() -> u32 { return u32(clamp(graph_counts[1], 0, 8192)); }
+fn node_count() -> u32 {
+    if (!valid_graph()) { return 0u; }
+    return u32(graph_counts[0]);
+}
+fn edge_count() -> u32 {
+    if (!valid_graph()) { return 0u; }
+    return u32(graph_counts[1]);
+}
 fn token_count() -> u32 { return u32(clamp(graph_counts[2], 1, 32)); }
 fn layer_count() -> u32 { return u32(clamp(graph_counts[3], 1, 512)); }
 fn finite_value(v: f32) -> f32 { return select(0.0, v, abs(v) <= 3.402823e38); }
@@ -14,7 +25,7 @@ fn finite_value(v: f32) -> f32 { return select(0.0, v, abs(v) <= 3.402823e38); }
 fn assign_cells(@builtin(global_invocation_id) id: vec3<u32>) {
     let i = id.x;
     let n = node_count();
-    if (i == 0u) { atomicStore(&nodes_count, n); }
+    if (i == 0u) { atomicStore(&nodes_count, n); atomicStore(&cells_count, n); }
     if (i >= n) { return; }
     let k = u32(clamp(node_i[4u*i], 0, 3));
     let t = clamp(node_i[4u*i+2u], 0, i32(token_count())-1);
@@ -25,14 +36,15 @@ fn assign_cells(@builtin(global_invocation_id) id: vec3<u32>) {
     let x = select(0.0, -0.88 + 1.76*f32(t)/f32(max(token_count()-1u,1u)), token_count()>1u);
     let center = vec2<f32>(x, -0.82 + 1.64*f32(l+1)/f32(layer_count()+1u));
     let influence = finite_value(node_f[4u*i+1u]);
-    cells[i] = Cell(center, width, influence, u32(l+1)*32u+u32(t));
+    cells[i] = Cell(center, width, influence, u32(l+1)*32u+u32(t),
+                    1.64/f32(layer_count()+1u), 0u, 0u, select(0.0,0.15,edge_count()>0u), 0.0);
     nodes[i] = Node(vec4<f32>(center, 0.0, 0.0), i, k, l, t, node_i[4u*i+3u], influence);
 }
 
 // Each row owns its full text element. An absent text tensor uses a numeric label.
 fn copy_text(row: u32, number: u32, prefix: u32) {
     var words: array<u32, 16>;
-    if (shapes.label_text.z == 544u && shapes.label_text.w == 16u) {
+    if (shapes.label_text.z == shapes.node_i.z + 32u && shapes.label_text.w == 16u) {
         for (var w = 0u; w < 16u; w++) { words[w] = label_text[row*16u+w]; }
     } else {
         words[0] = prefix;
@@ -71,13 +83,15 @@ fn order_influence(@builtin(global_invocation_id) id: vec3<u32>) {
     var rank = 0u;
     var count = 0u;
     for (var j = 0u; j < n; j++) {
-        let other = cells[j];
-        if (other.key == c.key) {
+        if (cells[j].key == c.key) {
             count++;
-            if (other.influence > c.influence || (other.influence == c.influence && j < i)) { rank++; }
+            let influence = cells[j].influence;
+            if (influence > c.influence || (influence == c.influence && j < i)) { rank++; }
         }
     }
     let height = 1.64/f32(layer_count()+1u);
+    cells[i].rank = rank;
+    cells[i].size = count;
     let columns = min(count, max(1u, u32(ceil(sqrt(f32(count)*c.width/height)))));
     let rows = (count+columns-1u)/columns;
     let spacing = vec2<f32>(0.8*c.width/f32(columns), 0.8*height/f32(rows));
@@ -95,16 +109,25 @@ fn order_influence(@builtin(global_invocation_id) id: vec3<u32>) {
     copy_text(32u+i, u32(max(nodes[i].feature, 0)), prefix);
 }
 
-fn relaxed(i: u32, use_b: bool) -> vec4<f32> {
+struct Relaxed {
+    position: vec4<f32>,
+    input_abs_sum: f32,
+}
+fn relaxed(i: u32, use_b: bool) -> Relaxed {
     var own: vec4<f32>;
     if (use_b) { own = offset_b[i]; } else { own = offset_a[i]; }
     var total = 0.0;
     var count = 0.0;
+    var input_abs_sum = 0.0;
     let n = node_count();
     for (var e = 0u; e < edge_count(); e++) {
         let s = edge_i[2u*e];
         let t = edge_i[2u*e+1u];
         if (s < 0 || t < 0 || s >= i32(n) || t >= i32(n)) { continue; }
+        // Published viewer (util-cg.js:288,295): sum |weight| over incoming links of target node i.
+        if (t == i32(i)) {
+            input_abs_sum += abs(finite_value(edge_f[2u*e]));
+        }
         var neighbor = -1;
         if (s == i32(i)) { neighbor = t; }
         if (t == i32(i)) { neighbor = s; }
@@ -115,21 +138,22 @@ fn relaxed(i: u32, use_b: bool) -> vec4<f32> {
         count += 1.0;
     }
     if (count > 0.0) { own.x = clamp(mix(own.x, total/count, 0.5), own.y-0.15*own.z, own.y+0.15*own.z); }
-    return own;
+    return Relaxed(own, input_abs_sum);
 }
 @compute @workgroup_size(64)
-fn relax_one(@builtin(global_invocation_id) id: vec3<u32>) { if (id.x < node_count()) { offset_b[id.x] = relaxed(id.x, false); } }
+fn relax_one(@builtin(global_invocation_id) id: vec3<u32>) { if (id.x < node_count()) { offset_b[id.x] = relaxed(id.x, false).position; } }
 @compute @workgroup_size(64)
-fn relax_two(@builtin(global_invocation_id) id: vec3<u32>) { if (id.x < node_count()) { offset_a[id.x] = relaxed(id.x, true); } }
+fn relax_two(@builtin(global_invocation_id) id: vec3<u32>) { if (id.x < node_count()) { offset_a[id.x] = relaxed(id.x, true).position; } }
 @compute @workgroup_size(64)
-fn relax_three(@builtin(global_invocation_id) id: vec3<u32>) { if (id.x < node_count()) { offset_b[id.x] = relaxed(id.x, false); } }
+fn relax_three(@builtin(global_invocation_id) id: vec3<u32>) { if (id.x < node_count()) { offset_b[id.x] = relaxed(id.x, false).position; } }
 @compute @workgroup_size(64)
 fn relax_four(@builtin(global_invocation_id) id: vec3<u32>) {
     let i = id.x;
     if (i >= node_count()) { return; }
     let result = relaxed(i, true);
-    offset_a[i] = result;
-    nodes[i].position = vec4<f32>(result.x, nodes[i].position.y, 0.0, result.w);
+    offset_a[i] = result.position;
+    nodes[i].position = vec4<f32>(result.position.x, nodes[i].position.y, 0.0, result.position.w);
+    cells[i].input_abs_sum = result.input_abs_sum;
 }
 
 @compute @workgroup_size(64)
@@ -146,6 +170,8 @@ fn edge_curves(@builtin(global_invocation_id) id: vec3<u32>) {
     let b = nodes[u32(t)].position.xy;
     let mid = 0.5*(a.y+b.y);
     let weight = finite_value(edge_f[2u*i]);
-    let normalized = clamp(finite_value(edge_f[2u*i+1u]), -1.0, 1.0);
-    curves[i] = Curve(vec4<f32>(a, a.x, mid), vec4<f32>(b.x, mid, b), weight, normalized, u32(s), u32(t));
+    // Published viewer (util-cg.js:296): pctInput = weight / target.inputAbsSum.
+    let input_sum = cells[u32(t)].input_abs_sum;
+    let pct_input = select(0.0, clamp(weight / input_sum, -1.0, 1.0), input_sum > 0.0);
+    curves[i] = Curve(vec4<f32>(a, a.x, mid), vec4<f32>(b.x, mid, b), weight, pct_input, u32(s), u32(t));
 }

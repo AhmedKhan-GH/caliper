@@ -223,8 +223,23 @@ struct SpecSelectionRows {
 SpecSelectionRows spec_selection_rows(const PreparedPanel& panel, const SpecSelection& selection,
                                       size_t max_rows = 1000);
 
+// Active progress or error overlay drawn in a panel's content area while
+// waiting for loading, tracing, generation, or first render.
+struct PanelProgress {
+    bool active = false;
+    bool error = false;
+    std::string stage;
+    std::string label;
+    std::string detail;
+    int done = 0;
+    int total = 0;           // > 0: determinate bar; <= 0: indeterminate bar
+    double elapsed_s = -1.0;
+    bool translucent = false;
+};
+
 struct SpecPanelView {
     PreparedPanel data;
+    std::optional<PanelProgress> progress;
     SpecColorKey* key = nullptr;    // the spec's colour key; null: colours by position
     bool show_title = true;         // false for a tab, whose label carries it
     bool preview = false;           // drawn from a preview: the strip says so

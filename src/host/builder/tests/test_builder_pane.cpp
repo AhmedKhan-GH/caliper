@@ -1249,3 +1249,59 @@ TEST_CASE("builder pane: pieces in Sources, and a piece dropped on a scene panel
     REQUIRE(p.undo());
     CHECK(p.open_spec()->spec == before);
 }
+
+TEST_CASE("builder pane: non-closable panels and Lock Layout refuse close and layout edits") {
+    Rig r = rig("pane-lock-closable");
+    build_dashboard(r);
+    BuilderPane& p = *r.pane;
+
+    // Marking a panel non-closable refuses both remove_panel and remove_focused without sending a command.
+    p.focus_panel("curves");
+    REQUIRE_MESSAGE(p.set_closable(false), p.error().message);
+    CHECK(p.open_spec()->spec.find_panel("curves")->closable == std::optional<bool>(false));
+    const size_t sent_before_refusal = p.sent().size();
+    CHECK_FALSE(p.remove_panel("curves"));
+    CHECK(p.error().code == "panel.not_closable");
+    CHECK_FALSE(p.remove_focused());
+    CHECK(p.error().code == "panel.not_closable");
+    CHECK(p.sent().size() == sent_before_refusal);
+    CHECK(p.open_spec()->spec.find_panel("curves") != nullptr);
+
+    // Lock Layout prevents closing any panel, resizing dividers, moving panels, or adding panels.
+    REQUIRE_MESSAGE(p.set_layout_locked(true), p.error().message);
+    CHECK(p.layout_locked());
+    const size_t sent_locked = p.sent().size();
+    CHECK_FALSE(p.remove_panel("rows"));
+    CHECK(p.error().code == "layout.locked");
+    CHECK_FALSE(p.set_ratio("", 0.4));
+    CHECK(p.error().code == "layout.locked");
+    DragPayload move;
+    move.kind = DragPayload::Kind::panel;
+    move.panel = "rows";
+    CHECK_FALSE(p.drop(move, at(DropZone::edge, "curves", "below")));
+    CHECK(p.error().code == "layout.locked");
+    p.select("table:run42_metrics");
+    CHECK_FALSE(p.add_primitive(spec::Primitive::text));
+    CHECK(p.error().code == "layout.locked");
+    CHECK(p.sent().size() == sent_locked);
+
+    // Editing a panel's title still works while the layout is locked.
+    p.focus_panel("rows");
+    REQUIRE_MESSAGE(p.set_title("Metrics table"), p.error().message);
+    CHECK(p.open_spec()->spec.find_panel("rows")->title == std::optional<std::string>("Metrics table"));
+
+    // Unlocking restores layout edits and removal of closable panels; non-closable panels stay protected.
+    REQUIRE_MESSAGE(p.set_layout_locked(false), p.error().message);
+    CHECK_FALSE(p.layout_locked());
+    REQUIRE_MESSAGE(p.set_ratio("", 0.4), p.error().message);
+    REQUIRE_MESSAGE(p.remove_panel("rows"), p.error().message);
+    CHECK(p.open_spec()->spec.find_panel("rows") == nullptr);
+    CHECK_FALSE(p.remove_panel("curves"));
+    CHECK(p.error().code == "panel.not_closable");
+
+    // Re-enabling closable lets curves be removed too.
+    p.focus_panel("curves");
+    REQUIRE_MESSAGE(p.set_closable(true), p.error().message);
+    REQUIRE_MESSAGE(p.remove_panel("curves"), p.error().message);
+    CHECK(p.open_spec()->spec.find_panel("curves") == nullptr);
+}

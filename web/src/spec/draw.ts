@@ -27,6 +27,117 @@ export function drawState(ctx: CanvasRenderingContext2D, st: PanelState, c: Rect
   if (detail) text(ctx, 'mono', SIZE.mono - 1, cx - bw / 2, top + SIZE.ui + gap, COL.faint, detail);
 }
 
+/** Active progress or error overlay drawn inside a panel's content area (draw_progress_overlay). */
+export interface PanelProgress {
+  active: boolean;
+  error: boolean;
+  stage: string;
+  label: string;
+  detail?: string;
+  done?: number | null;
+  total?: number | null;
+  elapsedS?: number | null;
+  translucent?: boolean;
+}
+
+export function formatElapsedSeconds(seconds: number): string {
+  if (!Number.isFinite(seconds) || seconds < 0) return '';
+  if (seconds < 60) return `${seconds.toFixed(1)}s`;
+  const total = Math.floor(seconds);
+  const mins = Math.floor(total / 60);
+  const secs = String(total % 60).padStart(2, '0');
+  return `${mins}m ${secs}s`;
+}
+
+export function drawProgressOverlay(ctx: CanvasRenderingContext2D, prog: PanelProgress, c: Rect, nowMs: number): void {
+  if (!prog.active || c.w < 16 || c.h < 16) return;
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(c.x, c.y, c.w, c.h);
+  ctx.clip();
+
+  if (prog.translucent) {
+    fill(ctx, c.x, c.y, c.w, c.h, 'rgba(20, 19, 17, 0.80)');
+  } else {
+    fill(ctx, c.x, c.y, c.w, c.h, COL.ground);
+  }
+
+  const padX = 16, padY = 12;
+  const innerW = Math.max(40, Math.min(c.w - 2 * padX, 320));
+  const heading = fitText(ctx, 'ui', SIZE.ui, prog.label || (prog.error ? 'Error' : 'Working'), innerW);
+  const hw = textWidth(ctx, 'ui', SIZE.ui, heading);
+
+  const barH = 6;
+  const barW = Math.max(48, Math.min(innerW, 260));
+  const gapBar = 9;
+
+  let detail = prog.detail ?? '';
+  if (!prog.error && !detail) {
+    const parts: string[] = [];
+    if (typeof prog.total === 'number' && prog.total > 0) {
+      const d = typeof prog.done === 'number' ? Math.max(0, prog.done) : 0;
+      parts.push(`${d} / ${prog.total}`);
+    }
+    if (typeof prog.elapsedS === 'number' && Number.isFinite(prog.elapsedS) && prog.elapsedS >= 0) {
+      const dur = formatElapsedSeconds(prog.elapsedS);
+      if (dur) parts.push(dur);
+    }
+    detail = parts.join('  ·  ');
+  }
+
+  const detailFace = prog.error ? 'ui' : 'mono';
+  const detailSize = prog.error ? SIZE.small : SIZE.mono - 1;
+  const detailShown = detail ? fitText(ctx, detailFace, detailSize, detail, innerW) : '';
+  const dw = detailShown ? textWidth(ctx, detailFace, detailSize, detailShown) : 0;
+  const gapDet = detailShown ? 8 : 0;
+
+  const blockH = SIZE.ui + (barH > 0 ? gapBar + barH : 0) + (detailShown ? gapDet + detailSize : 0);
+  const cx = c.x + c.w / 2;
+  const top = Math.round(c.y + Math.max(padY, (c.h - blockH) / 2));
+
+  if (prog.translucent) {
+    const cardW = Math.min(c.w - 12, Math.max(hw, barW, dw) + 2 * padX);
+    const cardH = Math.min(c.h - 12, blockH + 2 * padY);
+    const caX = Math.round(cx - cardW / 2), caY = Math.round(top - padY);
+    fill(ctx, caX, caY, Math.round(cardW), Math.round(cardH), COL.plate);
+    outline(ctx, caX, caY, caX + Math.round(cardW), caY + Math.round(cardH), prog.error ? COL.statusError : COL.rule);
+  }
+
+  let y = top;
+  text(ctx, 'ui', SIZE.ui, Math.round(cx - hw / 2), y, prog.error ? COL.errorText : COL.text, heading);
+  y += SIZE.ui;
+
+  if (barW > 0) {
+    y += gapBar;
+    const bx = Math.round(cx - barW / 2), by = Math.round(y), bw = Math.round(barW);
+    if (prog.error) {
+      fill(ctx, bx, by, bw, barH, COL.statusError);
+    } else {
+      fill(ctx, bx, by, bw, barH, COL.plate);
+      if (typeof prog.total === 'number' && prog.total > 0) {
+        const d = typeof prog.done === 'number' ? prog.done : 0;
+        const frac = Math.max(0, Math.min(1, d / prog.total));
+        const fw = Math.round(bw * frac);
+        if (fw > 0) fill(ctx, bx, by, fw, barH, COL.accent);
+      } else {
+        const t = Math.max(0, nowMs) / 1000;
+        const phase = 0.5 - 0.5 * Math.cos(t * 2.4);
+        const seg = Math.max(28, Math.round(bw * 0.30));
+        const sx = bx + phase * Math.max(0, bw - seg);
+        fill(ctx, sx, by, Math.min(seg, bx + bw - sx), barH, COL.accent);
+      }
+      outline(ctx, bx, by, bx + bw, by + barH, COL.rule);
+    }
+    y += barH;
+  }
+
+  if (detailShown) {
+    y += gapDet;
+    text(ctx, detailFace, detailSize, Math.round(cx - dw / 2), y, prog.error ? COL.secondary : COL.faint, detailShown);
+  }
+  ctx.restore();
+}
+
 /** What draw_spec_panel returns: the header and the content's rectangles. */
 export interface PanelFrame { header: Rect; content: Rect }
 
@@ -34,7 +145,8 @@ export interface PanelFrame { header: Rect; content: Rect }
 export interface PanelView { scroll: number }
 
 export function drawPanel(ctx: CanvasRenderingContext2D, p: PreparedPanel | null, title: string, rect: Rect,
-                          showTitle: boolean, key: ColorKey, view: PanelView): PanelFrame {
+                          showTitle: boolean, key: ColorKey, view: PanelView,
+                          progress?: PanelProgress | null, nowMs = 0): PanelFrame {
   fill(ctx, rect.x, rect.y, rect.w, rect.h, COL.ground);
   const hh = showTitle ? Math.min(rect.h, Math.round(SIZE.ui + 9)) : 0;
   const header = { x: rect.x, y: rect.y, w: rect.w, h: hh };
@@ -58,9 +170,18 @@ export function drawPanel(ctx: CanvasRenderingContext2D, p: PreparedPanel | null
   if (p?.primitive === 'table') content = { x: rect.x + pad, y: rect.y + hh + 1, w: rect.w - 2 * pad, h: rect.h - hh - 1 };
   const frame = { header, content };
   if (content.w < 8 || content.h < 8) return frame;
-  if (!p) return frame;   // not resolved yet: the panel waits, empty
+  const hasProgress = !!progress?.active;
+  if (hasProgress && !progress!.translucent && p?.primitive !== 'scene') {
+    drawProgressOverlay(ctx, progress!, content, nowMs);
+    return frame;
+  }
+  if (!p) {
+    if (hasProgress) drawProgressOverlay(ctx, progress!, content, nowMs);
+    return frame;
+  }
   if (p.state) {
     drawState(ctx, p.state, content);
+    if (hasProgress) drawProgressOverlay(ctx, progress!, content, nowMs);
     return frame;
   }
   ctx.save();
@@ -77,7 +198,22 @@ export function drawPanel(ctx: CanvasRenderingContext2D, p: PreparedPanel | null
     case 'text': drawText(ctx, p, content); break;
   }
   ctx.restore();
+  if (hasProgress && p.primitive !== 'scene') drawProgressOverlay(ctx, progress!, content, nowMs);
   return frame;
+}
+
+/** The × close control on a closable panel's title strip (or top-right corner for a tabbed panel). */
+export function drawCloseButton(ctx: CanvasRenderingContext2D, rect: Rect, hovered: boolean): void {
+  fill(ctx, rect.x, rect.y, rect.w, rect.h, hovered ? COL.plateHover : COL.plate);
+  const cx = rect.x + rect.w / 2, cy = rect.y + rect.h / 2, a = 4;
+  ctx.strokeStyle = hovered ? COL.accent : COL.secondary;
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  ctx.moveTo(cx - a, cy - a);
+  ctx.lineTo(cx + a, cy + a);
+  ctx.moveTo(cx - a, cy + a);
+  ctx.lineTo(cx + a, cy - a);
+  ctx.stroke();
 }
 
 // ---- series ----------------------------------------------------------------------

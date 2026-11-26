@@ -28,16 +28,21 @@ from typing import Any, ClassVar
 import numpy as np
 
 if __package__:
-    from . import _interpret_protocol
+    from . import _interpret_protocol, _intervention_protocol
 else:
     # Browser fixtures and codec clients load this file without the package.
     import importlib.util as _import_util
     from pathlib import Path as _Path
 
-    _protocol_spec = _import_util.spec_from_file_location(
-        f"{__name__}_interpret_protocol", _Path(__file__).with_name("_interpret_protocol.py"))
-    _interpret_protocol = _import_util.module_from_spec(_protocol_spec)
-    _protocol_spec.loader.exec_module(_interpret_protocol)
+    def _load_protocol(name):
+        spec = _import_util.spec_from_file_location(
+            f"{__name__}{name}", _Path(__file__).with_name(name + ".py"))
+        module = _import_util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module
+
+    _interpret_protocol = _load_protocol("_interpret_protocol")
+    _intervention_protocol = _load_protocol("_intervention_protocol")
 
 __all__ = [
     "MAJOR", "MINOR", "MAGIC", "MsgType", "Kind", "DType", "Encoding", "WireError",
@@ -1204,7 +1209,7 @@ class Control(_Msg):
             _bad(f"'{op}' needs 'name'")
         value = None
         if op == OP_SET:
-            value = _req(m, "value", _set_value, "a number, a boolean or a choice")
+            value = _req(m, "value", _set_value, "a finite number, a boolean, or bounded text")
         count = None
         if op == OP_STEP:
             count = _opt(m, "count", lambda v: _u32(v) and v >= 1, "a positive uint32")
@@ -1270,7 +1275,7 @@ class ControlReply(_Msg):
             _bad("a successful interpretation reply requires result")
         return cls(_req(m, "request_id", _u32, "a uint32"), op, status,
                    _opt(m, "name", _name, "a parameter or action name"),
-                   _opt(m, "value", _set_value, "a number, a boolean or a choice"),
+                   _opt(m, "value", _set_value, "a finite number, a boolean, or bounded text"),
                    _opt(m, "message", _text, f"a string of at most {TEXT_MAX} bytes"), err, result)
 
 
@@ -2978,6 +2983,7 @@ CAP_INTERVENTIONS = "interventions"
 PROGRAM_SET, PROGRAM_REMOVE, PROGRAM_PARAMS = "set", "remove", "params"
 SECTION_WGSL = "wgsl"
 INTERVENE_ABLATE = "ablate"
+INTERVENE_OPS = ("ablate", "add", "scale", "clamp", "patch")
 MAX_PROGRAMS = 16
 PROGRAM_ID_MAX = 55
 PROGRAM_SOURCE_MAX = 65536
@@ -3260,7 +3266,8 @@ _STATUS_KEYS = (("every", _int_in(1, PROGRAM_EVERY_MAX)), ("every_min", _int_in(
                 ("last_pass_ms", _nonneg), ("last_cost_ms", _nonneg), ("step_ms", _nonneg),
                 ("overhead_share", _nonneg), ("passes_per_s", _nonneg),
                 ("last_step", _safe_uint), ("runs", _safe_uint), ("memory_bytes", _safe_uint),
-                ("memory_limit_bytes", _safe_uint), ("error", _program_error))
+                ("memory_limit_bytes", _safe_uint), ("error", _program_error),
+                ("warning", _program_error))
 
 
 def _status_item(v) -> bool:
@@ -3320,15 +3327,13 @@ def _opt_step(v) -> bool:
 
 
 def _intervene_request(v) -> bool:
-    """CONTROL's ``intervene``: exactly one of ``set``, ``clear`` and ``clear_all``."""
-    if not _obj(v) or sum(v.get(k) is not None for k in ("set", "clear", "clear_all")) != 1:
+    if (not _obj(v) or set(v) - {"set", "clear", "clear_all"}
+            or sum(v.get(k) is not None for k in ("set", "clear", "clear_all")) != 1):
         return False
     if v.get("set") is not None:
-        st = v["set"]
-        return (_obj(st) and _point(st.get("point")) and _name(st.get("op"))
-                and _opt_step(st.get("from_step")) and _opt_step(st.get("until_step")))
+        return _intervention_protocol.specification(v["set"])
     if v.get("clear") is not None:
-        return _point(v["clear"])
+        return _interpret_protocol.text(v["clear"], POINT_MAX, False)
     return v["clear_all"] is True
 
 
@@ -3341,9 +3346,7 @@ def _point_entry(v) -> bool:
 
 
 def _active_entry(v) -> bool:
-    return (_obj(v) and _point(v.get("point")) and _name(v.get("op"))
-            and all(_opt_step(v.get(k)) for k in ("from_step", "until_step", "since_step"))
-            and v.get("state") in INTERVENTION_STATES)
+    return _intervention_protocol.specification(v, lifecycle=True)
 
 
 def _interventions(v) -> bool:
@@ -3359,14 +3362,16 @@ _PIECE_TAIL = _PIECE_HEAD | _DIGITS | {"_"}
 
 def _piece_pin(v) -> bool:
     """The pin of a piece: ``name`` ([a-z][a-z0-9_]*, at most 32 bytes), ``version`` (1 to
-    1,000,000) and ``hash`` ("sha256:" and 64 lowercase hex digits)."""
+    1,000,000), ``hash`` ("sha256:" and 64 lowercase hex digits) and optional ``from``
+    (``library``, ``workspace`` or ``inline``)."""
     if not _obj(v):
         return False
-    name, h = v.get("name"), v.get("hash")
+    name, h, fr = v.get("name"), v.get("hash"), v.get("from")
     return (isinstance(name, str) and 0 < len(name) <= PIECE_NAME_MAX and name.isascii()
             and name[0] in _PIECE_HEAD and all(c in _PIECE_TAIL for c in name)
             and _int_in(1, PIECE_VERSION_MAX)(v.get("version"))
-            and isinstance(h, str) and h.startswith("sha256:") and _sha256_hex(h[len("sha256:"):]))
+            and isinstance(h, str) and h.startswith("sha256:") and _sha256_hex(h[len("sha256:"):])
+            and (fr is None or fr in ("library", "workspace", "inline")))
 
 
 def _library_pin(v) -> bool:

@@ -153,6 +153,7 @@ struct Control {
     std::string id;                    // shares the panels' set of ids
     ControlKind kind = ControlKind::slider;
     std::optional<std::string> title;  // the id when absent
+    std::optional<bool> closable;      // default true when absent
     std::string bind;                  // as written: "param:lr", "action:save", "run:pause", "value"
     ControlOptions options;
     nlohmann::json x;                  // the extension table, null when absent

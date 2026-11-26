@@ -12,7 +12,7 @@ MAX_FIELDS = 64
 MAX_DEPTH = 8
 MAX_VALUES = 16384
 READ_METHODS = frozenset(("feature.dictionary", "feature.show", "feature.examples", "trace.status", "trace.read"))
-METHODS = READ_METHODS | {"trace.run"}
+METHODS = READ_METHODS | {"trace.run", "patch.sweep", "trace.validate"}
 
 
 def text(value, limit=MAX_STRING, empty=True):
@@ -64,23 +64,39 @@ def request(value):
     if not isinstance(method, str) or method not in METHODS or type(p) is not dict:
         return False
     allowed = {
-        "feature.dictionary": set(), "trace.status": set(),
+        "feature.dictionary": set(), "trace.status": set(), "trace.validate": set(),
+        "patch.sweep": {"clean_prompt", "corrupted_prompt", "metric"},
         "feature.show": {"layer", "feature", "node"},
         "feature.examples": {"layer", "feature", "node", "limit"},
-        "trace.run": {"prompt", "max_targets", "max_nodes", "max_edges"},
+        "trace.run": {"prompt", "max_targets", "max_nodes", "max_edges",
+                      "max_n_logits", "desired_logit_prob", "node_threshold", "edge_threshold",
+                      "batch_size", "update_interval"},
         "trace.read": {"node_offset", "node_limit", "edge_offset", "edge_limit"},
     }[method]
     if set(p) - allowed:
         return False
-    bounds = {"layer": (0, 4095), "feature": (0, 2**31 - 1), "node": (0, 511),
-              "limit": (0, 16), "max_targets": (0, 512), "max_nodes": (1, 512),
-              "max_edges": (0, 8192), "node_offset": (0, 512), "edge_offset": (0, 8192),
+    bounds = {"layer": (0, 4095), "feature": (0, 2**31 - 1), "node": (0, 8191),
+              "limit": (0, 16), "max_targets": (0, 5000),
+              "max_nodes": (1, 8192), "max_edges": (0, 262144),
+              "max_n_logits": (1, 10), "update_interval": (1, 128),
+              "node_offset": (0, 8192), "edge_offset": (0, 262144),
               "node_limit": (0, 256), "edge_limit": (0, 256)}
     if any(k in p and not integer(p[k], *b) for k, b in bounds.items()):
         return False
     if method in ("feature.show", "feature.examples"):
         return (("node" in p and "layer" not in p and "feature" not in p)
                 or ("node" not in p and "layer" in p and "feature" in p))
+    if method == "patch.sweep":
+        metric = p.get("metric")
+        return (text(p.get("clean_prompt"), empty=False) and text(p.get("corrupted_prompt"), empty=False)
+                and type(metric) is dict and set(metric) == {"positive_token", "negative_token"}
+                and all(integer(v, 0, 2**31 - 1) for v in metric.values())
+                and metric["positive_token"] != metric["negative_token"])
     if method == "trace.run":
+        if p.get("batch_size") is not None and not integer(p["batch_size"], 1, 512):
+            return False
+        for key in ("desired_logit_prob", "node_threshold", "edge_threshold"):
+            if key in p and (type(p[key]) not in (int, float) or not 0 <= p[key] <= 1):
+                return False
         return text(p.get("prompt"), empty=False)
     return True

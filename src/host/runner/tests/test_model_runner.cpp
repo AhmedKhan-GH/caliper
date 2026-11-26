@@ -19,6 +19,7 @@
 #include "net/wire.h"
 #include "net/ws.h"
 #include "../../../../tests/probe_metadata.h"
+#include "../../../../tests/intervention_metadata.h"
 
 #include <caliper_builder/session/events.h>
 #include <caliper_builder/session/session.h>
@@ -251,7 +252,8 @@ TEST_CASE("runner: native interpretation validation and protocol errors need no 
 namespace {
 
 std::string fresh_dir(const std::string& name) {
-    const fs::path p = fs::path(CALIPER_RUNNER_TEST_TMP) / name;
+    const char* root = std::getenv("CALIPER_RUNNER_TEST_TMP");
+    const fs::path p = fs::path(root && *root ? root : CALIPER_RUNNER_TEST_TMP) / name;
     std::error_code ec;
     fs::remove_all(p, ec);
     fs::create_directories(p);
@@ -1102,6 +1104,98 @@ TEST_CASE("runner: semantic probe metadata survives the managed connection") {
     CHECK(cb::validate_command_value(descriptor->result, reply.result).ok());
 }
 
+TEST_CASE("runner: intervention discriminators survive the managed route") {
+    namespace wire = caliper_net::wire;
+    caliper_net::Server server;
+    std::string why;
+    REQUIRE(server.listen(0, &why));
+    Workspace workspace("intervention-discriminators");
+    REQUIRE(!workspace.python.empty());
+    // This bounded child supplies only the process contract. The native fixture serves the wire.
+    std::ofstream script(workspace.ws + "/scripts/discriminator_fixture.py");
+    script << "import os, threading\nfrom pathlib import Path\n"
+              "print('fixture_pid=' + str(os.getpid()), flush=True)\n"
+              "Path(os.environ['CALIPER_RUN_LINK_FILE']).write_text('ws://127.0.0.1:"
+           << server.port() << "/v3/stream?token=native_fixture_0123456789')\n"
+              "threading.Event().wait(60)\n";
+    script.close();
+    cr::ModelRunner::Options options;
+    options.workspace = workspace.ws;
+    options.python = workspace.python;
+    options.start_limit_s = 10;
+    options.kill_grace_s = 0.1;
+    cr::ModelRunner runner(options);
+    struct ExitEvidence {
+        cr::ModelRunner& runner;
+        std::string workspace;
+        ~ExitEvidence() {
+            runner.shutdown();
+            json result = json::array();
+            for (const auto& run : runner.list())
+                result.push_back({{"state", run.state}, {"exit_code", run.exit_code ? json(*run.exit_code) : json()}});
+            std::ofstream(workspace + "/fixture-exit.json") << result.dump() << '\n';
+        }
+    } evidence{runner, workspace.ws};
+    const auto records = caliper_test::intervention_records();
+    const auto controls = caliper_test::intervention_controls(records);
+    cb::RunEntry entry;
+    auto request = workspace.start({}, json::object(), "discriminator-fixture");
+    request.script = "scripts/discriminator_fixture.py";
+    request.script_path = workspace.ws + "/" + request.script;
+    REQUIRE(runner.start(request, &entry).ok());
+    std::vector<wire::Control> received;
+    const auto pump = [&] {
+        for (auto& event : server.poll(5)) {
+            if (event.type == caliper_net::Event::Type::Request) REQUIRE(server.accept(event.conn));
+            if (event.type != caliper_net::Event::Type::Message) continue;
+            wire::Message message;
+            REQUIRE(wire::decode(event.data.data(), event.data.size(), &message).ok());
+            const auto send = [&](const wire::Message& outgoing) {
+                std::vector<std::uint8_t> bytes;
+                REQUIRE(wire::encode(outgoing, &bytes));
+                REQUIRE(server.send(event.conn, bytes.data(), bytes.size()));
+            };
+            if (std::holds_alternative<wire::Hello>(message)) {
+                wire::Welcome welcome;
+                welcome.role = CALIPER_NET_ROLE_PRODUCER;
+                welcome.session = wire::Identity{"discriminator-fixture", "fixture.py", 1, 1}.to_json();
+                welcome.capabilities = {CALIPER_NET_CAP_CONTROLS, CALIPER_NET_CAP_INTERVENTIONS};
+                welcome.control = true;
+                send(welcome);
+                send(controls);
+            } else if (const auto* control = std::get_if<wire::Control>(&message)) {
+                received.push_back(*control);
+            }
+        }
+    };
+    const auto until = [&](const std::function<bool()>& ready) {
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+        while (!ready() && std::chrono::steady_clock::now() < deadline) pump();
+        REQUIRE(ready());
+    };
+    cb::RunControl* control = nullptr;
+    until([&] {
+        cb::Error error;
+        control = runner.control_of(entry.id, &error);
+        return control && control->state().control && control->interventions_supported();
+    });
+    auto opened = cb::Session::open(workspace.ws);
+    REQUIRE(opened.session);
+    opened.session->set_run_control(control);
+    const auto interventions = caliper_test::check_intervention_records(*control, *opened.session, records);
+    for (const auto& intervention : interventions) REQUIRE(control->intervene_set(intervention).ok());
+    until([&] { return received.size() == interventions.size(); });
+    for (std::size_t index = 0; index < received.size(); ++index) {
+        CHECK(received[index].op == "intervene");
+        CHECK(json::parse(received[index].intervene.dump()).at("set") == cb::intervention_set_spec(interventions[index]));
+    }
+    runner.shutdown();
+    CHECK(runner.running_pids().empty());
+    const auto ended = runner.list();
+    REQUIRE(ended.size() == 1);
+    REQUIRE(ended[0].exit_code);
+}
+
 TEST_CASE("runner: interpretation uses the managed connection without attachment") {
     Workspace w("interpretation");
     if (const char* python = std::getenv("CALIPER_INTERPRET_PYTHON")) w.python = python;
@@ -1219,4 +1313,135 @@ threading.Event().wait()
     CHECK(success.result.at("result").at("state") == "idle");
     auto refused = control->interpret(requests[1].first, json::object(), requests[1].second);
     CHECK(refused.error.code == "interpret.missing_dictionary");
+}
+
+TEST_CASE("runner: native inference keeps prompts out of arguments and excludes shadow packages") {
+    Workspace w("inference-entry");
+    if (const char* python = std::getenv("CALIPER_INTERPRET_PYTHON")) w.python = python;
+    REQUIRE(!w.python.empty());
+    std::string installation;
+    bool check_fork = false;
+    SUBCASE("installed package") { installation = "installed"; }
+    SUBCASE("editable package") { installation = "editable"; }
+    SUBCASE("editable package fork") { installation = "editable"; check_fork = true; }
+    cr::ChildSpec setup;
+    setup.program = w.python;
+    setup.args = {(fs::path(CALIPER_RUNNER_STAND_IN).parent_path() / "inference_probe.py").u8string(),
+                  w.ws, CALIPER_RUNNER_PYTHONPATH, installation};
+    setup.env = cr::current_environment();
+    setup.output = w.ws + "/setup.log";
+    std::string error;
+    auto child = cr::start_child(setup, &error);
+    REQUIRE_MESSAGE(child, error);
+    struct ChildGuard {
+        cr::ChildProcess& child;
+        ~ChildGuard() { child.kill(); std::int64_t code = 0; child.wait(2000, &code); }
+    } child_guard{*child};
+    std::int64_t code = 0;
+    REQUIRE(child->wait(15000, &code));
+    REQUIRE_MESSAGE(code == 0, read_file(setup.output));
+
+    struct Environment {
+        std::vector<std::pair<std::string, std::optional<std::string>>> values;
+        void set(const std::string& name, const std::string& value) {
+            const char* old = std::getenv(name.c_str());
+            values.emplace_back(name, old ? std::optional<std::string>(old) : std::nullopt);
+            setenv(name.c_str(), value.c_str(), 1);
+        }
+        ~Environment() {
+            for (const auto& [name, value] : values) {
+                if (value) setenv(name.c_str(), value->c_str(), 1);
+                else unsetenv(name.c_str());
+            }
+        }
+    } environment;
+    environment.set("PYTHONPATH", w.ws + "/shadow-path");
+    environment.set("CALIPER_RUN_PROMPT", "stale inherited prompt");
+    environment.set("CALIPER_RUN_PYTHON", "");
+    cr::ModelRunner::Options options;
+    options.workspace = w.ws;
+    if (check_fork) options.start_limit_s = 60;
+    cr::ModelRunner runner(options);
+    struct Guard { cr::ModelRunner& runner; ~Guard() { runner.shutdown(); } } guard{runner};
+    cb::RunStartRequest request;
+    request.kind = "inference";
+    request.id = "inference-probe";
+    request.model = "fixture model";
+    request.dictionary = "fixture dictionary";
+    request.prompt = u8"native prompt marker: 'quotes' \"double\" $value $(literal)\n\u03bb";
+    request.params = json{{"prompt", "parameter override"}};
+    const std::string hold = w.ws + "/hold-inference";
+    if (check_fork) {
+        std::ofstream(hold) << "held";
+        environment.set("CALIPER_TEST_INFERENCE_HOLD", hold);
+    }
+    const auto wait_for_output = [&](const std::string& id) {
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(15);
+        do {
+            if (runner.wait_for([&](const auto&) {
+                    const auto output = read_file(w.ws + "/runs/" + id + "/output.log");
+                    return !output.empty() && output.back() == '\n';
+                }, 20)) return true;
+        } while (std::chrono::steady_clock::now() < deadline);
+        return false;
+    };
+    cb::RunEntry entry;
+    REQUIRE(!runner.start(request, &entry));
+    REQUIRE(wait_for_output(entry.id));
+    const auto observed = json::parse(read_file(w.ws + "/runs/" + entry.id + "/output.log"));
+    CHECK(observed.at("prompt_sha256") == "014352fd1b6ffba4ae7b72f3282b141b682998315ed1cfb7d38dc7e51d693bc5");
+    CHECK(observed.at("model") == request.model);
+    CHECK(observed.at("dictionary") == request.dictionary);
+    CHECK(observed.at("params") == json{{"prompt_sha256", "49c55f34c6fd4deb504e86b271408e6a2eafd912d87c56a2786a984bf40c2f8c"}});
+    CHECK(observed.at("prompt_removed") == true);
+    CHECK(observed.at("executable") == w.ws + "/.venv/bin/python");
+    const auto arguments = observed.at("original_argv").get<std::vector<std::string>>();
+    CAPTURE(observed.at("original_argv").dump());
+    REQUIRE(!arguments.empty());
+    const std::vector<std::string> interpreter_options(arguments.begin() + 1, arguments.end());
+    std::vector<std::string> expected{"-E", "-P", "-u", "-m", "caliper.interp._entry",
+                                     "--model=" + request.model, "--dictionary=" + request.dictionary};
+    CHECK(interpreter_options == expected);
+    for (const char* key : {"original_argv", "argv"}) {
+        CHECK(observed.at(key).dump().find("native prompt marker") == std::string::npos);
+        CHECK(observed.at(key).dump().find("--prompt") == std::string::npos);
+    }
+    if (check_fork) {
+        const auto kept = fs::path(w.ws) / "runs" / entry.id / "kept";
+        fs::create_directory(kept);
+        std::ofstream(kept / "checkpoint-3.json") << "{}";
+        cb::RunForkRequest fork;
+        fork.parent = entry.id;
+        fork.step = 3;
+        fork.params = {{"prompt", "fork parameter override"}};
+        fork.interventions = one_ablate();
+        cb::RunEntry child_entry;
+        const auto fork_error = runner.fork(fork, &child_entry);
+        REQUIRE_MESSAGE(!fork_error, fork_error.code << ": " << fork_error.message);
+        REQUIRE(wait_for_output(child_entry.id));
+        const auto forked = json::parse(read_file(w.ws + "/runs/" + child_entry.id + "/output.log"));
+        CHECK(forked.at("original_argv") == observed.at("original_argv"));
+        CHECK(forked.at("prompt_sha256") == observed.at("prompt_sha256"));
+        CHECK(forked.at("params") == json{{"prompt_sha256", "39b4e34992ee0d750716c80183a045d7d99a989cf5531fcae01b3f582c0454df"}});
+        CHECK(forked.at("prompt_removed") == true);
+        CHECK(forked.at("parent") == entry.id);
+        CHECK(forked.at("resume") == w.ws + "/runs/" + child_entry.id + "/resume-3.json");
+        CHECK(forked.at("interventions") == fork.interventions);
+        fs::remove(hold);
+        REQUIRE(runner.wait_for(state_is(child_entry.id, "exited"), 15000));
+    }
+    REQUIRE(runner.wait_for(state_is(entry.id, "exited"), 15000));
+    CHECK(runner.running_pids().empty());
+
+    if (check_fork) return;
+    auto script = w.start({"ordinary script argument"}, json::object(), "script-probe");
+    script.script = "script_probe.py";
+    script.script_path = w.ws + "/script_probe.py";
+    REQUIRE(!runner.start(script, &entry));
+    REQUIRE(runner.wait_for(state_is(entry.id, "exited"), 15000));
+    const auto ordinary = json::parse(read_file(w.ws + "/runs/" + entry.id + "/output.log"));
+    CHECK(ordinary.at("argv") == script.args);
+    CHECK(ordinary.at("value") == "script path retained");
+    CHECK(ordinary.at("prompt_removed") == true);
+    CHECK(runner.running_pids().empty());
 }

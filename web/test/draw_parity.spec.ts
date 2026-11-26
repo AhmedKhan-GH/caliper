@@ -366,10 +366,9 @@ test('the module draws the draw halves that PROGRAM and RESOURCE bring over its 
       // The arcs' pixels are counted inside the page, in the same task as each frame of the module:
       // right after the module's animation callback has drawn, the canvas is copied into a 2D canvas
       // (a WebGPU canvas keeps its texture only until the end of that task). A screenshot from the
-      // test process has no tie to a frame, and a slow software adapter may stop the arcs
-      // (program.draw_over_time) or sit between presents when it lands. The wait ends when the count
-      // passes the bound while the two programs are refused, or when the arcs leave "running", or at
-      // the frame cap.
+      // test process has no tie to a frame, and may sit between presents when it lands. The wait ends
+      // when the count passes the bound while the two programs are refused, or when the arcs leave
+      // "running", or at the frame cap.
       const probe = document.createElement('canvas');
       const pg = probe.getContext('2d', { willReadFrequently: true })!;
       const count = () => {
@@ -430,17 +429,17 @@ test('the module draws the draw halves that PROGRAM and RESOURCE bring over its 
     }
     expect(programs.largest, 'the scene view draws the arcs').toBeGreaterThan(500);
     // On a software adapter the frame time is the time from the submit until the work is done (no
-    // timestamps), far over the arcs' 4 ms, so the safety rule may stop them after 30 frames: the
-    // arcs either keep running or stop with program.draw_over_time, never with another code.
+    // timestamps), which records a program.draw_over_time warning while the arcs keep running.
     const later = await page.evaluate(() => {
       const m = (window as unknown as { liveViews: { caliperStats?: Record<string, string>; _caliper_views_destroy(): void } }).liveViews;
-      const list = JSON.parse(m.caliperStats?.programs ?? '[]') as { id: string; state: string; code: string }[];
+      const list = JSON.parse(m.caliperStats?.programs ?? '[]') as { id: string; state: string; code: string; warning_code?: string }[];
       m._caliper_views_destroy();
       return list.find((p) => p.id === 'tower_arcs');
     });
-    console.log(`[${info.project.name}] live tower_arcs at the end: ${later?.state} ${later?.code}`);
-    expect(['running', 'stopped']).toContain(later?.state);
-    if (later?.state === 'stopped') expect(later.code).toBe('program.draw_over_time');
+    console.log(`[${info.project.name}] live tower_arcs at the end: ${later?.state} ${later?.warning_code ?? ''}`);
+    expect(later?.state).toBe('running');
+    expect(later?.code ?? '').toBe('');
+    if (later?.warning_code) expect(later.warning_code).toBe('program.draw_over_time');
   } finally {
     site.close();
     proc.kill();

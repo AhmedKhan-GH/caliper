@@ -840,6 +840,7 @@ void draw_page_scene(float w, float h, float scale) {
     const ImGuiWindowFlags flags = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove |
                                    ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoBackground |
                                    ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoScrollWithMouse;
+    const auto prev_labels = g.page_state.labels;
     if (ImGui::Begin("##caliper.page.scene", nullptr, flags)) {
         g.page_options.draw_feed = g.programs ? g.programs->feed(g.cfg.view) : nullptr;
         auto sink = [](const char* type, const std::string& detail) {
@@ -854,6 +855,12 @@ void draw_page_scene(float w, float h, float scale) {
         caliper_live_views::draw_scene_view_in_rect(*g.page_view, scale, "##page.scene", ImVec2(0.0f, 0.0f), ImVec2(w, h),
                                                     g.page_options, g.page_state, sink);
     }
+    const auto same_label = [](const caliper_live_views::DrawnLabel& a, const caliper_live_views::DrawnLabel& b) {
+        return a.text == b.text && a.x0 == b.x0 && a.y0 == b.y0 && a.x1 == b.x1 && a.y1 == b.y1;
+    };
+    if (g.frames >= 15 && !std::equal(prev_labels.begin(), prev_labels.end(),
+                                      g.page_state.labels.begin(), g.page_state.labels.end(), same_label))
+        g.publish_soon = true;
     ImGui::End();
     ImGui::PopStyleColor();
     ImGui::PopStyleVar(2);
@@ -909,6 +916,7 @@ void frame() {
         return;
     }
     const float scale = (float)fs.fb_w / fs.css_w;
+    if (g.page_view && g.fb_w > 0 && (fs.fb_w != g.fb_w || fs.fb_h != g.fb_h)) g.publish_soon = true;
     g.css_w = fs.css_w;
     g.css_h = fs.css_h;
     g.fb_w = fs.fb_w;

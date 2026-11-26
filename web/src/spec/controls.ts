@@ -12,6 +12,8 @@
 
 import type { Rect } from './layout.js';
 import { COL, SIZE, fill, fitText, text, textWidth } from './look.js';
+import { formatElapsedSeconds } from './draw.js';
+import type { RunProgress } from './types.js';
 
 /** panel.data's `data` for a control (panel_data.h, control_data_result). */
 export interface ControlData {
@@ -26,6 +28,27 @@ export interface ControlData {
   min?: number;
   max?: number;
   choices?: { value: unknown; label: string | null }[];
+  progress?: RunProgress | null;
+}
+
+export function progressElapsedSeconds(prog: RunProgress | null | undefined, nowEpochS = Date.now() / 1000): number | null {
+  if (!prog) return null;
+  if (!prog.state || prog.state === 'ready' || prog.state === 'idle') return null;
+  let elapsed = typeof prog.elapsed_s === 'number' && Number.isFinite(prog.elapsed_s) && prog.elapsed_s >= 0 ? prog.elapsed_s : -1;
+  if (prog.state !== 'error' && typeof prog.started_at === 'number' && Number.isFinite(prog.started_at) && nowEpochS >= prog.started_at) {
+    const wall = nowEpochS - prog.started_at;
+    if (wall < 86400) elapsed = Math.max(elapsed, wall);
+  }
+  return elapsed >= 0 ? elapsed : null;
+}
+
+export function formatProgressStatus(prog: RunProgress | null | undefined, nowEpochS = Date.now() / 1000): string {
+  if (!prog || !prog.state || prog.state === 'ready' || prog.state === 'idle') return '';
+  if (prog.state === 'error') return prog.error || prog.label || 'Error';
+  const label = prog.label || prog.state;
+  const elapsed = progressElapsedSeconds(prog, nowEpochS);
+  const dur = elapsed !== null ? formatElapsedSeconds(elapsed) : '';
+  return dur ? `${label}  ·  ${dur}` : label;
 }
 
 /** The app's frame: the UI face at 15 px with a frame padding of 4 (sternbild_theme.cpp, kFramePadding). */
@@ -99,7 +122,8 @@ const label = (v: unknown): string =>
   v === null || v === undefined ? '' : typeof v === 'number' ? String(Math.round(v * 1e6) / 1e6) : typeof v === 'string' ? v : JSON.stringify(v);
 
 /** One control in its row, from its panel.data, or its title alone before the data comes. */
-export function drawControl(ctx: CanvasRenderingContext2D, d: ControlData | null, title: string, kind: string, rect: Rect): void {
+export function drawControl(ctx: CanvasRenderingContext2D, d: ControlData | null, title: string, kind: string, rect: Rect,
+                            liveProgress?: RunProgress | null): void {
   fill(ctx, rect.x, rect.y, rect.w, rect.h, COL.ground);
   const button = kind === 'button';
   const row = rowOf(ctx, rect, title, !button);
@@ -117,8 +141,22 @@ export function drawControl(ctx: CanvasRenderingContext2D, d: ControlData | null
     if (kind === 'toggle') {
       drawToggle(ctx, row, d.value === true, d.text || (d.value === true ? 'on' : 'off'), enabled);
     } else if (kind === 'readout') {
-      const shown = fitText(ctx, 'ui', SIZE.ui, d.text || '—', w.w);
-      text(ctx, 'ui', SIZE.ui, w.x, w.y + (w.h - SIZE.ui) / 2, d.text ? COL.text : COL.faint, shown);
+      const prog = (d.bind === 'param:output.status' || d.id === 'trace_status') ? (liveProgress ?? d.progress ?? null) : null;
+      const liveText = formatProgressStatus(prog);
+      if (liveText) {
+        const isErr = prog?.state === 'error';
+        const r = 3.5;
+        ctx.fillStyle = isErr ? COL.statusError : COL.accent;
+        ctx.beginPath();
+        ctx.arc(w.x + r + 1, w.y + w.h / 2, r, 0, Math.PI * 2);
+        ctx.fill();
+        const tx = w.x + r * 2 + 7;
+        const shown = fitText(ctx, 'ui', SIZE.ui, liveText, Math.max(0, w.w - (tx - w.x)));
+        text(ctx, 'ui', SIZE.ui, tx, w.y + (w.h - SIZE.ui) / 2, isErr ? COL.errorText : COL.text, shown);
+      } else {
+        const shown = fitText(ctx, 'ui', SIZE.ui, d.text || '—', w.w);
+        text(ctx, 'ui', SIZE.ui, w.x, w.y + (w.h - SIZE.ui) / 2, d.text ? COL.text : COL.faint, shown);
+      }
     } else {
       // The other kinds as their ImGui frames, at the disabled alpha.
       ctx.globalAlpha = enabled ? 1 : DISABLED_ALPHA;

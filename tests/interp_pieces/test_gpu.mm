@@ -216,6 +216,49 @@ Json pick_at(float x, float y, unsigned item) {
 }
 }
 
+TEST_CASE("reference graph capacities retain nodes and edges beyond the legacy limits") {
+    @autoreleasepool {
+        mr::Metal metal;
+        if (!metal.backend) CALIPER_SKIP_NO_GPU(metal.why);
+        const auto piece = ip::load("attribution_graph");
+        constexpr unsigned nodes = 513, edges = 8193;
+        std::vector<std::int32_t> ni(8192 * 4), ei(262144 * 2), counts{nodes, edges, 32, 24};
+        std::vector<float> nf(8192 * 4), ef(262144 * 2);
+        for (unsigned i = 0; i < nodes; ++i) {
+            ni[4 * i] = 1;
+            ni[4 * i + 1] = i % 24;
+            ni[4 * i + 2] = i % 32;
+            ni[4 * i + 3] = i;
+            nf[4 * i + 1] = 1.0f / (i + 1);
+        }
+        for (unsigned i = 0; i < edges; ++i) {
+            ei[2 * i] = i % nodes;
+            ei[2 * i + 1] = (i + 1) % nodes;
+            ef[2 * i] = -0.25f;
+            ef[2 * i + 1] = -1.0f;
+        }
+        std::vector<HostTensor> tensors{
+            HostTensor::of("graph_counts", "i32", {4}, counts),
+            HostTensor::of("node_i", "i32", {8192, 4}, ni),
+            HostTensor::of("node_f", "f32", {8192, 4}, nf),
+            HostTensor::of("edge_i", "i32", {262144, 2}, ei),
+            HostTensor::of("edge_f", "f32", {262144, 2}, ef), text_tensor(8224, "reference ")};
+        const auto data = mr::run_derive(metal.device, piece, tensors, {});
+        REQUIRE(resource(data, "nodes").count == nodes);
+        REQUIRE(resource(data, "curves").count == edges);
+        CHECK(scalar<std::uint32_t>(resource(data, "nodes"), nodes - 1, 16, 48) == nodes - 1);
+        CHECK(scalar<float>(resource(data, "nodes"), nodes - 1, 12, 48) > 0.0f);
+        CHECK(scalar<float>(resource(data, "curves"), edges - 1, 32, 48) == -0.25f);
+        CHECK(scalar<std::uint32_t>(resource(data, "curves"), edges - 1, 40, 48) == (edges - 1) % nodes);
+        CHECK(scalar<std::uint32_t>(resource(data, "strings"), 32 + nodes - 1, 0, 64) == 0x65666572u);
+        counts[0] = 8193;
+        tensors[0] = HostTensor::of("graph_counts", "i32", {4}, counts);
+        const auto refused = mr::run_derive(metal.device, piece, tensors, {});
+        CHECK(resource(refused, "nodes").count == 0);
+        CHECK(resource(refused, "curves").count == 0);
+    }
+}
+
 TEST_CASE("small graph density markers retain distinct center pixels for every kind") {
     @autoreleasepool {
         mr::Metal metal;
@@ -335,23 +378,30 @@ TEST_CASE("graph layout has disjoint cells, stable bytes, labels, and sixteen ce
         CHECK(labels[0].text=="label 0"); CHECK(labels[4].text=="label 36");
         CHECK(scalar<unsigned>(resource(data,"labels"),32,16,32)==0xffffffffu);
         auto& output=exporter();
+        Export sparse_output(size,"sparse_graph");
         output.add("graph_selected",piece,data,draw,params,picks);
+        sparse_output.add("graph_selected",piece,data,draw,params,picks);
         const auto selected=draw.color;
         const auto shown=draw.rt.shown_items();
         Json changed=Json::object(); changed.set("selected_node",5);
         REQUIRE(draw.draw(frame(piece,changed)));
+        const auto selected_five=draw.color;
         REQUIRE(draw.rt.labels().size()==5);
         CHECK(draw.rt.labels()[4].text=="label 37");
         CHECK(draw.rt.shown_items().version==shown.version);
         REQUIRE(draw.draw(frame(piece)));
         REQUIRE(draw.rt.labels().size()==4);
-        std::size_t dimmed=0;
+        const int bg_r=int(dp::kBackground&255), bg_g=int((dp::kBackground>>8)&255), bg_b=int((dp::kBackground>>16)&255);
+        std::size_t edge_pixels_in_overview=0, edge_pixels_when_selected=0;
         for (unsigned y=0;y<size;++y) for (unsigned x=0;x<size;++x) {
             if (mr::identity_of(draw.ids,size,x,y)) continue;
             const auto p=(y*size+x)*4;
-            dimmed += draw.color[p]+draw.color[p+1]+draw.color[p+2] > selected[p]+selected[p+1]+selected[p+2]+5;
+            edge_pixels_in_overview += (draw.color[p]!=bg_r || draw.color[p+1]!=bg_g || draw.color[p+2]!=bg_b);
+            edge_pixels_when_selected += (selected[p]!=bg_r || selected[p+1]!=bg_g || selected[p+2]!=bg_b);
         }
-        CHECK(dimmed>100);
+        // Overview without a clicked or pinned node draws zero edges; clicking node 4 draws its incident links.
+        CHECK(edge_pixels_in_overview==0);
+        CHECK(edge_pixels_when_selected>100);
         for (unsigned i=0;i<2;++i) {
             const float t=0.37f, u=1-t;
             const float x=u*u*u*scalar<float>(curves,i,0,48)+3*u*u*t*scalar<float>(curves,i,8,48)+
@@ -361,16 +411,122 @@ TEST_CASE("graph layout has disjoint cells, stable bytes, labels, and sixteen ce
             const auto [px,py]=pixel(x,y);
             const auto at=(py*size+px)*4;
             CHECK(mr::identity_of(draw.ids,size,px,py)==0);
+            CHECK(draw.color[at]==bg_r);
+            CHECK(draw.color[at+1]==bg_g);
+            CHECK(draw.color[at+2]==bg_b);
             if (i==0) {
-                CHECK(draw.color[at+2]>draw.color[at]);
-                CHECK(draw.color[at+2]==selected[at+2]);
+                // Edge 0 (0 -> 4, weight +1.0, pctInput +1.0): visible as PRGn green #00441b when node 4 is clicked.
+                CHECK(std::abs(int(selected[at])-0)<=2);
+                CHECK(std::abs(int(selected[at+1])-68)<=2);
+                CHECK(std::abs(int(selected[at+2])-27)<=2);
+                CHECK(selected_five[at]==bg_r);
+                CHECK(selected_five[at+1]==bg_g);
+                CHECK(selected_five[at+2]==bg_b);
             } else {
-                CHECK(draw.color[at]>draw.color[at+2]);
-                CHECK(draw.color[at]>selected[at]+20);
+                // Edge 1 (1 -> 5, weight -0.5, pctInput -1.0): visible as PRGn purple #40004b when node 5 is clicked.
+                CHECK(selected[at]==bg_r);
+                CHECK(selected[at+1]==bg_g);
+                CHECK(selected[at+2]==bg_b);
+                CHECK(std::abs(int(selected_five[at])-64)<=2);
+                CHECK(std::abs(int(selected_five[at+1])-0)<=2);
+                CHECK(std::abs(int(selected_five[at+2])-75)<=2);
             }
         }
         output.add("graph",piece,data,draw,Json::object(),picks);
+        sparse_output.add("graph",piece,data,draw,Json::object(),picks);
+        sparse_output.finish();
         output.finish();
+    }
+}
+
+TEST_CASE("crossing edges paint stronger pctInput on top when draw order reverses") {
+    @autoreleasepool {
+        mr::Metal metal;
+        if (!metal.backend) CALIPER_SKIP_NO_GPU(metal.why);
+        const auto piece = ip::load("attribution_graph");
+        std::vector<std::int32_t> ni(512*4), ei(8192*2);
+        std::vector<float> nf(512*4), ef(8192*2);
+        for (unsigned i=0; i<4; ++i) {
+            ni[4*i] = i<2 ? 0 : 3;
+            ni[4*i+1] = i<2 ? -1 : 1;
+            ni[4*i+2] = i%2;
+            ni[4*i+3] = 100+i;
+            nf[4*i+1] = 1;
+        }
+        // Edge 0 (0 -> 3): +0.2 into node 3 (with companion 1 -> 3 of +0.8 => pctInput = +0.20, PRGn green).
+        // Edge 1 (1 -> 2): -1.0 into node 2 (sole incoming edge => pctInput = -1.00, PRGn deep purple).
+        ei[0]=0; ei[1]=3; ef[0]=0.2f; ef[1]=0.2f;
+        ei[2]=1; ei[3]=2; ef[2]=-1.0f; ef[3]=-1.0f;
+        ei[4]=1; ei[5]=3; ef[4]=0.8f; ef[5]=0.8f;
+        const std::vector<HostTensor> tensors{
+            HostTensor::of("graph_counts","i32",{4},std::vector<std::int32_t>{4,3,2,1}),
+            HostTensor::of("node_i","i32",{512,4},ni), HostTensor::of("node_f","f32",{512,4},nf),
+            HostTensor::of("edge_i","i32",{8192,2},ei), HostTensor::of("edge_f","f32",{8192,2},ef),
+            text_tensor(544,"cross ")};
+        const auto data = mr::run_derive(metal.device,piece,tensors,{});
+        const auto& nodes = resource(data,"nodes");
+        const auto& curves = resource(data,"curves");
+        REQUIRE(nodes.count==4); REQUIRE(curves.count==3);
+        CHECK(scalar<float>(curves,0,36,48)==doctest::Approx(0.2f));
+        CHECK(scalar<float>(curves,1,36,48)==doctest::Approx(-1.0f));
+        mr::PieceDraw draw(*metal.backend,size);
+        set_resources(draw,piece,data);
+        // Pin nodes 0 and 1 via linked selection so both crossing edges render without a single clicked node.
+        auto pinned = frame(piece);
+        pinned.selection.push_back({mr::kPiecePick, 0, 0, {-1,-1,-1,-1}});
+        pinned.selection.push_back({mr::kPiecePick, 1, 0, {-1,-1,-1,-1}});
+        // Background (no edges), weak positive edge, strong negative edge, both edges, then reverse order.
+        std::array<std::vector<std::uint8_t>,5> colors;
+        std::vector<std::uint64_t> node_ids;
+        for (unsigned pass=0; pass<colors.size(); ++pass) {
+            @autoreleasepool {
+                CAPTURE(pass);
+                auto subset = curves;
+                subset.count = pass==0 ? 0 : pass<3 ? 1 : 2;
+                if (pass==2) subset.bytes.erase(subset.bytes.begin(),subset.bytes.begin()+48);
+                subset.bytes.resize(subset.count*48);
+                if (pass==4) std::rotate(subset.bytes.begin(),subset.bytes.begin()+48,subset.bytes.end());
+                draw.set("curves",subset.bytes,subset.count,&subset);
+                REQUIRE(draw.draw(pinned));
+                colors[pass] = draw.color;
+                std::vector<std::uint64_t> ids;
+                ids.reserve(size*size);
+                for (unsigned y=0; y<size; ++y) for (unsigned x=0; x<size; ++x)
+                    ids.push_back(mr::identity_of(draw.ids,size,x,y));
+                if (pass==0) node_ids=ids;
+                else CHECK(ids==node_ids);
+                for (unsigned i=0; i<nodes.count; ++i)
+                    check_pick(draw,scalar<float>(nodes,i,0,48),scalar<float>(nodes,i,4,48),i);
+            }
+        }
+        int order_gap=0;
+        for (std::size_t p=0; p<colors[3].size(); p+=4) for (unsigned c=0; c<3; ++c)
+            order_gap=std::max(order_gap,std::abs(int(colors[3][p+c])-int(colors[4][p+c])));
+        CHECK(order_gap<=1);
+        // Stronger edge 1 (pctInput = -1.0, #40004b = 64,0,75) must paint over weaker edge 0 (pctInput = +0.2, 127,196,128).
+        const auto [cx,cy]=pixel(0.0f,0.0f);
+        unsigned crossing_pixels=0;
+        for (int y=cy-64; y<=cy+64; ++y) for (int x=cx-64; x<=cx+64; ++x) {
+            const auto p=(unsigned(y)*size+unsigned(x))*4;
+            if (colors[1][p+1] > 150 && colors[2][p+2] > 60 && colors[2][p+1] < 10) {
+                ++crossing_pixels;
+                CHECK(node_ids[unsigned(y)*size+unsigned(x)]==0);
+                CHECK(std::abs(int(colors[1][p])-127)<=2);
+                CHECK(std::abs(int(colors[1][p+1])-196)<=2);
+                CHECK(std::abs(int(colors[1][p+2])-128)<=2);
+                CHECK(std::abs(int(colors[2][p])-64)<=2);
+                CHECK(std::abs(int(colors[2][p+1])-0)<=2);
+                CHECK(std::abs(int(colors[2][p+2])-75)<=2);
+                CHECK(std::abs(int(colors[3][p])-64)<=2);
+                CHECK(std::abs(int(colors[3][p+1])-0)<=2);
+                CHECK(std::abs(int(colors[3][p+2])-75)<=2);
+                CHECK(std::abs(int(colors[4][p])-64)<=2);
+                CHECK(std::abs(int(colors[4][p+1])-0)<=2);
+                CHECK(std::abs(int(colors[4][p+2])-75)<=2);
+            }
+        }
+        CHECK(crossing_pixels>0);
+        MESSAGE("Crossing interior pixels: " << crossing_pixels << ", maximum order gap: " << order_gap);
     }
 }
 
@@ -945,4 +1101,6 @@ TEST_CASE("panel layouts retain graph coverage and disjoint example and probabil
         }
     }
 }
+#include "dense_cells.h"
+#include "exposure.h"
 CALIPER_GPU_TEST_MAIN()

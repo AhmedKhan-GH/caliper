@@ -891,6 +891,31 @@ bool BuilderPane::set_title(const std::string& title) {
     return run_plan(simulate({invocation("panel.patch", {{"id", p->id}, {"patch", {{"title", value}}}})}), "title");
 }
 
+bool BuilderPane::set_closable(bool closable) {
+    if (blocked()) return false;
+    const spec::Panel* p = panel();
+    if (!p) return refuse(Error("panel.not_found", "No panel is focused.", ""));
+    if (p->closable.value_or(true) == closable) return true;
+    const json value = closable ? json(nullptr) : json(false);
+    return run_plan(simulate({invocation("panel.patch", {{"id", p->id}, {"patch", {{"closable", value}}}})}));
+}
+
+bool BuilderPane::layout_locked() const {
+    return open_ && open_->spec.applet.layout_locked.value_or(false);
+}
+
+bool BuilderPane::set_layout_locked(bool locked) {
+    update();   // outside build mode the pane is not drawn, so read the open spec now
+    if (blocked()) return false;
+    if (locked == layout_locked()) return true;
+    if (!build_) end_gesture();
+    const cb::CommandOrigin before = origin_;
+    origin_ = build_ ? CommandOrigin::builder : CommandOrigin::ui;
+    const bool ok = run_plan(simulate({invocation("layout.lock", {{"locked", locked}})}));
+    origin_ = before;
+    return ok;
+}
+
 bool BuilderPane::set_primitive(Primitive prim) {
     if (blocked()) return false;
     const spec::Panel* p = panel();

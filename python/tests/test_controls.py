@@ -195,7 +195,17 @@ def test_intervention_strings_and_limits_mirror_the_codec():
     if not hasattr(w, "OP_INTERVENE"):
         pytest.skip("this codec has no CONTROL op intervene (protocol 3.2 draft)")
     assert C.OP_INTERVENE == w.OP_INTERVENE
-    assert C.INTERVENE_OPS == (w.INTERVENE_ABLATE,)
+    from caliper._intervention_protocol import KINDS, specification
+    from caliper._ablate import KINDS as EXECUTOR_KINDS
+    assert C.INTERVENE_OPS == w.INTERVENE_OPS == KINDS == EXECUTOR_KINDS
+    for fields in ({"op": "ablate"}, {"kind": "add", "vector": [1., -1.], "coefficient": .5},
+                   {"kind": "scale", "feature": 1, "multiplier": 2.},
+                   {"kind": "clamp", "feature": 1, "value": 0.},
+                   {"kind": "patch", "source_prompt": "AB", "positions": [0], "source_position": 1}):
+        spec = {"point": "layers.0.mlp_out", **fields}
+        assert specification(spec)
+        control = w.Control(1, "intervene", intervene={"set": spec})
+        assert w.decode(w.encode(control)).intervene == {"set": spec}
     assert (C.IV_PENDING, C.IV_ACTIVE, C.IV_ENDED) == w.INTERVENTION_STATES
     for name in ("MAX_POINTS_LISTED", "MAX_INTERVENTIONS", "POINT_MAX"):
         assert getattr(C, name) == getattr(w, name), name
@@ -626,6 +636,74 @@ def test_actions_run_in_order_at_the_checkpoint(ctl):
     assert evaluate.entry() == {"name": "evaluate", "running": False, "queued": False}
 
 
+@pytest.mark.parametrize("same_action", [False, True])
+def test_late_actions_observe_prior_parameter_edits_at_the_next_pass(ctl, same_action):
+    route = ctl.attach(Fake())
+    value = caliper.param("value", 0)
+    observed = []
+
+    def enqueue():
+        assert control(route, "set", name="value", value=7)["status"] == "ok"
+        assert control(route, "run", name="evaluate")["status"] == "queued"
+
+    def evaluate():
+        observed.append(value.value)
+        if same_action and len(observed) == 1:
+            enqueue()
+
+    caliper.action("evaluate", evaluate)
+    caliper.action("enqueue", enqueue)
+    caliper.step()
+    control(route, "run", name="evaluate" if same_action else "enqueue")
+    caliper.step()
+    assert observed == ([0] if same_action else [])
+    assert ctl.actions["evaluate"].queued and value.value == 0
+    caliper.step()
+    assert observed == ([0, 7] if same_action else [7])
+    assert not ctl.actions["evaluate"].queued
+
+
+@pytest.mark.parametrize("edit", [False, True])
+def test_late_waiters_defer_the_coalesced_action_and_its_followers(ctl, edit):
+    transport = Fake()
+    route = ctl.attach(transport)
+    value = caliper.param("value", 0)
+    observed, joined = [], []
+
+    def enqueue():
+        observed.append(("enqueue", value.value))
+        for new_value in (3, 7):
+            if edit:
+                assert control(route, "set", name="value", value=new_value)["status"] == "ok"
+            joined.append(control(route, "run", name="evaluate"))
+
+    caliper.action("enqueue", enqueue)
+    evaluate = caliper.action("evaluate", lambda: observed.append(("evaluate", value.value)))
+    caliper.action("after", lambda: observed.append(("after", value.value)))
+    caliper.step()
+    first = control(route, "run", name="enqueue")
+    earlier = [control(route, "run", name="evaluate") for _ in range(2)]
+    last = control(route, "run", name="after")
+    run_id = evaluate.run_id
+
+    caliper.step()
+    assert observed == [("enqueue", 0)]
+    assert [reply["request_id"] for _, reply in transport.replies] == [first["request_id"]]
+    assert evaluate.queued and evaluate.run_id == run_id
+    assert len(evaluate.waiters) == 4
+    assert value.value == 0
+
+    caliper.step()
+    expected = 7 if edit else 0
+    assert observed == [("enqueue", 0), ("evaluate", expected), ("after", expected)]
+    assert [reply["request_id"] for _, reply in transport.replies] == [
+        request["request_id"] for request in [first, *earlier, *joined, last]]
+    assert all(reply["status"] == "ok" for _, reply in transport.replies)
+    assert not ctl.queue and not evaluate.waiters
+    caliper.step()
+    assert ctl.counters["actions_run"] == 3
+
+
 def test_an_action_that_raises(ctl):
     t = Fake()
     r = ctl.attach(t)
@@ -640,6 +718,69 @@ def test_an_action_that_raises(ctl):
     assert err["status"] == "error" and err["error"]["code"] == "action_failed"
     assert "ZeroDivisionError" in err["error"]["message"]
     assert len(ok["message"].encode("utf-8")) <= 1024 and ok["message"] == "é" * 512
+
+
+@pytest.mark.parametrize("terminal", ["expire", "remove"])
+@pytest.mark.parametrize("late_join", [False, True])
+@pytest.mark.parametrize("report_due", [False, True])
+def test_deferred_action_keeps_deadline_and_exact_terminal_replies(ctl, monkeypatch, terminal, late_join, report_due):
+    transport = Fake()
+    ran, timers, requests = [], [], []
+    monkeypatch.setattr(ctl._timers, "at", lambda when, fn, *args: timers.append((when, fn, args)))
+    route = ctl.attach(transport)
+    evaluate = ctl.action("evaluate", lambda: ran.append("evaluate"))
+    ctl.action("after", lambda: ran.append("after"))
+    ctl.step()
+    before = time.monotonic()
+    requests.extend(control(route, "run", name="evaluate", conn=conn) for conn in ("a", "b"))
+    after = time.monotonic()
+    follower = control(route, "run", name="after", conn="c")
+    deadline, expire, args = next(item for item in timers if item[2] == (evaluate, evaluate.run_id))
+    assert before + C.ACTION_WAIT_S <= deadline <= after + C.ACTION_WAIT_S
+    original_timers = [item for item in timers if item[1] == ctl._expire]
+    run_id = evaluate.run_id
+    results = iter([True, False, True])
+    monkeypatch.setattr(ctl, "_intervention_boundary", lambda *args: (False, next(results)))
+
+    def nested(step):
+        with ctl.lock:
+            ctl._apply_interventions()
+            ctl._apply_interventions()
+        if late_join:
+            requests.append(control(route, "run", name="evaluate", conn="d"))
+
+    ctl.interpretation_service = types.SimpleNamespace(pending=False, step=nested)
+    try:
+        if report_due:
+            next(fn for _, fn, _ in timers if fn == ctl._report)()
+        ctl.step()
+        assert not ran and not transport.replies
+        assert evaluate.queued and evaluate.run_id == run_id
+        assert len(evaluate.waiters) == len(requests)
+        assert [item for item in timers if item[1] == ctl._expire] == original_timers
+        if terminal == "expire":
+            expire(*args)
+            code, message = "timeout", f"no checkpoint ran the action within {C.ACTION_WAIT_S:g} s"
+        else:
+            assert evaluate.remove()
+            code, message = "unknown_control", "the action 'evaluate' was removed"
+        expected = [(conn, w.ControlReply(request["request_id"], "run", "error", "evaluate",
+                    error={"code": code, "message": message}).to_meta())
+                    for conn, request in zip(("a", "b", "d"), requests)]
+        assert transport.replies == expected
+        assert not evaluate.queued and not evaluate.waiters and not evaluate.running
+        expire(*args)
+        assert transport.replies == expected
+        ctl.interpretation_service = None
+        monkeypatch.setattr(ctl, "_intervention_boundary", lambda *args: (False, True))
+        ctl.step()
+        expected.append(("c", w.ControlReply(follower["request_id"], "run", "ok", "after").to_meta()))
+        assert transport.replies == expected and ran == ["after"] and not ctl.queue
+        expire(*args)
+        ctl.step()
+        assert transport.replies == expected
+    finally:
+        ctl.interpretation_service = None
 
 
 def test_actions_wait_for_a_checkpoint_and_time_out(ctl, fast):
@@ -980,3 +1121,64 @@ def test_free_text_parameter_round_trip_and_utf8_bounds(ctl):
         with pytest.raises(w.MessageError):
             route.on_control(None, {"request_id": 3, "op": "set", "name": "prompt", "value": value})
     assert caliper.param("choice", "yes", choices=["yes", "no"]).type == "choice"
+
+
+def test_structured_interventions_checkpoints_forks_and_replay(ctl):
+    import torch
+
+    class TinySeq(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.embed = torch.nn.Embedding(16, 4)
+            self.proj = torch.nn.Linear(4, 4, bias=False)
+            with torch.no_grad():
+                self.embed.weight.copy_(torch.arange(64, dtype=torch.float32).reshape(16, 4) / 16.0)
+                self.proj.weight.copy_(torch.eye(4))
+
+        def forward(self, input_ids):
+            return self.proj(self.embed(input_ids))
+
+    model = TinySeq()
+    service = ctl.interventions_on(model)
+    service.configure(tokenizer=lambda text, return_tensors="pt": {
+        "input_ids": torch.tensor([[ord(ch) % 16 for ch in text]], dtype=torch.long)
+    })
+    try:
+        assert C.intervention_key({"point": "proj", "kind": "clamp", "feature": 3, "positions": [2, 0]}) == (
+            "proj", "clamp", 3, (0, 2))
+        assert C.intervention_key({"point": "proj", "op": "ablate"}) == ("proj", "ablate")
+
+        base = model(torch.tensor([[1, 2]]))
+        ctl.step()
+        add_spec = {"point": "proj", "kind": "add", "vector": [1.0, 0.0, -1.0, 0.5],
+                    "coefficient": 2.0, "positions": [1]}
+        service.set(add_spec)
+        ctl.step()
+        steered = model(torch.tensor([[1, 2]]))
+        assert torch.allclose(steered[:, 0], base[:, 0])
+        assert torch.allclose(steered[:, 1], base[:, 1] + torch.tensor([[2.0, 0.0, -2.0, 1.0]]))
+
+        saved = service.state_dict()
+        service.clear()
+        ctl.step()
+        assert service.specifications() == []
+        with service.temporary_state(saved) as replay:
+            assert len(replay.specifications()) == 1
+            replayed = model(torch.tensor([[1, 2]]))
+            assert torch.allclose(replayed, steered)
+        assert torch.allclose(model(torch.tensor([[1, 2]])), base)
+
+        service.load_state_dict(saved, restore_active=True)
+        assert torch.allclose(model(torch.tensor([[1, 2]])), steered)
+
+        patch_spec = {"point": "proj", "kind": "patch", "source_prompt": "\x03\x04",
+                      "source_position": 1, "positions": [0]}
+        service.apply_overrides([patch_spec])
+        donor = base = None
+        with service.suspend():
+            clean_target = model(torch.tensor([[1, 2]]))
+            donor = model(torch.tensor([[3, 4]]))
+        patched = model(torch.tensor([[1, 2]]))
+        assert torch.allclose(patched[:, 0], donor[:, 1])
+    finally:
+        service.remove()

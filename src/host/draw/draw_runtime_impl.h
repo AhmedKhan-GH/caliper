@@ -131,8 +131,9 @@ struct DrawRuntime::Impl {
     std::deque<double> window;                       // the last 30 whole-frame times
     std::uint32_t over = 0;                          // frames over draw.frame_ms in a row
     bool measure = false;                            // the next frame measures each pass
-    std::string measure_code;                        // what a measured frame stops with
+    std::string measure_code;                        // the warning code of a measured frame
     std::string measure_message;
+    bool panel_warned = false;                       // the active warning came from the panel budget
     std::vector<double> measured;                    // per pass of the measuring frame; < 0 none
     // A frame that is not done after kTimeoutMs by the wall clock is late: the program submits
     // no frame until it is done, and is then judged by its GPU time, or, where the backend gives

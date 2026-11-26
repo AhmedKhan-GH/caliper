@@ -2,6 +2,7 @@
 #include <doctest/doctest.h>
 #include "pieces.h"
 #include "draw/draw_runtime.h"
+#include "draw/draw_runtime_impl.h"
 #include "gfx/recording_backend.h"
 #include <cstring>
 #include <limits>
@@ -111,6 +112,30 @@ TEST_CASE("graph hover labels use a local hit without a derive update or a selec
     CHECK(hovered[2].priority == 4);
     CHECK(graph.runtime.labels().size() == 2);
     CHECK(graph.runtime.shown_items().version == shown.version);
+}
+
+TEST_CASE("draw status tracks staggered attribution resources and a new selected frame") {
+    Graph graph;
+    const auto first = graph.runtime.status();
+    CHECK(first.frames == 1);
+    std::map<std::string, std::vector<std::uint8_t>> bytes;
+    for (const auto& slot : graph.runtime.internals().slots)
+        if (slot.shown) bytes[slot.id] = slot.shown->bytes;
+    graph.put_text(33, "New Selected Feature");
+    graph.set("nodes", bytes.at("nodes"), 2, 2);
+    graph.draw(1);
+    CHECK(graph.runtime.status().resource_step == 2);
+    REQUIRE(graph.runtime.labels().size() == 1);
+    graph.set("curves", {}, 0, 2);
+    graph.draw(1);
+    graph.set("labels", bytes.at("labels"), 34, 2);
+    graph.draw(1);
+    REQUIRE(graph.runtime.labels().size() == 1);
+    graph.set("strings", graph.strings, 544, 2);
+    graph.draw(1);
+    CHECK(graph.runtime.status().frames == first.frames + 4);
+    REQUIRE(graph.runtime.labels().size() == 2);
+    CHECK(graph.runtime.labels()[1].text == "New Selected Feature");
 }
 
 TEST_CASE("a hover declaration chooses its own anchor and string offset") {
@@ -249,4 +274,28 @@ TEST_CASE("a node replacement at the same step changes the hover version identit
     CHECK(first.version != second.version);
     REQUIRE(cd::DrawRuntime::pick_shown(1, first));
     CHECK_FALSE(cd::DrawRuntime::pick_shown(1, second));
+}
+
+
+TEST_CASE("reference graph labels retain the last node in native and browser composition") {
+    bool webgpu = true;
+    SUBCASE("browser composition") {}
+    SUBCASE("native composition") { webgpu = false; }
+    Graph graph(33, 32, {}, webgpu);
+    graph.strings.resize(8224 * 64);
+    graph.put_text(8223, "Last Reference Feature");
+    graph.set("strings", graph.strings, 8224, 1);
+    std::vector<std::uint8_t> nodes(8192 * 48);
+    const std::uint32_t last = 8191;
+    std::memcpy(nodes.data() + last * 48 + 16, &last, 4);
+    graph.set("nodes", nodes, 8192, 1);
+    graph.draw(last);
+    const auto selected = graph.runtime.labels();
+    REQUIRE(selected.size() == 2);
+    CHECK(selected[1].text == "Last Reference Feature");
+    const auto picked = graph.runtime.pick(last);
+    REQUIRE(picked);
+    const auto hovered = graph.runtime.labels(&*picked);
+    REQUIRE(hovered.size() == 3);
+    CHECK(hovered[2].text == "Last Reference Feature");
 }

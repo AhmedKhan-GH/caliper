@@ -46,6 +46,8 @@ struct DrawStatus {
     std::optional<std::int64_t> resource_step;    // the step of the newest resource version that a frame drew
     std::optional<ProgramError> error;            // the last refusal or stop
     std::string error_where;                      // the pass of the error, such as "draw.passes[1]"; empty when none
+    std::optional<ProgramError> warning;          // the frame-budget warning while running
+    std::string warning_where;                    // the pass of the warning, such as "draw.passes[1]"; empty when none
 };
 
 // One status item (the command table's program_status, and PROGRAM_STATE's
@@ -70,6 +72,7 @@ struct ProgramStatus {
     std::uint64_t memory_bytes = 0;               // output buffers and bound tensors
     std::uint64_t memory_limit_bytes = 0;         // from limits.memory_mb
     std::optional<ProgramError> error;            // the last error
+    std::optional<ProgramError> warning;          // the active warning while running (e.g. program.over_budget)
     std::string sha256;                           // of the source the host runs; empty when none
     // An instance of a piece (design/programmable-graphics.md, Status and
     // Events). The item's `piece` and `draw` keys, and the event's `half` and
@@ -83,8 +86,8 @@ struct ProgramStatus {
 // The status item in the command table's form (program_status).
 nlohmann::json program_status_json(const ProgramStatus& status);
 
-// Pushes one `program` event: change "compiled", "refused" or "stopped", with
-// the item's id, host, panel and, when it has one, its error.
+// Pushes one `program` event: change "compiled", "warned", "refused" or "stopped",
+// with the item's id, host, panel and, when it has one, its error or warning.
 void push_program_event(EventSink& sink, const ProgramStatus& status, std::string_view change);
 
 // The programs in the attached script. The app's implementation owns the

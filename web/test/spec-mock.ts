@@ -163,8 +163,11 @@ export async function openSpec(page: Page, applet: string): Promise<void> {
 }
 
 export interface PageState {
-  status: string; state: string | null; applet: string; title: string;
-  panels: { id: string; title: string; primitive: string; drawn: boolean; state: string | null; info: string; rect: Json }[];
+  status: string; state: string | null; applet: string; title: string; layoutLocked: boolean;
+  panels: { id: string; title: string; primitive: string; drawn: boolean; state: string | null; info: string;
+            closable: boolean; closeButton: Json | null; rect: Json }[];
+  controls?: { id: string; kind: string; title: string; value: unknown; text: string; enabled: boolean; why: string;
+               closable: boolean; rect: Json }[];
   tabs: { path: string; labels: string[]; active: number }[];
   requests: number;
 }

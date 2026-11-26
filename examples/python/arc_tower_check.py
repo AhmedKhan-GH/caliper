@@ -7,7 +7,7 @@ as a managed run, writes the pieces of demos/arc_tower into the workspace and pl
 arcs of the tower and the attention grid of one head, with no built-in primitive in either frame, and a chart of the
 induction score of each head. It then scrubs to the first kept step and the bump of the loss, where the chart's
 lines of layer 1 rise, picks an arc, ablates the head that formed, forks the run from a past step with that head
-ablated, and stops a draw that is over its time while training goes on. A piece of a foreign spec waits in review.
+ablated, and warns on a draw that is over its time while training goes on. A piece of a foreign spec waits in review.
 The script prints each step as it passes, then each measured result, and then the match of the library piece
 points@1 with the built-in points when the build holds that test. No window opens.
 
@@ -90,7 +90,7 @@ def main():
     print("Pick: " + json.dumps(res.get("pick")))
     print("Ablation: " + json.dumps(res.get("ablation")))
     print("Fork: " + json.dumps(res.get("fork")))
-    print("Draw stopped: " + json.dumps(res.get("draw_stop")))
+    print("Draw warning: " + json.dumps(res.get("draw_warning")))
     print("Overhead share of the derive halves: " + json.dumps(res.get("overhead_share")))
     print("SHA-256 of the app, caliper-mcp and the Python package: the same before and after.")
     print("Captures:")

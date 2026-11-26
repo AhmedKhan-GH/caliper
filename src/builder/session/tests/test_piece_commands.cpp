@@ -663,6 +663,7 @@ TEST_CASE("pieces: program.status takes an instance's draw object from the viewe
     json status = ok(*s, "program.status", {{"id", "field"}});
     CHECK(status["programs"][0]["draw"]["state"] == "waiting");
     CHECK(status["programs"][0]["draw"]["frame_ms"].is_null());
+    CHECK(status["programs"][0]["draw"]["warning"].is_null());
 
     ViewerHost viewer;
     ProgramStatus item;
@@ -671,33 +672,33 @@ TEST_CASE("pieces: program.status takes an instance's draw object from the viewe
     item.host = "viewer";
     item.half = "draw";
     DrawStatus d;
-    d.state = "stopped";
+    d.state = "running";
     d.frame_ms = 6.5;
     d.frame_limit_ms = 4;
     d.memory_bytes = 1024;
     d.memory_limit_bytes = 64u << 20;
     d.resource_step = 120;
-    d.error = ProgramError{"program.draw_over_time", "The pass draw.passes[0] took 6.5 ms of its 4 ms.", 0, 0};
-    d.error_where = "draw.passes[0]";
+    d.warning = ProgramError{"program.draw_over_time", "field: draw pass 0 (fs) took 6.5 ms a frame, above its 4 ms", 0, 0};
+    d.warning_where = "draw.passes[0]";
     item.draw = d;
     viewer.items = {item};
     s->set_draw_host(&viewer);
     status = ok(*s, "program.status", {{"id", "field"}});
     const json& draw = status["programs"][0]["draw"];
-    CHECK(draw["state"] == "stopped");
+    CHECK(draw["state"] == "running");
     CHECK(draw["frame_ms"] == 6.5);
     CHECK(draw["memory_bytes"] == 1024);
     CHECK(draw["resource_step"] == 120);
-    CHECK(draw["error"]["code"] == "program.draw_over_time");
-    CHECK(draw["error"]["where"] == "draw.passes[0]");
+    CHECK(draw["error"].is_null());
+    CHECK(draw["warning"]["code"] == "program.draw_over_time");
+    CHECK(draw["warning"]["where"] == "draw.passes[0]");
     s->set_draw_host(nullptr);
 
     // The event of an instance's half names the half and its pass; another program's has neither.
     Events events;
-    item.state = "stopped";
+    item.state = "running";
     item.pass = 0;
-    item.error = d.error;
-    push_program_event(events, item, "stopped");
+    push_program_event(events, item, "warned");
     ProgramStatus plain;
     plain.id = "rows";
     push_program_event(events, plain, "compiled");
@@ -708,6 +709,7 @@ TEST_CASE("pieces: program.status takes an instance's draw object from the viewe
     CHECK(!events.got[1].fields.contains("pass"));
     // Both keys leave through the events' JSON, which keeps only the keys of the kind.
     const json out = event_json(events.got[0]);
+    CHECK(out["change"] == "warned");
     CHECK(out["half"] == "draw");
     CHECK(out["pass"] == 0);
     CHECK(out["code"] == "program.draw_over_time");

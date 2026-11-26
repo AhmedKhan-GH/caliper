@@ -199,7 +199,7 @@ The hosts report these codes in a status item and in a `program` event. The cons
 | `program.over_memory` | The outputs and the bound tensors are above `memory_mb` |
 | `program.layer_refused` | The frame validation of the graphics layer refused the pass |
 | `program.over_time` | The program went over `time_ms` on 3 passes in a row |
-| `program.over_budget` | Even a pass every 10 s or every 10,000 steps takes more than 4 % of the training time, and every program stopped |
+| `program.over_budget` | Warning in a training run: even a pass every 10 s or every 10,000 steps takes more than 4 % of the training time; non-library programs warn and keep running |
 | `program.timeout` | A pass did not finish in time: every program stopped, and the GPU runs the pass until the driver ends it |
 | `program.device_lost` | The device was lost, and every program stopped |
 | `program.unavailable` | The script cannot load the runtime, such as a torch without DLPack export on MPS |
@@ -227,7 +227,7 @@ target = min(max(N_want, 3), N_max)
 
 N moves up as soon as it is below the target, by at most a factor of 2 for each update. It moves down only when it is more than 25 % above the target, by at most a factor of 1.5. Thus N rests between the target and 1.25 times the target. N is at least 3, so that each half of a cycle holds at least one step. Before the first measured pass, N is 3, and a program's first pass runs 8 steps after its install.
 
-All programs share the pass steps of N, and one pass runs every program that is due, thus the wait is paid once. A program is due at a pass step when at least its declared `every` steps passed since its own last pass. Thus `every` asks for a slower cadence, never for a faster one. When `N_want` stays above `N_max` for 3 updates in a row while N is at `N_max`, and the smallest declared `every` is below `N_want` too, the programs cannot run inside the budget on this run. Every program then stops with `program.over_budget`, which gives a status item and a `program` event of the change `stopped`. Training continues, and the next install measures again.
+All programs share the pass steps of N, and one pass runs every program that is due, thus the wait is paid once. A program is due at a pass step when at least its declared `every` steps passed since its own last pass. Thus `every` asks for a slower cadence, never for a faster one. When `N_want` stays above `N_max` for 3 updates in a row while N is at `N_max`, and the smallest declared `every` is below `N_want` too, the passes exceed the training budget. Built-in library pieces get no hard stop and no `program.over_budget` warning. Agent-written pieces and other programs carry a recoverable `program.over_budget` warning in their status item and push a `program` event of the change `warned`, while they keep running. A real hang still stops every program with `program.timeout`. The training-overhead rule does not apply to interpretability runs, where `step_ms` and `overhead_share` stay null and `last_cost_ms` measures only program work. Control pauses, actions and interpretation requests inside `caliper.step()` reset the open cycle so they do not count as program pass overhead.
 
 ### Views in the Cadence
 
@@ -294,15 +294,16 @@ The facade in the script gives each output to the publish path of a `caliper.sce
 | `every` | The steps between two passes of the program: N, or a multiple of N for a larger declared `every`; null before the first pass |
 | `every_min` | The declared `every`, or null |
 | `last_pass_ms` | The GPU time of the last pass, or null |
-| `last_cost_ms` | The overhead `D` of a pass in Cadence, shared by all programs, or null before it is measured |
-| `step_ms` | The base step time `b` in Cadence, or null before it is measured |
-| `overhead_share` | `D / (N × b)`, the measured share of the training time that the passes take; null before it is measured |
+| `last_cost_ms` | The pass cost `D` in Cadence: in training runs, the wall-clock overhead shared by all programs; in interpretability runs, the program work time; null before it is measured |
+| `step_ms` | The base training step time `b` in Cadence; null in interpretability runs or before it is measured |
+| `overhead_share` | `D / (N × b)`, the measured share of the training time that the passes take; null in interpretability runs or before it is measured |
 | `passes_per_s` | The passes of the program a second on the run's wall clock, over its last 8 passes; null before its second pass and while the program does not run |
 | `last_step` | The step of the last pass, or null |
 | `runs` | The count of passes |
 | `memory_bytes` | The bytes of the output buffers and the bound tensors |
 | `memory_limit_bytes` | The budget from `memory_mb` |
 | `error` | `{code, message, line, column}` of the last error, or null |
+| `warning` | `{code, message, line, column}` of any active warning while running, or null |
 | `sha256` | The SHA-256 of the source the host runs |
 
 The interfaces of the hosts are in `src/builder/include/caliper_builder/session/program_host.h`. The app gives the session a `ProgramHost` for the programs in the script and a `DrawStatusHost` that reports the draw halves of the pieces in the viewer, as it gives its `RunControl`.
@@ -314,8 +315,9 @@ Programs add the event kind `program` to the ring of `events.wait`. The hosts pu
 | Change | When |
 |---|---|
 | `compiled` | A host compiled the program, and it runs from the next pass or frame |
+| `warned` | A program went over a budget such as `program.over_budget` or `program.draw_over_time` while it keeps running |
 | `refused` | A check refused it; `code`, `message`, `line` and `column` say why |
-| `stopped` | The watchdog, the memory budget, the budget of the cadence or a lost device stopped it |
+| `stopped` | The watchdog, the memory budget, `program.timeout` or a lost device stopped it |
 
 ## Producer Runtime Interface
 

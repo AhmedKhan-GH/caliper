@@ -347,7 +347,9 @@ inline bool run_derive(id<MTLDevice> device, const cs::Piece& piece, const std::
     if (caliper_producer_compile_derive(rt, &d, &program, &e) != CALIPER_PRODUCER_OK) return failed("compile_derive");
     caliper_producer_frame frame{1, 0.0, 1};
     caliper_producer_pass pass{};
-    if (caliper_producer_run(rt, &program, 1, &frame, 0, &pass, &e) != CALIPER_PRODUCER_OK) return failed("run");
+    // This harness checks pixels. Allow cold CI drivers to complete the pass
+    // within a bounded wait while retaining the piece's execution-time limit.
+    if (caliper_producer_run(rt, &program, 1, &frame, 5000, &pass, &e) != CALIPER_PRODUCER_OK) return failed("run");
     for (const cs::Resource& r : piece.resources) {
         if (!r.publish) continue;
         caliper_producer_output o{};

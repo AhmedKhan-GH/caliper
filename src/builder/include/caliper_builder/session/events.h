@@ -11,7 +11,7 @@
 //             the end of an action, its attachment
 //   spec      a command changed the open spec (from the journal)
 //   approval  a card asked for the person's decision, or was decided
-//   program   a GPU program compiled, was refused or stopped
+//   program   a GPU program compiled, warned, was refused or stopped
 //             (design/gpu-programs.md, Program Events); its host pushes it
 //   state     a state variable took a new value
 //   cursor    the time cursor went live or held, played, moved or was clamped

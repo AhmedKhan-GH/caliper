@@ -75,7 +75,8 @@ inline constexpr double kFrameMsMax = 16.0;
 inline constexpr std::uint32_t kDrawMemoryMbDefault = 64;        // resources, draw buffers and targets in the viewer
 inline constexpr std::uint32_t kDrawMemoryMbMax = 512;
 inline constexpr std::size_t kPickFields = 8;
-inline constexpr std::size_t kStrings = 4096;                    // strings of the text table
+inline constexpr std::size_t kStrings = 4096;                    // strings of the literal text table
+inline constexpr std::size_t kBufferStrings = 8224;              // reference nodes plus token labels
 inline constexpr std::size_t kStringBytes = 64;
 inline constexpr std::size_t kLabels = 512;                      // labels drawn in one frame, as place_labels
 }  // namespace piece_limits
@@ -476,7 +477,7 @@ struct TextTable {
     std::string string = "string";
     std::optional<std::string> priority;
     std::vector<std::string> strings;        // at most kStrings, each at most kStringBytes
-    std::optional<std::string> strings_from; // a buffer of at most kStrings elements of at most kStringBytes
+    std::optional<std::string> strings_from; // a buffer of at most kBufferStrings elements of at most kStringBytes
     TextAlign align = TextAlign::placed;
     std::optional<TextHover> hover;          // local ID hit: string_offset + item at one anchor
     std::optional<TextSelected> selected;   // frame parameter: string_offset + item at one anchor

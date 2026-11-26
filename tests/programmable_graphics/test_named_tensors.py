@@ -73,7 +73,9 @@ def test_republication_releases_old_reference_and_watch_replacement_clears():
     first_handle.remove()
     assert P._resolve("output.probs") is not None
     second_handle.remove()
-    assert P._resolve("output.probs") is None
+    assert _publish._resolve("output.probs") is None
+    with pytest.raises(P._Waiting):
+        P._resolve("output.probs")
 
 
 def test_publication_before_watch_joins_its_lifecycle():
@@ -106,24 +108,23 @@ def test_publication_type_and_model_name_conflicts():
 
 
 def test_public_inference_watch_clears_publications_and_capture_hooks():
-    # Use the deterministic fixture without imports from another test module.
-    from tests.interp.fixture import TinyLM
-    model = TinyLM(layers=1)
+    model = torch.nn.Sequential(torch.nn.Embedding(8, 4), torch.nn.Linear(4, 8))
     watch = caliper.watch(model, activations=False, groups=False, scene=False)
-    capture = interp.capture(model, ["layers.0.mlp_out"])
     try:
-        capture.__enter__()
+        with pytest.raises(P._Waiting):
+            P._resolve("1.act")
         model(torch.tensor([[1, 2]]))
-        captured = weakref.ref(capture["layers.0.mlp_out"])
-        interp.publish("trace.node_f", capture["layers.0.mlp_out"])
+        act_tensor = P._resolve("1.act")
+        captured = weakref.ref(act_tensor)
+        interp.publish("trace.node_f", act_tensor.clone())
+        del act_tensor
         published = weakref.ref(P._resolve("trace.node_f"))
         watch.remove()
         gc.collect()
         assert captured() is None and published() is None
-        assert not capture and not _publish._TENSORS
+        assert not P._ACTS and not _publish._TENSORS
         assert not any(m._forward_hooks or m._forward_pre_hooks for m in model.modules())
     finally:
-        capture.close(clear=True)
         watch.remove()
 
 

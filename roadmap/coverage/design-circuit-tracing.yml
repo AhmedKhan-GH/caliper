@@ -2,36 +2,36 @@
 title: Circuit Tracing Design
 kind: page
 source: design/circuit-tracing.md
-summary: The circuit tracing design maps model probes, dictionaries, examples, graphs, and interventions to their registry entries.
+summary: The circuit tracing design maps TransformerLens, circuit-tracer, and SAELens integration to the interpretability registry entries.
 not_features:
   - Purpose
   - Verified Base
 entries:
   - heading: Model And Dictionary
-    item: The exact Qwen checkpoint and per-layer transcoder artifact define dictionary identity.
+    item: Staged HookedTransformer, ReplacementModel, TranscoderSet, and SAE loaders connect public models and dictionaries.
     ids: [INT-36]
   - heading: Existing Interfaces
     item: Semantic probes, text parameters, and intervention commands extend the existing interfaces.
     ids: [INT-35, INT-40, INT-42]
   - heading: Text And Registry
-    item: Text limits require two pages of eight examples in the graph instrument.
+    item: Piece text limits organize feature examples into two pages of eight rows.
     ids: [INT-37, INT-39]
   - heading: Dictionary Contract
-    item: Bounded tools train and qualify per-layer dictionaries and index their top examples.
+    item: DictionaryView, FeatureIndex, and LiveFeatureIndex expose lazy decoder lookups and top feature examples.
     ids: [INT-36, INT-37]
   - heading: Replacement Model
-    item: Frozen routing and normalization produce direct effects with explicit error nodes.
+    item: Attribution delegates to circuit-tracer with frozen routing, per-batch MPS pool drains, and CPU pruning.
     ids: [INT-38]
   - heading: Tensor Contract
-    item: Fixed tensor shapes publish graph counts, nodes, and edges with bounded identities.
+    item: Fixed tensor shapes publish graph counts, nodes, and edges up to 8,192 nodes and 262,144 edges.
     ids: [INT-38]
   - heading: Pieces And Commands
-    item: Shared graph, example, and probability pieces expose dictionary and trace commands.
+    item: Shared graph, example, heatmap, and probability pieces pair with eight MCP interpretation commands.
     ids: [INT-37, INT-38, INT-39]
   - heading: Intervention Contract
-    item: Live feature edits, activation patches, paired outputs, and hosted inference extend the control route.
+    item: Live feature interventions, delta-form SAE hooks, activation sweeps, and hosted inference extend the control route.
     ids: [INT-40, INT-41, INT-42]
     note: INT-40 promotes the former feature-steering candidate into the registry.
   - heading: Validation And Delivery
-    item: Fixture identities, hidden acceptance, resource limits, and platform checks verify delivery.
+    item: Offline fixtures, Gemma 2 2B Dallas reference parity, native and browser captures, and 40 GB / 8 GB limits verify delivery.
     reason: test

@@ -1739,6 +1739,10 @@
             "pattern": "^[a-z][a-z0-9_-]{0,63}$",
             "type": "string"
           },
+          "layout_locked": {
+            "description": "Spec version 1: whether the whole layout is locked, making every component non-closable and fixing its layout; false when absent.",
+            "type": "boolean"
+          },
           "title": {
             "description": "The applet's title for a person.",
             "maxLength": 256,
@@ -3791,6 +3795,10 @@
             "required": [],
             "type": "object"
           },
+          "closable": {
+            "description": "Spec version 1: whether the panel can be closed or removed; true when absent.",
+            "type": "boolean"
+          },
           "dry_run": {
             "default": false,
             "description": "Whether to check the change and return its diff without applying it, so that it can be shown for approval first; false when absent.",
@@ -4987,6 +4995,13 @@
                 "required": [],
                 "type": "object"
               },
+              "closable": {
+                "description": "Spec version 1: whether the panel can be closed or removed; null restores the default (true).",
+                "type": [
+                  "boolean",
+                  "null"
+                ]
+              },
               "entity": {
                 "description": "scene: the entities of the scene; the list replaces the panel's own, and null removes them.",
                 "items": {
@@ -6039,6 +6054,10 @@
                 "required": [],
                 "type": "object"
               },
+              "closable": {
+                "description": "Spec version 1: whether the person or a command can close or remove the panel; true when absent.",
+                "type": "boolean"
+              },
               "id": {
                 "description": "The panel's id.",
                 "maxLength": 64,
@@ -6601,7 +6620,7 @@
         ],
         "type": "object"
       },
-      "summary": "Removes a panel from the open spec and from its layout. The id comes from spec.get. Undo restores it in its place. The result holds the change as a diff; with dry_run true the change is only checked and not applied."
+      "summary": "Removes a panel from the open spec and from its layout. Refuses with panel.not_closable when the panel sets closable to false, and with layout.locked when the layout is locked. The id comes from spec.get. Undo restores it in its place. The result holds the change as a diff; with dry_run true the change is only checked and not applied."
     },
     {
       "agents": true,
@@ -7307,6 +7326,89 @@
       "args": {
         "additionalProperties": false,
         "properties": {
+          "dry_run": {
+            "default": false,
+            "description": "Whether to check the change and return its diff without applying it, so that it can be shown for approval first; false when absent.",
+            "type": "boolean"
+          },
+          "locked": {
+            "description": "Whether to lock the layout (true) or unlock it (false).",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "locked"
+        ],
+        "type": "object"
+      },
+      "destructive": false,
+      "effect": "edit",
+      "examples": [
+        {
+          "locked": true
+        }
+      ],
+      "frame_thread": true,
+      "mutates": true,
+      "name": "layout.lock",
+      "result": {
+        "additionalProperties": false,
+        "properties": {
+          "applied": {
+            "description": "Whether the change was applied: to the open spec, or to the preview when the call names one; false for a dry run.",
+            "type": "boolean"
+          },
+          "diff": {
+            "description": "The change as a unified diff of the spec's canonical TOML text, before and after; empty when the text does not change.",
+            "type": "string"
+          },
+          "locked": {
+            "description": "Whether the layout is locked now, or would be after a dry run.",
+            "type": "boolean"
+          },
+          "warnings": {
+            "description": "What the validator warns about, such as spec.not_portable for a source that cannot run in the browser viewer.",
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "code": {
+                  "description": "A stable code, such as spec.unknown_primitive or spec.not_portable.",
+                  "type": "string"
+                },
+                "message": {
+                  "description": "One plain sentence that says what is wrong.",
+                  "type": "string"
+                },
+                "where": {
+                  "description": "Where in the spec: a path such as panel[2].bind.y, or a line and column such as 12:7; empty when it is not located.",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "code",
+                "message",
+                "where"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "locked",
+          "warnings",
+          "diff",
+          "applied"
+        ],
+        "type": "object"
+      },
+      "summary": "Locks or unlocks the open spec's whole layout. While locked, every panel and control is non-closable and layout edits (adding, removing, moving or replacing components) are refused with layout.locked until unlocked. Undo restores the previous lock state. The result holds the change as a diff; with dry_run true the change is only checked and not applied."
+    },
+    {
+      "agents": true,
+      "args": {
+        "additionalProperties": false,
+        "properties": {
           "id": {
             "description": "The new preview's id; one is made when absent.",
             "maxLength": 64,
@@ -7895,6 +7997,10 @@
             "pattern": "^(param:.{1,63}|action:.{1,63}|run:pause|value|state:[a-z][a-z0-9_-]{0,63}|cursor|intervene:.{1,255})$",
             "type": "string"
           },
+          "closable": {
+            "description": "Whether the control can be closed or removed; true when absent.",
+            "type": "boolean"
+          },
           "dry_run": {
             "default": false,
             "description": "Whether to check the change and return its diff without applying it, so that it can be shown for approval first; false when absent.",
@@ -8229,6 +8335,13 @@
                 "pattern": "^(param:.{1,63}|action:.{1,63}|run:pause|value|state:[a-z][a-z0-9_-]{0,63}|cursor|intervene:.{1,255})$",
                 "type": "string"
               },
+              "closable": {
+                "description": "Whether the control can be closed or removed; null restores the default (true).",
+                "type": [
+                  "boolean",
+                  "null"
+                ]
+              },
               "kind": {
                 "description": "What the control is.",
                 "enum": [
@@ -8520,6 +8633,10 @@
               "bind": {
                 "description": "The control's target, such as param:lr.",
                 "type": "string"
+              },
+              "closable": {
+                "description": "Whether the person or a command can close or remove the control; true when absent.",
+                "type": "boolean"
               },
               "id": {
                 "description": "The control's id.",
@@ -8843,7 +8960,7 @@
         ],
         "type": "object"
       },
-      "summary": "Removes a control from the open spec and from its layout. The id comes from spec.get. Undo restores it in its place. The result holds the change as a diff; with dry_run true the change is only checked and not applied."
+      "summary": "Removes a control from the open spec and from its layout. Refuses with control.not_closable when the control sets closable to false, and with layout.locked when the layout is locked. The id comes from spec.get. Undo restores it in its place. The result holds the change as a diff; with dry_run true the change is only checked and not applied."
     },
     {
       "agents": true,
@@ -11012,11 +11129,31 @@
             "maxItems": 64,
             "type": "array"
           },
+          "dictionary": {
+            "description": "The local inference dictionary resource, at most 1024 UTF-8 bytes.",
+            "maxLength": 1024,
+            "minLength": 1,
+            "type": "string"
+          },
           "id": {
             "description": "The new run's id, unique in the workspace; the script's file name and a number, such as train-1, when absent.",
             "maxLength": 40,
             "minLength": 1,
             "pattern": "^[a-z0-9-]{1,40}$",
+            "type": "string"
+          },
+          "kind": {
+            "description": "The run kind. Script is the default.",
+            "enum": [
+              "script",
+              "inference"
+            ],
+            "type": "string"
+          },
+          "model": {
+            "description": "The local inference model resource, at most 1024 UTF-8 bytes.",
+            "maxLength": 1024,
+            "minLength": 1,
             "type": "string"
           },
           "params": {
@@ -11050,6 +11187,12 @@
             "maxItems": 64,
             "type": "array"
           },
+          "prompt": {
+            "description": "The initial inference prompt, at most 4096 UTF-8 bytes.",
+            "maxLength": 4096,
+            "minLength": 1,
+            "type": "string"
+          },
           "script": {
             "description": "The script's path relative to the workspace, with / between folders and no ., .. or link in it, such as scripts/train.py, so that the review card names the file that runs; another path to a file of the workspace fails with run.script_refused, whose message gives the path to use.",
             "maxLength": 1024,
@@ -11057,9 +11200,7 @@
             "type": "string"
           }
         },
-        "required": [
-          "script"
-        ],
+        "required": [],
         "type": "object"
       },
       "destructive": false,
@@ -11209,7 +11350,7 @@
         ],
         "type": "object"
       },
-      "summary": "Starts a Python script of the workspace as a managed run, for training or for inference, with arguments and parameter values, and attaches the app to it. It always waits for the person's approval on a review card, because the script runs as Python code. The result comes when the process starts, in the state starting; a run event of change runner, through events.wait, or run.list says when it runs. The script's caliper.watch() line writes the stream link that the app attaches to."
+      "summary": "Starts a managed workspace script or local inference through the fixed Caliper module. Script runs take script, args, and params, with optional kind:script. Inference runs require kind:inference, model, dictionary, and prompt. The two forms cannot mix fields. Both forms wait for approval on a review card. The result has state starting when the process starts. A runner event through events.wait, or run.list, reports later state changes."
     },
     {
       "agents": true,
@@ -11228,36 +11369,112 @@
             "items": {
               "additionalProperties": false,
               "properties": {
-                "from_step": {
-                  "description": "The first step it acts on; the fork's first step when absent.",
-                  "minimum": 0,
-                  "type": "integer"
+                "coefficient": {
+                  "description": "The finite coefficient for add.",
+                  "type": "number"
                 },
-                "op": {
-                  "description": "What to do; scale, steer and patch are reserved.",
-                  "enum": [
-                    "ablate",
-                    "scale",
-                    "steer",
-                    "patch"
-                  ],
-                  "type": "string"
-                },
-                "point": {
-                  "description": "The point's name, from intervene.points.",
+                "dictionary": {
+                  "description": "The configured dictionary identifier for scale or clamp.",
                   "maxLength": 255,
                   "minLength": 1,
                   "type": "string"
                 },
-                "until_step": {
-                  "description": "The step it ends before; it lasts when absent.",
-                  "minimum": 1,
+                "feature": {
+                  "description": "The feature for scale or clamp.",
+                  "maximum": 2147483647,
+                  "minimum": 0,
                   "type": "integer"
+                },
+                "from_step": {
+                  "description": "The first step, or null for the next step.",
+                  "maximum": 9007199254740991,
+                  "minimum": 0,
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
+                },
+                "kind": {
+                  "description": "The operation discriminator. It must equal op when both are present.",
+                  "enum": [
+                    "ablate",
+                    "add",
+                    "scale",
+                    "clamp",
+                    "patch",
+                    "steer"
+                  ],
+                  "type": "string"
+                },
+                "multiplier": {
+                  "description": "The finite multiplier for scale.",
+                  "type": "number"
+                },
+                "op": {
+                  "description": "The legacy discriminator. Supply op or kind. Steer stays reserved.",
+                  "enum": [
+                    "ablate",
+                    "add",
+                    "scale",
+                    "clamp",
+                    "patch",
+                    "steer"
+                  ],
+                  "type": "string"
+                },
+                "point": {
+                  "description": "The point name from intervene.points.",
+                  "maxLength": 255,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "positions": {
+                  "description": "Selected token positions. Omission selects all, and an empty list selects none.",
+                  "items": {
+                    "maximum": 31,
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "maxItems": 32,
+                  "type": "array"
+                },
+                "source_position": {
+                  "description": "The one source position, or matching positions when absent.",
+                  "maximum": 31,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "source_prompt": {
+                  "description": "The clean patch source, at most 4096 UTF-8 bytes and 32 model tokens.",
+                  "maxLength": 4096,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "until_step": {
+                  "description": "The exclusive end step, or null until cleared.",
+                  "maximum": 9007199254740991,
+                  "minimum": 0,
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
+                },
+                "value": {
+                  "description": "The finite activation for clamp.",
+                  "type": "number"
+                },
+                "vector": {
+                  "description": "The add vector. Its length must match the point width.",
+                  "items": {
+                    "type": "number"
+                  },
+                  "maxItems": 16384,
+                  "minItems": 1,
+                  "type": "array"
                 }
               },
               "required": [
-                "point",
-                "op"
+                "point"
               ],
               "type": "object"
             },
@@ -11795,7 +12012,7 @@
                   "type": "string"
                 },
                 "change": {
-                  "description": "cursor: what changed: live, held, playing, moved (by a command, a step or a key) or clamped (to the nearest kept step); run: what changed: the run's state, a parameter applied at a step, the end of an action, the attachment of a script, the state of a managed run (runner), or an intervention applied at a step (intervene); program: compiled, refused by a check, or stopped by a limit.",
+                  "description": "cursor: what changed: live, held, playing, moved (by a command, a step or a key) or clamped (to the nearest kept step); run: what changed: the run's state, a parameter applied at a step, the end of an action, the attachment of a script, the state of a managed run (runner), or an intervention applied at a step (intervene); program: compiled, warned over its budget, refused by a check, or stopped by a limit.",
                   "enum": [
                     "state",
                     "param",
@@ -11804,6 +12021,7 @@
                     "runner",
                     "intervene",
                     "compiled",
+                    "warned",
                     "refused",
                     "stopped",
                     "live",
@@ -11815,7 +12033,7 @@
                   "type": "string"
                 },
                 "code": {
-                  "description": "program with change refused or stopped: a stable code, such as program.writes_input.",
+                  "description": "program with change warned, refused or stopped: a stable code, such as program.writes_input.",
                   "type": "string"
                 },
                 "column": {
@@ -11908,7 +12126,7 @@
                   "type": "integer"
                 },
                 "half": {
-                  "description": "program of an instance of a piece: the half that compiled, was refused or stopped.",
+                  "description": "program of an instance of a piece: the half that compiled, warned, was refused or stopped.",
                   "enum": [
                     "derive",
                     "draw"
@@ -11916,7 +12134,7 @@
                   "type": "string"
                 },
                 "host": {
-                  "description": "program: where it compiled, was refused or stopped.",
+                  "description": "program: where it compiled, warned, was refused or stopped.",
                   "enum": [
                     "script",
                     "viewer"
@@ -11967,7 +12185,7 @@
                   "type": "integer"
                 },
                 "message": {
-                  "description": "program with change refused or stopped: one plain sentence that says why.",
+                  "description": "program with change warned, refused or stopped: one plain sentence that says why.",
                   "type": "string"
                 },
                 "name": {
@@ -12367,7 +12585,7 @@
                     "type": "string"
                   },
                   "frame_ms": {
-                    "description": "The most GPU time of the draw half in one frame in milliseconds; 4 when absent. Over it on 30 frames in a row, the program stops.",
+                    "description": "The most GPU time of the draw half in one frame in milliseconds; 4 when absent. Over it on 30 frames in a row, the program records a warning and keeps drawing.",
                     "maximum": 16,
                     "minimum": 0.1,
                     "type": "number"
@@ -12657,7 +12875,7 @@
                         "type": "array"
                       },
                       "strings_from": {
-                        "description": "In place of strings: a published buffer resource or buffer input of at most 4096 elements whose stride is at most 64 bytes of u32 fields; each valid element is one string of UTF-8 bytes, ended by its stride or its first zero byte. A string that is not UTF-8 leaves its labels out.",
+                        "description": "A published buffer with at most 8224 strings, each with at most 64 bytes of u32 fields. Its stride or first zero byte ends each UTF-8 string. Invalid UTF-8 hides the label.",
                         "pattern": "^[a-z][a-z0-9_]{0,31}$",
                         "type": "string"
                       }
@@ -14299,7 +14517,7 @@
                       "description": "The draw half's last error, or null.",
                       "properties": {
                         "code": {
-                          "description": "A stable code, such as program.draw_over_time.",
+                          "description": "A stable code, such as program.draw_timeout.",
                           "type": "string"
                         },
                         "message": {
@@ -14360,6 +14578,33 @@
                         "stopped"
                       ],
                       "type": "string"
+                    },
+                    "warning": {
+                      "additionalProperties": false,
+                      "description": "The draw half's frame-budget warning while running, or null.",
+                      "properties": {
+                        "code": {
+                          "description": "A stable code, such as program.draw_over_time.",
+                          "type": "string"
+                        },
+                        "message": {
+                          "description": "One plain sentence that names the pass, its time, and its limit.",
+                          "type": "string"
+                        },
+                        "where": {
+                          "description": "The pass, such as draw.passes[1], or draw.",
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message",
+                        "where"
+                      ],
+                      "type": [
+                        "object",
+                        "null"
+                      ]
                     }
                   },
                   "required": [
@@ -14369,7 +14614,8 @@
                     "memory_bytes",
                     "memory_limit_bytes",
                     "resource_step",
-                    "error"
+                    "error",
+                    "warning"
                   ],
                   "type": [
                     "object",
@@ -14449,7 +14695,7 @@
                   "type": "string"
                 },
                 "last_cost_ms": {
-                  "description": "The overhead D of a pass in milliseconds: the time that a pass adds to the run's wall clock, shared by all programs; null before it is measured.",
+                  "description": "The pass cost D in milliseconds: in a training run, the time that a pass adds to the wall clock; in an interpretability run, the program work time of the pass; null before it is measured.",
                   "type": [
                     "number",
                     "null"
@@ -14480,7 +14726,7 @@
                   "type": "integer"
                 },
                 "overhead_share": {
-                  "description": "The measured share of the training time that the passes take, D / (N b), which the cadence aims to keep at or below 0.04; null before it is measured.",
+                  "description": "The measured share of the training time that the passes take, D / (N b), which training runs aim to keep at or below 0.04; null in interpretability runs or before it is measured.",
                   "minimum": 0,
                   "type": [
                     "number",
@@ -14552,9 +14798,43 @@
                   "type": "string"
                 },
                 "step_ms": {
-                  "description": "The base step time b in milliseconds: the time of a training step far from a pass; null before it is measured.",
+                  "description": "The base training step time b in milliseconds far from a pass; null in interpretability runs or before it is measured.",
                   "type": [
                     "number",
+                    "null"
+                  ]
+                },
+                "warning": {
+                  "additionalProperties": false,
+                  "description": "The active warning while running, such as program.over_budget, or null.",
+                  "properties": {
+                    "code": {
+                      "description": "A stable code, such as program.over_budget.",
+                      "type": "string"
+                    },
+                    "column": {
+                      "description": "The column in the source, or 0.",
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "line": {
+                      "description": "The line in the source, or 0.",
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "message": {
+                      "description": "One plain sentence that says what happened.",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "code",
+                    "message",
+                    "line",
+                    "column"
+                  ],
+                  "type": [
+                    "object",
                     "null"
                   ]
                 }
@@ -14576,6 +14856,7 @@
                 "memory_bytes",
                 "memory_limit_bytes",
                 "error",
+                "warning",
                 "sha256"
               ],
               "type": "object"
@@ -14589,7 +14870,7 @@
         ],
         "type": "object"
       },
-      "summary": "Returns the state of each GPU program of the open spec: where it runs, whether it compiled, runs, was refused or stopped, its cadence N, the GPU time of its last pass, the overhead of a pass and the base step time on the run's wall clock, the measured share of the training time, its passes a second, its memory, and its last error with line and column. It changes nothing."
+      "summary": "Returns the state of each GPU program of the open spec: where it runs, whether it compiled, runs, was refused or stopped, its cadence N, the GPU time of its last pass, the overhead of a pass and the base step time on the run's wall clock, the measured share of the training time, its passes a second, its memory, and its last error or active warning with line and column. It changes nothing."
     },
     {
       "agents": true,
@@ -14780,7 +15061,7 @@
                     "type": "string"
                   },
                   "frame_ms": {
-                    "description": "The most GPU time of the draw half in one frame in milliseconds; 4 when absent. Over it on 30 frames in a row, the program stops.",
+                    "description": "The most GPU time of the draw half in one frame in milliseconds; 4 when absent. Over it on 30 frames in a row, the program records a warning and keeps drawing.",
                     "maximum": 16,
                     "minimum": 0.1,
                     "type": "number"
@@ -15070,7 +15351,7 @@
                         "type": "array"
                       },
                       "strings_from": {
-                        "description": "In place of strings: a published buffer resource or buffer input of at most 4096 elements whose stride is at most 64 bytes of u32 fields; each valid element is one string of UTF-8 bytes, ended by its stride or its first zero byte. A string that is not UTF-8 leaves its labels out.",
+                        "description": "A published buffer with at most 8224 strings, each with at most 64 bytes of u32 fields. Its stride or first zero byte ends each UTF-8 string. Invalid UTF-8 hides the label.",
                         "pattern": "^[a-z][a-z0-9_]{0,31}$",
                         "type": "string"
                       }
@@ -15950,7 +16231,7 @@
                     "type": "string"
                   },
                   "frame_ms": {
-                    "description": "The most GPU time of the draw half in one frame in milliseconds; 4 when absent. Over it on 30 frames in a row, the program stops.",
+                    "description": "The most GPU time of the draw half in one frame in milliseconds; 4 when absent. Over it on 30 frames in a row, the program records a warning and keeps drawing.",
                     "maximum": 16,
                     "minimum": 0.1,
                     "type": "number"
@@ -16240,7 +16521,7 @@
                         "type": "array"
                       },
                       "strings_from": {
-                        "description": "In place of strings: a published buffer resource or buffer input of at most 4096 elements whose stride is at most 64 bytes of u32 fields; each valid element is one string of UTF-8 bytes, ended by its stride or its first zero byte. A string that is not UTF-8 leaves its labels out.",
+                        "description": "A published buffer with at most 8224 strings, each with at most 64 bytes of u32 fields. Its stride or first zero byte ends each UTF-8 string. Invalid UTF-8 hides the label.",
                         "pattern": "^[a-z][a-z0-9_]{0,31}$",
                         "type": "string"
                       }
@@ -16994,7 +17275,7 @@
                     "type": "string"
                   },
                   "frame_ms": {
-                    "description": "The most GPU time of the draw half in one frame in milliseconds; 4 when absent. Over it on 30 frames in a row, the program stops.",
+                    "description": "The most GPU time of the draw half in one frame in milliseconds; 4 when absent. Over it on 30 frames in a row, the program records a warning and keeps drawing.",
                     "maximum": 16,
                     "minimum": 0.1,
                     "type": "number"
@@ -17284,7 +17565,7 @@
                         "type": "array"
                       },
                       "strings_from": {
-                        "description": "In place of strings: a published buffer resource or buffer input of at most 4096 elements whose stride is at most 64 bytes of u32 fields; each valid element is one string of UTF-8 bytes, ended by its stride or its first zero byte. A string that is not UTF-8 leaves its labels out.",
+                        "description": "A published buffer with at most 8224 strings, each with at most 64 bytes of u32 fields. Its stride or first zero byte ends each UTF-8 string. Invalid UTF-8 hides the label.",
                         "pattern": "^[a-z][a-z0-9_]{0,31}$",
                         "type": "string"
                       }
@@ -18006,7 +18287,7 @@
           },
           "node": {
             "description": "The selected graph row. Supply node or layer and feature.",
-            "maximum": 511,
+            "maximum": 8191,
             "minimum": 0,
             "type": "integer"
           },
@@ -18087,7 +18368,7 @@
           },
           "node": {
             "description": "The selected graph row. Supply node or layer and feature.",
-            "maximum": 511,
+            "maximum": 8191,
             "minimum": 0,
             "type": "integer"
           },
@@ -18147,23 +18428,61 @@
       "args": {
         "additionalProperties": false,
         "properties": {
+          "batch_size": {
+            "default": null,
+            "description": "The attribution batch size, or null for the backend default.",
+            "maximum": 512,
+            "minimum": 1,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "desired_logit_prob": {
+            "default": 0.95,
+            "description": "The cumulative probability target for selected logits.",
+            "maximum": 1,
+            "minimum": 0,
+            "type": "number"
+          },
+          "edge_threshold": {
+            "default": 0.98,
+            "description": "The cumulative edge influence threshold.",
+            "maximum": 1,
+            "minimum": 0,
+            "type": "number"
+          },
           "max_edges": {
             "description": "The edge cap.",
-            "maximum": 8192,
+            "maximum": 262144,
             "minimum": 0,
+            "type": "integer"
+          },
+          "max_n_logits": {
+            "default": 10,
+            "description": "The maximum selected logit count.",
+            "maximum": 10,
+            "minimum": 1,
             "type": "integer"
           },
           "max_nodes": {
             "description": "The node cap.",
-            "maximum": 512,
+            "maximum": 8192,
             "minimum": 1,
             "type": "integer"
           },
           "max_targets": {
             "description": "The feature target cap.",
-            "maximum": 512,
+            "maximum": 5000,
             "minimum": 0,
             "type": "integer"
+          },
+          "node_threshold": {
+            "default": 0.8,
+            "description": "The cumulative node influence threshold.",
+            "maximum": 1,
+            "minimum": 0,
+            "type": "number"
           },
           "prompt": {
             "description": "The prompt, at most 4096 UTF-8 bytes and 32 model tokens.",
@@ -18176,6 +18495,13 @@
             "maximum": 4294967295,
             "minimum": 1,
             "type": "integer"
+          },
+          "update_interval": {
+            "default": 4,
+            "description": "The node-selection update interval.",
+            "maximum": 128,
+            "minimum": 1,
+            "type": "integer"
           }
         },
         "required": [],
@@ -18185,7 +18511,7 @@
       "effect": "run",
       "examples": [
         {
-          "prompt": "The capital of France is"
+          "prompt": "Fact: the capital of the state containing Dallas is"
         }
       ],
       "frame_thread": true,
@@ -18289,7 +18615,7 @@
           },
           "edge_offset": {
             "description": "The first edge.",
-            "maximum": 8192,
+            "maximum": 262144,
             "minimum": 0,
             "type": "integer"
           },
@@ -18301,7 +18627,7 @@
           },
           "node_offset": {
             "description": "The first node.",
-            "maximum": 512,
+            "maximum": 8192,
             "minimum": 0,
             "type": "integer"
           },
@@ -18355,6 +18681,156 @@
         "type": "object"
       },
       "summary": "Reads a bounded page from the completed graph."
+    },
+    {
+      "agents": true,
+      "args": {
+        "additionalProperties": false,
+        "properties": {
+          "clean_prompt": {
+            "description": "The clean prompt, at most 4096 UTF-8 bytes and 32 model tokens.",
+            "maxLength": 4096,
+            "minLength": 1,
+            "type": "string"
+          },
+          "corrupted_prompt": {
+            "description": "The corrupted prompt with the same token count.",
+            "maxLength": 4096,
+            "minLength": 1,
+            "type": "string"
+          },
+          "metric": {
+            "additionalProperties": false,
+            "description": "Distinct output token IDs for the logit difference.",
+            "properties": {
+              "negative_token": {
+                "description": "The output token ID.",
+                "maximum": 2147483647,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "positive_token": {
+                "description": "The output token ID.",
+                "maximum": 2147483647,
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "positive_token",
+              "negative_token"
+            ],
+            "type": "object"
+          },
+          "request_id": {
+            "description": "Poll a prior request without another model operation.",
+            "maximum": 4294967295,
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [],
+        "type": "object"
+      },
+      "destructive": false,
+      "effect": "run",
+      "examples": [
+        {
+          "clean_prompt": "AB",
+          "corrupted_prompt": "AC",
+          "metric": {
+            "negative_token": 66,
+            "positive_token": 65
+          }
+        }
+      ],
+      "frame_thread": true,
+      "mutates": false,
+      "name": "patch.sweep",
+      "result": {
+        "additionalProperties": false,
+        "properties": {
+          "pending": {
+            "description": "True until the final reply arrives.",
+            "type": "boolean"
+          },
+          "request_id": {
+            "description": "Poll a prior request without another model operation.",
+            "maximum": 4294967295,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "result": {
+            "additionalProperties": true,
+            "description": "The bounded result, or null while pending.",
+            "type": [
+              "object",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "request_id",
+          "pending",
+          "result"
+        ],
+        "type": "object"
+      },
+      "summary": "Queues a patch sweep at the next run boundary."
+    },
+    {
+      "agents": true,
+      "args": {
+        "additionalProperties": false,
+        "properties": {
+          "request_id": {
+            "description": "Poll a prior request without another model operation.",
+            "maximum": 4294967295,
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [],
+        "type": "object"
+      },
+      "destructive": false,
+      "effect": "run",
+      "examples": [
+        {}
+      ],
+      "frame_thread": true,
+      "mutates": false,
+      "name": "trace.validate",
+      "result": {
+        "additionalProperties": false,
+        "properties": {
+          "pending": {
+            "description": "True until the final reply arrives.",
+            "type": "boolean"
+          },
+          "request_id": {
+            "description": "Poll a prior request without another model operation.",
+            "maximum": 4294967295,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "result": {
+            "additionalProperties": true,
+            "description": "The bounded result, or null while pending.",
+            "type": [
+              "object",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "request_id",
+          "pending",
+          "result"
+        ],
+        "type": "object"
+      },
+      "summary": "Queues validation of the latest trace and intervention snapshot."
     },
     {
       "agents": true,
@@ -18417,7 +18893,6 @@
                   "description": "The optional attention pattern form, or null for another semantic probe.",
                   "enum": [
                     "softmax",
-                    "signed_value_mixing",
                     null
                   ],
                   "type": [
@@ -18487,36 +18962,112 @@
       "args": {
         "additionalProperties": false,
         "properties": {
-          "from_step": {
-            "description": "The first step it acts on; the next step when absent.",
-            "minimum": 0,
-            "type": "integer"
+          "coefficient": {
+            "description": "The finite coefficient for add.",
+            "type": "number"
           },
-          "op": {
-            "description": "What to do: ablate sets the output to zero; scale, steer and patch are reserved and refused with intervene.op_reserved.",
-            "enum": [
-              "ablate",
-              "scale",
-              "steer",
-              "patch"
-            ],
-            "type": "string"
-          },
-          "point": {
-            "description": "The point's name, from intervene.points.",
+          "dictionary": {
+            "description": "The configured dictionary identifier for scale or clamp.",
             "maxLength": 255,
             "minLength": 1,
             "type": "string"
           },
-          "until_step": {
-            "description": "The step it ends before; it lasts until it is cleared when absent.",
-            "minimum": 1,
+          "feature": {
+            "description": "The feature for scale or clamp.",
+            "maximum": 2147483647,
+            "minimum": 0,
             "type": "integer"
+          },
+          "from_step": {
+            "description": "The first step, or null for the next step.",
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "kind": {
+            "description": "The operation discriminator. It must equal op when both are present.",
+            "enum": [
+              "ablate",
+              "add",
+              "scale",
+              "clamp",
+              "patch",
+              "steer"
+            ],
+            "type": "string"
+          },
+          "multiplier": {
+            "description": "The finite multiplier for scale.",
+            "type": "number"
+          },
+          "op": {
+            "description": "The legacy discriminator. Supply op or kind. Steer stays reserved.",
+            "enum": [
+              "ablate",
+              "add",
+              "scale",
+              "clamp",
+              "patch",
+              "steer"
+            ],
+            "type": "string"
+          },
+          "point": {
+            "description": "The point name from intervene.points.",
+            "maxLength": 255,
+            "minLength": 1,
+            "type": "string"
+          },
+          "positions": {
+            "description": "Selected token positions. Omission selects all, and an empty list selects none.",
+            "items": {
+              "maximum": 31,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "maxItems": 32,
+            "type": "array"
+          },
+          "source_position": {
+            "description": "The one source position, or matching positions when absent.",
+            "maximum": 31,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "source_prompt": {
+            "description": "The clean patch source, at most 4096 UTF-8 bytes and 32 model tokens.",
+            "maxLength": 4096,
+            "minLength": 1,
+            "type": "string"
+          },
+          "until_step": {
+            "description": "The exclusive end step, or null until cleared.",
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "value": {
+            "description": "The finite activation for clamp.",
+            "type": "number"
+          },
+          "vector": {
+            "description": "The add vector. Its length must match the point width.",
+            "items": {
+              "type": "number"
+            },
+            "maxItems": 16384,
+            "minItems": 1,
+            "type": "array"
           }
         },
         "required": [
-          "point",
-          "op"
+          "point"
         ],
         "type": "object"
       },
@@ -18554,7 +19105,7 @@
         ],
         "type": "object"
       },
-      "summary": "Sets one intervention on a point of the attached model, applied at the script's next step through the module hooks: ablate sets the point's output to zero, or one head's part where the point is a head. scale, steer and patch are reserved. It lasts until intervene.clear, or from from_step until until_step. The result says it is pending; a run event of change intervene reports the step the script applied it at. intervene.points lists the points."
+      "summary": "Sets one intervention on a point of the attached model, applied at the script's next step through the module hooks. Kinds are ablate, add, scale, clamp, and patch. Steer stays reserved. It lasts until intervene.clear, or from from_step until until_step. The result says it is pending; a run event of change intervene reports the step the script applied it at. intervene.points lists the points."
     },
     {
       "agents": true,
@@ -18632,23 +19183,84 @@
             "items": {
               "additionalProperties": false,
               "properties": {
+                "coefficient": {
+                  "description": "The finite coefficient for add.",
+                  "type": "number"
+                },
+                "dictionary": {
+                  "description": "The configured dictionary identifier for scale or clamp.",
+                  "maxLength": 255,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "error": {
+                  "description": "The execution refusal, when present.",
+                  "maxLength": 1024,
+                  "type": "string"
+                },
+                "error_code": {
+                  "description": "The structured refusal code, when present.",
+                  "maxLength": 63,
+                  "type": "string"
+                },
+                "feature": {
+                  "description": "The feature for scale or clamp.",
+                  "maximum": 2147483647,
+                  "minimum": 0,
+                  "type": "integer"
+                },
                 "from_step": {
-                  "description": "The first step it acts on, or null for the next step.",
+                  "description": "The first step, or null for the next step.",
+                  "maximum": 9007199254740991,
+                  "minimum": 0,
                   "type": [
                     "integer",
                     "null"
                   ]
                 },
-                "op": {
-                  "description": "What it does: ablate sets the point's output to zero.",
+                "kind": {
+                  "description": "The operation discriminator. It must equal op when both are present.",
                   "enum": [
-                    "ablate"
+                    "ablate",
+                    "add",
+                    "scale",
+                    "clamp",
+                    "patch",
+                    "steer"
+                  ],
+                  "type": "string"
+                },
+                "multiplier": {
+                  "description": "The finite multiplier for scale.",
+                  "type": "number"
+                },
+                "op": {
+                  "description": "The legacy discriminator. Supply op or kind. Steer stays reserved.",
+                  "enum": [
+                    "ablate",
+                    "add",
+                    "scale",
+                    "clamp",
+                    "patch",
+                    "steer"
                   ],
                   "type": "string"
                 },
                 "point": {
-                  "description": "The point it acts on.",
+                  "description": "The point name from intervene.points.",
+                  "maxLength": 255,
+                  "minLength": 1,
                   "type": "string"
+                },
+                "positions": {
+                  "description": "Selected token positions. Omission selects all, and an empty list selects none.",
+                  "items": {
+                    "maximum": 31,
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "maxItems": 32,
+                  "type": "array"
                 },
                 "since_step": {
                   "description": "The step the script applied it at, or null while it is pending.",
@@ -18656,6 +19268,18 @@
                     "integer",
                     "null"
                   ]
+                },
+                "source_position": {
+                  "description": "The one source position, or matching positions when absent.",
+                  "maximum": 31,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "source_prompt": {
+                  "description": "The clean patch source, at most 4096 UTF-8 bytes and 32 model tokens.",
+                  "maxLength": 4096,
+                  "minLength": 1,
+                  "type": "string"
                 },
                 "state": {
                   "description": "pending until the script's next step, active, or ended after until_step.",
@@ -18667,11 +19291,26 @@
                   "type": "string"
                 },
                 "until_step": {
-                  "description": "The step it ends before, or null until it is cleared.",
+                  "description": "The exclusive end step, or null until cleared.",
+                  "maximum": 9007199254740991,
+                  "minimum": 0,
                   "type": [
                     "integer",
                     "null"
                   ]
+                },
+                "value": {
+                  "description": "The finite activation for clamp.",
+                  "type": "number"
+                },
+                "vector": {
+                  "description": "The add vector. Its length must match the point width.",
+                  "items": {
+                    "type": "number"
+                  },
+                  "maxItems": 16384,
+                  "minItems": 1,
+                  "type": "array"
                 }
               },
               "required": [

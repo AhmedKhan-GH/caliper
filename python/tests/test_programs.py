@@ -225,6 +225,9 @@ class SimRuntime:
     def stats(self):
         return {}
 
+    def close(self):
+        pass
+
 
 @pytest.fixture
 def sim(monkeypatch):
@@ -240,7 +243,8 @@ def sim(monkeypatch):
         monkeypatch.setitem(P._STATE, "rt", SimRuntime(s))
         monkeypatch.setitem(P._STATE, "marks", _adapter.StepMarks(s.event, size=64))
         monkeypatch.setitem(P._STATE, "step", None)
-        for k, v in (("dense", True), ("drained", 0), ("short", 0), ("long", 0), ("switches", 0)):
+        for k, v in (("dense", True), ("drained", 0), ("short", 0), ("long", 0), ("switches", 0),
+                     ("interp", False)):
             monkeypatch.setitem(P._STATE, k, v)
         monkeypatch.setattr(P, "_outputs", lambda rt, p: {})
         monkeypatch.setattr(P, "_publish", lambda p, outs: None)
@@ -253,7 +257,9 @@ def sim(monkeypatch):
         return s
 
     yield make
-    P._PROGS.pop("sim", None)
+    for pid in list(P._PROGS):
+        P._PROGS.pop(pid, None)
+    P._STATE["interp"] = False
     P._set_active()
     P._CAD.reset()
     P.listeners.clear()
@@ -387,21 +393,98 @@ def test_the_cadence_moves_by_bounded_factors(sim):
     assert all(b <= math.ceil(a * P.GROW) for a, b in zip(seen, seen[1:])), seen
 
 
-def test_a_pass_over_the_budget_at_the_ceiling_stops_the_programs(sim, monkeypatch):
+def test_a_pass_over_the_budget_at_the_ceiling_warns_without_stopping(sim, monkeypatch):
     monkeypatch.setattr(P, "CEILING_S", 0.01)        # at most 24 steps of 0.42 ms between passes
     s = sim(cpu=0.30e-3, gpu=0.42e-3, pass_s=2.0e-3)
     seen = []
     P.listeners.append(seen.append)
     s.train(3000)
     item = P.status()[0]
-    assert item["state"] == "stopped" and item["error"]["code"] == "program.over_budget"
-    assert item["passes_per_s"] is None and item["overhead_share"] > 0.04
-    assert re.search(r"more than the ceiling of 2[4-7] steps", item["error"]["message"])
-    assert seen and seen[-1]["state"] == "stopped"
-    assert not P.ACTIVE                              # training goes on without the program
+    assert item["state"] == "running" and item["error"] is None
+    assert item["warning"] is not None and item["warning"]["code"] == "program.over_budget"
+    assert item["passes_per_s"] is not None and item["overhead_share"] > 0.04
+    assert re.search(r"more than the ceiling of 2[4-7] steps", item["warning"]["message"])
+    assert seen and seen[-1]["warning"]["code"] == "program.over_budget"
+    assert P.ACTIVE                                  # the warning does not stop the program
     runs = s.ran
-    s.train(100, first=3000)
-    assert s.ran == runs
+    s.train(200, first=3000)
+    assert s.ran > runs
+    # Once the pass cost falls back inside the budget, the warning clears.
+    s.pass_s = 0.01e-3
+    s.gpu = 5.0e-3
+    s.train(2000, first=3200)
+    assert P.status()[0]["state"] == "running" and P.status()[0]["warning"] is None
+
+
+def test_builtin_library_piece_gets_no_over_budget_warning_or_stop(sim, monkeypatch):
+    monkeypatch.setattr(P, "CEILING_S", 0.01)
+    s = sim(cpu=0.30e-3, gpu=0.42e-3, pass_s=2.0e-3)
+    lib = P._PROGS["sim"]
+    lib.kind = "piece"
+    lib.piece = {"name": "attribution_graph", "version": 1, "hash": "sha256:" + "0" * 64, "from": "library"}
+    ws = P._Program("ws", {}, "", None, "")
+    ws.kind = "piece"
+    ws.piece = {"name": "custom_graph", "version": 1, "hash": "sha256:" + "1" * 64, "from": "workspace"}
+    ws.handle, ws.state = 2, "compiled"
+    P._PROGS["ws"] = ws
+    s.train(3000)
+    by_id = {x["id"]: x for x in P.status()}
+    assert by_id["sim"]["state"] == "running" and by_id["sim"]["error"] is None
+    assert by_id["sim"]["warning"] is None
+    assert by_id["ws"]["state"] == "running" and by_id["ws"]["error"] is None
+    assert by_id["ws"]["warning"] is not None and by_id["ws"]["warning"]["code"] == "program.over_budget"
+
+
+def test_interpretability_run_skips_training_overhead_and_times_only_program_work(sim, monkeypatch):
+    from caliper import _controls
+
+    monkeypatch.setattr(P, "CEILING_S", 0.01)
+    s = sim(cpu=0.30e-3, gpu=0.42e-3, pass_s=2.0e-3)
+    controls = _controls.Controls()
+    controls.interpretation_service = type("Svc", (), {"owner": object(), "pending": False})()
+    monkeypatch.setattr(_controls, "CONTROLS", controls)
+    adapter = type("A", (), {"framework_done": staticmethod(lambda: None)})()
+    monkeypatch.setattr(P, "_torch_adapter", lambda: adapter)
+    # Long idle and retrace pauses between hosted boundaries must not pollute pass cost or cadence.
+    for k in range(60):
+        if k in (10, 20, 35, 45):
+            s.t += 20.0
+        s.t += 1.0e-3
+        P.at_step(k)
+    item = P.status()[0]
+    assert item["state"] == "running" and item["error"] is None and item["warning"] is None
+    assert item["step_ms"] is None and item["overhead_share"] is None
+    assert item["every"] == P.N_MIN
+    assert item["last_cost_ms"] == pytest.approx(2.0, abs=0.2)
+
+
+def test_control_work_in_step_does_not_inflate_pass_cost(sim):
+    s = sim(cpu=0.30e-3, gpu=0.42e-3, pass_s=0.10e-3)
+    s.train(1000)
+    # Simulate a 5 s pause or action inside c.step() in the middle of a training run.
+    s.t += 5.0
+    P.at_step(1000, control_work=True)
+    s.train(2000, first=1001)
+    item = P.status()[0]
+    assert item["state"] == "running" and item["warning"] is None
+    assert item["step_ms"] == pytest.approx(0.42, rel=0.05)
+    assert item["last_cost_ms"] < 5.0
+
+
+def test_timeout_hang_guard_still_stops_builtin_library_pieces(sim, monkeypatch):
+    s = sim(cpu=0.30e-3, gpu=0.42e-3, pass_s=0.10e-3)
+    lib = P._PROGS["sim"]
+    lib.kind = "piece"
+    lib.piece = {"name": "attribution_graph", "version": 1, "hash": "sha256:" + "0" * 64, "from": "library"}
+
+    def hang(*args):
+        raise RuntimeError("program.timeout", "The pass timed out on the GPU.", 0, 0)
+
+    monkeypatch.setattr(P._STATE["rt"], "run", hang)
+    s.train(P.WARMUP_STEPS + 5)
+    item = P.status()[0]
+    assert item["state"] == "stopped" and item["error"]["code"] == "program.timeout"
+    assert item["warning"] is None and not P.ACTIVE
 
 
 def test_a_declared_every_above_the_need_is_not_over_budget(sim, monkeypatch):
@@ -409,7 +492,7 @@ def test_a_declared_every_above_the_need_is_not_over_budget(sim, monkeypatch):
     s = sim(cpu=0.30e-3, gpu=0.42e-3, pass_s=2.0e-3)
     P._PROGS["sim"].every_min = 400                  # passes rarer than the 137 steps the cost needs
     s.train(6000)
-    assert P.status()[0]["state"] == "running"
+    assert P.status()[0]["state"] == "running" and P.status()[0]["warning"] is None
 
 
 def test_step_marks_report_each_completion_in_order():
@@ -456,7 +539,7 @@ def test_a_declaration_is_refused_before_any_pass(monkeypatch):
     assert P.install("g", decl, src, scene="s")["error"]["code"] == "program.over_limits"
     assert set(item) == {"id", "kind", "state", "every", "every_min", "last_pass_ms", "last_cost_ms",
                          "step_ms", "overhead_share", "passes_per_s", "last_step", "runs",
-                         "memory_bytes", "memory_limit_bytes", "error", "sha256"}
+                         "memory_bytes", "memory_limit_bytes", "error", "warning", "sha256"}
     P.remove("g")
     assert P.status() == [] and not P.ACTIVE
 

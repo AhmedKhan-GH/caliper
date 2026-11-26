@@ -8,7 +8,7 @@
 // finite leaves the anchor out or its priority at 0. Of more than kLabels
 // anchors, those of the highest priority stay, the earlier first between
 // equals. With strings_from, the strings are the elements of the version of
-// that resource that the same frame showed: at most kStrings, each its
+// that resource that the same frame showed: at most kBufferStrings, each its
 // element's bytes up to the first zero byte, and a string that is not valid
 // UTF-8 leaves its labels out.
 #include "draw/draw_runtime.h"
@@ -110,7 +110,7 @@ std::vector<Label> DrawRuntime::labels(const PickedItem* hovered) const {
         const Impl::Shown& sv = *from->shown;
         strings_step = sv.step;
         strings_current = hovered && sv.step == hovered->step;
-        const std::uint64_t count = std::min<std::uint64_t>({sv.count, sv.bytes.size() / width, pl::kStrings});
+        const std::uint64_t count = std::min<std::uint64_t>({sv.count, sv.bytes.size() / width, pl::kBufferStrings});
         for (std::uint64_t i = 0; i < count; ++i) {
             const char* at = reinterpret_cast<const char*>(sv.bytes.data() + i * width);
             const std::string_view text(at, std::size_t(std::find(at, at + width, '\0') - at));

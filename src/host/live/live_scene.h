@@ -236,11 +236,12 @@ public:
     // the highlight of a selection, into the view's colour, its ID target (RG32Uint, the program's
     // pick id and the item, cleared to 0 in each frame) and its depth. A panel of programs alone
     // frames the box from -1 to 1 on each axis. The view never waits for a program's GPU
-    // work: poll() gives each program the GPU time of its completed submits and the age of its
-    // oldest pending one, which stops a program over its budget, and the programs of the panel
-    // together over 16.7 ms a frame on 30 polls in a row stop the costliest one. Each change of a
-    // program's state goes back to the feed. Null draws no program. Without the draw layer in the
-    // build (CALIPER_HAVE_DRAW), the view draws none.
+    // work. poll() gives each program the GPU time of its completed submits and the age of its
+    // oldest pending one, which warns on a program over its budget and stops a hung program. When
+    // the programs of the panel exceed 16.7 ms together on 30 polls in a row, the costliest
+    // program records a warning. Each change of a program's state or warning goes back to the feed.
+    // Null draws no program. Without the draw layer in the build (CALIPER_HAVE_DRAW), the view
+    // draws none.
     void set_draw_feed(caliper_draw::DrawFeed* feed);
     // The installed programs of the feed, in draw order.
     std::vector<const caliper_draw::DrawRuntime*> draw_runtimes() const;
@@ -397,6 +398,7 @@ private:
     void sync_shapes();
     void refresh_piece_notes();
     bool external_draws() const;
+    bool active_external_draws() const;
     bool program_pan_zoom() const;
     bool normalized_program_camera() const;
     bool program_camera_active_ = false;

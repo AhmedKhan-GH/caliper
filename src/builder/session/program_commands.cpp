@@ -27,8 +27,11 @@ json draw_status_json(const DrawStatus& d) {
                 {"memory_bytes", d.memory_bytes},
                 {"memory_limit_bytes", d.memory_limit_bytes},
                 {"resource_step", opt(d.resource_step)},
-                {"error", nullptr}};
+                {"error", nullptr},
+                {"warning", nullptr}};
     if (d.error) out["error"] = {{"code", d.error->code}, {"message", d.error->message}, {"where", d.error_where}};
+    if (d.warning)
+        out["warning"] = {{"code", d.warning->code}, {"message", d.warning->message}, {"where", d.warning_where}};
     return out;
 }
 
@@ -52,12 +55,18 @@ json program_status_json(const ProgramStatus& s) {
                 {"memory_bytes", s.memory_bytes},
                 {"memory_limit_bytes", s.memory_limit_bytes},
                 {"error", nullptr},
+                {"warning", nullptr},
                 {"sha256", s.sha256}};
     if (s.error)
         out["error"] = {{"code", s.error->code},
                         {"message", s.error->message},
                         {"line", s.error->line},
                         {"column", s.error->column}};
+    if (s.warning)
+        out["warning"] = {{"code", s.warning->code},
+                          {"message", s.warning->message},
+                          {"line", s.warning->line},
+                          {"column", s.warning->column}};
     if (s.piece) out["piece"] = spec::to_json(*s.piece);
     if (s.draw) out["draw"] = draw_status_json(*s.draw);
     return out;
@@ -69,11 +78,16 @@ void push_program_event(EventSink& sink, const ProgramStatus& s, std::string_vie
     e.panel = s.panel;
     e.origin = s.host == "script" ? "script" : "ui";
     e.fields = {{"program", s.id}, {"change", std::string(change)}, {"host", s.host == "none" ? "viewer" : s.host}};
-    if (s.error) {
-        e.fields["code"] = s.error->code;
-        e.fields["message"] = s.error->message;
-        e.fields["line"] = s.error->line;
-        e.fields["column"] = s.error->column;
+    const std::optional<ProgramError>& diag =
+        change == "compiled"
+            ? std::nullopt
+            : (change == "warned" ? (s.warning ? s.warning : (s.draw ? s.draw->warning : std::nullopt))
+                                  : (s.error ? s.error : (s.draw ? s.draw->error : std::nullopt)));
+    if (diag) {
+        e.fields["code"] = diag->code;
+        e.fields["message"] = diag->message;
+        e.fields["line"] = diag->line;
+        e.fields["column"] = diag->column;
     }
     // An instance's half and its pass (design/programmable-graphics.md, Status and Events).
     if (!s.half.empty()) {
@@ -148,7 +162,8 @@ json instance_status(const spec::Spec& s, const spec::Program& p, const ProgramS
                        {"memory_limit_bytes",
                         std::uint64_t(d.memory_mb.value_or(spec::piece_limits::kDrawMemoryMbDefault)) << 20},
                        {"resource_step", nullptr},
-                       {"error", nullptr}};
+                       {"error", nullptr},
+                       {"warning", nullptr}};
     }
     return out;
 }

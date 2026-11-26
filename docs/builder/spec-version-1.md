@@ -20,6 +20,8 @@ An instrument is a spec that reacts to a run: its panels read live tensors, kept
 | `range`, `picker`, `text`, `segmented`, `readout`, `transport` | Control `kind` | The control kinds | [Controls](controls.md) |
 | `state:<id>`, `cursor` | Control `bind` | The state and the cursor as targets | [Controls](controls.md) |
 | `shares`, `min` | Layout | The shares of a split and the minimum of a leaf | [Layout Shares](#layout-shares) |
+| `closable` | Panel and control | Whether a user or a command can close the component | [Non-Closable Components](#non-closable-components) |
+| `layout_locked` | Applet | Whether the instrument fixes its layout and blocks close actions | [Layout Lock](#layout-lock) |
 | `params` | Program | Named numbers that the program reads | [Operators](operators.md#program-parameters) |
 | `tensor` | Program output `kind` | An output that the script publishes as a live tensor | [Operators](operators.md#tensor-output) |
 | `piece` | Top level | An array of inline pieces | [Pieces](#pieces) |
@@ -75,6 +77,7 @@ The array `control` holds the controls of the spec. A control acts on one target
 | `id` | Id | Yes | The id of the control. Panels and controls share one set of ids. |
 | `kind` | `slider`, `button`, `range`, `toggle`, `picker`, `text`, `segmented`, `readout` or `transport` | Yes | The widget |
 | `title` | Text, at most 256 characters | No | The label. The default is the `id`. |
+| `closable` | Boolean | No | Whether a user or a command can close the control. The default is `true`. |
 | `bind` | Target string | Yes, except for a `readout` | The one target of the control |
 | `options` | Table | No | The options of the kind |
 
@@ -136,11 +139,39 @@ children = [
 
 Each child first gets its minimum. The rest of the space goes to the children in proportion to their shares. A child whose share falls below its minimum keeps the minimum, and the other children share the rest again. When the minimums do not fit, the children share the space in proportion to their minimums. The result has whole pixels. A control leaf keeps its height. The command `layout.set` takes the nodes with `shares` and `mins`.
 
+## Non-Closable Components
+
+A panel or a control accepts the optional boolean key `closable`. The default value is `true` when the key is absent. Set `closable = false` to keep a required component open during a session.
+
+```toml
+[[panel]]
+id = "graph"
+primitive = "scene"
+title = "Attribution Graph"
+closable = false
+bind = { scene = "live:model" }
+```
+
+When `closable` is `false`, the app and the browser viewer hide the close button and ignore the Delete key. The command `panel.remove` fails with `panel.not_closable`, and `control.remove` fails with `control.not_closable`. Set `closable` to `true` or `null` with `panel.patch` or `control.patch` before you remove the component.
+
+## Layout Lock
+
+The `[applet]` table accepts the optional boolean key `layout_locked`. The default value is `false` when the key is absent. Set `layout_locked = true` to lock the whole instrument.
+
+```toml
+[applet]
+id = "circuit-trace"
+title = "Circuit Trace"
+layout_locked = true
+```
+
+When `layout_locked` is `true`, every panel and control becomes non-closable and the layout stays fixed. The app hides panel close buttons, disables title strip drags and disables divider drags. The browser viewer hides panel close buttons and shows `layout locked` in the status bar. The commands `panel.create`, `panel.remove`, `control.create`, `control.remove`, `layout.place` and `layout.set` fail with `layout.locked`. Use `layout.lock` with `locked = false`, or click Lock Layout in the page bar, to unlock the instrument.
+
 ## Control Commands
 
 The commands `control.create`, `control.patch` and `control.remove` edit the open spec as the panel commands do. Each one has a dry run, a diff, review for the origins that have it on, one undo step and a journal entry.
 
-`control.create` takes `id`, `kind` and `bind`, and optionally `title`, `options`, `place` and `dry_run`. The argument `place` takes `target`, `where` (`beside`, `above`, `below` or `tabbed`) and `ratio`, and its target can be a panel or a control. Without `place`, the control joins the row of controls under the layout. `control.patch` takes `id` and a merge patch of `kind`, `title`, `bind` and `options`. A key set to null is removed, and the id cannot change. `control.remove` takes `id` and also removes the control from the layout.
+`control.create` takes `id`, `kind` and `bind`, and optionally `title`, `closable`, `options`, `place` and `dry_run`. The argument `place` takes `target`, `where` (`beside`, `above`, `below` or `tabbed`) and `ratio`, and its target can be a panel or a control. Without `place`, the control joins the row of controls under the layout. `control.patch` takes `id` and a merge patch of `kind`, `title`, `closable`, `bind` and `options`. A key set to null is removed, and the id cannot change. `control.remove` takes `id` and removes the control from the layout. It fails with `control.not_closable` when `closable` is `false`, and with `layout.locked` when `layout_locked` is `true`.
 
 The result of `control.create` and `control.remove` holds `id`, `warnings`, `diff` and `applied`. The result of `control.patch` holds `control` instead of `id`. A control id that exists fails with `control.exists`, and an unknown one fails with `control.not_found`.
 

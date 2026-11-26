@@ -446,4 +446,70 @@ TEST_CASE("draw: textures are released and freed once the backend has destroyed 
     render(320, 200, [&](const ImRect&) {}, 2);
 }
 
+TEST_CASE("draw: a waiting panel shows its progress overlay and error state") {
+    if (!canvas()) return;
+    SpecOffscreen* c = canvas();
+    const spec::Spec s = one_panel(kMetrics, "primitive = \"text\"\ntitle = \"Attribution Graph\"\n"
+                                             "options = { text = \"The trace is not available.\" }");
+    // Determinate bar fills proportional bronze pixels inside the content area.
+    {
+        SpecPanelView view;
+        view.data = prepare_panel(s, s.panels[0], data({}, spec::Primitive::text));
+        PanelProgress p;
+        p.active = true;
+        p.stage = "attribution";
+        p.label = "Attribution batches (10/20)";
+        p.done = 10;
+        p.total = 20;
+        p.elapsed_s = 3.5;
+        view.progress = p;
+        SpecPanelFrame frame;
+        const Image img = render(640, 400, [&](const ImRect& area) {
+            frame = draw_spec_panel(view, area, c->look(), c->textures());
+        });
+        const int x0 = (int)frame.content.Min.x, y0 = (int)frame.content.Min.y;
+        const int x1 = (int)frame.content.Max.x, y1 = (int)frame.content.Max.y;
+        CHECK(img.count(near(c->look().accent, 4), x0, y0, x1, y1).n > 200);
+        CHECK(img.count(bright, x0, y0, x1, y1).n > 50);
+    }
+    // Indeterminate bar animates a bronze segment even without counts.
+    {
+        SpecPanelView view;
+        view.data = prepare_panel(s, s.panels[0], data({}, spec::Primitive::text));
+        PanelProgress p;
+        p.active = true;
+        p.stage = "weights";
+        p.label = "Loading model weights (stage 1/3)";
+        p.elapsed_s = 1.2;
+        view.progress = p;
+        SpecPanelFrame frame;
+        const Image img = render(640, 400, [&](const ImRect& area) {
+            frame = draw_spec_panel(view, area, c->look(), c->textures());
+        });
+        const int x0 = (int)frame.content.Min.x, y0 = (int)frame.content.Min.y;
+        const int x1 = (int)frame.content.Max.x, y1 = (int)frame.content.Max.y;
+        CHECK(img.count(near(c->look().accent, 4), x0, y0, x1, y1).n > 100);
+    }
+    // Error overlay renders error ink and never leaves the panel blank.
+    {
+        SpecPanelView view;
+        view.data = prepare_panel(s, s.panels[0], data({}, spec::Primitive::text));
+        PanelProgress p;
+        p.active = true;
+        p.error = true;
+        p.stage = "error";
+        p.label = "Trace failed";
+        p.detail = "Out of memory during attribution";
+        view.progress = p;
+        SpecPanelFrame frame;
+        const Image img = render(640, 400, [&](const ImRect& area) {
+            frame = draw_spec_panel(view, area, c->look(), c->textures());
+        });
+        const int x0 = (int)frame.content.Min.x, y0 = (int)frame.content.Min.y;
+        const int x1 = (int)frame.content.Max.x, y1 = (int)frame.content.Max.y;
+        CHECK(img.count(near(sternbild::col::status_error, 8), x0, y0, x1, y1).n > 200);
+        CHECK(img.count([](uint32_t px) { return (px & 0xff) > 100; }, x0, y0, x1, y1).n > 250);
+    }
+}
+
 }  // TEST_SUITE("gpu")

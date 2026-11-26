@@ -343,9 +343,21 @@ void Hub::Impl::handle(Event& e) {
         }
         case Event::Type::Pong:
             break;
-        case Event::Type::Closed:
+        case Event::Type::Closed: {
+            auto pt = peers.find(e.conn);
+            if (pt != peers.end()) {
+                const auto role = pt->second.role;
+                const char* name = role == Peer::Role::Producer ? "producer" :
+                                   role == Peer::Role::Viewer ? "viewer" :
+                                   role == Peer::Role::Retired ? "retired" : "pending";
+                // Peer reasons can contain private data. Log only transport fields.
+                log("connection " + std::to_string(e.conn) + " closed: role=" + name +
+                    " code=" + std::to_string(e.code) +
+                    " local=" + (e.initiated_here ? "true" : "false"));
+            }
             on_closed(e.conn);
             break;
+        }
     }
 }
 

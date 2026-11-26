@@ -616,11 +616,34 @@ def watch(model, optimizer=None, *, activations: bool = True, gradients: bool = 
         ValueError: When `every` is below 1.
     """
     from ._watch import watch as _w
-    h = _w(model, optimizer, activations=activations, gradients=gradients, every=every,
-           include=include, rate=rate, groups=groups, scene=scene)
-    _programs.attach(model, optimizer, h)          # Derive inputs also belong to inference watches.
-    if optimizer is not None:
-        _controls.CONTROLS.interventions_on(model, h)   # the points of the model, for interventions
+    from . import _net_programs
+
+    class InferenceCapabilities:
+        active = True
+
+        def remove(self):
+            if self.active:
+                self.active = False
+                _net_programs.disable()
+
+    capabilities = None
+    h = None
+    if optimizer is None:
+        _net_programs.enable()
+        capabilities = InferenceCapabilities()
+    try:
+        h = _w(model, optimizer, activations=activations, gradients=gradients, every=every,
+               include=include, rate=rate, groups=groups, scene=scene)
+        if capabilities is not None:
+            h._handles.append(capabilities)
+        _programs.attach(model, optimizer, h)
+        _controls.CONTROLS.interventions_on(model, h)
+    except BaseException:
+        if h is not None:
+            h.remove()
+        elif capabilities is not None:
+            capabilities.remove()
+        raise
     return h
 
 
@@ -1557,14 +1580,25 @@ def step(step=None) -> None:
             `None` counts the calls.
     """
     c = _CTL
-    if step is None:
-        c.n += 1
+    service = c.intervention_service
+    if service is not None and service.executor.preparing_source:
+        return
+    control_work = False
+    if _programs.ACTIVE:
+        actions_before = c.counters["actions_run"]
+        interp_service = c.interpretation_service
+        had_work = c.busy and (
+            c.state == _controls.RUN_PAUSING
+            or (c.state == _controls.RUN_STEPPING and c.steps_left <= 1)
+            or bool(c.queue)
+            or (interp_service is not None and interp_service.pending)
+        )
+        c.step(step)
+        control_work = had_work or c.counters["actions_run"] != actions_before
     else:
-        c.n = step
-    if c.busy:
-        c.checkpoint()
+        c.step(step)
     if _programs.ACTIVE:                                       # GPU programs (caliper._programs)
-        _programs.at_step(c.n)
+        _programs.at_step(c.n, control_work=control_work)
 
 
 def pause() -> bool:

@@ -31,7 +31,8 @@ const char* const kV0[] = {
     "data.query",      "data.import",     "loader.list",    "loader.describe", "loader.create",  "loader.update",
     "loader.run",      "loader.delete",   "spec.new",       "spec.open",     "spec.get",         "spec.set_text",
     "spec.validate",   "source.add",      "source.patch",   "source.remove", "panel.create",     "panel.patch",
-    "panel.remove",    "panel.render",    "panel.data",     "layout.place",  "layout.set",       "preview.begin",
+    "panel.remove",    "panel.render",    "panel.data",     "layout.place",  "layout.set",       "layout.lock",
+    "preview.begin",
     "preview.diff",    "preview.commit",  "preview.discard", "applet.save",  "applet.open",      "applet.list",
     "review.status",   "capture.frame",   "control.create", "control.patch", "control.remove",
     // The eighteen commands of design/instrument-interface.md, Commands.
@@ -43,7 +44,7 @@ const char* const kV0[] = {
     "run.stop",        "run.logs",        "events.wait",
     "program.create",  "program.patch",   "program.remove", "program.status", "piece.check",    "piece.list",
     "piece.show",      "piece.save",      "piece.copy",     "piece.update",  "piece.remove",     "program.read",
-    "feature.dictionary", "feature.show", "feature.examples", "trace.run", "trace.status", "trace.read",
+    "feature.dictionary", "feature.show", "feature.examples", "trace.run", "trace.status", "trace.read", "patch.sweep", "trace.validate",
     "intervene.points", "intervene.set",
     "intervene.clear", "intervene.list",  "history.undo",   "history.redo",  "history.list",
 };
@@ -66,10 +67,11 @@ void property_names(const json& schema, std::set<std::string>& out) {
     if (schema.contains("items")) property_names(schema["items"], out);
 }
 
-std::string open_path_of(const std::string& name) {
+std::vector<std::string> open_paths_of(const std::string& name) {
+    std::vector<std::string> paths;
     for (const auto& p : cb::command_table_open_paths())
-        if (p.first == name) return p.second;
-    return {};
+        if (p.first == name) paths.push_back(p.second);
+    return paths;
 }
 
 }  // namespace
@@ -106,15 +108,13 @@ TEST_CASE("every schema is closed, lists its required properties and describes e
         CHECK(cb::check_command_schema(d.result).ok());
         const auto args = cb::check_closed_command_schema(d.args, "args");
         CHECK_MESSAGE(args.ok(), (args.where + ": " + args.message));
-        std::vector<std::string> open;
-        if (!open_path_of(d.name).empty()) open.push_back(open_path_of(d.name));
-        const auto result = cb::check_closed_command_schema(d.result, "result", open);
+        const auto result = cb::check_closed_command_schema(d.result, "result", open_paths_of(d.name));
         CHECK_MESSAGE(result.ok(), (result.where + ": " + result.message));
         CHECK(d.summary.size() > 40);
         CHECK(d.summary.size() < 1200);
         CHECK(d.summary.back() == '.');
     }
-    // The one open result really is open, and nothing else is.
+    // The spec payload is open only at its declared result path.
     const auto* get = cb::find_command_descriptor("spec.get");
     REQUIRE(get);
     CHECK(get->result["properties"]["json"]["additionalProperties"] == true);
@@ -130,7 +130,7 @@ TEST_CASE("no command takes or returns a value named like a secret") {
     for (const auto& n : names) {
         CAPTURE(n);
         // The event key `key` and the control option `keys` name keyboard shortcuts, not secrets.
-        if (n == "key" || n == "keys") continue;
+        if (n == "key" || n == "keys" || n == "positive_token" || n == "negative_token") continue;
         for (const char* bad : {"token", "secret", "password", "api_key", "apikey", "authorization", "key"})
             CHECK(n.find(bad) == std::string::npos);
     }
@@ -143,7 +143,7 @@ TEST_CASE("the flags follow the design page") {
           std::set<std::string>{"data.import", "loader.create", "loader.update", "loader.run", "loader.delete",
                                 "spec.new", "spec.open", "spec.set_text", "source.add", "source.patch",
                                 "source.remove", "panel.create", "panel.patch", "panel.remove", "layout.place",
-                                "layout.set", "preview.commit", "applet.save", "applet.open", "control.create",
+                                "layout.set", "layout.lock", "preview.commit", "applet.save", "applet.open", "control.create",
                                 "control.patch", "control.remove", "program.create",
                                 "program.patch", "program.remove", "history.undo", "history.redo", "state.create",
                                 "state.patch", "state.remove", "entity.set", "entity.remove", "annotation.set",
@@ -152,7 +152,7 @@ TEST_CASE("the flags follow the design page") {
     CHECK(names_where([](const CommandDescriptor& d) { return d.frame_thread; }) ==
           std::set<std::string>{"app.applets", "app.launch", "spec.new", "spec.open", "spec.get", "spec.set_text",
                                 "spec.validate", "source.add", "source.patch", "source.remove", "panel.create",
-                                "panel.patch", "panel.remove", "panel.render", "panel.data", "layout.place", "layout.set",
+                                "panel.patch", "panel.remove", "panel.render", "panel.data", "layout.place", "layout.set", "layout.lock",
                                 "preview.begin", "preview.diff", "preview.commit", "preview.discard",
                                 "applet.save", "applet.open", "capture.frame", "control.create", "control.patch",
                                 "control.remove", "state.create", "state.patch", "state.remove", "state.set",
@@ -161,7 +161,7 @@ TEST_CASE("the flags follow the design page") {
                                 "cursor.step", "camera.get", "camera.set", "camera.save", "run.state", "run.set_param", "run.action", "run.pause",
                                 "run.list", "run.start", "run.fork", "run.stop", "run.logs",
                                 "program.create", "program.patch", "program.remove", "program.status",
-                                "feature.dictionary", "feature.show", "feature.examples", "trace.run", "trace.status", "trace.read",
+                                "feature.dictionary", "feature.show", "feature.examples", "trace.run", "trace.status", "trace.read", "patch.sweep", "trace.validate",
                                 "piece.list", "piece.show", "piece.save", "program.read", "intervene.points", "intervene.set", "intervene.clear", "intervene.list",
                                 "history.undo", "history.redo", "history.list"});
     // Every destructive command mutates.
@@ -269,5 +269,19 @@ TEST_CASE("command_table.json is exactly the table's JSON, so the sidecar sees t
                               "agents", "effect"})
             CHECK(c.contains(k));
         CHECK(c["agents"] == (c["name"] != "history.undo" && c["name"] != "history.redo"));
+    }
+}
+
+TEST_CASE("M8 command schemas retain inference resources and structured intervention fields") {
+    const auto* start = cb::find_command_descriptor("run.start");
+    REQUIRE(start);
+    CHECK_FALSE(cb::validate_command_value(start->args,{{"kind","inference"},{"model","fixture"},{"dictionary","dict"},{"prompt","AB"}},"args"));
+    CHECK(cb::validate_command_value(start->args,{{"kind","inference"},{"model",true}},"args"));
+    CHECK(cb::validate_command_value(start->args,{{"kind","inference"},{"prompt",std::string(4097,'x')}},"args"));
+    for (const auto* name : {"patch.sweep","trace.validate"}) {
+        const auto* descriptor = cb::find_command_descriptor(name);
+        REQUIRE(descriptor);
+        CHECK(descriptor->effect == cb::CommandEffect::run);
+        CHECK_FALSE(cb::validate_command_value(descriptor->args,descriptor->examples.front(),"args"));
     }
 }

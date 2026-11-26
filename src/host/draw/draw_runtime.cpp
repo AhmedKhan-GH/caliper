@@ -3,7 +3,7 @@
 // Draws): the decoder of a PROGRAM's draw half, the checks before anything is
 // made, the programs and pipelines of each pass, the resources, the draw
 // buffers and the offscreen targets, the passes of one frame, the reset rules,
-// the timing and the removal of a program over its budget.
+// the frame-budget warning and the removal of a hung program.
 #include "draw/draw_runtime.h"
 #include "draw/draw_runtime_impl.h"
 
@@ -30,7 +30,7 @@ namespace gfx = caliper_gfx;
 
 namespace {
 
-constexpr std::uint32_t kWindowFrames = 30;      // frames in a row over draw.frame_ms before a stop
+constexpr std::uint32_t kWindowFrames = 30;      // frames in a row over draw.frame_ms before a warning
 // A frame not done after kTimeoutMs by the wall clock is late. A training run on the same GPU can
 // delay a correct frame that long, thus the wall clock alone stops a program only at kHangMs, and a
 // late frame waits for its GPU time. A frame over kHeavyMs of GPU time, more than 15 times the
@@ -505,6 +505,8 @@ void release_objects(DrawRuntime::Impl& m) {
 // finishes what it runs; the layer destroys each object after its last use completed.
 void stop(DrawRuntime::Impl& m, const char* code, const std::string& message, int pass, std::string where = {}) {
     m.status.state = DrawState::stopped;
+    m.status.warning = Verdict{};
+    m.panel_warned = false;
     m.status.error = refusal(code, message, where.empty() ? (pass >= 0 ? pass_where(std::size_t(pass)) : "draw")
                                                           : where);
     m.status.pass = pass;
@@ -515,6 +517,28 @@ void stop(DrawRuntime::Impl& m, const char* code, const std::string& message, in
     }
     m.status.memory_bytes = 0;
     release_objects(m);
+}
+
+// Records a frame-budget warning on a running program without releasing its GPU objects.
+void warn(DrawRuntime::Impl& m, const char* code, const std::string& message, int pass, std::string where = {}) {
+    m.status.warning = refusal(code, message, where.empty() ? (pass >= 0 ? pass_where(std::size_t(pass)) : "draw")
+                                                            : where);
+    m.status.pass = pass;
+    m.status.entry.clear();
+    if (pass >= 0 && m.piece.draw && std::size_t(pass) < m.piece.draw->passes.size()) {
+        const cs::DrawPass& p = m.piece.draw->passes[std::size_t(pass)];
+        m.status.entry = p.kind == cs::PassKind::compute ? p.entry : p.fragment;
+    }
+}
+
+void clear_warning(DrawRuntime::Impl& m) {
+    if (m.status.warning.ok()) return;
+    m.status.warning = Verdict{};
+    m.panel_warned = false;
+    if (m.status.error.ok()) {
+        m.status.pass = -1;
+        m.status.entry.clear();
+    }
 }
 
 std::string pass_name(const DrawRuntime::Impl& m, int pass) {
@@ -1344,6 +1368,7 @@ void DrawRuntime::remove() {
     m.window.clear();
     m.over = 0;
     m.measure = false;
+    m.panel_warned = false;
     m.measured.clear();
     m.epoch_known = false;
     m.late = false;
@@ -1575,8 +1600,13 @@ bool DrawRuntime::encode(std::vector<caliper_gfx::Frame>* frames, const FrameInp
     }
     std::vector<std::uint8_t> params = m.params_default;
     if (m.params_bytes) {
-        std::memcpy(params.data(), in.params.data(), std::min<std::size_t>(params.size(), in.params.size()));
-        g.write_buffer(m.params, 0, params.data(), params.size());
+        if (!in.params.empty())
+            std::memcpy(params.data(), in.params.data(), std::min<std::size_t>(params.size(), in.params.size()));
+        if (!g.write_buffer(m.params, 0, params.data(), params.size())) {
+            stop(m, cp::kProgramLayerRefused,
+                 "The graphics layer refused the draw parameters: " + g.last_error(), -1, "params");
+            return false;
+        }
     }
     if (m.counts_bytes) {
         std::vector<std::uint8_t> counts(m.counts_bytes, 0);
@@ -1751,29 +1781,42 @@ void DrawRuntime::frame_done(double gpu_ms, double wall_ms) {
     // host's polling, once a frame in a browser (about 16.7 ms at 60 Hz), thus it cannot judge a
     // draw.frame_ms of a few milliseconds: every light frame would count as over. The frame time
     // stays unknown, so the panel's sum skips it too, and only frames over kHeavyMs of that time,
-    // kWindowFrames in a row, stop the program as over its time.
+    // kWindowFrames in a row, record a warning on the program while it keeps drawing.
+    const std::string prefix = m.instance.program.empty() ? std::string() : m.instance.program + ": ";
     if (gpu_ms < 0 && !timed) {
         if (e.pass >= 0 || wall_ms < 0) return;
-        m.over = wall_ms > kHeavyMs ? m.over + 1 : 0;
-        if (m.over >= kWindowFrames)
-            stop(m, cp::kProgramDrawOverTime,
-                 "Stopped " + m.instance.program + ": " + std::to_string(kWindowFrames) +
-                     " frames of its draw passes in a row took over " + fmt_ms(kHeavyMs) +
-                     " ms from the submit until done, and this backend gives no GPU time",
-                 e.pass);
+        if (wall_ms <= kHeavyMs) {
+            m.over = 0;
+            if (!m.panel_warned) clear_warning(m);
+            return;
+        }
+        ++m.over;
+        if (m.over >= kWindowFrames && m.status.warning.ok())
+            warn(m, cp::kProgramDrawOverTime,
+                 prefix + std::to_string(kWindowFrames) + " frames of its draw passes in a row took over " +
+                     fmt_ms(kHeavyMs) + " ms from the submit until done, and this backend gives no GPU time",
+                 -1);
         return;
     }
     if (gpu_ms < 0) gpu_ms = wall_ms;   // the upper bound, where the backend gives no GPU time
     const double limit = m.status.frame_limit_ms;
-    if (e.pass < 0) {
-        if (gpu_ms < 0) return;
-        m.window.push_back(gpu_ms);
+    auto record_window = [&](double ms) {
+        m.window.push_back(ms);
         while (m.window.size() > kWindowFrames) m.window.pop_front();
         std::vector<double> sorted(m.window.begin(), m.window.end());
         std::sort(sorted.begin(), sorted.end());
         m.status.frame_ms = sorted[sorted.size() / 2];
-        m.over = gpu_ms > limit ? m.over + 1 : 0;
-        if (m.over >= kWindowFrames && !m.measure) {
+    };
+    if (e.pass < 0) {
+        if (gpu_ms < 0) return;
+        record_window(gpu_ms);
+        if (gpu_ms <= limit) {
+            m.over = 0;
+            if (!m.panel_warned) clear_warning(m);
+            return;
+        }
+        ++m.over;
+        if (m.over >= kWindowFrames && !m.measure && m.status.warning.ok()) {
             m.measure = true;
             m.measure_code = cp::kProgramDrawOverTime;
             m.measure_message.clear();
@@ -1784,22 +1827,27 @@ void DrawRuntime::frame_done(double gpu_ms, double wall_ms) {
     if (!e.last) return;
     int worst = -1;
     double total = 0;
+    bool any_measured = false;
     for (std::size_t k = 0; k < m.measured.size(); ++k) {
         if (m.measured[k] < 0) continue;
+        any_measured = true;
         total += m.measured[k];
         if (worst < 0 || m.measured[k] > m.measured[std::size_t(worst)]) worst = int(k);
     }
+    if (any_measured) record_window(total);
     const std::string code = m.measure_code;
     if (code == cp::kProgramDrawOverTime && m.measure_message.empty() && total <= limit) {
         m.over = 0;   // the time came back under the limit while it measured
+        if (!m.panel_warned) clear_warning(m);
         return;
     }
     if (worst < 0) worst = 0;
-    std::string message = "Stopped " + m.instance.program + ": " + pass_name(m, worst) + " took " +
-                          fmt_ms(m.measured[std::size_t(worst)] < 0 ? 0 : m.measured[std::size_t(worst)]) +
-                          " ms a frame, above its " + fmt_limit(limit) + " ms";
-    if (!m.measure_message.empty()) message += "; " + m.measure_message;
-    stop(m, code.c_str(), message, worst);
+    const double pass_ms = m.measured[std::size_t(worst)] < 0 ? 0 : m.measured[std::size_t(worst)];
+    std::string message = prefix + pass_name(m, worst) + " took " + fmt_ms(pass_ms) + " ms a frame";
+    if (m.measure_message.empty()) message += ", above its " + fmt_limit(limit) + " ms";
+    else message += "; " + m.measure_message;
+    m.panel_warned = !m.measure_message.empty();
+    warn(m, code.c_str(), message, worst);
 }
 
 void DrawRuntime::frame_pending(double waited_ms) {
@@ -1815,6 +1863,8 @@ void DrawRuntime::frame_pending(double waited_ms) {
          pass);
 }
 
+bool DrawRuntime::late() const { return impl_->late; }
+
 void DrawRuntime::frame_refused(const std::string& why) {
     Impl& m = *impl_;
     if (m.status.state != DrawState::running && m.status.state != DrawState::compiled) return;
@@ -1822,12 +1872,19 @@ void DrawRuntime::frame_refused(const std::string& why) {
          -1);
 }
 
-void DrawRuntime::request_stop(const char* code, const std::string& message) {
+void DrawRuntime::request_warning(const char* code, const std::string& message) {
     Impl& m = *impl_;
     if (m.status.state != DrawState::running && m.status.state != DrawState::compiled) return;
     m.measure = true;
     m.measure_code = code;
-    m.measure_message = message.empty() ? std::string("stopped by its panel") : message;
+    m.measure_message = message.empty() ? std::string("the programs of its panel exceeded 16.7 ms") : message;
+}
+
+void DrawRuntime::clear_panel_warning() {
+    Impl& m = *impl_;
+    if (!m.panel_warned) return;
+    if (m.over == 0) clear_warning(m);
+    else m.panel_warned = false;
 }
 
 std::int64_t DrawRuntime::resource_step(const std::string& resource) const {

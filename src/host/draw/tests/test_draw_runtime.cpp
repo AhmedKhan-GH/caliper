@@ -101,6 +101,24 @@ const gfx::DrawList& list_of(const gfx::Frame& f, std::size_t i) {
 
 }  // namespace
 
+TEST_CASE("draw parameter upload handles empty input and stops on buffer failure") {
+    Host h;
+    cd::DrawRuntime rt(h.gfx, true, checks());
+    const cs::Piece piece = ex::attention_field();
+    REQUIRE(rt.install(piece, {}, 1).ok());
+    REQUIRE(rt.set_resource(version("pattern", std::vector<float>{1}, 7)).ok());
+    cd::FrameInputs in;
+    REQUIRE(frame(h, rt, in).size() == 1);
+    CHECK(rt.status().frames == 1);
+    h.gfx.release(rt.internals().params);
+    std::vector<gfx::Frame> frames;
+    CHECK(!rt.encode(&frames, in, h.target));
+    CHECK(frames.empty());
+    CHECK(rt.status().state == cd::DrawState::stopped);
+    CHECK(rt.status().error.code == cp::kProgramLayerRefused);
+    CHECK(rt.status().error.where == "params");
+}
+
 TEST_CASE("the field installs, waits for its resource, then draws one full-screen triangle") {
     for (bool webgpu : modes()) {
         CAPTURE(webgpu);
@@ -604,7 +622,7 @@ TEST_CASE("the reset rules zero the draw buffers at a new epoch, a cursor move o
     CHECK(zeroed(2));
 }
 
-TEST_CASE("a program over its frame time for 30 frames stops, naming its costliest pass") {
+TEST_CASE("a program over its frame time for 30 frames warns, naming its costliest pass, keeps drawing, and clears under budget") {
     Host h;
     cd::DrawRuntime rt(h.gfx, true, checks());
     cd::Instance in;
@@ -613,7 +631,7 @@ TEST_CASE("a program over its frame time for 30 frames stops, naming its costlie
     give_arcs(rt, ex::arc_resources(), 1);
     CHECK(rt.status().frame_limit_ms == doctest::Approx(4.0));
 
-    // A spike, and 29 slow frames then a fast one, never stop it.
+    // A spike, and 29 slow frames then a fast one, never warn.
     for (int i = 0; i < 29; ++i) {
         REQUIRE(frame(h, rt).size() == 1);
         rt.frame_done(9.0);
@@ -621,12 +639,14 @@ TEST_CASE("a program over its frame time for 30 frames stops, naming its costlie
     REQUIRE(frame(h, rt).size() == 1);
     rt.frame_done(1.0);
     CHECK(rt.status().state == cd::DrawState::running);
+    CHECK(rt.status().warning.ok());
     for (int i = 0; i < 30; ++i) {
         REQUIRE(frame(h, rt).size() == 1);
         rt.frame_done(20.0);
     }
     CHECK(rt.status().state == cd::DrawState::running);
     CHECK(rt.status().frame_ms == doctest::Approx(20.0));
+    CHECK(rt.status().warning.ok());
     // The next frame measures each pass in a submit of its own.
     const std::vector<gfx::Frame> measured = frame(h, rt);
     REQUIRE(measured.size() == 3);
@@ -635,18 +655,27 @@ TEST_CASE("a program over its frame time for 30 frames stops, naming its costlie
     CHECK(rt.status().state == cd::DrawState::running);
     rt.frame_done(50.0);
     const cd::DrawStatus s = rt.status();
-    CHECK(s.state == cd::DrawState::stopped);
-    CHECK(s.error.code == cp::kProgramDrawOverTime);
-    CHECK(s.error.where == "draw.passes[2]");
+    CHECK(s.state == cd::DrawState::running);
+    CHECK(s.error.ok());
+    CHECK(s.warning.code == cp::kProgramDrawOverTime);
+    CHECK(s.warning.where == "draw.passes[2]");
     CHECK(s.pass == 2);
     CHECK(s.entry == "bloom");
-    CHECK(s.error.message == "Stopped tower_arcs: draw pass 2 (bloom) took 50.0 ms a frame, above its 4 ms");
-    std::vector<gfx::Frame> after;
-    CHECK(!rt.encode(&after, {}, h.target));
-    CHECK(rt.internals().passes.empty());   // its objects are released
+    CHECK(s.warning.message == "tower_arcs: draw pass 2 (bloom) took 50.0 ms a frame, above its 4 ms");
+    // The program keeps its objects and keeps drawing; a fast frame clears the warning.
+    CHECK(!rt.internals().passes.empty());
+    REQUIRE(frame(h, rt).size() == 1);
+    rt.frame_done(18.0);
+    CHECK(rt.status().warning.code == cp::kProgramDrawOverTime);
+    REQUIRE(frame(h, rt).size() == 1);
+    rt.frame_done(2.0);
+    CHECK(rt.status().state == cd::DrawState::running);
+    CHECK(rt.status().warning.ok());
+    CHECK(rt.status().pass == -1);
+    CHECK(rt.status().entry.empty());
 }
 
-TEST_CASE("a measured frame back under the limit keeps the program") {
+TEST_CASE("a measured frame back under the limit records no warning") {
     Host h;
     cd::DrawRuntime rt(h.gfx, true, checks());
     REQUIRE(rt.install(ex::attention_arcs(), {}, 1).ok());
@@ -660,6 +689,7 @@ TEST_CASE("a measured frame back under the limit keeps the program") {
     rt.frame_done(1.0);
     rt.frame_done(1.0);
     CHECK(rt.status().state == cd::DrawState::running);
+    CHECK(rt.status().warning.ok());
     CHECK(frame(h, rt).size() == 1);
 }
 
@@ -700,10 +730,13 @@ TEST_CASE("a late frame waits for its GPU time: a busy GPU keeps the program, ov
     give_arcs(rt, ex::arc_resources(), 1);
     REQUIRE(frame(h, rt).size() == 1);
     // A training run holds the GPU: the frame waits 1.5 s by the wall clock but took 2 ms on it.
+    CHECK_FALSE(rt.late());
     rt.frame_pending(1500.0);
+    CHECK(rt.late());
     CHECK(rt.status().state == cd::DrawState::running);
     CHECK(frame(h, rt).empty());   // nothing more is submitted while the frame is late
     rt.frame_done(2.0, 1600.0);
+    CHECK_FALSE(rt.late());
     CHECK(rt.status().state == cd::DrawState::running);
     CHECK(rt.status().frame_ms == doctest::Approx(2.0));
     // Late again and again under the same load: each frame is judged by its own GPU time.
@@ -851,14 +884,19 @@ TEST_CASE("without GPU time, a light frame that the host sees done a frame later
     }
     CHECK(rt.status().state == cd::DrawState::running);
     CHECK(rt.status().frame_ms < 0);   // unknown: the panel's sum of frame times skips it
-    // Frames over 250 ms of that time, 30 in a row, still stop it.
+    // Frames over 250 ms of that time, 30 in a row, warn while the program keeps drawing.
     for (int i = 0; i < 30; ++i) {
         REQUIRE(frame(h, rt).size() == 1);
         rt.frame_done(-1.0, 300.0);
     }
-    CHECK(rt.status().state == cd::DrawState::stopped);
-    CHECK(rt.status().error.code == cp::kProgramDrawOverTime);
-    CHECK(rt.status().error.message.find("gives no GPU time") != std::string::npos);
+    CHECK(rt.status().state == cd::DrawState::running);
+    CHECK(rt.status().error.ok());
+    CHECK(rt.status().warning.code == cp::kProgramDrawOverTime);
+    CHECK(rt.status().warning.where == "draw");
+    CHECK(rt.status().warning.message.find("gives no GPU time") != std::string::npos);
+    REQUIRE(frame(h, rt).size() == 1);
+    rt.frame_done(-1.0, 17.0);
+    CHECK(rt.status().warning.ok());
 }
 
 TEST_CASE("a pick keeps the version of the frame it read, and a version at the same step replaces the copy") {
@@ -998,21 +1036,29 @@ TEST_CASE("a refused frame is an error of its program only") {
     CHECK(rt.status().error.code == cp::kProgramLayerRefused);
 }
 
-TEST_CASE("the panel's rule stops a program after one measured frame") {
+TEST_CASE("the panel's rule warns on a program after one measured frame and clears when under budget") {
     Host h;
     cd::DrawRuntime rt(h.gfx, true, checks());
     cd::Instance in;
     in.program = "tower_arcs";
     REQUIRE(rt.install(ex::attention_arcs(), in, 1).ok());
     give_arcs(rt, ex::arc_resources(), 1);
-    rt.request_stop(cp::kProgramDrawOverTime, "the programs of its panel took 18.0 ms a frame, above 16.7 ms");
+    rt.request_warning(cp::kProgramDrawOverTime, "the programs of its panel took 18.0 ms a frame, above 16.7 ms");
     REQUIRE(frame(h, rt).size() == 3);
     rt.frame_done(3.0);
     rt.frame_done(2.0);
     rt.frame_done(1.0);
-    CHECK(rt.status().state == cd::DrawState::stopped);
-    CHECK(rt.status().error.where == "draw.passes[0]");
-    CHECK(rt.status().error.message.find("above 16.7 ms") != std::string::npos);
+    CHECK(rt.status().state == cd::DrawState::running);
+    CHECK(rt.status().error.ok());
+    CHECK(rt.status().frame_ms == doctest::Approx(6.0));
+    CHECK(rt.status().warning.code == cp::kProgramDrawOverTime);
+    CHECK(rt.status().warning.where == "draw.passes[0]");
+    CHECK(rt.status().warning.message.find("above 16.7 ms") != std::string::npos);
+    REQUIRE(frame(h, rt).size() == 1);
+    rt.frame_done(2.0);
+    CHECK(rt.status().warning.code == cp::kProgramDrawOverTime);
+    rt.clear_panel_warning();
+    CHECK(rt.status().warning.ok());
 }
 
 TEST_CASE("draw memory over draw.memory_mb stops the program and names the object") {
@@ -1264,20 +1310,34 @@ TEST_CASE("the draw host gives each panel its programs, packs params and refuses
     CHECK(hd == 3);
     CHECK(gain == doctest::Approx(2.0));
 
-    // Its states reach the events: compiled once, then stopped with the pass and the entry.
+    // Its states and warnings reach the events: compiled once, warned while running, then stopped on a hang.
     host.feed("pattern")->status(rt);
     host.feed("pattern")->status(rt);
+    rt.request_warning(cp::kProgramDrawOverTime, "the programs of its panel took 19.0 ms a frame, above 16.7 ms");
     REQUIRE(frame(h, rt).size() == 1);
-    rt.frame_pending(5000.5);
+    rt.frame_done(6.0);
+    host.feed("pattern")->status(rt);
     host.feed("pattern")->status(rt);
     REQUIRE(sink.events.size() == 3);
     CHECK(sink.events[1].fields["change"] == "compiled");
-    CHECK(sink.events[2].fields["change"] == "stopped");
-    CHECK(sink.events[2].fields["code"] == cp::kProgramDrawTimeout);
-    CHECK(sink.events[2].panel == "pattern");
+    CHECK(sink.events[2].fields["change"] == "warned");
+    CHECK(sink.events[2].fields["code"] == cp::kProgramDrawOverTime);
+    CHECK(sink.events[2].fields["pass"] == 0);
+    const nlohmann::json jw = cd::draw_status_json(host.status().at("head_pattern"));
+    CHECK(jw["state"] == "running");
+    CHECK(jw["error"].is_null());
+    CHECK(jw["warning"]["code"] == cp::kProgramDrawOverTime);
+    REQUIRE(frame(h, rt).size() == 1);
+    rt.frame_pending(5000.5);
+    host.feed("pattern")->status(rt);
+    REQUIRE(sink.events.size() == 4);
+    CHECK(sink.events[3].fields["change"] == "stopped");
+    CHECK(sink.events[3].fields["code"] == cp::kProgramDrawTimeout);
+    CHECK(sink.events[3].panel == "pattern");
     const nlohmann::json j = cd::draw_status_json(host.status().at("head_pattern"));
     CHECK(j["state"] == "stopped");
     CHECK(j["error"]["code"] == cp::kProgramDrawTimeout);
+    CHECK(j["warning"].is_null());
     CHECK(j["frame_limit_ms"] == 4.0);
 
     // A program that leaves the spec leaves its panel; a changed piece gets a new revision.

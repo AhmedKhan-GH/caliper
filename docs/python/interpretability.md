@@ -1,239 +1,185 @@
 # Model Interpretation
 
-Caliper LIB exposes model probes, transcoder dictionaries, feature examples, and attribution graphs.
-The model and its dictionary stay in the Python process.
-Library pieces draw the graph, example tokens, and next-token probabilities in the app and browser.
-The [interpretation tools](../agents/interpretation.md) expose the same data through Caliper MCP.
+Caliper LIB connects live tensor publication and controls to `transformer-lens`, `circuit-tracer`, and `sae-lens`.
+The model, transcoders, and sparse autoencoders stay inside the Python process.
+Library pieces draw attribution graphs, feature examples, and next-token probabilities in the native app and the browser viewer.
+The [interpretation tools](../agents/interpretation.md) expose the same operations through Caliper MCP.
+
+## Installation
+
+Install the `interp` extra from the repository root to pin compatible library versions:
+
+```sh
+pip install -e ".[interp]"
+```
+
+The `interp` extra installs compatible tested versions:
+
+- `torch>=2.15.0` and `transformers>=5.24.0,<5.25.0`
+- `transformer-lens==3.9.0`
+- `sae-lens==6.56.3`
+- `nnsight==0.8.4`
+- `circuit-tracer` at commit `82996f144b3371ae858ea5713590d004c218f0c2`
+
+On Apple Silicon, `caliper.interp` sets `TRANSFORMERLENS_ALLOW_MPS=1` and selects `mps` automatically when available.
 
 ## Model Probes
 
-`caliper.interp.points(model)` lists the supported probe points.
-Decoder blocks expose `resid_pre`, `mlp_in`, `mlp_out`, and `attn_pattern` beside the existing module and head points.
-The fixture uses names such as `layers.0.mlp_in`.
-The Qwen text model uses names such as `model.layers.0.mlp_in`.
+`intervene.points` (`caliper._ablate.points(model)`) lists module, attention-head, and semantic probe points on a PyTorch or `HookedTransformer` model.
+Decoder blocks expose `resid_pre`, `attn_out`, `mlp_out`, and `attn_pattern` (plus `mlp_in` when `cfg.use_hook_mlp_in` is true) alongside module and `blocks.L.attn#H` head points.
+Any watched module also exposes its latest forward activation to derive programs as `live:<module>.act` without a CPU copy.
 
-`caliper.interp.capture(model, points)` captures tensors without a CPU copy.
-Use it as a context manager around the model call.
-The context removes its hooks when it closes.
-Qwen DeltaNet patterns represent signed causal mixing coefficients, which can differ from attention probabilities.
-
-`caliper.interp.publish(name, tensor)` exposes a named tensor to a derive program.
-For example, a publication named `trace.counts` becomes the source `live:trace.counts`.
-A new publication replaces the previous tensor for that name.
-The tensor retains its device and storage.
-Watch removal clears the model's publications and capture hooks.
+`caliper.interp.publish(name, tensor)` exposes a named tensor to derive programs.
+For example, `publish("trace.counts", counts)` updates the catalog source `live:trace.counts`.
+Published tensors keep their device and storage, and watch removal clears publications owned by that model.
 
 ### Publication Lifetime
 
-A publication belongs to the current watch, or to the next watch if no watch exists.
-Completed publications before the first watch remain available when that watch attaches.
-Watch removal or replacement clears all publications.
-Attachment of the same model without removal preserves the current lifetime.
-
-A trace or example request captures the watch lifetime before model work or resolution of lazy resources.
-The request checks that lifetime under the program lock before it publishes a complete tensor group.
-The check also requires the request model to match the watched model.
-Removal, replacement, or first attachment during the request invalidates its publication lease.
-Removal followed by attachment of the same model also invalidates the lease.
-A stale request raises `RuntimeError` with code `interpret.watch_changed`, which the interpretation service returns as an error.
-
-Each graph group contains all structural tensors, labels, and probability bars.
-Each example group contains tokens, activations, example IDs, valid lengths, and labels.
-The producer sees the complete previous group or the complete new group.
-A refused publication changes no tensor in the group.
-Model work and service waits never hold the program lock.
-
-Watch removal does not cancel model work or wait for a service request.
-A result can complete before removal and reach its caller after removal clears the tensors.
-Concurrent model mutation and concurrent traces through one tracer remain unsupported.
-An explicit `publish` or standalone `Graph.publish` call assigns supplied tensors to the current lifetime.
-These explicit calls do not establish the tensors' model identity.
+Each publication belongs to the current `caliper.watch` lifetime, or to the next watch if none is active yet.
+Watch removal or model replacement invalidates prior publication leases and clears published tensors.
+A trace, example, or sweep request checks its lease under the program lock before it publishes a tensor group.
+If the watched model changes during execution, the request raises `RuntimeError` with code `interpret.watch_changed`.
+Producers observe either the complete previous tensor group or the complete new tensor group.
 
 ## Feature Dictionaries
 
-A dictionary contains one transcoder for each MLP layer.
-Each transcoder maps the MLP input to sparse feature activations, then reconstructs the MLP output.
-The dictionary folder contains `dictionary.json` and one `layer_NN.safetensors` file per layer.
-The manifest records model identity, probe points, dimensions, activation type, text partitions, and measured quality.
+`caliper.interp.load_backend(model_ref, dictionary_ref=None, *, sae_id=None, device=None, dtype=None)` loads a staged `Backend`.
+Pass a Hugging Face model name or local snapshot path as `model_ref`.
+When `dictionary_ref` names a transcoder hub alias (`"gemma"` or `"llama"`), a `TranscoderSet`, or a local transcoder directory, `load_backend` builds a staged `TransformerLensReplacementModel`.
+When `dictionary_ref` names a `sae-lens` release (with `sae_id`) or a local SAE directory, `load_backend` builds a `HookedTransformer` and stages the `SAE` on CPU before moving it to the target device.
 
-`caliper.interp.load_dictionary(path, model=model)` verifies the dictionary against the model.
-An explicit `model_hash` can supply the expected identity instead.
-The loader refuses an absent identity or a mismatch.
-Its `memory_limit_gb` argument caps total process memory at 12 GB by default and refuses larger limits.
-The loader admits metadata before the read and JSON parse.
-Metadata has a 1 MiB byte limit and a maximum depth of 64 containers.
+```python
+from caliper.interp import Tracer, load_backend
 
-Header checks precede tensor allocation, and memory admission includes the model, dictionary, metadata, and conversion buffers.
-The returned object exposes `encode(layer, x)`, `decode(layer, a)`, and `error(layer, x, y)`.
-Its `metadata` contains the manifest, and its `layers` contain the weights.
-
-An external HF model requires `caliper.interp.verify_hf_model(model, snapshot)` before admission against a pinned HF dictionary.
-The local snapshot must contain the checkpoint tensors and `config.json` for the same repository and commit.
-Verification compares weights and forward settings with that trusted snapshot, including normalization epsilon, activation functions, rotary settings, and layer types.
-The model must use evaluation mode.
-Eager and SDPA attention are supported backend choices and preserve the checkpoint identity.
-Later identity checks refuse changes to weights or forward settings, including changes before dictionary admission or tracer construction.
-
-For default Qwen3.5 text RoPE, the verifier reconstructs buffers within a fixed CPU allocation limit.
-It refuses other nonpersistent buffers and nondefault RoPE modes.
-
-Each encoder and decoder has shape `(latents, width)`.
-TopK encoding applies ReLU, then retains the largest `k` feature activations.
-Decoding multiplies the activations by the decoder and adds the decoder bias.
-The error is the original MLP output minus the reconstruction.
-
-## Local Resources
-
-The supported Qwen checkpoint is `Qwen/Qwen3.5-0.8B` at revision `2fc06364715b967f1860aea9cf38778875588b17`.
-It has 24 decoder layers and width 1,024.
-Local preparation requires PyTorch 2.15.0 and Transformers 5.24.0.
-Place the complete pinned snapshot in the Hugging Face cache before tool execution.
-
-Model and tokenizer files must exist locally. The tools refuse an incomplete model checkpoint.
-Tests never download a model or dataset.
-
-The text source is `HuggingFaceFW/fineweb-edu`, configuration `sample-10BT`, split `train`.
-Its pinned revision is `87f09149ef4734204d70ed1d046ddc9ca3f2b8f9`.
-Training, quality checks, and the example index use separate document partitions.
-The manifest records the source and partition rules.
-
-A pinned local dataset manifest can identify the staged Parquet files.
-Without that manifest, the tools use the specifically approved public dataset stream at the fixed revision above.
-This dataset stream can require network access. Local model files do not imply a local dataset source.
-
-Local Parquet input supports flat UTF-8 text with uncompressed or SNAPPY pages.
-Each decode uses one row and checks process and host memory.
-Other codecs and unbounded decode units are refused before data allocation.
-
-The preparation commands below use local resource folders.
-Each full job requires an external resource wrapper, a heavy slot, and an exclusive model slot.
-The wrapper must set `nice -n 10` and enforce exclusive GPU access for training.
-These requirements are run policy. Portable tools do not contain machine-specific lock paths.
-Set `HEAVY_WRAPPER` to the project wrapper, which accepts a job name, a log path, and a command.
-
-```sh
-"$HEAVY_WRAPPER" TRAIN-DICTIONARY "$TRAIN_LOG" env PYTHONPATH=python:. python -m tools.interp.train_transcoders \
-  --output "$DICTIONARY" --local-dataset-manifest "$DATASET_MANIFEST"
-"$HEAVY_WRAPPER" MODEL-QUALITY "$QUALITY_LOG" env PYTHONPATH=python:. python -m tools.interp.eval_dictionary \
-  --dictionary "$DICTIONARY" --local-dataset-manifest "$DATASET_MANIFEST"
-"$HEAVY_WRAPPER" MODEL-INDEX "$INDEX_LOG" env PYTHONPATH=python:. python -m tools.interp.build_index \
-  --dictionary "$DICTIONARY" --local-dataset-manifest "$DATASET_MANIFEST"
+backend = load_backend("google/gemma-2-2b", "gemma")
+tracer = Tracer(backend.model, backend.tokenizer, backend.dictionary, backend=backend)
+graph = tracer.trace("He saw a carrot and had to grab it, his hunger was like a starving")
 ```
 
-The trainer defaults to 16,384 latents per layer, TopK with `k=32`, and 40 million tokens.
-The context contains 256 tokens.
-The process limit is 24 GB, and the wall-time limit is ten hours.
-The memory guard sets the MPS allocation fraction for the whole process.
-Use a separate process when another workload requires a different MPS limit.
-
-Checkpoints support `--resume`. The periodic checkpoint interval is 240 seconds after each completed save.
-A 270-second work interval forces a clean stop. Checkpoint writes consume additional time within the aggregate cap.
-A bounded pilot must establish time and memory requirements before a full run.
-
-Quality checks use 200,000 separate tokens.
-Mean unexplained variance must be at most 0.40, and the dead-feature fraction must be at most 0.15.
-Replacement of all MLPs must increase cross-entropy by at most 0.5 nats.
-These thresholds describe acceptance criteria, not a claim that a local dictionary passed.
-The example index uses two million other tokens and a 12 GB process limit.
-
-Gemma 2 2B with Gemma Scope transcoders requires a separate converter.
-Its normalization points and encoder orientation differ.
-This release contains no Gemma converter or fallback model run.
-The demo uses the accepted Qwen dictionary. A Qwen dictionary cannot serve Gemma.
+`backend.dictionary` is a `DictionaryView` with uniform `metadata`, `encode(layer, x)`, and lazy `decoder_vectors(layer, ids)`.
+Any `HookedTransformer` architecture in `transformer-lens` and any compatible `sae-lens` or `circuit-tracer` dictionary can attach through `load_backend`.
+For offline tests without model downloads, pass `model_ref="tiny-lm"` to construct a deterministic 2-layer `ReplacementModel` and `TranscoderSet`.
 
 ## Example Index
 
-`FeatureIndex` in `caliper.interp._index` reads the index under the dictionary folder.
-The index retains the 16 largest activations for each feature, with document IDs and token positions.
-It also records activation counts and maxima.
-Queries calculate real window activations and retain up to 256 feature results in a cache.
+`FeatureIndex` loads corpus examples and promoted tokens from a memory-mapped index on disk.
+When no disk index exists, `LiveFeatureIndex(backend)` resolves feature summaries and top 33-token windows in memory.
+When a session has network access and `SAE.cfg.metadata` defines `neuronpedia_id`, `LiveFeatureIndex` queries `get_neuronpedia_feature`.
+When a session runs offline or uses unindexed transcoders, `LiveFeatureIndex` scans prompt text with a bounded min-heap.
+That scan zeros BOS positions.
 
-`feature.show` returns the feature label, activation count, maximum, and promoted tokens.
-`feature.examples` returns up to 16 examples in descending activation order.
-Each example contains 33 token slots, with null padding at document boundaries.
-The display uses the central 25 slots and removes boundary padding from each visible prefix.
-Two pages expose eight examples each, with stable IDs zero through 15.
+`feature.show` returns the heuristic label, activation count, maximum value, and promoted tokens for a feature.
+`feature.examples` returns up to 16 ranked 33-token windows and publishes the central 25 slots to `token_strip@1`.
+
+### Index Attachment
+
+`FeatureIndex` reads corpus examples from an index folder on disk.
+`FeatureIndex` and `FeatureIndex.resolve(path)` check three locations in order and select the first directory with `index.json`:
+
+1. The index directory directly, such as `<path>/index`.
+2. A nested folder inside the dictionary at `<dictionary>/index`.
+3. A sibling folder next to the dictionary at `<dictionary>/../index`.
+
+Path resolution checks only local paths for sibling folders.
+The sibling check runs only when `<dictionary>` exists on disk.
+As a result, hub aliases such as `"gemma"` do not match an unrelated `index` folder in the current directory.
+An explicit index path always takes priority over nested and sibling folders.
+
+Pass either the dictionary folder or the index folder to `FeatureIndex`:
+
+```python
+from caliper.interp import FeatureIndex, load_backend
+
+backend = load_backend("google/gemma-2-2b", "/path/to/dictionary")
+index_dir = FeatureIndex.resolve("/path/to/dictionary")
+if index_dir is not None:
+    index = FeatureIndex(
+        index_dir,
+        model=backend.model,
+        tokenizer=backend.tokenizer,
+        dictionary=backend.dictionary,
+    )
+```
+
+Run `tools/interp/build_index.py` to build a new index inside `<dictionary>/index` from a JSONL corpus:
+
+```sh
+python -m tools.interp.build_index --model google/gemma-2-2b --dictionary "$SCOPE_DIR" --text-jsonl "$CORPUS_JSONL"
+```
+
+### Index Layout
+
+Each index folder holds `index.json` and four binary files.
+`FeatureIndex` maps the binary files in read-only mode and checks the layer and latent counts against `dictionary.metadata`.
+In `index.json`, the latent count uses either `"latents"` or `"features"`.
+When `"latents"` is absent, `FeatureIndex` reads `"features"` to support 2-million-token Gemma indexes.
+If both keys appear with different values, `FeatureIndex` raises `ValueError`.
+
+| File | Format | Contents |
+|---|---|---|
+| `index.json` | JSON | `layers`, `latents` or `features`, `index_hash`, and corpus metadata |
+| `table.npy` | NumPy `(layers, latents, 16)` | Ranked `activation` (`<f8`) and token `offset` (`<i8`) pairs |
+| `counts.npy` | NumPy `(layers, latents)` | Positive activation count (`<u8`) per feature |
+| `tokens.bin` | Raw `<u4` stream | Concatenated token IDs |
+| `documents.bin` | Fixed 145-byte records | UTF-8 `id` (`S128`), `start` (`<i8`), `length` (`<i8`), and `truncated` flag |
 
 ## Attribution Graphs
 
-`caliper.interp.Tracer(model, tokenizer, dictionary).trace(prompt)` returns a `Graph`.
-Supply `index=feature_index` to include heuristic feature labels in standalone traces.
-The index must use the same model, tokenizer, and dictionary objects.
-Without an index, feature labels contain the layer and feature IDs.
-After a standalone trace, call `caliper.step()` once to derive and send its published tensors.
-The hosted `trace.run` command performs this work at its existing run boundary.
+`Tracer(model, tokenizer, dictionary, backend=backend).trace(prompt)` runs `circuit_tracer.attribute`, transfers the graph to CPU, runs `prune_graph`, and publishes graph tensors.
+Prompts accept up to 32 model tokens with BOS and refuse longer inputs without truncation.
+Default settings select up to 10 logit targets (`desired_logit_prob=0.95`), up to `5,000` feature targets, `node_threshold=0.7`, and `edge_threshold=0.9`.
+Pass `show_more=True` to relax pruning to `node_threshold=0.78` and `edge_threshold=0.93`.
 
-The local replacement model fixes attention routing, normalization denominators, and feature masks from the prompt.
-Each MLP becomes its transcoder output plus a constant error vector.
-Qwen gates and DeltaNet routing factors also remain fixed.
-The graph describes effects through these fixed paths, not the causes of attention choices.
-
-Edges represent direct effects between token, feature, error, and logit nodes.
-The tracer accounts for biases separately and measures completeness before display pruning.
-It reports feature share, error share, and omitted influence.
-The graph uses per-layer transcoders, without cross-layer features, supernodes, or global weight analysis.
-Feature labels use promoted output tokens and frequent example tokens, without model-generated descriptions.
-
-A prompt contains at most 32 tokens, including special tokens.
-The tracer refuses excess tokens without truncation.
-Defaults cap feature targets at 512, displayed nodes at 512, and edges at 8,192.
-Logit targets cover 95 percent cumulative probability, with at most ten targets.
-An eight-entry cache uses the prompt, intervention state, and feature-label index identity as its key.
-A different label index preserves compatible forward activations but requires a new graph identity.
+After a standalone `tracer.trace(prompt)` call, invoke `caliper.step()` once so derive programs process the published tensors.
+In a hosted inference run, `trace.run` executes and publishes automatically at the next run boundary.
+`Tracer` caches up to 16 completed graphs keyed by prompt, active interventions, thresholds, and label index identity.
 
 ## Graph Tensors
 
-The tracer publishes fixed tensor shapes on the model device.
-Counts define the valid rows, and unused rows contain zeros.
-Graph JSON retains labels, prompt tokens, and completeness diagnostics.
-`trace.read` pages at most 256 nodes and 256 edges per request.
+`Graph.publish()` writes fixed-capacity tensors on the model device.
+Graphs within 512 nodes and 8,192 edges use `(512, 8192)` capacities, while larger graphs up to 8,192 nodes and 262,144 edges use `(8192, 262144)` capacities.
 
 | Source | Type | Shape | Fields |
 |---|---|---|---|
 | `live:trace.counts` | `int32` | `(4,)` | Nodes, edges, tokens, layers |
-| `live:trace.node_i` | `int32` | `(512,4)` | Kind, layer, position, feature or token ID |
-| `live:trace.node_f` | `float32` | `(512,4)` | Activation, influence, top-logit effect, reserved |
-| `live:trace.edge_i` | `int32` | `(8192,2)` | Source and target node rows |
-| `live:trace.edge_f` | `float32` | `(8192,2)` | Weight and normalized weight |
-| `live:trace.label_text` | `uint32` | `(544,16)` | Packed prompt and node labels |
+| `live:trace.node_i` | `int32` | `(N, 4)` | Kind, layer, position, feature or token ID |
+| `live:trace.node_f` | `float32` | `(N, 4)` | Activation, influence, top-logit effect, reserved |
+| `live:trace.edge_i` | `int32` | `(E, 2)` | Source and target node rows |
+| `live:trace.edge_f` | `float32` | `(E, 2)` | Weight and normalized weight |
+| `live:trace.label_text` | `uint32` | `(32 + N, 16)` | Packed prompt and node labels |
 
-Node kinds are token zero, feature one, error two, and logit three.
-Token layers use minus one, and logit layers use the layer count.
-Feature and error layers use zero-based indices.
-Edges refer to displayed node rows.
+Node kinds are token `0`, feature `1`, error `2`, and logit `3`.
+Token layers use `-1`, logit layers use the layer count, and feature and error layers use zero-based indices.
+`trace.read` pages through full JSON node and edge records up to 256 items per page.
 
 ## Graph Pieces
 
-`attribution_graph@1` places token positions horizontally and layers vertically.
-Bind its `graph_counts` input to `live:trace.counts` and its other structural inputs to the corresponding tensors above.
-Signed edges show direct effects, and node picks identify graph rows.
-The `selected_node` parameter reads shared state with the same name.
-The selected label follows this value on each draw frame, even when the run is idle.
-Prompt tokens and selected or hovered labels appear as host text.
+`attribution_graph@1` places prompt tokens horizontally and model layers vertically.
+Bind `graph_counts` to `live:trace.counts` and bind `node_i`, `node_f`, `edge_i`, `edge_f`, and `label_text` to their `live:trace.*` sources.
+Its `selected_node` parameter reads shared state `selected_node`, highlights connected edges, and displays the selected label.
 
-The graph uses `draw.text.selected` for selection and `draw.text.hover` for the local pointer hit.
-Both labels use the shown node map and text resource without a new derive pass or model step.
-Pointer hover uses the ID readback and has no graph parameter.
+`token_strip@1` binds to the five `live:examples.*` tensors documented in [Example Panel Bindings](../agents/interpretation.md#example-panel-bindings).
+`logit_bars@1` binds either to `live:trace.probs` for static baseline logits or to `live:output.probs`, `live:output.tokens`, and `live:output.label_text` for live baseline-versus-steered comparisons.
+`heat_grid@1` binds to `live:patch.grid` to render layer-by-position activation recovery.
 
-`token_strip@1` uses the five `live:examples.*` sources documented in the [example bindings](../agents/interpretation.md#example-panel-bindings).
-Its `page` parameter selects zero or one.
-Its `activation_max` parameter sets the color scale from the selected feature maximum.
-The API retains full labels when display labels exceed 63 UTF-8 bytes.
+## Feature Steering
 
-M7 `logit_bars@1` reads `live:trace.probs`, `live:trace.logit_tokens`, and `live:trace.logit_label_text`.
-Both probability rows describe the traced baseline.
-These sources do not describe a steered output distribution.
-The app and browser use the same piece files.
+`Backend.intervene_logits` and live `InterventionExecutor` hooks support `clamp`, `scale`, `add`, and `ablate` interventions.
+On a `ReplacementModel`, feature `clamp` and `scale` edits call `ReplacementModel.feature_intervention` directly.
+On a standalone `HookedTransformer` with an `SAE`, edits run in delta form (`x + (sae.decode(modified) - sae.decode(base))`), which preserves exact logits at identity.
+
+`Output(backend, interventions)` compares clean and steered next-token distributions and publishes `live:output.probs` `(2, 10)`, `live:output.tokens` `(10,)`, and `live:output.label_text` `(10, 16)`.
+`Output.generate(prompt)` generates 24 greedy baseline tokens and 24 greedy steered tokens while keeping permanent replacement hooks intact.
+
+## Activation Patching
+
+`caliper.interp.patch_sweep(backend, interventions, clean_prompt=..., corrupted_prompt=..., metric=...)` runs a `hook_resid_pre` activation patching sweep across all `(layer, position)` cells.
+Clean and corrupted prompts must tokenize to equal lengths within the 32-token cap.
+`metric` specifies distinct `positive_token` and `negative_token` vocabulary IDs.
+The sweep runs at most 32 cells per forward pass, publishes normalized recovery as `live:patch.grid` `(layers, positions)`, and returns full summary values.
 
 ## Refusals And Limits
 
-Missing models, dictionaries, indexes, and completed graphs produce structured refusals.
-Unsupported probe points and incompatible dictionary identities also fail explicitly.
-A queued command is not a completed result.
-Use its request ID to retrieve the final reply, and use events to wait for progress.
-The [command reference](../agents/interpretation.md) specifies the request and reply limits.
-
-The seeded CPU fixture verifies mathematical identities without a downloaded model.
-Its reference forward hash is `2464295694bd3690f156dcc7248882f0ad289f55972caafbbd7bd23f4e3d109e`.
-Fixture completeness requires a residual at most `1e-9`.
-Qwen requires at most `0.02` per target and separate learned-model acceptance evidence.
+`MemoryGuard` enforces a 40 GB process limit (`40,000,000,000` bytes) and an 8 GB host available memory reserve (`8,000,000,000` bytes).
+Missing dictionaries, unknown probe points, out-of-range features, and unequal patch prompt lengths return structured refusals.
+See [Interpretation Tools](../agents/interpretation.md) for MCP request schemas and paging bounds.

@@ -909,13 +909,20 @@ struct Session::Impl {
                 std::lock_guard<std::mutex> lock(doc_mutex);
                 shown = doc && doc->spec.applet.id == loaded.spec.applet.id;
             }
-            return CommandOutput::ok({{"open", true},
-                                      {"id", loaded.spec.applet.id},
-                                      {"path", loaded.path},
-                                      {"dirty", false},
-                                      {"open_in_app", shown},
-                                      {"text", spec::to_toml(loaded.spec)},
-                                      {"json", spec::to_json(loaded.spec)}});
+            json out = {{"open", true},
+                        {"id", loaded.spec.applet.id},
+                        {"path", loaded.path},
+                        {"dirty", false},
+                        {"open_in_app", shown},
+                        {"text", spec::to_toml(loaded.spec)},
+                        {"json", spec::to_json(loaded.spec)}};
+            if (shown) {
+                if (RunControl* rc = run_control.load()) {
+                    const json prog = rc->progress_state();
+                    if (prog.is_object()) out["progress"] = prog;
+                }
+            }
+            return CommandOutput::ok(std::move(out));
         }
         std::lock_guard<std::mutex> lock(doc_mutex);
         // No spec open: a first look, answered as a read, not as a failure
@@ -1300,7 +1307,7 @@ struct Session::Impl {
     Error check_scope(const Preview& p, const std::string& name, const json& args) const {
         if (p.panel.empty() && p.source.empty()) return {};
         const std::string target = p.panel.empty() ? "source " + p.source : "panel " + p.panel;
-        if (name == "spec.set_text" || name == "layout.set")
+        if (name == "spec.set_text" || name == "layout.set" || name == "layout.lock")
             return Error("preview.out_of_scope",
                          "A preview of the " + target + " cannot replace the whole spec or the whole layout; change "
                                                         "the target with the other edits.",
@@ -1829,8 +1836,8 @@ struct Session::Impl {
         bind("spec.get", &Impl::spec_get);
         bind("spec.validate", &Impl::spec_validate);
         for (const char* name : {"spec.set_text", "source.add", "source.patch", "source.remove", "panel.create",
-                                 "panel.patch", "panel.remove", "layout.place", "layout.set", "control.create",
-                                 "control.patch", "control.remove", "program.create",
+                                 "panel.patch", "panel.remove", "layout.place", "layout.set", "layout.lock",
+                                 "control.create", "control.patch", "control.remove", "program.create",
                                  "program.patch", "program.remove", "state.create", "state.patch", "state.remove",
                                  "entity.set", "entity.remove", "annotation.set", "annotation.remove", "camera.save"})
             bind(name, &Impl::spec_edit);
@@ -1847,7 +1854,7 @@ struct Session::Impl {
         bind("program.read", &Impl::resource_cmd);
         for (const char* name : {"intervene.points", "intervene.set", "intervene.clear", "intervene.list"})
             bind(name, &Impl::intervene_cmd);
-        for (const char* name : {"feature.dictionary", "feature.show", "feature.examples", "trace.run", "trace.status", "trace.read"})
+        for (const char* name : {"feature.dictionary", "feature.show", "feature.examples", "trace.run", "trace.status", "trace.read", "patch.sweep", "trace.validate"})
             bind(name, &Impl::interpretation_cmd);
         // The run commands and events.wait (design/instruments.md).
         for (const char* name : {"run.state", "run.set_param", "run.action", "run.pause"}) bind(name, &Impl::run_cmd);
@@ -2125,7 +2132,7 @@ struct Session::Impl {
         if (!review_of(inv).is_null()) return ApprovalDecision::ask;
         // A request ID alone reads a retained reply. The transport verifies
         // the method and run, and an unknown ID cannot submit an operation.
-        if (inv.name == "trace.run" &&
+        if ((inv.name == "trace.run" || inv.name == "trace.validate" || inv.name == "patch.sweep") &&
             inv.args.is_object() && inv.args.size() == 1) {
             const auto request = inv.args.find("request_id");
             if (request != inv.args.end() && request->is_number_integer() &&

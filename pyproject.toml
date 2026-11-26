@@ -15,9 +15,31 @@ classifiers = [
 
 [project.optional-dependencies]
 torch = ["torch"]
-test = ["pytest", "torch>=2.15.0", "safetensors", "transformers==5.24.0", "psutil", "datasets"]
+test = [
+    "pytest",
+    "jsonschema",
+    "torch>=2.15.0",
+    "safetensors",
+    "psutil",
+    "datasets",
+    "transformers>=5.24.0,<5.25.0",
+    "transformer-lens==3.9.0",
+    "sae-lens==6.56.3",
+    "nnsight==0.8.4",
+    "circuit-tracer @ git+https://github.com/decoderesearch/circuit-tracer.git@82996f144b3371ae858ea5713590d004c218f0c2",
+]
 notebook = ["anywidget"]
-interp = ["torch>=2.15.0", "safetensors", "transformers==5.24.0", "psutil", "datasets"]
+interp = [
+    "torch>=2.15.0",
+    "safetensors",
+    "psutil",
+    "datasets",
+    "transformers>=5.24.0,<5.25.0",
+    "transformer-lens==3.9.0",
+    "sae-lens==6.56.3",
+    "nnsight==0.8.4",
+    "circuit-tracer @ git+https://github.com/decoderesearch/circuit-tracer.git@82996f144b3371ae858ea5713590d004c218f0c2",
+]
 
 [tool.scikit-build]
 minimum-version = "0.10"

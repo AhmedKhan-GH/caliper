@@ -23,7 +23,6 @@ def test_service_binds_labels_before_trace_identity_and_publication(trace_index,
     monkeypatch.setattr(_publish, "_TENSORS", published)
     tracer = Tracer(index.model, index.tokenizer, index.dictionary)
     plain = tracer.trace("AB", max_targets=8)
-    path = tracer._forward_cache[1]
     calls = []
     def factory():
         calls.append("index")
@@ -33,7 +32,6 @@ def test_service_binds_labels_before_trace_identity_and_publication(trace_index,
         result = service._execute("trace.run", {"prompt": "AB", "max_targets": 8}, 1)
         graph = service.graph
         assert result["trace_id"] == graph.trace_id != plain.trace_id
-        assert tracer._forward_cache[1] is path
         features = [(i, n) for i, n in enumerate(graph.nodes) if n["kind"] == "feature"]
         assert features
         for i, node in features:

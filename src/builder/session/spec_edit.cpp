@@ -33,6 +33,15 @@ Error fail(std::string code, std::string message, std::string where = {}) {
     return Error(std::move(code), std::move(message), std::move(where));
 }
 
+bool layout_is_locked(const spec::Spec& s) { return s.applet.layout_locked.value_or(false); }
+
+Error layout_locked_error(const char* what) {
+    return fail("layout.locked",
+                std::string("The instrument's layout is locked, so you cannot ") + what +
+                    "; unlock the layout with layout.lock first.",
+                "applet.layout_locked");
+}
+
 std::string binding_source(const std::string& binding) {
     const auto dot = binding.find('.');
     return dot == std::string::npos ? binding : binding.substr(0, dot);
@@ -225,6 +234,7 @@ bool only_controls(const LayoutNode& node, const spec::Spec& s, int depth = 0) {
 }
 
 SpecEdit panel_create(const spec::Spec& s, const json& args, const spec::SourceResolver& resolver) {
+    if (layout_is_locked(s)) return refuse(layout_locked_error("add a panel"));
     const std::string id = str_arg(args, "id");
     if (s.find_panel(id))
         return refuse(fail("panel.exists", "The spec already has a panel " + id + "; choose another id.", "args.id"));
@@ -308,6 +318,11 @@ SpecEdit panel_remove(const spec::Spec& s, const json& args, const spec::SourceR
     for (std::size_t i = 0; i < s.panels.size(); ++i)
         if (s.panels[i].id == id) index = i;
     if (index == s.panels.size()) return refuse(fail("panel.not_found", "The spec has no panel " + id + ".", "args.id"));
+    if (layout_is_locked(s)) return refuse(layout_locked_error("remove a panel"));
+    if (!s.panels[index].closable.value_or(true))
+        return refuse(fail("panel.not_closable",
+                           "The panel " + id + " is not closable; set closable to true before removing it.",
+                           "args.id"));
     spec::Spec next = s;
     next.panels.erase(next.panels.begin() + static_cast<std::ptrdiff_t>(index));
     if (next.layout) {
@@ -321,6 +336,7 @@ SpecEdit panel_remove(const spec::Spec& s, const json& args, const spec::SourceR
 }
 
 SpecEdit layout_place(const spec::Spec& s, const json& args, const spec::SourceResolver& resolver) {
+    if (layout_is_locked(s)) return refuse(layout_locked_error("move a panel or control"));
     const std::string panel = str_arg(args, "panel");
     const std::string target = str_arg(args, "target");
     const std::string where = str_arg(args, "where");
@@ -348,12 +364,28 @@ SpecEdit layout_place(const spec::Spec& s, const json& args, const spec::SourceR
 }
 
 SpecEdit layout_set(const spec::Spec& s, const json& args, const spec::SourceResolver& resolver) {
+    if (layout_is_locked(s)) return refuse(layout_locked_error("change the layout"));
     FlatLayoutParse parsed = layout_from_flat(args.contains("layout") ? args["layout"] : json(), s);
     if (parsed.error) return refuse(std::move(parsed.error));
     spec::Spec next = s;
     next.layout = std::move(parsed.root);
     json flat = layout_to_flat(*next.layout, next);
     return finish(std::move(next), resolver, json{{"layout", std::move(flat)}});
+}
+
+SpecEdit layout_lock(const spec::Spec& s, const json& args, const spec::SourceResolver& resolver) {
+    const auto it = args.find("locked");
+    if (it == args.end() || !it->is_boolean())
+        return refuse(fail("command.invalid_args", "locked must be true or false.", "args.locked"));
+    const bool locked = it->get<bool>();
+    spec::Spec next = s;
+    if (locked) {
+        next.applet.layout_locked = true;
+        next.version = std::max(next.version, spec::required_version(next));
+    } else {
+        next.applet.layout_locked.reset();
+    }
+    return finish(std::move(next), resolver, json{{"locked", locked}});
 }
 
 // No command writes the provenance table (design/gpu-programs.md,
@@ -636,8 +668,8 @@ Error first_spec_error(const std::vector<spec::Diagnostic>& diagnostics) {
 bool is_spec_edit_command(std::string_view name) {
     return name == "spec.set_text" || name == "source.add" || name == "source.patch" || name == "source.remove" ||
            name == "panel.create" || name == "panel.patch" || name == "panel.remove" || name == "layout.place" ||
-           name == "layout.set" || name == "control.create" || name == "control.patch" || name == "control.remove" ||
-           name == "program.create" || name == "program.patch" ||
+           name == "layout.set" || name == "layout.lock" || name == "control.create" || name == "control.patch" ||
+           name == "control.remove" || name == "program.create" || name == "program.patch" ||
            name == "program.remove" || name == "state.create" || name == "state.patch" || name == "state.remove" ||
            name == "entity.set" || name == "entity.remove" || name == "annotation.set" ||
            name == "annotation.remove" || name == "camera.save";
@@ -656,6 +688,7 @@ SpecEdit apply_spec_edit(const spec::Spec& s, std::string_view name, const json&
         if (name == "panel.remove") return panel_remove(s, args, resolver);
         if (name == "layout.place") return layout_place(s, args, resolver);
         if (name == "layout.set") return layout_set(s, args, resolver);
+        if (name == "layout.lock") return layout_lock(s, args, resolver);
         if (name == "control.create" || name == "control.patch" || name == "control.remove")
             return apply_control_edit(s, name, args, resolver);
         if (name == "program.create" || name == "program.patch" || name == "program.remove")
@@ -679,6 +712,10 @@ spec::Spec new_spec_from_args(const json& args) {
     if (args.contains("title") && args["title"].is_string()) s.applet.title = args["title"].get<std::string>();
     if (args.contains("description") && args["description"].is_string())
         s.applet.description = args["description"].get<std::string>();
+    if (args.contains("layout_locked") && args["layout_locked"].is_boolean() && args["layout_locked"].get<bool>()) {
+        s.applet.layout_locked = true;
+        s.version = std::max(s.version, spec::required_version(s));
+    }
     return s;
 }
 

@@ -1,8 +1,9 @@
 // The app's program host over the builder session (AppProgramHost in
 // src/host/live/live_programs.h, design/gpu-programs.md, Program Status and
 // Program Events): the status items that program.status returns carry the
-// script's cadence, and a program that the script stopped for its budget
-// shows program.over_budget in its status item and in a `program` event.
+// script's cadence, and a program over its training budget shows
+// program.over_budget as a recoverable warning in its status item and in a
+// `program` event while it keeps running.
 // Compiled into caliper_live_tests only with CALIPER_WITH_BUILDER.
 #include <doctest/doctest.h>
 
@@ -52,10 +53,10 @@ cb::spec::Program pixels(const std::string& id) {
     return p;
 }
 
-// The script's status item of a running program with its cadence, or of a
-// program stopped with `code`.
+// The script's status item of a running program with its cadence, or with an
+// error or warning code.
 caliper_net::Json script_item(const caliper_live::WantedProgram& w, const std::string& state,
-                              const std::string& code = "") {
+                              const std::string& error_code = "", const std::string& warning_code = "") {
     caliper_net::Json o = caliper_net::Json::object();
     o.set("id", w.id);
     o.set("kind", "pixels");
@@ -70,13 +71,21 @@ caliper_net::Json script_item(const caliper_live::WantedProgram& w, const std::s
     o.set("last_step", 960);
     o.set("runs", 20);
     o.set("sha256", w.sha256);
-    if (!code.empty()) {
+    if (!error_code.empty()) {
         caliper_net::Json e = caliper_net::Json::object();
-        e.set("code", code);
-        e.set("message", "A pass adds 9 ms to a step of 0.5 ms, more than the ceiling allows.");
+        e.set("code", error_code);
+        e.set("message", "The pass timed out on the GPU.");
         e.set("line", nullptr);
         e.set("column", nullptr);
         o.set("error", e);
+    }
+    if (!warning_code.empty()) {
+        caliper_net::Json warn = caliper_net::Json::object();
+        warn.set("code", warning_code);
+        warn.set("message", "A pass adds 9 ms to a step of 0.5 ms, more than the ceiling allows.");
+        warn.set("line", nullptr);
+        warn.set("column", nullptr);
+        o.set("warning", warn);
     }
     return o;
 }
@@ -90,7 +99,7 @@ caliper_live::ProgramAnswer answer(std::vector<caliper_net::Json> items) {
 
 }  // namespace
 
-TEST_CASE("live/programs: program.status carries the script's cadence, and over_budget stops with a status and an event") {
+TEST_CASE("live/programs: program.status carries the script's cadence, and over_budget warns without stopping") {
     cb::spec::Spec spec;
     spec.programs = {pixels("heat"), pixels("image")};
     const auto heat = caliper_live::AppProgramHost::wanted_program(spec, spec.programs[0]);
@@ -117,23 +126,25 @@ TEST_CASE("live/programs: program.status carries the script's cadence, and over_
     CHECK(j["overhead_share"] == 0.03125);
     CHECK(j["passes_per_s"] == 40.0);
     CHECK(j["error"].is_null());
+    CHECK(j["warning"].is_null());
     const std::uint64_t cursor = ring.latest();   // past the two `compiled` events
 
-    // Even the ceiling of N costs more than the budget: the script stops every
-    // program with program.over_budget, and training goes on.
-    link.answers.push_back(answer({script_item(heat, "stopped", cb::programs::kProgramOverBudget),
-                                   script_item(image, "stopped", cb::programs::kProgramOverBudget)}));
+    // Even the ceiling of N costs more than the budget: the script warns with
+    // program.over_budget while the programs keep running.
+    link.answers.push_back(answer({script_item(heat, "running", "", cb::programs::kProgramOverBudget),
+                                   script_item(image, "running", "", cb::programs::kProgramOverBudget)}));
     host.pump(link, &ring);
     st = host.status();
     REQUIRE(st.size() == 2);
     for (const cb::ProgramStatus& s : st) {
         CAPTURE(s.id);
-        CHECK(s.state == "stopped");
-        REQUIRE(s.error.has_value());
-        CHECK(s.error->code == cb::programs::kProgramOverBudget);
-        CHECK(s.error->line == 0);
+        CHECK(s.state == "running");
+        CHECK(!s.error.has_value());
+        REQUIRE(s.warning.has_value());
+        CHECK(s.warning->code == cb::programs::kProgramOverBudget);
+        CHECK(s.warning->line == 0);
         CHECK(s.overhead_share.value_or(0) == 0.03125);   // the item still shows why
-        CHECK(cb::program_status_json(s)["error"]["code"] == "program.over_budget");
+        CHECK(cb::program_status_json(s)["warning"]["code"] == "program.over_budget");
     }
     const cb::EventRead read = ring.read(cursor, {{cb::EventKind::program}, {}}, 8);
     REQUIRE(read.events.size() == 2);
@@ -141,7 +152,7 @@ TEST_CASE("live/programs: program.status carries the script's cadence, and over_
     for (const cb::Event& e : read.events) {
         const nlohmann::json ev = cb::event_json(e);
         CHECK(ev["kind"] == "program");
-        CHECK(ev["change"] == "stopped");
+        CHECK(ev["change"] == "warned");
         CHECK(ev["host"] == "script");
         CHECK(ev["code"] == "program.over_budget");
         ids.push_back(ev["program"].get<std::string>());
@@ -149,6 +160,15 @@ TEST_CASE("live/programs: program.status carries the script's cadence, and over_
     CHECK(ids == std::vector<std::string>{"heat", "image"});
 
     host.pump(link, &ring);   // nothing new: no second event
+    CHECK(ring.read(cursor, {{cb::EventKind::program}, {}}, 8).events.size() == 2);
+
+    // Recovery clears the warning without pushing another event.
+    link.answers.push_back(answer({script_item(heat, "running"), script_item(image, "running")}));
+    host.pump(link, &ring);
+    for (const cb::ProgramStatus& s : host.status()) {
+        CHECK(s.state == "running");
+        CHECK(!s.warning.has_value());
+    }
     CHECK(ring.read(cursor, {{cb::EventKind::program}, {}}, 8).events.size() == 2);
 }
 
@@ -456,6 +476,8 @@ TEST_CASE("live/programs: a foreign spec's programs and pieces wait for a review
     REQUIRE(link.inner.sent.size() == 2);
     CHECK(link.inner.sent[0].id == "heat");
     CHECK(link.inner.sent[1].id == "field");
+    REQUIRE(link.inner.sent[1].piece.find("from") != nullptr);
+    CHECK(link.inner.sent[1].piece.find("from")->as_string() == "inline");
     for (const cb::ProgramStatus& s : host.status()) CHECK(s.state == "waiting");
 
     // A changed source of a reviewed program waits again, and the script removes the old one.

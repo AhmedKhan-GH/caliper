@@ -248,7 +248,7 @@ public:
         if (auto x = j.find("x"); x != j.end()) line("x", *x, false);
 
         out_ += "\n[applet]\n";
-        table(j.at("applet"), {"id", "title", "description", "x"}, false, "");
+        table(j.at("applet"), {"id", "title", "description", "layout_locked", "x"}, false, "");
 
         if (auto sources = j.find("source"); sources != j.end()) {
             for (const json& s : *sources) {
@@ -274,7 +274,7 @@ public:
         if (auto panels = j.find("panel"); panels != j.end()) {
             for (const json& p : *panels) {
                 out_ += "\n[[panel]]\n";
-                table(p, {"id", "primitive", "title", "bind", "options", "x"}, false, "");
+                table(p, {"id", "primitive", "title", "closable", "bind", "options", "x"}, false, "");
                 if (auto es = p.find("entity"); es != p.end()) {
                     for (const json& e : *es) {
                         out_ += "  [[panel.entity]]\n";
@@ -295,7 +295,7 @@ public:
         if (auto controls = j.find("control"); controls != j.end()) {
             for (const json& c : *controls) {
                 out_ += "\n[[control]]\n";
-                table(c, {"id", "kind", "title", "bind", "options", "x"}, false, "");
+                table(c, {"id", "kind", "title", "closable", "bind", "options", "x"}, false, "");
             }
         }
         // A program's WGSL comes last in its table, as a

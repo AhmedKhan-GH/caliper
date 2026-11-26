@@ -620,39 +620,116 @@ bool interpretation_request(const Json& v) {
         !params || !params->is_object()) return false;
     const auto& m = method->as_string();
     std::set<std::string> allowed;
-    if (m == "feature.dictionary" || m == "trace.status") {}
+    if (m == "feature.dictionary" || m == "trace.status" || m == "trace.validate") {}
+    else if (m == "patch.sweep") allowed = {"clean_prompt", "corrupted_prompt", "metric"};
     else if (m == "feature.show") allowed = {"layer", "feature", "node"};
     else if (m == "feature.examples") allowed = {"layer", "feature", "node", "limit"};
-    else if (m == "trace.run") allowed = {"prompt", "max_targets", "max_nodes", "max_edges"};
+    else if (m == "trace.run") allowed = {"prompt", "max_targets", "max_nodes", "max_edges",
+        "max_n_logits", "desired_logit_prob", "node_threshold", "edge_threshold", "batch_size", "update_interval"};
     else if (m == "trace.read") allowed = {"node_offset", "node_limit", "edge_offset", "edge_limit"};
     else return false;
     for (const auto& kv : params->members()) if (!allowed.count(kv.first)) return false;
     const struct { const char* key; uint64_t low, high; } bounds[] = {
-        {"layer",0,4095}, {"feature",0,2147483647}, {"node",0,511}, {"limit",0,16},
-        {"max_targets",0,512}, {"max_nodes",1,512}, {"max_edges",0,8192},
-        {"node_offset",0,512}, {"edge_offset",0,8192}, {"node_limit",0,256}, {"edge_limit",0,256}};
+        {"layer",0,4095}, {"feature",0,2147483647}, {"node",0,8191}, {"limit",0,16},
+        {"max_targets",0,5000u}, {"max_nodes",1,8192u}, {"max_edges",0,262144u},
+        {"max_n_logits",1,10}, {"update_interval",1,128},
+        {"node_offset",0,8192}, {"edge_offset",0,262144}, {"node_limit",0,256}, {"edge_limit",0,256}};
     for (const auto& b : bounds) if (auto* x = params->find(b.key); x && !int_in(*x,b.low,b.high)) return false;
     if (m == "feature.show" || m == "feature.examples")
         return (params->has("node") && !params->has("layer") && !params->has("feature")) ||
                (!params->has("node") && params->has("layer") && params->has("feature"));
+    if (m == "patch.sweep") {
+        for (auto* key : {"clean_prompt","corrupted_prompt"}) {
+            auto* prompt = params->find(key);
+            if (!prompt || !interpretation_text(*prompt,CALIPER_NET_INTERPRET_STRING_MAX,false)) return false;
+        }
+        auto* metric = params->find("metric");
+        if (!metric || !metric->is_object() || metric->size() != 2) return false;
+        auto* positive = metric->find("positive_token");
+        auto* negative = metric->find("negative_token");
+        return positive && negative && int_in(*positive,0,2147483647) && int_in(*negative,0,2147483647) && *positive != *negative;
+    }
     if (m == "trace.run") {
+        if (auto* batch = params->find("batch_size"); batch && !batch->is_null() && !int_in(*batch,1,512)) return false;
+        for (const auto* key : {"desired_logit_prob", "node_threshold", "edge_threshold"}) {
+            if (const auto* x = params->find(key); x && (!is_finite(*x) || x->as_double() < 0 || x->as_double() > 1)) return false;
+        }
         auto* prompt = params->find("prompt");
         return prompt && interpretation_text(*prompt,CALIPER_NET_INTERPRET_STRING_MAX,false);
     }
     return true;
 }
 
-bool intervene_request(const Json& v) {
-    if (!v.is_object()) return false;
-    const Json* set = v.find("set");
-    const Json* clear = v.find("clear");
-    const Json* all = v.find("clear_all");
-    if (int(present(set)) + int(present(clear)) + int(present(all)) != 1) return false;
-    if (present(set)) {
-        return set->is_object() && point_ok(set->find("point")) && name_ok(set->find("op")) &&
-               opt_step(set->find("from_step")) && opt_step(set->find("until_step"));
+bool intervention_number(const Json& value) {
+    return is_finite(value) && (!value.is_integer_token() || std::abs(value.as_double()) <= double(kSafeInt));
+}
+
+bool intervention_spec(const Json& value, bool lifecycle = false) {
+    if (!value.is_object()) return false;
+    const auto* op = value.find("op");
+    const auto* kind = value.find("kind");
+    if (present(op) && present(kind) && *op != *kind) return false;
+    const auto* selected = present(kind) ? kind : op;
+    if (!selected || !one_of(*selected, {"ablate", "add", "scale", "clamp", "patch", "steer"})) return false;
+    const auto* point = value.find("point");
+    if (!point || !interpretation_text(*point,255,false)) return false;
+    const auto& name = selected->as_string();
+    std::set<std::string> fields = {"point","op","kind","from_step","until_step"};
+    if (name == "add") fields.insert({"vector","coefficient","positions"});
+    if (name == "scale") fields.insert({"feature","multiplier","positions","dictionary"});
+    if (name == "clamp") fields.insert({"feature","value","positions","dictionary"});
+    if (name == "patch") fields.insert({"source_prompt","source_position","positions"});
+    if (lifecycle) {
+        fields.insert({"since_step","state","error","error_code"});
+        const auto* state = value.find("state");
+        if (!state || !one_of(*state,{"pending","active","ended"})) return false;
+        if (auto* e = value.find("error"); e && !interpretation_text(*e,1024)) return false;
+        if (auto* e = value.find("error_code"); e && !interpretation_text(*e,63,false)) return false;
     }
-    if (present(clear)) return point_ok(clear);
+    for (const auto& item : value.members()) if (!fields.count(item.first)) return false;
+    for (const auto* key : {"from_step","until_step","since_step"}) if (!opt_step(value.find(key))) return false;
+    const auto* start = value.find("from_step");
+    const auto* end = value.find("until_step");
+    if (present(start) && present(end) && end->as_double() <= start->as_double()) return false;
+    if (auto* positions = value.find("positions")) {
+        if (!positions->is_array() || positions->size() > 32) return false;
+        std::set<uint64_t> seen;
+        for (const auto& item : positions->items()) {
+            uint64_t index = 0;
+            if (!int_in(item,0,31) || !item.get_u64(&index) || !seen.insert(index).second) return false;
+        }
+    }
+    if (auto* dictionary = value.find("dictionary"); dictionary && !interpretation_text(*dictionary,255,false)) return false;
+    if (name == "add") {
+        const auto* vector = value.find("vector");
+        const auto* coefficient = value.find("coefficient");
+        if (!vector || !vector->is_array() || !vector->size() || vector->size() > 16384 ||
+            !coefficient || !intervention_number(*coefficient)) return false;
+        for (const auto& item : vector->items()) if (!intervention_number(item)) return false;
+    }
+    if (name == "scale" || name == "clamp") {
+        const auto* feature = value.find("feature");
+        const auto* number = value.find(name == "scale" ? "multiplier" : "value");
+        if (!feature || !int_in(*feature,0,2147483647) || !number || !intervention_number(*number)) return false;
+    }
+    if (name == "patch") {
+        const auto* prompt = value.find("source_prompt");
+        if (!prompt || !interpretation_text(*prompt,4096,false)) return false;
+        if (auto* position = value.find("source_position"); position && !int_in(*position,0,31)) return false;
+    }
+    return value.dump().size() <= 262144;
+}
+
+bool intervene_request(const Json& value) {
+    if (!value.is_object()) return false;
+    for (const auto& item : value.members())
+        if (item.first != "set" && item.first != "clear" && item.first != "clear_all") return false;
+    const auto* set = value.find("set");
+    const auto* clear = value.find("clear");
+    const auto* all = value.find("clear_all");
+    if (int(present(set)) + int(present(clear)) + int(present(all)) != 1) return false;
+    if (present(set)) return intervention_spec(*set);
+    if (present(clear)) return interpretation_text(*clear,255,false);
     return all->is_bool() && all->as_bool();
 }
 
@@ -672,13 +749,7 @@ bool point_entry(const Json& v) {
     return true;
 }
 
-bool active_entry(const Json& v) {
-    if (!v.is_object() || !point_ok(v.find("point")) || !name_ok(v.find("op"))) return false;
-    if (!opt_step(v.find("from_step")) || !opt_step(v.find("until_step")) || !opt_step(v.find("since_step")))
-        return false;
-    const Json* st = v.find("state");
-    return st && one_of(*st, {"pending", "active", "ended"});
-}
+bool active_entry(const Json& value) { return intervention_spec(value, true); }
 
 bool interventions_ok(const Json& v) {
     if (!v.is_object()) return false;
@@ -2076,8 +2147,8 @@ void check_declaration(const Json& d) {
 }
 
 // ---- 3.2 draft: instances of pieces and their resources (capability "resources") ----------------------
-// The pin of a piece: name [a-z][a-z0-9_]* of 1 to 32 bytes, version 1 to 1,000,000, and hash "sha256:" with
-// 64 lowercase hex digits.
+// The pin of a piece: name [a-z][a-z0-9_]* of 1 to 32 bytes, version 1 to 1,000,000, hash "sha256:" with
+// 64 lowercase hex digits, and optional from ("library", "workspace" or "inline").
 bool piece_pin_ok(const Json& v) {
     if (!v.is_object()) return false;
     const Json* name = v.find("name");
@@ -2091,7 +2162,9 @@ bool piece_pin_ok(const Json& v) {
     const Json* hash = v.find("hash");
     if (!hash || !hash->is_string() || hash->as_string().compare(0, 7, "sha256:") != 0) return false;
     const Json hex(hash->as_string().substr(7));
-    return sha256_hex_ok(&hex);
+    if (!sha256_hex_ok(&hex)) return false;
+    const Json* from = v.find("from");
+    return !present(from) || one_of(*from, {"library", "workspace", "inline"});
 }
 // One value of "bind": live:<a tensor name of 1 to 255 bytes>, or program:<program id>/<resource name>.
 bool binding_ok(const Json& v) {
@@ -2325,7 +2398,7 @@ bool status_item(const Json& v) {
         !opt_ok(v, "overhead_share", is_nonneg) || !opt_ok(v, "passes_per_s", is_nonneg) ||
         !opt_ok(v, "last_step", is_safe_uint) || !opt_ok(v, "runs", is_safe_uint) ||
         !opt_ok(v, "memory_bytes", is_safe_uint) || !opt_ok(v, "memory_limit_bytes", is_safe_uint) ||
-        !opt_ok(v, "error", program_error_ok))
+        !opt_ok(v, "error", program_error_ok) || !opt_ok(v, "warning", program_error_ok))
         return false;
     const Json* sha = v.find("sha256");
     return !present(sha) || (sha->is_string() && sha->as_string().empty()) || sha256_hex_ok(sha);

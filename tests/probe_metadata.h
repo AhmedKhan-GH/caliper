@@ -22,13 +22,12 @@ inline nlohmann::json probe_descriptors() {
     }
     rows[2]["module"] = "layers.0";
     rows[2]["type"] = "Block";
-    for (const bool full : {false, true}) {
-        const std::string block = full ? "model.layers.3" : "model.layers.0";
+    for (const int layer : {0, 3}) {
+        const std::string block = "model.layers." + std::to_string(layer);
         rows.push_back({{"point", block + ".attn_pattern"}, {"kind", "module"},
-                        {"module", block + (full ? ".self_attn" : ".linear_attn")}, {"head", nullptr},
-                        {"type", full ? "Qwen3_5Attention" : "Qwen3_5GatedDeltaNet"}, {"shape", nullptr},
-                        {"probe", "attn_pattern"}, {"layer", full ? 3 : 0},
-                        {"pattern", full ? "softmax" : "signed_value_mixing"}});
+                        {"module", block + ".self_attn"}, {"head", nullptr},
+                        {"type", "Attention"}, {"shape", nullptr},
+                        {"probe", "attn_pattern"}, {"layer", layer}, {"pattern", "softmax"}});
     }
     return rows;
 }

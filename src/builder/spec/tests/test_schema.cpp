@@ -10,6 +10,8 @@
 #include <ostream>
 #include <string>
 
+#include <caliper_builder/spec/patch.h>
+
 #include <doctest/doctest.h>
 
 #include "helpers.h"
@@ -387,5 +389,78 @@ TEST_CASE("the schema of version 1 takes programs and provenance, and refuses wh
         errors = checker_v1().errors(d);
         CHECK_MESSAGE(errors.empty(), join_errors(errors));
         CHECK(library_accepts(d));
+    }
+}
+
+TEST_CASE("closable and layout_locked validate, round-trip, and stay gated to version 1") {
+    const json v1_doc = {
+        {"caliper_spec", 1},
+        {"applet", {{"id", "locked-instrument"}, {"layout_locked", true}}},
+        {"panel", json::array({
+                      {{"id", "notes"}, {"primitive", "text"}, {"closable", false}, {"options", {{"text", "Fixed"}}}},
+                      {{"id", "scene"}, {"primitive", "scene"}, {"closable", true}, {"bind", {{"scene", "live:model"}}}},
+                  })},
+        {"control", json::array({
+                        {{"id", "gain"}, {"kind", "slider"}, {"closable", false}, {"bind", "value"}},
+                    })},
+        {"layout", {{"split", "horizontal"}, {"children", json::array({"notes", "scene", "gain"})}}},
+    };
+    const auto schema_errors = checker_v1().errors(v1_doc);
+    CHECK_MESSAGE(schema_errors.empty(), join_errors(schema_errors));
+    CHECK(library_accepts(v1_doc));
+
+    const auto parsed = cs::from_json(v1_doc);
+    REQUIRE(parsed.ok());
+    CHECK(parsed.spec.applet.layout_locked == std::optional<bool>(true));
+    REQUIRE(parsed.spec.panels.size() == 2);
+    CHECK(parsed.spec.panels[0].closable == std::optional<bool>(false));
+    CHECK(parsed.spec.panels[1].closable == std::optional<bool>(true));
+    REQUIRE(parsed.spec.controls.size() == 1);
+    CHECK(parsed.spec.controls[0].closable == std::optional<bool>(false));
+    CHECK(cs::required_version(parsed.spec) == cs::kInstrumentVersion);
+
+    const std::string toml = cs::to_toml(parsed.spec);
+    CHECK(toml.find("layout_locked = true") != std::string::npos);
+    CHECK(toml.find("closable = false") != std::string::npos);
+    const auto reparsed = cs::parse_toml(toml);
+    REQUIRE(reparsed.ok());
+    CHECK(reparsed.spec == parsed.spec);
+    CHECK_MESSAGE(checker_v1().errors(cs::to_json(reparsed.spec)).empty(), "round-tripped JSON fails v1 schema");
+
+    // Patching closable on a version 0 spec raises it to version 1 and round-trips through merge patch.
+    const auto v0_base = cs::parse_toml(R"(
+caliper_spec = 0
+[applet]
+id = "base"
+[[panel]]
+id = "note"
+primitive = "text"
+options = { text = "hi" }
+)");
+    REQUIRE(v0_base.ok());
+    CHECK(cs::required_version(v0_base.spec) == 0);
+    const auto patched = cs::patch_panel(v0_base.spec, "note", json{{"closable", false}});
+    REQUIRE(patched.ok());
+    CHECK(patched.spec.version == cs::kInstrumentVersion);
+    CHECK(patched.spec.panels[0].closable == std::optional<bool>(false));
+    const auto cleared = cs::patch_panel(patched.spec, "note", json{{"closable", nullptr}});
+    REQUIRE(cleared.ok());
+    CHECK_FALSE(cleared.spec.panels[0].closable.has_value());
+
+    // Version 0 rejects closable and layout_locked; non-boolean values fail both v1 schema and library.
+    const std::vector<json> refused = {
+        json::parse(R"({"caliper_spec": 0, "applet": {"id": "a", "layout_locked": true}})"),
+        json::parse(R"({"caliper_spec": 0, "applet": {"id": "a"},
+                        "panel": [{"id": "n", "primitive": "text", "closable": false, "options": {"text": "x"}}]})"),
+        json::parse(R"({"caliper_spec": 1, "applet": {"id": "a", "layout_locked": "yes"}})"),
+        json::parse(R"({"caliper_spec": 1, "applet": {"id": "a"},
+                        "panel": [{"id": "n", "primitive": "text", "closable": 0, "options": {"text": "x"}}]})"),
+        json::parse(R"({"caliper_spec": 1, "applet": {"id": "a"},
+                        "control": [{"id": "c", "kind": "slider", "closable": "no", "bind": "value"}]})"),
+    };
+    for (const json& d : refused) {
+        CAPTURE(d.dump());
+        if (d.at("caliper_spec") == 1) CHECK_FALSE(checker_v1().passes(d));
+        CHECK_FALSE(library_accepts(d));
     }
 }

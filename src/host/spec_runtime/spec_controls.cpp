@@ -950,6 +950,30 @@ bool draw_segmented(const spec::Control& c, const Row& row, const SpecLook& look
 void draw_readout(const spec::Control& c, const Row& row, const SpecLook& look, const SpecInstrumentHost& host) {
     ImDrawList* dl = ImGui::GetWindowDrawList();
     const float ty = row.widget.GetCenter().y - ImGui::GetTextLineHeight() * 0.5f;
+    if (host.run && (c.bind == "param:output.status" || c.id == "trace_status")) {
+        const json prog = host.run->progress_state();
+        if (prog.is_object()) {
+            const std::string st = prog.value("state", std::string());
+            const std::string live = cb::format_progress_status(prog);
+            if (!live.empty()) {
+                const bool is_error = st == "error";
+                const float r = std::max(3.0f, std::round(3.5f * look.text_scale));
+                const float dx = row.widget.Min.x + r + 1.0f;
+                const float dy = row.widget.GetCenter().y;
+                dl->AddCircleFilled(ImVec2(dx, dy), r, is_error ? sternbild::col::status_error : look.accent);
+                const float tx = row.widget.Min.x + r * 2.0f + std::round(7.0f * look.text_scale);
+                const float avail = std::max(0.0f, row.widget.Max.x - tx);
+                const std::string shown = fit_row_text(live, avail);
+                ImGui::SetCursorScreenPos(row.widget.Min);
+                ImGui::InvisibleButton("###readout", row.widget.GetSize());
+                if (ImGui::IsItemHovered() && shown != live) ImGui::SetTooltip("%s", live.c_str());
+                dl->PushClipRect(row.widget.Min, row.widget.Max, true);
+                dl->AddText(ImVec2(tx, ty), is_error ? sternbild::col::error_text : look.text, shown.c_str());
+                dl->PopClipRect();
+                return;
+            }
+        }
+    }
     if (!c.options.bound_text) {
         dl->AddText(ImVec2(row.widget.Min.x, ty), look.faint, "\xE2\x80\x94");
         return;
@@ -981,7 +1005,6 @@ std::string spec_button_label(const caliper_builder::spec::Control& control, con
     if (t.kind == spec::ControlTarget::Kind::run_pause) return state.state != "paused" ? "Pause" : "Resume";
     std::string label = control.title.value_or(control.id);
     if (t.kind != spec::ControlTarget::Kind::action) return label;
-    label += " (" + spec::control_target_string(t) + ")";
     const cb::RunAction* a = state.attached ? find_action(state, t.name) : nullptr;
     if (a && (a->queued || a->running)) label += a->running ? "  \xC2\xB7 running" : "  \xC2\xB7 queued";   // ·
     return label;

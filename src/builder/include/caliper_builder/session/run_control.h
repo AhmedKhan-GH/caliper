@@ -90,7 +90,7 @@ inline constexpr const char* kRunRefused = "run.refused";                     //
 // ---- interventions (design/gpu-programs.md, Interventions)
 // The error codes of the intervention commands.
 inline constexpr const char* kInterveneUnknownPoint = "intervene.unknown_point";  // the model has no such point
-inline constexpr const char* kInterveneOpReserved = "intervene.op_reserved";      // scale, steer or patch
+inline constexpr const char* kInterveneOpReserved = "intervene.op_reserved";      // steer remains reserved
 inline constexpr const char* kInterveneBadRange = "intervene.bad_range";          // until_step not above from_step
 inline constexpr const char* kInterveneNotSupported = "intervene.not_supported";  // no capability interventions
 
@@ -114,12 +114,33 @@ struct InterventionPoint {
 // interventions.active gives it back.
 struct Intervention {
     std::string point;
-    std::string op = "ablate";                 // the only op built; scale, steer and patch are reserved
+    std::string op = "ablate";                 // ablate, add, scale, clamp, or patch
     std::optional<std::int64_t> from_step;     // null: the next step
     std::optional<std::int64_t> until_step;    // null: until cleared
     std::optional<std::int64_t> since_step;    // the step the script applied it at; null while pending
     std::string state = "pending";             // "pending", "active" or "ended"
+    nlohmann::json specification = nlohmann::json::object();
 };
+
+// Validated wire records prefer a non-null kind, then the legacy op.
+inline std::string intervention_op(const nlohmann::json& specification) {
+    for (const auto* key : {"kind", "op"}) {
+        const auto it = specification.find(key);
+        if (it != specification.end() && !it->is_null()) return it->get<std::string>();
+    }
+    return "ablate";
+}
+
+inline nlohmann::json intervention_set_spec(const Intervention& i) {
+    auto result = i.specification.is_object() ? i.specification : nlohmann::json::object();
+    for (const auto* key : {"since_step", "state", "error", "error_code"}) result.erase(key);
+    result["point"] = i.point;
+    result["op"] = i.op;
+    if (result.contains("kind")) result["kind"] = i.op;
+    result["from_step"] = i.from_step ? nlohmann::json(*i.from_step) : nlohmann::json();
+    result["until_step"] = i.until_step ? nlohmann::json(*i.until_step) : nlohmann::json();
+    return result;
+}
 
 class RunControl {
 public:
@@ -166,7 +187,21 @@ public:
         (void)point;
         return Error("command.not_available", "This run control takes no interventions.");
     }
+    // Structured progress JSON of the active run (from param output.progress, or synthesized
+    // from the runner while a managed run starts or fails), or null when unavailable.
+    virtual nlohmann::json progress_state();
 };
+
+// Formats active or error progress into a single Status-row string with elapsed time,
+// or returns empty when the run is ready/idle.
+std::string format_progress_status(const nlohmann::json& progress, double now_epoch_s = -1.0);
+
+// Live elapsed seconds for an active progress payload, using wall time since started_at
+// when available and falling back to elapsed_s. Negative when no active elapsed time applies.
+double progress_elapsed_seconds(const nlohmann::json& progress, double now_epoch_s = -1.0);
+
+// Formats a non-negative duration in seconds concisely (e.g. "4.2s" or "1m 12s").
+std::string format_elapsed_seconds(double seconds);
 
 // The handler of run.state, run.set_param, run.action and run.pause, by the
 // invocation's name. `control` is the session's run control, or null, which

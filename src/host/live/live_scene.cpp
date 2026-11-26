@@ -148,6 +148,7 @@ struct SceneView::ProgramSlot {
     int reported = -1;
     int64_t reported_step = -2;   // the resource step of the last report
     double reported_ms = -1;     // the completed draw timing of the last report
+    std::string reported_warning; // the warning of the last report
     std::chrono::steady_clock::time_point installed;
 };
 
@@ -520,6 +521,18 @@ bool SceneView::external_draws() const {
     return false;
 }
 
+bool SceneView::active_external_draws() const {
+#if defined(CALIPER_HAVE_DRAW)
+    for (const auto& d : draws_) {
+        if (d->shape || d->marks || !d->runtime) continue;
+        const caliper_draw::DrawState st = d->runtime->status().state;
+        if ((st == caliper_draw::DrawState::compiled || st == caliper_draw::DrawState::running) && !d->runtime->late())
+            return true;
+    }
+#endif
+    return false;
+}
+
 bool SceneView::program_pan_zoom() const {
 #if defined(CALIPER_HAVE_DRAW)
     for (const auto& d : draws_)
@@ -636,16 +649,21 @@ Aabb program_box() {
     return b;
 }
 
-// The feed receives changes of state, resource step, and completed draw timing.
+// The feed receives changes of state, resource step, warning, and completed draw timing.
 // A timing can arrive after the report of its resource step. The host emits
-// an event only when the state changes.
+// an event only when the state or warning changes.
 void report_state(caliper_draw::DrawFeed* feed, int* reported, int64_t* reported_step, double* reported_ms,
-                  const caliper_draw::DrawRuntime& rt) {
+                  std::string* reported_warning, const caliper_draw::DrawRuntime& rt) {
     const caliper_draw::DrawStatus st = rt.status();
-    if (int(st.state) == *reported && st.resource_step == *reported_step && st.frame_ms == *reported_ms) return;
+    const std::string warn =
+        st.warning.ok() ? std::string() : st.warning.code + ":" + st.warning.where + ":" + st.warning.message;
+    if (int(st.state) == *reported && st.resource_step == *reported_step && st.frame_ms == *reported_ms &&
+        warn == *reported_warning)
+        return;
     *reported = int(st.state);
     *reported_step = st.resource_step;
     *reported_ms = st.frame_ms;
+    *reported_warning = warn;
     if (feed) feed->status(rt);
 }
 
@@ -693,7 +711,8 @@ void SceneView::reconcile_programs() {
 #if defined(CALIPER_SCENE_PIECES)
                 if (shape) shapes_->installed(p.instance.program);
 #endif
-                report_state(feed, &slot->reported, &slot->reported_step, &slot->reported_ms, *slot->runtime);
+                report_state(feed, &slot->reported, &slot->reported_step, &slot->reported_ms,
+                             &slot->reported_warning, *slot->runtime);
             }
             next.push_back(std::move(slot));
         }
@@ -817,7 +836,7 @@ void SceneView::draw_programs() {
                 d->pending.emplace_back(s, std::chrono::steady_clock::now());
             }
         }
-        report_state(feed, &d->reported, &d->reported_step, &d->reported_ms, *d->runtime);
+        report_state(feed, &d->reported, &d->reported_step, &d->reported_ms, &d->reported_warning, *d->runtime);
     }
     refresh_piece_notes();
 #endif
@@ -841,11 +860,14 @@ void SceneView::poll_programs() {
             completed = true;
         }
         if (!d->pending.empty()) d->runtime->frame_pending(ms_since(d->pending.front().second));
-        report_state(slot_feed(*d), &d->reported, &d->reported_step, &d->reported_ms, *d->runtime);
+        const int prev_state = d->reported;
+        report_state(slot_feed(*d), &d->reported, &d->reported_step, &d->reported_ms, &d->reported_warning,
+                     *d->runtime);
+        if (d->reported != prev_state && d->runtime->status().state == caliper_draw::DrawState::stopped) changed();
     }
     refresh_piece_notes();
-    // The programs of the panel together: over 16.7 ms a frame on 30 polls in a row stops the
-    // costliest one, which names its costliest pass after one more measured frame.
+    // The programs of the panel together: over 16.7 ms a frame on 30 polls in a row warns on the
+    // costliest one, which names its costliest pass after one measured frame.
     if (!completed) return;
     double total = 0, worst_ms = -1;
     caliper_draw::DrawRuntime* worst = nullptr;
@@ -859,11 +881,23 @@ void SceneView::poll_programs() {
             worst = d->runtime.get();
         }
     }
-    panel_over_ = total > 16.7 ? panel_over_ + 1 : 0;
+    if (total <= 16.7) {
+        panel_over_ = 0;
+        for (auto& d : draws_) {
+            if (!d->runtime) continue;
+            d->runtime->clear_panel_warning();
+            report_state(slot_feed(*d), &d->reported, &d->reported_step, &d->reported_ms, &d->reported_warning,
+                         *d->runtime);
+        }
+        return;
+    }
+    ++panel_over_;
     if (panel_over_ >= 30 && worst != nullptr) {
-        char b[96];
-        std::snprintf(b, sizeof b, "the programs of its panel took %.1f ms a frame together, above 16.7 ms", total);
-        worst->request_stop(caliper_builder::programs::kProgramDrawOverTime, b);
+        if (worst->status().warning.ok()) {
+            char b[96];
+            std::snprintf(b, sizeof b, "the programs of its panel took %.1f ms a frame together, above 16.7 ms", total);
+            worst->request_warning(caliper_builder::programs::kProgramDrawOverTime, b);
+        }
         panel_over_ = 0;
     }
 #endif
@@ -1364,7 +1398,7 @@ bool SceneView::render(uint32_t width, uint32_t height, float pixel_scale, uint3
     // The feed's programs draw in every frame: their time, their draw state and their resources
     // move. Scene pieces draw when the scene changes.
     reconcile_programs();
-    if (external_draws()) changed();
+    if (active_external_draws()) changed();
     // The piece selects the host camera even when the empty scene defaults to 3-D.
     const bool pan_zoom = program_pan_zoom();
     if (pan_zoom != program_camera_active_ || (pan_zoom && !std::holds_alternative<PanZoom>(camera_))) {

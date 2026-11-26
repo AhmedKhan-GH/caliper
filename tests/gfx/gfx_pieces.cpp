@@ -321,7 +321,7 @@ TEST_CASE("gfx/Metal pieces: the arcs draw instanced and additive, with an ID fo
     CHECK(halo_plain * 10 < halo);
 }
 
-TEST_CASE("gfx/Metal pieces: a pass over its frame time stops its program after 30 frames, named, and the other goes on") {
+TEST_CASE("gfx/Metal pieces: a pass over its frame time warns after 30 frames, named, and both programs keep drawing") {
     std::unique_ptr<gfx::Backend> g = layer();
     if (!g) CALIPER_SKIP_NO_GPU("no Metal device");
     if (!g->caps().has(gfx::kCapTimestamps)) CALIPER_SKIP_NOT_APPLICABLE("the Metal device gives no GPU timestamps");
@@ -358,17 +358,21 @@ fn slow(in: CaliperFullscreen) -> @location(0) vec4<f32> {
     // The slow pass loops 20,000 times in each fragment, thousands of times its 0.5 ms on any GPU;
     // the other program gets 1 ms a frame, so that the speed of the runner's GPU decides nothing.
     int frames = 0;
-    while (frames < 40 && panel.frame(rt, frame)) {
+    while (frames < 35 && rt.status().warning.ok()) {
+        REQUIRE(panel.frame(rt, frame));
         ++frames;
         REQUIRE(panel.frame(other, frame, 1.0));
     }
     const cd::DrawStatus s = rt.status();
-    MESSAGE("slow_pattern: stopped after ", frames, " frames: ", s.error.message);
-    CHECK(s.state == cd::DrawState::stopped);
-    CHECK(s.error.code == cp::kProgramDrawOverTime);
-    CHECK(s.error.where == "draw.passes[1]");
+    MESSAGE("slow_pattern: warned after ", frames, " frames: ", s.warning.message);
+    CHECK(s.state == cd::DrawState::running);
+    CHECK(s.error.ok());
+    CHECK(s.warning.code == cp::kProgramDrawOverTime);
+    CHECK(s.warning.where == "draw.passes[1]");
     CHECK(s.entry == "slow");
     CHECK(frames == 31);   // 30 frames over its limit, then one that measures each pass
+    CHECK(panel.frame(rt, frame));
+    CHECK(rt.status().state == cd::DrawState::running);
     CHECK(other.status().state == cd::DrawState::running);
     CHECK(panel.frame(other, frame, 1.0));
 }
@@ -573,6 +577,14 @@ TEST_CASE("gfx/Metal pieces: the scene view draws its programs after its scene, 
     MESSAGE("scene view: ", lit, " lit pixels, ", picked, " with an arc's ID, median GPU time ", s.frame_ms, " ms");
     CHECK(lit >= 2000);
     CHECK(picked >= 1000);
+    // While a pending frame is late (> 1 s), render() keeps the last drawn target instead of clearing it.
+    auto* mut_rt = const_cast<cd::DrawRuntime*>(rig.view->draw_runtimes()[0]);
+    mut_rt->frame_pending(1500.0);
+    CHECK(mut_rt->late());
+    REQUIRE_MESSAGE(rig.view->render(kSize, kSize, 2.0f, kBackground, &why), why);
+    std::vector<std::uint8_t> late_rgba;
+    REQUIRE_MESSAGE(rig.view->read_pixels(&late_rgba, &why), why);
+    CHECK(late_rgba == rgba);
     // A program that leaves the feed leaves the view, and the scene draws alone.
     feed.list.clear();
     ++feed.rev;
@@ -624,7 +636,7 @@ TEST_CASE("gfx/Metal pieces: a scene view of programs alone opens at its startin
     rig.view->set_draw_feed(nullptr);
 }
 
-TEST_CASE("gfx/Metal pieces: the scene view stops a program over its time and the other program draws on") {
+TEST_CASE("gfx/Metal pieces: the scene view warns on a program over its time and both programs keep drawing") {
     ViewRig rig;
     if (!rig.init()) CALIPER_SKIP_NO_GPU("no Metal device");
     cs::Piece slow = ex::attention_field();
@@ -646,9 +658,8 @@ fn slow(in: CaliperFullscreen) -> @location(0) vec4<f32> {
     return vec4<f32>(0.0, 0.0, 0.0, x * 0.0001);
 }
 )";
-    // The view measures real GPU times: tower_arcs keeps the largest frame budget, 16 ms, thus a
-    // slow or paravirtual GPU does not stop it, and slow_field is over its 0.5 ms by thousands
-    // of times on any GPU.
+    // The view measures real GPU times: tower_arcs keeps the largest frame budget, 16 ms, and
+    // slow_field exceeds its 0.5 ms budget by thousands of times on any GPU.
     cs::Piece arcs = ex::attention_arcs();
     arcs.draw->frame_ms = cs::piece_limits::kFrameMsMax;
     FixedFeed feed;
@@ -661,18 +672,23 @@ fn slow(in: CaliperFullscreen) -> @location(0) vec4<f32> {
             if (rt->instance().program == "slow_field") return rt->status();
         return cd::DrawStatus{};
     };
-    while (frames < 60 && slow_state().state != cd::DrawState::stopped) {
+    while (frames < 60 && slow_state().warning.ok()) {
         rig.frame();
         ++frames;
     }
     const cd::DrawStatus s = slow_state();
-    MESSAGE("scene view: slow_field stopped after ", frames, " frames: ", s.error.message);
-    CHECK(s.state == cd::DrawState::stopped);
-    CHECK(s.error.code == cp::kProgramDrawOverTime);
-    CHECK(s.error.where == "draw.passes[1]");
+    MESSAGE("scene view: slow_field warned after ", frames, " frames: ", s.warning.message);
+    CHECK(s.state == cd::DrawState::running);
+    CHECK(s.error.ok());
+    CHECK(s.warning.code == cp::kProgramDrawOverTime);
+    CHECK(s.warning.where == "draw.passes[1]");
     CHECK(frames <= 33);
-    CHECK(feed.states["slow_field"].back() == cd::DrawState::stopped);
+    CHECK(feed.states["slow_field"].back() == cd::DrawState::running);
+    const std::uint64_t encoded_before = s.frames;
     rig.frame();
+    rig.frame();
+    CHECK(slow_state().frames > encoded_before);
+    CHECK(slow_state().state == cd::DrawState::running);
     for (const cd::DrawRuntime* rt : rig.view->draw_runtimes())
         if (rt->instance().program == "tower_arcs") CHECK(rt->status().state == cd::DrawState::running);
     rig.view->set_draw_feed(nullptr);

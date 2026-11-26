@@ -350,7 +350,11 @@ public:
         if (applet == root.end()) {
             missing("", "applet", "A spec");
         } else if (table(*applet, "applet", "applet")) {
-            keys(*applet, "applet", {"id", "title", "description"}, "the applet table");
+            if (version_ >= kInstrumentVersion) {
+                keys(*applet, "applet", {"id", "title", "description", "layout_locked"}, "the applet table");
+            } else {
+                keys(*applet, "applet", {"id", "title", "description"}, "the applet table");
+            }
             auto id = string(*applet, "id", "applet");
             if (id) {
                 s.applet.id = *id;
@@ -359,6 +363,7 @@ public:
             }
             s.applet.title = string(*applet, "title", "applet");
             s.applet.description = string(*applet, "description", "applet");
+            if (version_ >= kInstrumentVersion) s.applet.layout_locked = boolean(*applet, "layout_locked", "applet");
             s.applet.x = extension(*applet, "applet");
         }
 
@@ -1073,7 +1078,7 @@ public:
     Control control(const json& o, const std::string& path) {
         Control c;
         if (!table(o, path, path)) return c;
-        keys(o, path, {"id", "kind", "title", "bind", "options"}, "a control");
+        keys(o, path, {"id", "kind", "title", "closable", "bind", "options"}, "a control");
         if (auto id = string(o, "id", path)) {
             c.id = *id;
         } else if (o.find("id") == o.end()) {
@@ -1094,6 +1099,7 @@ public:
             missing(path, "kind", "A control");
         }
         c.title = string(o, "title", path);
+        c.closable = boolean(o, "closable", path);
         if (auto bind = string(o, "bind", path)) {
             c.bind = *bind;
         } else if (o.find("bind") == o.end() && !(kind_known && c.kind == ControlKind::readout)) {
@@ -1350,7 +1356,8 @@ public:
         Panel p;
         if (!table(o, path, path)) return p;
         if (version_ >= kInstrumentVersion) {
-            keys(o, path, {"id", "primitive", "title", "bind", "options", "entity", "annotation"}, "a panel");
+            keys(o, path, {"id", "primitive", "title", "closable", "bind", "options", "entity", "annotation"},
+                 "a panel");
         } else {
             keys(o, path, {"id", "primitive", "title", "bind", "options"}, "a panel");
         }
@@ -1374,6 +1381,7 @@ public:
             missing(path, "primitive", "A panel");
         }
         p.title = string(o, "title", path);
+        if (version_ >= kInstrumentVersion) p.closable = boolean(o, "closable", path);
         p.x = extension(o, path);
         if (!known) return p;  // slots and options depend on the primitive
         const std::string prim_name = to_string(p.primitive);
@@ -2184,6 +2192,7 @@ json to_json(const Panel& p) {
     j["id"] = p.id;
     j["primitive"] = to_string(p.primitive);
     if (p.title) j["title"] = *p.title;
+    if (p.closable) j["closable"] = *p.closable;
     if (!p.bind.empty()) {
         json bind = json::object();
         for (const auto& [slot, value] : p.bind) {
@@ -2274,6 +2283,7 @@ json to_json(const Control& c) {
     j["id"] = c.id;
     j["kind"] = control_kind_name(c.kind);
     if (c.title) j["title"] = *c.title;
+    if (c.closable) j["closable"] = *c.closable;
     if (!c.bind.empty() || c.kind != ControlKind::readout) j["bind"] = c.bind;  // a readout binds nothing
     if (!c.options.empty()) j["options"] = control_options_json(c.options);
     if (!c.x.is_null()) j["x"] = c.x;
@@ -2393,6 +2403,7 @@ json to_json(const Spec& spec) {
     applet["id"] = spec.applet.id;
     if (spec.applet.title) applet["title"] = *spec.applet.title;
     if (spec.applet.description) applet["description"] = *spec.applet.description;
+    if (spec.applet.layout_locked) applet["layout_locked"] = *spec.applet.layout_locked;
     if (!spec.applet.x.is_null()) applet["x"] = spec.applet.x;
     j["applet"] = std::move(applet);
     if (!spec.sources.empty()) {

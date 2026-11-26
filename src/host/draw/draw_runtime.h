@@ -25,17 +25,19 @@
 // stop a pass on the GPU, thus the runtime never waits for one. The host
 // reports each submit's GPU time with frame_done() and the age of the oldest
 // pending one with frame_pending(). A program over draw.frame_ms on 30 frames
-// in a row records one more frame with each pass in a submit of its own, and
-// then stops with program.draw_over_time, naming its costliest pass. A frame
-// still pending after 1 s by the wall clock is late, and the program submits
-// no frame until it is done: a training run on the same GPU can delay a
-// correct frame that long. Frames over 250 ms of GPU time in a row stop it
-// with program.draw_timeout once their GPU time passes 1 s together, thus a
-// frame over 1 s of GPU time stops it at once. A late frame that the driver
-// ended stops it too, and where the backend gives no GPU time, 3 late frames
-// in a row do; a frame still pending after 5 s stops it at once. A resource, draw buffer or target over draw.memory_mb stops it with
-// program.draw_over_memory. A stopped program releases its objects and draws
-// nothing; the other programs of the panel keep drawing. Nothing here throws.
+// in a row records one frame with each pass in its own submit. It then sets a
+// program.draw_over_time warning that names the costliest pass and keeps
+// running. The warning clears when the frame time returns within the limit. A
+// frame pending after 1 s by the wall clock is late, and the program submits
+// no frame until it finishes, because a training run on the same GPU can delay
+// a valid frame. Frames over 250 ms of GPU time in a row stop the program with
+// program.draw_timeout once their GPU time passes 1 s together. Thus one frame
+// over 1 s of GPU time stops it at once. A late frame that the driver ended
+// stops it too. Without GPU timestamps, 3 late frames in a row stop it, and a
+// frame pending after 5 s stops it at once. A resource, draw buffer or target
+// over draw.memory_mb stops it with program.draw_over_memory. A stopped
+// program releases its objects and draws nothing, while other panel programs
+// keep drawing. Nothing here throws.
 #include "gfx/gfx.h"
 
 #include <caliper_builder/programs/pieces.h>
@@ -195,7 +197,8 @@ struct DrawStatus {
     std::int64_t resource_step = -1; // the step of the resources of the last frame
     std::uint64_t frames = 0;
     Verdict error;                   // the refusal or the stop; `where` names the pass, e.g. "draw.passes[2]"
-    int pass = -1;                   // the index of the pass that the error names, or -1
+    Verdict warning;                 // the frame-budget warning; `where` names the pass, e.g. "draw.passes[2]"
+    int pass = -1;                   // the index of the pass that the error or warning names, or -1
     std::string entry;               // that pass's entry point (its fragment for a render pass)
 };
 
@@ -244,30 +247,32 @@ public:
     // installed, stopped, a resource without a version, or a refusal, which
     // stops it). Applies the reset rules of the draw buffers.
     bool encode(std::vector<caliper_gfx::Frame>* frames, const FrameInputs& in, const HostTarget& target);
-    // Reports one submitted frame that is done, in the order of encode()'s
-    // frames: `gpu_ms` from the layer's timestamps, < 0 where the backend gave
-    // none, and `wall_ms`, the time from the submit until the host saw the
-    // work done, which stands in for a missing GPU time as an upper bound.
-    // Over draw.frame_ms on 30 frames in a row stops the program with
-    // program.draw_over_time. Frames over 250 ms of GPU time in a row stop it
-    // with program.draw_timeout once their GPU time passes 1 s together. A
-    // late frame (frame_pending) stops it when the backend has timestamps and
-    // gave it none (the driver ended it), or, without timestamps, when it is
-    // the third late frame in a row. A frame whose time the backend no longer
-    // keeps (caliper_gfx::kGpuMsForgotten) is done and not judged.
+    // Reports one completed frame in the order of encode(): `gpu_ms` comes from
+    // layer timestamps (< 0 when absent), and `wall_ms` is the elapsed time from
+    // submit until completion, an upper bound without GPU timestamps. Over
+    // draw.frame_ms on 30 frames in a row records a program.draw_over_time
+    // warning and keeps running, and a frame within the limit clears it. Frames
+    // over 250 ms of GPU time in a row stop the program with
+    // program.draw_timeout once their GPU time passes 1 s together. A late frame
+    // (frame_pending) stops it when a timestamped backend gives no time (the
+    // driver ended it), or on the third late frame in a row without timestamps.
+    // A frame with caliper_gfx::kGpuMsForgotten is done and is not judged.
     void frame_done(double gpu_ms, double wall_ms = -1);
-    // The oldest submitted frame of the program that is not done has waited
-    // this long by the wall clock: after 1 s the frame is late and the
-    // program submits no frame until it is done; after 5 s the program stops
-    // at once with program.draw_timeout.
+    // Reports the wall-clock wait of the oldest pending frame: after 1 s the
+    // frame is late and no new frame submits until completion, and after 5 s the
+    // program stops at once with program.draw_timeout.
     void frame_pending(double waited_ms);
+    // Whether a pending frame passed 1 s and blocks new submits until completion.
+    bool late() const;
     // The layer refused a submitted frame (Backend::last_error()): the program
     // stops with program.layer_refused; the panel's other programs go on.
     void frame_refused(const std::string& why);
-    // Stops the program after one more frame that measures each pass, naming
-    // the costliest: the scene view's rule for the programs of one panel
-    // together over 16.7 ms a frame. `message` says why.
-    void request_stop(const char* code, const std::string& message);
+    // Records a warning after one measured frame that names the costliest pass,
+    // for a panel whose programs exceed 16.7 ms together. `message` gives the
+    // panel total.
+    void request_warning(const char* code, const std::string& message);
+    // Clears a panel warning when the panel total returns within 16.7 ms.
+    void clear_panel_warning();
     // The step of the version of a resource or buffer input that the next frame shows; -1
     // before its first version.
     std::int64_t resource_step(const std::string& resource) const;

@@ -251,6 +251,47 @@ cb::RunState AppRunControl::state() {
     return st;
 }
 
+json AppRunControl::progress_state() {
+    json prog = cb::RunControl::progress_state();
+    if (prog.is_object()) return prog;
+    if (!runner_) return nullptr;
+    const std::vector<cb::RunEntry> runs = runner_->list();
+    const double now = std::chrono::duration<double>(std::chrono::system_clock::now().time_since_epoch()).count();
+    for (const cb::RunEntry& r : runs) {
+        if (r.state != "starting") continue;
+        auto [it, inserted] = starting_since_.emplace(r.id, now);
+        (void)inserted;
+        return json{{"state", "starting"},
+                    {"stage", "starting"},
+                    {"label", "Starting model process"},
+                    {"done", nullptr},
+                    {"total", nullptr},
+                    {"started_at", it->second},
+                    {"elapsed_s", std::max(0.0, now - it->second)},
+                    {"error", nullptr},
+                    {"panels", json::object()}};
+    }
+    starting_since_.clear();
+    if (!link_ || !link_->attached()) {
+        for (auto it = runs.rbegin(); it != runs.rend(); ++it) {
+            if (it->state == "running" || it->state == "paused") break;
+            if (it->state == "failed") {
+                const std::string err = it->error && !it->error->empty() ? *it->error : "The managed run failed.";
+                return json{{"state", "error"},
+                            {"stage", "error"},
+                            {"label", "Run failed"},
+                            {"done", nullptr},
+                            {"total", nullptr},
+                            {"started_at", nullptr},
+                            {"elapsed_s", 0.0},
+                            {"error", err},
+                            {"panels", json::object()}};
+            }
+        }
+    }
+    return nullptr;
+}
+
 cb::Error AppRunControl::send(const std::string& op, const std::string& name, const json& value, std::int64_t count) {
     return send_net(op, name, to_net(value), count);
 }
@@ -325,8 +366,9 @@ std::vector<cb::Intervention> interventions_of(const json& interventions) {
     for (const json& a : interventions["active"]) {
         if (!a.is_object()) continue;
         cb::Intervention i;
+        i.specification = a;
         i.point = a.value("point", std::string());
-        i.op = a.value("op", std::string("ablate"));
+        i.op = cb::intervention_op(a);
         i.from_step = opt_int(a, "from_step");
         i.until_step = opt_int(a, "until_step");
         i.since_step = opt_int(a, "since_step");
@@ -365,9 +407,7 @@ std::vector<cb::Intervention> AppRunControl::interventions() {
 cb::Error AppRunControl::intervene_set(const cb::Intervention& i) {
     if (link_ && link_->attached() && !interventions_supported())
         return cb::Error(cb::kInterveneNotSupported, "The script " + link_->script() + " takes no interventions.");
-    json set{{"point", i.point}, {"op", i.op}};
-    set["from_step"] = i.from_step ? json(*i.from_step) : json();
-    set["until_step"] = i.until_step ? json(*i.until_step) : json();
+    json set = cb::intervention_set_spec(i);
     return send_net(kOpIntervene, "", to_net_json(json{{"set", std::move(set)}}), 0);
 }
 
@@ -380,23 +420,32 @@ cb::Error AppRunControl::intervene_clear(const std::string& point) {
 
 void AppRunControl::feed_interventions(const json& interventions, const json& step, bool baseline,
                                        cb::EventSink& sink) {
-    // The interventions the script applies now, by point and op, with the
-    // step it applied each at.
-    std::map<std::pair<std::string, std::string>, json> now;
-    for (const cb::Intervention& i : interventions_of(interventions))
-        if (i.state == "active") now[{i.point, i.op}] = i.since_step ? json(*i.since_step) : step;
+    std::map<std::string, json> now;
+    for (const cb::Intervention& i : interventions_of(interventions)) {
+        if (i.state != "active") continue;
+        json key = json::array({i.point, i.op});
+        if ((i.op == "clamp" || i.op == "scale") && i.specification.contains("positions")) {
+            auto positions = i.specification.at("positions").get<std::vector<std::int64_t>>();
+            std::sort(positions.begin(), positions.end());
+            key.push_back(i.specification.at("feature"));
+            key.push_back(positions);
+        }
+        now[key.dump()] = {{"point", i.point}, {"op", i.op}, {"step", i.since_step ? json(*i.since_step) : step}};
+    }
     if (!baseline) {
-        for (const auto& [key, since] : now) {
+        for (const auto& [key, fields] : now) {
             const auto it = applied_.find(key);
-            if (it == applied_.end() || it->second != since)
-                push_run(sink, json{{"change", "intervene"}, {"point", key.first}, {"op", key.second}, {"step", since}});
+            if (it == applied_.end() || it->second != fields) {
+                auto event = fields;
+                event["change"] = "intervene";
+                push_run(sink, std::move(event));
+            }
         }
     }
-    // A stop also in a baseline: applied_ then holds what the same script applied before its
-    // link dropped (feed()), else nothing.
-    for (const auto& [key, since] : applied_)
+    // A baseline also reports effects that ended while the link was absent.
+    for (const auto& [key, fields] : applied_)
         if (!now.count(key))
-            push_run(sink, json{{"change", "intervene"}, {"point", key.first}, {"op", nullptr}, {"step", step}});
+            push_run(sink, json{{"change", "intervene"}, {"point", fields.at("point")}, {"op", nullptr}, {"step", step}});
     applied_ = std::move(now);
 }
 
@@ -619,6 +668,7 @@ struct AppSession::Impl {
         binding = std::make_shared<HostBinding>(this);
         s->set_host(binding);
         s->set_run_control(&run_ctl);
+        run_ctl.set_model_runner(runner.load());
         s->set_model_runner(runner.load());
         s->set_program_host(program_host.load());
         s->set_draw_host(draw_host.load());
@@ -1146,6 +1196,7 @@ caliper_builder::RunControl* AppSession::run_control() { return &impl_->run_ctl;
 
 void AppSession::set_model_runner(caliper_builder::ModelRunner* runner) {
     impl_->runner.store(runner);
+    impl_->run_ctl.set_model_runner(runner);
     std::lock_guard<std::mutex> lock(impl_->m);
     if (impl_->session) impl_->session->set_model_runner(runner);
 }

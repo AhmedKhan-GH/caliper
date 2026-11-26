@@ -54,6 +54,7 @@ TEST_CASE("programs: a status item has exactly the keys of the table's program_s
     for (const auto& kv : j.items()) have.insert(kv.key());
     CHECK(have == want);
     CHECK(j["error"]["code"] == "program.over_time");
+    CHECK(j["warning"].is_null());
 }
 
 TEST_CASE("programs: a program event carries its id, change, host and error") {
@@ -64,8 +65,14 @@ TEST_CASE("programs: a program event carries its id, change, host and error") {
     st.panel = "world";
     st.error = ProgramError{"program.writes_input", "The input w is not var<storage, read>.", 2, 1};
     push_program_event(ring, st, "refused");
+    ProgramStatus warned;
+    warned.id = "rows";
+    warned.host = "script";
+    warned.panel = "world";
+    warned.warning = ProgramError{"program.over_budget", "Passes exceed the training budget.", 0, 0};
+    push_program_event(ring, warned, "warned");
     const auto read = ring.read(0, {}, 8);
-    REQUIRE(read.events.size() == 1);
+    REQUIRE(read.events.size() == 2);
     const json e = event_json(read.events.front());
     CHECK(e["kind"] == "program");
     CHECK(e["panel"] == "world");
@@ -74,6 +81,11 @@ TEST_CASE("programs: a program event carries its id, change, host and error") {
     CHECK(e["host"] == "script");
     CHECK(e["code"] == "program.writes_input");
     CHECK(e["line"] == 2);
+    const json w = event_json(read.events.back());
+    CHECK(w["kind"] == "program");
+    CHECK(w["change"] == "warned");
+    CHECK(w["host"] == "script");
+    CHECK(w["code"] == "program.over_budget");
 }
 
 namespace {

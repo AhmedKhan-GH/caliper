@@ -199,3 +199,30 @@ TEST_CASE("control commands: a control placed below a scene panel, and the versi
     ok(*s, "history.undo");
     CHECK(s->open_spec()->spec == before);
 }
+
+TEST_CASE("control closable and layout.lock enforce non-closable controls and undo") {
+    auto s = open_session(fresh_dir("control_closable") + "/workspace");
+    ok(*s, "spec.new", {{"id", "m2"}});
+    ok(*s, "control.create", {{"id", "lr"}, {"kind", "slider"}, {"closable", false}, {"bind", "param:lr"}});
+    ok(*s, "control.create", {{"id", "pause"}, {"kind", "button"}, {"bind", "run:pause"}});
+
+    CHECK(err(*s, "control.remove", {{"id", "lr"}}) == "control.not_closable");
+
+    // Lock layout blocks removing even a closable control, and blocks creating a new one.
+    const json locked = ok(*s, "layout.lock", {{"locked", true}});
+    CHECK(locked["locked"] == true);
+    CHECK(err(*s, "control.remove", {{"id", "pause"}}) == "layout.locked");
+    CHECK(err(*s, "control.create", {{"id", "step"}, {"kind", "button"}, {"bind", "action:step"}}) == "layout.locked");
+
+    // Undo reverts layout.lock cleanly.
+    ok(*s, "history.undo");
+    CHECK_FALSE(s->open_spec()->spec.applet.layout_locked.value_or(false));
+    ok(*s, "control.remove", {{"id", "pause"}});
+    CHECK(err(*s, "control.remove", {{"id", "lr"}}) == "control.not_closable");
+
+    // Patching closable back to null lets lr be removed.
+    const json patched = ok(*s, "control.patch", {{"id", "lr"}, {"patch", {{"closable", nullptr}}}});
+    CHECK_FALSE(patched["control"].contains("closable"));
+    ok(*s, "control.remove", {{"id", "lr"}});
+    CHECK(s->open_spec()->spec.find_control("lr") == nullptr);
+}

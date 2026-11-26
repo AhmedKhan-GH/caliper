@@ -1,0 +1,232 @@
+[
+  {
+    "name": "legacy",
+    "accepted": true,
+    "specification": {
+      "point": "layers.0.mlp",
+      "op": "ablate"
+    }
+  },
+  {
+    "name": "kind",
+    "accepted": true,
+    "specification": {
+      "point": "layers.0.mlp",
+      "kind": "ablate"
+    }
+  },
+  {
+    "name": "both",
+    "accepted": true,
+    "specification": {
+      "point": "layers.0.mlp",
+      "op": "ablate",
+      "kind": "ablate"
+    }
+  },
+  {
+    "name": "add",
+    "accepted": true,
+    "specification": {
+      "point": "layers.0.mlp_out",
+      "kind": "add",
+      "vector": [
+        1.0,
+        -1.0
+      ],
+      "coefficient": 0.5,
+      "positions": [
+        0,
+        31
+      ]
+    }
+  },
+  {
+    "name": "scale",
+    "accepted": true,
+    "specification": {
+      "point": "layers.0.mlp_out",
+      "kind": "scale",
+      "feature": 0,
+      "multiplier": -2.0,
+      "dictionary": "fixture"
+    }
+  },
+  {
+    "name": "clamp",
+    "accepted": true,
+    "specification": {
+      "point": "layers.0.mlp_out",
+      "op": "clamp",
+      "feature": 1,
+      "value": 0.0,
+      "positions": []
+    }
+  },
+  {
+    "name": "patch",
+    "accepted": true,
+    "specification": {
+      "point": "layers.0.mlp_out",
+      "kind": "patch",
+      "source_prompt": "A café",
+      "source_position": 1
+    }
+  },
+  {
+    "name": "reserved",
+    "accepted": true,
+    "specification": {
+      "point": "layers.0.mlp",
+      "op": "steer"
+    }
+  },
+  {
+    "name": "missing discriminator",
+    "accepted": false,
+    "specification": {
+      "point": "layers.0.mlp"
+    }
+  },
+  {
+    "name": "conflicting discriminators",
+    "accepted": false,
+    "specification": {
+      "point": "layers.0.mlp",
+      "op": "ablate",
+      "kind": "add"
+    }
+  },
+  {
+    "name": "unknown kind",
+    "accepted": false,
+    "specification": {
+      "point": "layers.0.mlp",
+      "kind": "multiply"
+    }
+  },
+  {
+    "name": "extra field",
+    "accepted": false,
+    "specification": {
+      "point": "layers.0.mlp",
+      "kind": "ablate",
+      "value": 1
+    }
+  },
+  {
+    "name": "bool feature",
+    "accepted": false,
+    "specification": {
+      "point": "layers.0.mlp_out",
+      "kind": "scale",
+      "feature": true,
+      "multiplier": 1
+    }
+  },
+  {
+    "name": "missing vector",
+    "accepted": false,
+    "specification": {
+      "point": "layers.0.mlp_out",
+      "kind": "add",
+      "coefficient": 1
+    }
+  },
+  {
+    "name": "bool coefficient",
+    "accepted": false,
+    "specification": {
+      "point": "layers.0.mlp_out",
+      "kind": "add",
+      "vector": [
+        1
+      ],
+      "coefficient": true
+    }
+  },
+  {
+    "name": "empty vector",
+    "accepted": false,
+    "specification": {
+      "point": "layers.0.mlp_out",
+      "kind": "add",
+      "vector": [],
+      "coefficient": 1
+    }
+  },
+  {
+    "name": "duplicate positions",
+    "accepted": false,
+    "specification": {
+      "point": "layers.0.mlp_out",
+      "kind": "patch",
+      "source_prompt": "AB",
+      "positions": [
+        0,
+        0
+      ]
+    }
+  },
+  {
+    "name": "position out of range",
+    "accepted": false,
+    "specification": {
+      "point": "layers.0.mlp_out",
+      "kind": "patch",
+      "source_prompt": "AB",
+      "positions": [
+        32
+      ]
+    }
+  },
+  {
+    "name": "bool source position",
+    "accepted": false,
+    "specification": {
+      "point": "layers.0.mlp_out",
+      "kind": "patch",
+      "source_prompt": "AB",
+      "source_position": true
+    }
+  },
+  {
+    "name": "empty prompt",
+    "accepted": false,
+    "specification": {
+      "point": "layers.0.mlp_out",
+      "kind": "patch",
+      "source_prompt": ""
+    }
+  },
+  {
+    "name": "empty dictionary",
+    "accepted": false,
+    "specification": {
+      "point": "layers.0.mlp_out",
+      "kind": "clamp",
+      "feature": 1,
+      "value": 0,
+      "dictionary": ""
+    }
+  },
+  {
+    "name": "bad schedule",
+    "accepted": false,
+    "specification": {
+      "point": "layers.0.mlp",
+      "kind": "ablate",
+      "from_step": 10,
+      "until_step": 10
+    }
+  },
+  {
+    "name": "bool schedule",
+    "accepted": false,
+    "specification": {
+      "point": "layers.0.mlp",
+      "kind": "ablate",
+      "from_step": true
+    }
+  }
+]

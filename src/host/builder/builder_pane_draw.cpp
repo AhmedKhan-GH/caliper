@@ -338,7 +338,7 @@ struct BarItem {
 };
 
 std::vector<BarItem> bar_items(bool build) {
-    std::vector<BarItem> items = {{"bar:build", chord("B"), "Build"}};
+    std::vector<BarItem> items = {{"bar:build", chord("B"), "Build"}, {"bar:lock", "", "Lock Layout"}};
     if (build) {
         items.push_back({"bar:text", chord("T"), "Text"});
         items.push_back({"bar:undo", chord("Z"), "Undo"});
@@ -352,7 +352,8 @@ std::vector<BarItem> bar_items(bool build) {
 // the current context's faces.
 float bar_button_width(const BarItem& it) {
     const ImGuiStyle& st = ImGui::GetStyle();
-    return ImGui::CalcTextSize(it.key.c_str()).x + ImGui::CalcTextSize(it.label).x + 2.0f * st.FramePadding.x + 14.0f;
+    const float key_w = it.key.empty() ? 0.0f : ImGui::CalcTextSize(it.key.c_str()).x + 6.0f;
+    return key_w + ImGui::CalcTextSize(it.label).x + 2.0f * st.FramePadding.x + 8.0f;
 }
 
 }  // namespace
@@ -365,6 +366,7 @@ float BuilderPane::page_bar_width() const {
 
 void BuilderPane::page_bar(float max_width) {
     if (!draw_) draw_ = std::make_unique<Draw>();
+    update();
     for (auto it = draw_->items.begin(); it != draw_->items.end();) {
         if (it->first.rfind("bar:", 0) == 0) it = draw_->items.erase(it);
         else ++it;
@@ -377,18 +379,26 @@ void BuilderPane::page_bar(float max_width) {
         const BarItem& it = items[i];
         if (i) ImGui::SameLine(0.0f, 6.0f);
         bool enabled = true, on = false;
-        if (std::string(it.name) == "bar:build") on = build_;
-        else if (std::string(it.name) == "bar:text") on = text_open_;
-        else if (std::string(it.name) == "bar:undo") enabled = can_undo();
-        else if (std::string(it.name) == "bar:redo") enabled = can_redo();
-        else if (std::string(it.name) == "bar:save") enabled = open_.has_value();
+        const std::string name = it.name;
+        if (name == "bar:build") on = build_;
+        else if (name == "bar:lock") {
+            on = layout_locked();
+            enabled = open_.has_value();
+        } else if (name == "bar:text") on = text_open_;
+        else if (name == "bar:undo") enabled = can_undo();
+        else if (name == "bar:redo") enabled = can_redo();
+        else if (name == "bar:save") enabled = open_.has_value();
         const bool clicked = sternbild::key_button(it.key.c_str(), it.label, enabled);
         const ImRect r(ImGui::GetItemRectMin(), ImGui::GetItemRectMax());
         draw_->item(it.name, r);
         if (on) ImGui::GetWindowDrawList()->AddRect(r.Min, r.Max, sternbild::col::bronze, 0.0f, 0, 1.0f);
+        if (name == "bar:lock" && enabled && ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("%s", on ? "Layout is locked — click to unlock"
+                                       : "Lock layout and prevent closing components");
+        }
         if (!clicked) continue;
-        const std::string name = it.name;
         if (name == "bar:build") set_build_mode(!build_);
+        else if (name == "bar:lock") set_layout_locked(!layout_locked());
         else if (name == "bar:text") text_open_ = !text_open_;
         else if (name == "bar:undo") undo();
         else if (name == "bar:redo") redo();
@@ -533,15 +543,29 @@ void BuilderPane::draw_body(const ImRect& area, SpecRuntime& runtime, const Spec
     }
 
     // ---- the canvas's input: focus, a strip's drag, a divider's drag.
+    const bool locked = layout_locked();
+    if (locked) {
+        if (d.dividing) {
+            d.dividing = false;
+            d.divider.clear();
+            end_gesture();
+        }
+        if (drag_.kind == DragPayload::Kind::panel) {
+            drag_ = {};
+            hit_ = {};
+        }
+        if (d.pressed.kind == DragPayload::Kind::panel) d.pressed = {};
+    }
     const bool over_canvas = spec_rect_contains(canvas, mouse.x, mouse.y) &&
                              ImGui::IsWindowHovered(ImGuiHoveredFlags_ChildWindows | ImGuiHoveredFlags_AllowWhenBlockedByActiveItem) &&
                              !ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId);
-    const SpecLayoutSplit* grip = over_canvas && !d.dividing && drag_.kind == DragPayload::Kind::none
+    const SpecLayoutSplit* grip = !locked && over_canvas && !d.dividing && drag_.kind == DragPayload::Kind::none
                                       ? hit_divider(lay, mouse.x, mouse.y, d.m)
                                       : nullptr;
     bool claimed = false;
     for (const auto& c : claims_) claimed |= spec_rect_contains(c, mouse.x, mouse.y);
-    const std::string header = over_canvas && !grip && !claimed ? hit_header(lay, mouse.x, mouse.y, strip) : std::string();
+    const std::string header =
+        !locked && over_canvas && !grip && !claimed ? hit_header(lay, mouse.x, mouse.y, strip) : std::string();
     if (grip) ImGui::SetMouseCursor(grip->horizontal ? ImGuiMouseCursor_ResizeEW : ImGuiMouseCursor_ResizeNS);
     else if (!header.empty() && drag_.kind == DragPayload::Kind::none) ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeAll);
     if (over_canvas && !claimed && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
@@ -1263,6 +1287,13 @@ void BuilderPane::draw_panel_properties(Rows& rows, const spec::Panel& panel_in,
         d.item("prop:title", v);
         property_key(rows, r, pid, "title");
     }
+    {   // Closable: whether the panel can be closed or removed (default true).
+        const ImRect r = rows.next();
+        const ImRect v = rows.label(r, "Closable");
+        const bool on = p.closable.value_or(true);
+        if (flag_box(L, ("##prop.closable." + pid).c_str(), v, on)) set_closable(!on);
+        d.item("prop:closable", ImRect(v.Min, v2(v.Min.x + std::round(17.0f * s), v.Max.y)));
+    }
 
     // ---- bindings: one row per slot, required slots marked.
     rows.section("Bindings");
@@ -1540,7 +1571,10 @@ void BuilderPane::draw_panel_properties(Rows& rows, const spec::Panel& panel_in,
     const std::string key = "\xE2\x8C\xAB", label = "Remove";
     const ImRect b(v2(r.Min.x + d.m.pad, r.Min.y + std::round(2.0f * s)),
                    v2(r.Min.x + d.m.pad + key_button_width(L, key, label), r.Max.y - std::round(2.0f * s)));
-    if (key_button_at(L, "##panel.remove", b, key, label, true, false)) remove_focused();
+    const bool removable = !layout_locked() && p.closable.value_or(true);
+    if (key_button_at(L, "##panel.remove", b, key, label, removable, false)) remove_focused();
+    if (!removable && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+        ImGui::SetTooltip("%s", layout_locked() ? "Layout is locked" : "Panel is not closable");
     d.item("prop:remove", b);
 }
 
@@ -1876,6 +1910,13 @@ void BuilderPane::draw_spec_properties(Rows& rows) {
         if (f.changed) set_spec_description(f.value);
         if (f.deactivated) end_gesture();
         d.item("prop:spec.description", v);
+    }
+    {
+        const ImRect r = rows.next();
+        const ImRect v = rows.label(r, "Lock layout");
+        const bool on = s.applet.layout_locked.value_or(false);
+        if (flag_box(L, "##spec.layout_locked", v, on)) set_layout_locked(!on);
+        d.item("prop:spec.layout_locked", ImRect(v.Min, v2(v.Min.x + std::round(17.0f * L.text_scale), v.Max.y)));
     }
     {
         const ImRect r = rows.next();

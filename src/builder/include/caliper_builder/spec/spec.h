@@ -209,6 +209,7 @@ struct Panel {
     std::string id;
     Primitive primitive = Primitive::series;
     std::optional<std::string> title;
+    std::optional<bool> closable;            // version 1: default true when absent
     std::map<std::string, SlotValue> bind;   // slot name to its value
     Options options;
     std::vector<Entity> entities;            // scene, version 1: the array `entity`
@@ -240,6 +241,7 @@ struct Applet {
     std::string id;
     std::optional<std::string> title;
     std::optional<std::string> description;
+    std::optional<bool> layout_locked;       // version 1: default false when absent
     nlohmann::json x;
 };
 
