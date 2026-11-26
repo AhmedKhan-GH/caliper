@@ -20,7 +20,7 @@ from .test_evaluation_settings import run as run_legacy, settings_fixture
 from .test_gemma_import_binding import artifact
 from .test_gemma_runtime import gemma_model
 from .test_research_evaluation import run as run_research, host_headroom
-from .test_trace import exact_dictionary, qwen_for_trace
+from .test_trace import exact_dictionary
 
 
 TRANSITIONS = [("default", "bf16"), ("bf16", "fp16"),
@@ -30,8 +30,6 @@ TRANSITIONS = [("default", "bf16"), ("bf16", "fp16"),
 @pytest.mark.parametrize(("factory", "evaluation_hash", "index_hash"), [
     (gemma_model, "439db547b5ff10fbde702c0c3158d4a88890378e26994a672ea6ba6330c252c2",
      "a9d0efb48f2a6b4cef5c3be0c6d781f91e2bbd70a390042a2f271a73d2c33575"),
-    (qwen_for_trace, "8a60057bed25559793f333525ea9b94bc6a94a924b7784fbfc8c221cbb0f34d6",
-     "662c457d577c39fc8edbe3c31919ba34442f78533c30889cd0d6ddaa956fb79f"),
 ])
 def test_default_evaluation_and_index_hashes_match_legacy(factory, evaluation_hash, index_hash):
     # Exact parent-revision hashes protect default artifacts without a migration.

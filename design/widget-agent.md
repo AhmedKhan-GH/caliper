@@ -448,10 +448,6 @@ check, the footprint and the reasons the ACP Python SDK is used in tests only.
   refuses more than 20 strict tools, 24 optional parameters or 16 union-typed parameters in all, so the sidecar picks
   the strict tools within those limits; the others are checked against their full schema like every call. A widget
   scope is small, so its tools will usually all be strict.
-- **One run on a local model.** During the spike the dashboard prompt of the acceptance test ran once, on the
-  OpenAI-compatible route, against Qwen 3.8 27B on Ollama, which was already running, and built and saved the
-  dashboard in 135 seconds. It is one manual run of one model, not a guarantee; the conformance suite below is where
-  models are compared.
 
 ### Refusals
 
@@ -726,12 +722,6 @@ page, Widget agent conformance (`docs/agents/widget-agent-conformance.md`). The 
   the probe found, and each task's runs with their times and the reason of each failure. The person adds the
   Markdown's summary row to the reference page's table. A Caliper version and the staleness mark wait for a release
   numbering of the sidecar.
-- **One run on a local model.** The suite ran once against Qwen 3.8 27B (Q4_K_M) on Ollama 0.40.16, which was already
-  running, on loopback with the offline switch, one run of each task: 10 of 12 tasks passed ("partial"), with a median
-  of 16 seconds a task. Tasks 5 and 8 reached the limit of three model requests the budget had then (the model rendered the panel to check
-  its edits, or read the spec first and added the source twice), which suggests that a local model may need the
-  budget's third request for its closing sentence more often than the design assumed. It is one run on one machine,
-  not a guarantee.
 
 ## GPU contention
 

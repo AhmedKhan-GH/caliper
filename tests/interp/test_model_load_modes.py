@@ -12,10 +12,8 @@ from .test_model_load import hf_model, mocked_loader
 
 
 ROUTES = [
-    pytest.param({}, 12, id="qwen-default"),
-    pytest.param({"mode": "inference"}, 12, id="qwen-inference"),
-    pytest.param({"mode": "training"}, 24, id="qwen-training"),
-    pytest.param({"model_id": model_load.GEMMA_ID}, 40, id="gemma-inference"),
+    pytest.param({}, 40, id="gemma-default"),
+    pytest.param({"model_id": model_load.GEMMA_ID}, 40, id="gemma-explicit"),
 ]
 
 
@@ -39,13 +37,13 @@ def source_boundary(monkeypatch):
 
     monkeypatch.setitem(sys.modules, "huggingface_hub", SimpleNamespace(snapshot_download=source))
     monkeypatch.setitem(sys.modules, "transformers", SimpleNamespace(
-        AutoTokenizer=object(), Qwen3_5ForCausalLM=object(), Qwen3_5TextConfig=object()))
+        AutoTokenizer=object()))
     return calls
 
 
 @pytest.mark.parametrize("selection,ceiling", ROUTES)
 @pytest.mark.parametrize("supplied", [False, True])
-def test_loader_enforces_mode_ceiling_before_source(monkeypatch, source_boundary, selection, ceiling, supplied):
+def test_loader_enforces_ceiling_before_source(monkeypatch, source_boundary, selection, ceiling, supplied):
     readings = {"current": int(ceiling * 1e9), "peak": 0}
     created = []
 
@@ -116,31 +114,20 @@ def test_loader_refuses_wrong_guard_device(source_boundary, selection, ceiling):
     assert source_boundary == []
 
 
-@pytest.mark.parametrize("mode", [None, True, False, 24, "", "train", "TRAINING", [], {}])
-def test_loader_refuses_invalid_mode_before_guard(monkeypatch, source_boundary, mode):
-    monkeypatch.setattr(model_load, "MemoryGuard", lambda *a: pytest.fail("invalid mode created a guard"))
-    with pytest.raises(ValueError, match="unsupported text model load mode"):
-        model_load.load_text_model(device="cpu", mode=mode)
+def test_loader_refuses_unsupported_model_before_guard(monkeypatch, source_boundary):
+    monkeypatch.setattr(model_load, "MemoryGuard", lambda *a: pytest.fail("invalid model created a guard"))
+    with pytest.raises(ValueError, match="unsupported text model selection"):
+        model_load.load_text_model(device="cpu", model_id="example/unsupported")
     assert source_boundary == []
 
 
-def test_loader_refuses_gemma_training_before_guard(monkeypatch, source_boundary):
-    monkeypatch.setattr(model_load, "MemoryGuard", lambda *a: pytest.fail("invalid model mode created a guard"))
-    with pytest.raises(ValueError, match="training mode requires the Qwen text model"):
-        model_load.load_text_model(device="cpu", model_id=model_load.GEMMA_ID, mode="training")
-    assert source_boundary == []
-
-
-@pytest.mark.parametrize("mode,limit,current,expected", [
-    ("inference", 40, 10, 12), ("training", 24, 18, 24),
-    ("training", 40, 18, 24), ("training", 8, 6, 8),
-])
-def test_qwen_fixture_retains_mode_budget_and_prior_stops(tmp_path, monkeypatch, mode, limit, current, expected):
+@pytest.mark.parametrize("limit,current,expected", [(40, 10, 40), (8, 6, 8)])
+def test_loader_fixture_retains_budget_and_prior_stops(tmp_path, monkeypatch, limit, current, expected):
     model = hf_model()
     calls = mocked_loader(tmp_path, monkeypatch, model, {})
     readings = {"current": int(current * 1e9), "peak": 0}
     guard = logical_guard(limit, readings)
-    loaded, _ = model_load.load_text_model(device="cpu", memory=guard, mode=mode)
+    loaded, _ = model_load.load_text_model(device="cpu", memory=guard)
     assert loaded is model and calls == ["snapshot", "weights", "tokenizer"]
     retained = dictionary._VERIFIED_MODELS[model].memory
     assert retained.memory is guard and retained.limit == int(expected * 1e9)
@@ -154,23 +141,23 @@ def test_qwen_fixture_retains_mode_budget_and_prior_stops(tmp_path, monkeypatch,
         dictionary.model_identity(model)
 
 
-def test_qwen_training_fixture_retains_dynamic_lower_limit(tmp_path, monkeypatch):
+def test_loader_fixture_retains_dynamic_lower_limit(tmp_path, monkeypatch):
     model = hf_model()
     mocked_loader(tmp_path, monkeypatch, model, {})
     readings = {"current": 18_000_000_000, "peak": 0}
     guard = logical_guard(24, readings)
-    model_load.load_text_model(device="cpu", memory=guard, mode="training")
+    model_load.load_text_model(device="cpu", memory=guard)
     guard.limit = readings["current"] - 1
     with pytest.raises(CleanStop, match="memory limit"):
         dictionary.model_identity(model)
     assert dictionary._VERIFIED_MODELS[model].memory.limit == guard.limit
 
 
-@pytest.mark.parametrize("mode,current", [("inference", 11.6), ("training", 23.6)])
-def test_qwen_fixture_refuses_prospective_load_before_weights(tmp_path, monkeypatch, mode, current):
+def test_loader_fixture_refuses_prospective_load_before_weights(tmp_path, monkeypatch):
+    current = 39.6
     model = hf_model()
     calls = mocked_loader(tmp_path, monkeypatch, model, {})
     guard = logical_guard(40, {"current": int(current * 1e9), "peak": 0})
     with pytest.raises(CleanStop, match="model allocation exceeds"):
-        model_load.load_text_model(device="cpu", memory=guard, mode=mode)
+        model_load.load_text_model(device="cpu", memory=guard)
     assert calls == ["snapshot"] and model not in dictionary._VERIFIED_MODELS

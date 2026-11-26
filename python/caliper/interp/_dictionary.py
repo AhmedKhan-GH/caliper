@@ -277,15 +277,7 @@ def _checkpoint_slices(shape, maximum, prefix=()):
             yield from _checkpoint_slices(shape[1:], maximum, prefix + (index,))
 
 
-def _checkpoint_subset(model, identity, subset, key_mapping):
-    """Declare exact non-text keys from the pinned Qwen3.5 checkpoint header."""
-    if subset is None:
-        return ({} if key_mapping is None else key_mapping), frozenset()
-    from ._qwen_family import checkpoint_subset
-    return checkpoint_subset(model, identity, subset, key_mapping)
-
-
-def verify_hf_model(model, snapshot, *, key_mapping=None, checkpoint_subset=None, memory_limit_gb=12, memory=None):
+def verify_hf_model(model, snapshot, *, key_mapping=None, memory_limit_gb=12, memory=None):
     """Verify an external model against a local HF safetensors snapshot.
 
     The snapshot path must identify the same repository and exact commit as the
@@ -293,12 +285,9 @@ def verify_hf_model(model, snapshot, *, key_mapping=None, checkpoint_subset=None
     digest. It reads the local checkpoint as trusted source data. Each optional
     ``key_mapping`` entry maps a literal checkpoint prefix to a model prefix.
     Missing or extra tensors, ambiguous mappings, and changed weights are errors.
-    ``checkpoint_subset="qwen3.5-0.8b-text"`` declares the text weights of the
-    pinned Qwen3.5-0.8B revision. It supplies the prefix mapping and excludes
-    exactly 153 vision and 15 MTP keys. All other unexpected keys remain errors.
     Tied parameters can share one checkpoint entry. Nonpersistent buffers must
-    match a bounded trusted reconstruction. Qwen3.5 default text RoPE buffers
-    are supported. Other nonpersistent buffers are refused.
+    match a bounded trusted reconstruction. Gemma default RoPE and embedding
+    scale buffers are supported. Other nonpersistent buffers are refused.
     Forward settings must match an evaluation-mode reference from the local
     config. Eager and SDPA are supported.
 
@@ -346,7 +335,7 @@ def verify_hf_model(model, snapshot, *, key_mapping=None, checkpoint_subset=None
         raise ValueError("model forward settings differ from the local checkpoint")
     if _state_hash(nonpersistent_buffers(model), memory=memory) != buffers:
         raise ValueError("model nonpersistent buffers differ from the local checkpoint")
-    mapping, excluded = _checkpoint_subset(model, identity, checkpoint_subset, key_mapping)
+    mapping = {} if key_mapping is None else key_mapping
     if (not isinstance(mapping, dict) or any(not isinstance(k, str) or not k
             or not isinstance(v, str) for k, v in mapping.items())):
         raise ValueError("checkpoint key mappings require nonempty literal prefixes")
@@ -360,8 +349,6 @@ def verify_hf_model(model, snapshot, *, key_mapping=None, checkpoint_subset=None
                 if key in source_keys:
                     raise ValueError("checkpoint has duplicate source weights")
                 source_keys.add(key)
-                if key in excluded:
-                    continue
                 prefixes = [prefix for prefix in mapping if key.startswith(prefix)]
                 if len(prefixes) > 1:
                     raise ValueError("ambiguous checkpoint key mapping")
@@ -374,8 +361,6 @@ def verify_hf_model(model, snapshot, *, key_mapping=None, checkpoint_subset=None
                     raise ValueError("checkpoint tensor shape or dtype differs from the model")
                 entries[name] = (path, key, stored)
                 del view
-    if not excluded <= source_keys:
-        raise ValueError("checkpoint is missing declared non-text weights")
     # Only an actual shared Parameter object can justify an omitted tied key.
     for name, value in state.items():
         if name not in entries:

@@ -15,19 +15,12 @@ from tools.interp.text_stream import TextStream
 from .fixture import TinyTokenizer
 from .test_dictionary import memory_readers
 from .test_evaluation_binding import fixture, publications
-from .test_trace import qwen_for_trace, random_dictionary
 from .test_training_stream import documents
 
 
 def settings_fixture(folder, family):
-    if family == "tiny":
-        return fixture(folder)
-    model = qwen_for_trace()
-    dictionary = random_dictionary(model, latents=4, k=2)
-    write_json(folder / "dictionary.json", dictionary.metadata)
-    for i, layer in enumerate(dictionary.layers):
-        save_file(layer.state_dict(), folder / f"layer_{i:02d}.safetensors")
-    return model, load_dictionary(folder, model=model, device="cpu")
+    assert family == "tiny"
+    return fixture(folder)
 
 
 def run(folder, model, dictionary, *, interrupt=False, **kwargs):
@@ -48,7 +41,7 @@ def run(folder, model, dictionary, *, interrupt=False, **kwargs):
                                folder, tokens=8, context=4, batch_tokens=4, chunk_tokens=2, **kwargs)
 
 
-@pytest.mark.parametrize("family", ["tiny", "qwen"])
+@pytest.mark.parametrize("family", ["tiny"])
 def test_epsilon_resume_refuses_mixed_forward_statistics(tmp_path, monkeypatch, family):
     model, dictionary = settings_fixture(tmp_path, family)
     partial = run(tmp_path, model, dictionary, interrupt=True)
@@ -74,21 +67,19 @@ def test_epsilon_resume_refuses_mixed_forward_statistics(tmp_path, monkeypatch, 
     assert publications(tmp_path) == before
 
 
-@pytest.mark.parametrize("family", ["tiny", "qwen"])
+@pytest.mark.parametrize("family", ["tiny"])
 def test_equivalent_model_instance_resumes_forward_evidence(tmp_path, family):
     model, dictionary = settings_fixture(tmp_path, family)
     identity = dictionary_fingerprint(tmp_path, dictionary.metadata)
     partial = run(tmp_path, model, dictionary, interrupt=True)
     other = copy.deepcopy(model)
-    if family == "qwen":
-        assert other.model.layers[0].mlp.act_fn is not model.model.layers[0].mlp.act_fn
     resumed = run(tmp_path, other, dictionary, resume=True)
     assert resumed["evaluated_tokens"] == 8
     assert resumed["model_binding"] == partial["model_binding"]
     assert dictionary_fingerprint(tmp_path, dictionary.metadata) == identity
 
 
-@pytest.mark.parametrize("family", ["tiny", "qwen"])
+@pytest.mark.parametrize("family", ["tiny"])
 @pytest.mark.parametrize("forward", [1, 2])
 def test_epsilon_change_during_actual_forward_refuses_publication(tmp_path, monkeypatch, family, forward):
     model, dictionary = settings_fixture(tmp_path, family)
@@ -128,25 +119,6 @@ def test_change_between_forwards_refuses_replacement(tmp_path, monkeypatch):
     with pytest.raises(ValueError, match=r"forward setting changed.*norm.eps"):
         run(tmp_path, model, dictionary)
     assert calls == 1
-    assert publications(tmp_path) == before
-
-
-@pytest.mark.parametrize("setting", ["backend", "routing", "activation"])
-def test_qwen_resume_refuses_changed_forward_configuration(tmp_path, monkeypatch, setting):
-    model, dictionary = settings_fixture(tmp_path, "qwen")
-    run(tmp_path, model, dictionary, interrupt=True)
-    model_hash = model_identity(model)
-    if setting == "backend":
-        model.config._attn_implementation = "eager" if model.config._attn_implementation != "eager" else "sdpa"
-    elif setting == "routing":
-        model.config.layer_types[0] = "full_attention"
-    else:
-        model.model.layers[0].mlp.act_fn = torch.nn.Tanh()
-    assert (model_identity(model) == model_hash) is (setting == "backend")
-    before = publications(tmp_path)
-    monkeypatch.setattr(evaluation, "load_file", lambda *a, **k: pytest.fail("statistics restore ran"))
-    with pytest.raises(ValueError, match="cursor binding" if setting == "backend" else "model identity mismatch"):
-        run(tmp_path, model, dictionary, resume=True)
     assert publications(tmp_path) == before
 
 

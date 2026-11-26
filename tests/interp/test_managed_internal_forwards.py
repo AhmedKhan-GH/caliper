@@ -119,7 +119,7 @@ def test_internal_call_retains_fork_restore(environment, monkeypatch, tmp_path, 
             if operation == "decoder_capture":
                 # Exercise decoder dispatch with the same random fixture.
                 forward_model = torch.nn.Module()
-                forward_model.config = SimpleNamespace(model_type="qwen3_5_text")
+                forward_model.config = SimpleNamespace(model_type="gemma2")
                 forward_model.model = model
             with torch.no_grad():
                 result = _forward(forward_model, inputs["input_ids"], torch.ones_like(inputs["input_ids"]))
@@ -182,7 +182,7 @@ def test_internal_exception_restores_scope(environment, monkeypatch, tmp_path, o
                             forward_model = model
                             if operation == "decoder_capture":
                                 forward_model = torch.nn.Module()
-                                forward_model.config = SimpleNamespace(model_type="qwen3_5_text")
+                                forward_model.config = SimpleNamespace(model_type="gemma2")
                                 forward_model.model = model
                             _forward(forward_model, ids, torch.ones_like(ids))
                 assert is_internal_forward() is outer

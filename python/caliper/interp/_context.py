@@ -9,7 +9,7 @@ from ._memory import autorelease_scope
 
 
 def context_policy(model, context_length, *, tokenizer=None):
-    """Return the Gemma policy, or None for the unchanged Qwen and fixture paths."""
+    """Return the Gemma policy, or None for the fixture and generic paths."""
     if getattr(model.config, "model_type", None) != "gemma2":
         return None
     if type(context_length) is not int or not 2 <= context_length <= 256:

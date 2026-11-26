@@ -24,7 +24,7 @@ from caliper.interp import load_dictionary
 from caliper.interp._dictionary import _reference_coordinates
 from caliper.interp._index import FeatureIndex, MAX_TOKENS, _hash_file, build_index
 from .memory_limits import CleanStop, MemoryGuard, StopControl
-from .model_load import GEMMA_ID, MODEL_ID, load_text_model
+from .model_load import GEMMA_ID, load_text_model
 from .stop_records import clean_stop_record
 from .text_stream import (DATASET_CONFIG, DATASET_ID, DATASET_REVISION, TextStream,
                           evaluation_source_metadata, fineweb_documents, partition_metadata)
@@ -165,7 +165,7 @@ class _IndexParser(argparse.ArgumentParser):
 def parser():
     result = _IndexParser(description=__doc__)
     result.add_argument("--dictionary", type=Path, required=True)
-    result.add_argument("--model", choices=(MODEL_ID, GEMMA_ID), default=MODEL_ID)
+    result.add_argument("--model", choices=(GEMMA_ID,), default=GEMMA_ID)
     result.add_argument("--profile", choices=("caliper", REFERENCE_PROFILE), default="caliper")
     result.add_argument("--device", choices=("cpu", "mps"), default="mps")
     result.add_argument("--tokens", type=_bounded_int(MAX_TOKENS), default=MAX_TOKENS)
@@ -214,7 +214,7 @@ def main(argv=None):
                                        health=lambda: check("source admission"), memory=memory)
                 check("source")
                 stop.check()
-            selection = {"model_id": args.model} if args.model != MODEL_ID else {}
+            selection = {"model_id": args.model}
             if args.profile != "caliper":
                 selection["reference_profile"] = args.profile
             model, tokenizer = load_text_model(device=args.device, memory=memory, **selection)

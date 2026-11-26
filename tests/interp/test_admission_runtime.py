@@ -17,19 +17,16 @@ from .test_model_load import hf_model, local_snapshot
 def hosted_loader(tmp_path, monkeypatch, *, info=None, near_limit=False, transfer_limit=False):
     model = hf_model()
     snapshot = local_snapshot(tmp_path, model)
-    (snapshot / "config.json").write_text(json.dumps({"text_config": {"num_hidden_layers": 24, "hidden_size": 1024}}))
     memory = guard()
     if near_limit:
-        memory.peak = 11_700_000_000
+        memory.footprint = lambda: 11_700_000_000
     calls = []
 
     def load(*args, **kwargs):
         calls.append("weights")
         assert kwargs["local_files_only"] and kwargs["use_safetensors"]
-        model.config = kwargs["config"]
-        model.config.model_type = "qwen3_5_text"
         if transfer_limit:
-            memory.peak = 11_700_000_000
+            memory.footprint = lambda: 11_700_000_000
         return model, info or {}
 
     def transfer(*args, **kwargs):
@@ -43,8 +40,8 @@ def hosted_loader(tmp_path, monkeypatch, *, info=None, near_limit=False, transfe
         return object()
 
     monkeypatch.setitem(sys.modules, "transformers", SimpleNamespace(
-        Qwen3_5TextConfig=lambda **kwargs: SimpleNamespace(**kwargs),
-        Qwen3_5ForCausalLM=SimpleNamespace(from_pretrained=load),
+        Gemma2Config=lambda **kwargs: SimpleNamespace(model_type="gemma2", num_hidden_layers=26, hidden_size=2304, vocab_size=256000),
+        Gemma2ForCausalLM=SimpleNamespace(from_pretrained=load),
         AutoTokenizer=SimpleNamespace(from_pretrained=lambda *a, **k: object())))
     monkeypatch.setattr(torch.backends.mps, "is_available", lambda: False)
     monkeypatch.setattr(model, "to", transfer)

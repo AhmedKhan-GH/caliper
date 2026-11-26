@@ -101,16 +101,6 @@ def exact_dictionary(model):
     return Dictionary(fixture_manifest(model), layers)
 
 
-def qwen_for_trace(layers=4):
-    from caliper.interp._dictionary import weights_hash
-    from .test_points import qwen
-    model = qwen(layers=layers)
-    # Synthetic checkpoint metadata identifies these random CPU test weights.
-    model.config._name_or_path = "caliper-test/random-qwen"
-    model.config._commit_hash = weights_hash(model).split(":", 1)[1][:40]
-    return model
-
-
 def random_dictionary(model, *, latents=12, k=3):
     from caliper.interp._dictionary import Dictionary, TopKTranscoder, model_identity
     from caliper.interp._points import semantic_points
@@ -143,20 +133,14 @@ def random_dictionary(model, *, latents=12, k=3):
 
 
 @pytest.mark.parametrize("expected_hash_only", [False, True])
-@pytest.mark.parametrize("family", ["fixture", "qwen"])
-def test_trace_rejects_loaded_dictionary_for_other_model(tmp_path, monkeypatch, expected_hash_only, family):
+def test_trace_rejects_loaded_dictionary_for_other_model(tmp_path, monkeypatch, expected_hash_only):
     from safetensors.torch import save_file
     from caliper.interp import Tracer, load_dictionary
     from caliper.interp._frozen import FrozenPath
     from .fixture import TinyLM, TinyTokenizer
-    if family == "fixture":
-        options = dict(layers=1, width=8, heads=2, latents=8, k=2)
-        model, other = TinyLM(**options), TinyLM(seed=11, **options)
-        source = exact_dictionary(model)
-    else:
-        model, other = qwen_for_trace(layers=1), qwen_for_trace(layers=1)
-        other.config._commit_hash = "f" * 40
-        source = random_dictionary(model, latents=8, k=2)
+    options = dict(layers=1, width=8, heads=2, latents=8, k=2)
+    model, other = TinyLM(**options), TinyLM(seed=11, **options)
+    source = exact_dictionary(model)
     (tmp_path / "dictionary.json").write_text(json.dumps(source.metadata), encoding="utf-8")
     save_file(source.layers[0].state_dict(), tmp_path / "layer_00.safetensors")
     identity = {"model_hash": source.metadata["model_hash"]} if expected_hash_only else {"model": model}
@@ -236,54 +220,6 @@ def test_fixture_frozen_forward_linearity_and_zero_errors():
     cr, cf = path.run(a[0] - .7 * b[0], [x - .7 * y for x, y in zip(a[1:], b[1:])], bias_masks=zero_masks)
     for x, y, z in zip(ar + [af], br + [bf], cr + [cf]):
         torch.testing.assert_close(z, x - .7 * y, atol=1e-10, rtol=0)
-
-
-@pytest.mark.parametrize("delta_biases", [False, True])
-def test_real_qwen_modules_forward_and_linearity(delta_biases):
-    from caliper.interp._frozen import FrozenPath
-    model = qwen_for_trace()
-    # Cover nonzero full-attention biases with actual primary module code.
-    full = model.model.layers[3].self_attn
-    for projection in (full.v_proj, full.o_proj):
-        projection.bias = torch.nn.Parameter(torch.linspace(-.02, .02, projection.out_features))
-    if delta_biases:
-        for block in model.model.layers[:3]:
-            delta = block.linear_attn
-            for projection in (delta.in_proj_qkv, delta.out_proj):
-                projection.bias = torch.nn.Parameter(torch.linspace(-.02, .02, projection.out_features))
-            delta.conv1d.bias = torch.nn.Parameter(torch.linspace(-.01, .01, delta.conv_dim))
-    observed = {}
-    handles = []
-    for i, block in enumerate(model.model.layers):
-        mixer = block.linear_attn if block.block_type == "linear_attention" else block.self_attn
-        def record(mod, args, kwargs, result, i=i):
-            observed[i] = (kwargs["hidden_states"].detach(),
-                           (result[0] if isinstance(result, tuple) else result).detach())
-        handles.append(mixer.register_forward_hook(record, with_kwargs=True))
-    try:
-        path = FrozenPath(model, torch.tensor([[1, 2, 3, 4]]), random_dictionary(model))
-    finally:
-        for handle in handles:
-            handle.remove()
-    assert path.forward_residual < 2e-5
-    assert len(path.mixers) == 4
-    assert all(error.abs().sum() > 0 for error in path.errors)
-    for i, mixer in enumerate(path.mixers):
-        x, y = observed[i]
-        torch.testing.assert_close(mixer(x), y, atol=2e-6, rtol=2e-5)
-        perturbation = torch.linspace(-.1, .1, x.numel()).reshape_as(x)
-        torch.testing.assert_close(mixer(x + perturbation) - mixer(x), mixer(perturbation, 0.),
-                                   atol=3e-6, rtol=1e-4)
-        torch.testing.assert_close(mixer(1.3 * x - .7 * perturbation, 0.),
-                                   1.3 * mixer(x, 0.) - .7 * mixer(perturbation, 0.), atol=3e-6, rtol=1e-4)
-    # The whole independent-write path also obeys superposition.
-    zero_masks = torch.zeros(3, 1, 1, 1)
-    x = path.embedding
-    writes = path.writes
-    first = path.run(x, writes, bias_masks=zero_masks)
-    second = path.run(2 * x, [2 * y for y in writes], bias_masks=zero_masks)
-    for a, b in zip(first[0] + [first[1]], second[0] + [second[1]]):
-        torch.testing.assert_close(b, 2 * a, atol=2e-6, rtol=1e-5)
 
 
 def test_trace_fixture_completeness_publication_caps_and_determinism():
@@ -375,24 +311,6 @@ def test_imperfect_dictionary_and_explicit_bias_accounting():
     for kind in ("decoder", "encoder", "normalization", "attention", "unembedding"):
         assert any(abs(t["biases"][kind]) > 1e-9 for t in targets)
     assert all(abs(t["incoming"] + sum(t["biases"].values()) - t["expected"]) < 1e-9 for t in targets)
-
-
-def test_small_real_qwen_trace_with_all_twenty_four_blocks():
-    from caliper.interp import Tracer
-    class Tokenizer:
-        def __call__(self, text, **kwargs):
-            return {"input_ids": torch.tensor([[1, 2, 3]])}
-        def decode(self, ids):
-            return str(ids[0])
-    model = qwen_for_trace(layers=24)
-    assert sum(b.block_type == "linear_attention" for b in model.model.layers) == 18
-    dictionary = random_dictionary(model, latents=8, k=2)
-    graph = Tracer(model, Tokenizer(), dictionary).trace("small real architecture", max_targets=16)
-    assert graph.layers == 24
-    assert graph.completeness["max_absolute_residual"] < 2e-2
-    assert graph.completeness["direct_forward_residual"] < 2e-5
-    assert graph.completeness["replacement_forward_residual"] < 2e-2
-    assert graph.error_share > 0
 
 
 def test_target_batches_are_independent_of_later_encoders(monkeypatch):
@@ -527,11 +445,10 @@ def test_dictionary_alias_write_invalidates_graph_and_frozen_caches(new_limits):
         torch.testing.assert_close(changed.tensors[name], tensor, rtol=0, atol=0)
 
 
-@pytest.mark.parametrize("real_qwen", [False, True])
-def test_full_replacement_keeps_active_masks_and_constant_errors(real_qwen):
+def test_full_replacement_keeps_active_masks_and_constant_errors():
     from caliper.interp._frozen import FrozenPath
     from .fixture import TinyLM
-    model = qwen_for_trace() if real_qwen else TinyLM(layers=2)
+    model = TinyLM(layers=2)
     dictionary = random_dictionary(model)
     path = FrozenPath(model, torch.tensor([[1, 2, 3]]), dictionary)
     x = path.embedding
@@ -540,7 +457,7 @@ def test_full_replacement_keeps_active_masks_and_constant_errors(real_qwen):
     first = path.replacement(3 * x, dictionary)[1]
     second = path.replacement(-2 * x, dictionary)[1]
     combined = path.replacement(x, dictionary)[1]
-    torch.testing.assert_close(first + second - zero, combined, atol=2e-5 if real_qwen else 1e-9, rtol=1e-5 if real_qwen else 0)
+    torch.testing.assert_close(first + second - zero, combined, atol=1e-9, rtol=0)
     assert all(not e.requires_grad for e in path.errors)
 
 

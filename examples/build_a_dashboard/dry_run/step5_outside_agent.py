@@ -8,7 +8,7 @@ holds the edit on an approval card ("MCP agent"); the person approves it, and
 the panel lands in the dashboard.
 
     python3 step5_outside_agent.py [--caliper <app>] [--out <folder>] [--work <folder>] [--size 1440x900]
-        [--workspace <folder> --app-data <folder>] [--model qwen3.8:27b --ollama http://127.0.0.1:11434]
+        [--workspace <folder> --app-data <folder>] [--model example-model --ollama http://127.0.0.1:11434]
 
 The options are those of hidden_app.py.
 - caliper-mcp is found beside the caliper executable, or under

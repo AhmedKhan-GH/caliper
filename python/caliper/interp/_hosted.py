@@ -19,10 +19,9 @@ import torch
 from torch import nn
 from torch.nn import functional as F
 
-from ._admission import (GEMMA_REVISION, _admit_model_load, _admit_model_transfer, _load_gemma_model)
+from ._admission import GEMMA_REVISION, _load_gemma_model
 from .._controls import intervention_key
 from ._output import Output, bounded_text, internal_forward, prompt_inputs
-from ._qwen_family import MODEL_ID as QWEN_ID, MODEL_REVISION as QWEN_REVISION
 from ._service import InterpretationService, Refused, register_service, unregister_service
 
 CHECKPOINT_FORMAT = "caliper.inference"
@@ -486,7 +485,7 @@ def fixture_resources(folder):
 
 def load_resources(model_name, dictionary_path, *, replication_profile=None):
     """Load local safe weights for a fixture or an exact pinned text model."""
-    from ._dictionary import load_dictionary, _record_verified_hf_load
+    from ._dictionary import load_dictionary
     from ._index import FeatureIndex
     from ._memory import MemoryGuard
     if replication_profile not in (None, "published_dallas_v1"):
@@ -519,10 +518,7 @@ def load_resources(model_name, dictionary_path, *, replication_profile=None):
             remember_model_snapshot(model, snapshot)
         tokenizer = AutoTokenizer.from_pretrained(snapshot, local_files_only=True, trust_remote_code=False)
     else:
-        from ._qwen_family import load_hosted_model
-        model, tokenizer, guard = load_hosted_model(
-            model_name, memory_type=MemoryGuard, admit_load=_admit_model_load,
-            admit_transfer=_admit_model_transfer, record_load=_record_verified_hf_load)
+        raise ValueError("model must name the pinned local Gemma snapshot or tiny-lm")
     options = {"memory_limit_gb": 40} if getattr(model.config, "model_type", None) == "gemma2" else {}
     dictionary = load_dictionary(folder, model=model, device=next(model.parameters()).device,
                                  dtype=next(model.parameters()).dtype, memory=guard, **options)

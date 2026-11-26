@@ -253,7 +253,7 @@ public:
     // What the inline surface shows besides its state, for the driver's log:
     // its tag, its edits, the model, an error's code and message, the input
     // tokens of each request of the last turn and its output tokens, and the
-    // start of the reply, such as "tag LIMIT, 1 edit, model qwen, reply ...";
+    // start of the reply, such as "tag LIMIT, 1 edit, model example, reply ...";
     // "" before any ⌘K.
     std::string widget_facts() const;
     // Presses the inline surface's action of that label ("Setup", "Accept",

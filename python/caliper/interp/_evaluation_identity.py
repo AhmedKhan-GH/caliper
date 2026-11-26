@@ -75,7 +75,7 @@ def _evaluation_settings(model, memory):
     settings = _forward_settings(model, memory)
     if getattr(getattr(model, "config", None), "model_type", None) == "gemma2":
         # Include every Gemma checkpoint setting, such as activation approximation.
-        # Keep the existing Qwen cursor digest and trace object checks unchanged.
+        # Keep the existing cursor digest and trace object checks unchanged.
         checkpoint = forward_settings(model, tensor_hash=lambda state: _state_hash(state, memory=memory))
         checkpoint.update(settings)
         settings = checkpoint

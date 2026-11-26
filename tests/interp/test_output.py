@@ -221,7 +221,7 @@ def test_supported_text_model_requests_only_next_token_logits(output_case, monke
     model, tokenizer, controls, service, output = output_case
     original = model.forward
     seen = []
-    model.config.model_type = "qwen3_5_text"
+    model.config.model_type = "gemma2"
     def forward(*a, **kwargs):
         seen.append(kwargs.pop("logits_to_keep", None))
         result = original(*a, **kwargs)

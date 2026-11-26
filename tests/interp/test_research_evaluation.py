@@ -18,7 +18,8 @@ from .test_dictionary import memory_readers
 from .test_gemma_import_binding import artifact
 from .test_gemma_runtime import gemma_model, runtime_dictionary
 from .test_points import hooks
-from .test_trace import qwen_for_trace, random_dictionary
+from .fixture import TinyLM
+from .test_trace import random_dictionary
 from .test_training_stream import documents
 
 
@@ -50,7 +51,7 @@ def tokenizer(model, tokens=None):
 
 
 def fixture(family):
-    model = gemma_model() if family == "gemma" else qwen_for_trace(layers=2)
+    model = gemma_model() if family == "gemma" else TinyLM(layers=2, width=16, heads=2, vocab=32, latents=16, k=3, dtype=torch.float32)
     dictionary = runtime_dictionary(model) if family == "gemma" else random_dictionary(model, latents=8, k=3)
     return model, dictionary
 
@@ -61,7 +62,7 @@ def oracle(model, dictionary, active, mask):
     methods, reads = [], {}
     try:
         for i in active:
-            block = model.model.layers[i]
+            block = (model.model if model.config.model_type == "gemma2" else model).layers[i]
             old = block.mlp.forward
             methods.append((block.mlp, old))
             if model.config.model_type == "gemma2":
@@ -100,7 +101,7 @@ def independent_ce(model, prepared, excluded):
     return sum(loss.item() for loss in losses), len(losses)
 
 
-@pytest.mark.parametrize("family", ["gemma", "qwen"])
+@pytest.mark.parametrize("family", ["gemma", "tiny"])
 def test_independent_isolated_and_all_layer_loss_oracle(family):
     model, dictionary = fixture(family)
     policy = protocol.research_policy(model, 6, tokenizer(model))
@@ -158,7 +159,7 @@ def test_genuine_special_masks_and_native_no_bos():
                                           [False, True, False, False, False, False, False]]
     assert batch.prediction_mask.tolist() == [[True, False, True, False, False, False],
                                              [True, False, False, False, False, False]]
-    model, _ = fixture("qwen")
+    model, _ = fixture("tiny")
     assert getattr(model.config, "bos_token_id", None) is None
     policy = protocol.research_policy(model, 1024, tokenizer(model))
     assert policy["prefix_ids"] == [] and policy["bos_policy"] == "native_no_bos"
@@ -172,7 +173,7 @@ def test_genuine_special_masks_and_native_no_bos():
         protocol.research_policy(model, 1024, invalid)
 
 
-@pytest.mark.parametrize("family", ["gemma", "qwen"])
+@pytest.mark.parametrize("family", ["gemma", "tiny"])
 def test_special_outputs_remain_actual_and_features_stay_chunked(family, monkeypatch):
     model, dictionary = fixture(family)
     policy = protocol.research_policy(model, 6, tokenizer(model))
@@ -215,14 +216,14 @@ def run(folder, model, dictionary, **kwargs):
                                    context=4, batch_tokens=8, chunk_tokens=2, memory=guard(), **kwargs)
 
 
-@pytest.mark.parametrize("family", ["gemma", "qwen"])
+@pytest.mark.parametrize("family", ["gemma", "tiny"])
 @pytest.mark.parametrize("interruption", ["baseline", "isolated", "all"])
 def test_exact_resume_after_partial_layer_sweep(artifact, tmp_path, monkeypatch, family, interruption):
     if family == "gemma":
         folder, model, dictionary, _ = artifact
     else:
-        model, dictionary = fixture("qwen")
-        folder = tmp_path / "qwen"
+        model, dictionary = fixture("tiny")
+        folder = tmp_path / "tiny"
         persist(folder, model, dictionary)
     clean = tmp_path / "uninterrupted"
     import shutil
@@ -327,7 +328,7 @@ def test_host_reserve_and_historical_peak_remain_lower_limits(monkeypatch):
         protocol.admit_workspace(memory, 1)
 
 
-@pytest.mark.parametrize("family", ["gemma", "qwen"])
+@pytest.mark.parametrize("family", ["gemma", "tiny"])
 @pytest.mark.parametrize("failure", ["encode", "forward", "install", "nonfinite"])
 def test_replacement_exception_restores_every_hook_and_module(family, failure, monkeypatch):
     model, dictionary = fixture(family)
@@ -340,9 +341,9 @@ def test_replacement_exception_restores_every_hook_and_module(family, failure, m
     if failure == "encode":
         monkeypatch.setattr(dictionary.layers[1], "encode", fail)
     elif failure == "forward":
-        monkeypatch.setattr(model.model.layers[1].mlp, "forward", fail)
+        monkeypatch.setattr((model.model if model.config.model_type == "gemma2" else model).layers[1].mlp, "forward", fail)
     elif failure == "install":
-        monkeypatch.setattr(model.model.layers[1].mlp, "register_forward_pre_hook", fail)
+        monkeypatch.setattr((model.model if model.config.model_type == "gemma2" else model).layers[1].mlp, "register_forward_pre_hook", fail)
     else:
         with torch.no_grad():
             dictionary.layers[1].W_dec[0, 0] = float("nan")
@@ -456,7 +457,7 @@ def test_existing_legacy_report_and_resume_survive_research_mode(artifact):
     assert resumed["evaluated_tokens"] == 13
 
 
-@pytest.mark.parametrize("family", ["gemma", "qwen"])
+@pytest.mark.parametrize("family", ["gemma", "tiny"])
 def test_context_rows_follow_documents_and_final_source_budget(family):
     from tools.interp.text_stream import document_identity
     model, _ = fixture(family)
@@ -539,7 +540,7 @@ def test_stop_control_after_resume_keeps_committed_observations(artifact, monkey
     assert run(folder, model, dictionary, resume=True)["source_tokens"] == 13
 
 
-@pytest.mark.parametrize("family", ["gemma", "qwen"])
+@pytest.mark.parametrize("family", ["gemma", "tiny"])
 def test_head_chunks_and_hidden_states_release_before_next_pass(family):
     import weakref
     model, dictionary = fixture(family)
@@ -555,13 +556,15 @@ def test_head_chunks_and_hidden_states_release_before_next_pass(family):
         assert all(ref() is None for ref in states)
         passes.append(1)
     def after_model(module, args, output):
-        states.append(weakref.ref(output.last_hidden_state))
+        states.append(weakref.ref(output.last_hidden_state if family == "gemma" else output))
     try:
         head = model.get_output_embeddings()
         handles.append(head.register_forward_pre_hook(before_head))
         handles.append(head.register_forward_hook(after_head))
-        handles.append(model.model.register_forward_pre_hook(before_model))
-        handles.append(model.model.register_forward_hook(after_model))
+        entry = model.model if family == "gemma" else model.embed_tokens
+        exit_module = model.model if family == "gemma" else model.norm
+        handles.append(entry.register_forward_pre_hook(before_model))
+        handles.append(exit_module.register_forward_hook(after_model))
         result = evaluation.evaluate_research_batch(model, dictionary, batch, 3, chunk_tokens=2,
                                                     health=lambda: None, check_binding=lambda: None)
         assert len(passes) == 4  # Baseline, two isolated layers, and all layers.
@@ -572,9 +575,9 @@ def test_head_chunks_and_hidden_states_release_before_next_pass(family):
             handle.remove()
 
 
-def test_qwen_upper_scope_keeps_isolated_and_all_active_fields(monkeypatch):
+def test_tiny_upper_scope_keeps_isolated_and_all_active_fields(monkeypatch):
     from .test_upper_half import fallback_manifest, tiny_model
-    model, dictionary = fixture("qwen")
+    model, dictionary = fixture("tiny")
     fallback = fallback_manifest(tiny_model(2))["training"]["fallback"]
     dictionary.metadata["training"].update(fallback=fallback, source_id=fallback["source_id"])
     policy = protocol.research_policy(model, 4, tokenizer(model))

@@ -13,7 +13,6 @@ from torch.nn import functional as F
 
 from ._dictionary import _encoder_matches_dtype, _reference_coordinates, model_identity
 from ._families import model_family
-from . import _qwen_family
 from ._points import _architecture, capture
 from ._output import internal_forward
 from ._memory import (MemoryGuard as ProcessMemoryGuard, BudgetMemory, CleanStop,
@@ -468,26 +467,26 @@ def _bias(module):
 class FrozenNorm:
     """A recorded RMS denominator, fixed gain, and explicit affine bias."""
 
-    def __init__(self, module, x, *, qwen=False, reference=False):
+    def __init__(self, module, x, *, unit_offset=False, reference=False):
         x = x.detach()
-        work = x.float() if qwen else x
+        work = x.float() if unit_offset else x
         scale = torch.rsqrt(work.square().mean(-1, keepdim=True) + module.eps)
-        if not qwen and getattr(module, "frozen_scale", None) is not None:
+        if not unit_offset and getattr(module, "frozen_scale", None) is not None:
             scale = module.frozen_scale.detach()
         self.scale = scale.detach()
         self.denominator = (work.square().mean(-1, keepdim=True) + module.eps).sqrt().detach()
-        self.weight = (1 + module.weight.detach().float()) if qwen else module.weight.detach()
+        self.weight = (1 + module.weight.detach().float()) if unit_offset else module.weight.detach()
         self.promote_output = False
         if reference:
             from ._gemma_reference import ReferenceMLPOutputNorm
             self.weight = self.weight.to(module.weight.dtype)
             self.promote_output = type(module) is ReferenceMLPOutputNorm
         self.bias = _bias(module)
-        self.qwen = qwen
+        self.unit_offset = unit_offset
         self.reference = reference
 
     def __call__(self, x, bias=1.):
-        work = x.float() if self.qwen else x
+        work = x.float() if self.unit_offset else x
         result = (self.pure(x) * self.weight if self.reference else
                   ((work * self.scale) * self.weight).to(x.dtype))
         if self.bias is not None:
@@ -562,10 +561,8 @@ def _validate_ablation_points(model, interventions):
         if not point.endswith(".mlp_in"):
             continue
         base = point.rsplit(".", 1)[0]
-        block = model.get_submodule(base)
-        delta = getattr(block, "block_type", None) == "linear_attention"
-        name = f"{base}.linear_attn" if delta else f"{base}.self_attn"
-        projection = "out_proj" if delta else "o_proj"
+        name = f"{base}.self_attn"
+        projection = "o_proj"
         supported.update((f"{base}.mlp_out", f"{base}.mlp_in",
                           f"{base}.resid_pre", name, f"{name}.{projection}"))
         if family.mlp_write_module == "mlp":
@@ -587,18 +584,15 @@ def _validate_ablation_points(model, interventions):
 
 
 class FrozenAttention:
-    """Linear values with fixed softmax and an optional output gate."""
+    """Linear values with fixed softmax."""
 
-    def __init__(self, module, x, pattern, *, gate_projection=None, output=None):
+    def __init__(self, module, x, pattern, *, output=None):
         self.pattern = pattern.detach()
         self.head_dim = module.head_dim
         self.heads = pattern.shape[1]
         self.v_weight = module.v_proj.weight.detach()
         self.v_bias = _bias(module.v_proj)
         self.output = output if output is not None else FrozenAttentionOutput(module.o_proj)
-        self.gate = None
-        if gate_projection is not None:
-            self.gate = _qwen_family.attention_gate(gate_projection, x, self.heads, self.head_dim)
         with torch.no_grad():
             # The recorded residual can be float32 while the preceding norm
             # supplies model-dtype values to the attention projection.
@@ -612,20 +606,10 @@ class FrozenAttention:
         values = values.reshape(batch, length, -1, self.head_dim).transpose(1, 2)
         values = values.repeat_interleave(self.heads // values.shape[1], dim=1)
         result = (self.pattern @ values).transpose(1, 2).reshape(batch, length, -1)
-        if self.gate is not None:
-            result = result * self.gate
         return self.output(result, biases, intervention)
 
     def __call__(self, x, bias=1., intervention=1.):
         return self._apply(x, False) + bias * self.offset + intervention * self.intervention_offset
-
-
-class FrozenDeltaNet(_qwen_family.FrozenDeltaNet):
-    """Retain the internal constructor with shared bias and output primitives."""
-
-    def __init__(self, module, x, pattern, qkv, norm_input, output_gate, *, output=None):
-        super().__init__(module, x, pattern, qkv, norm_input, output_gate,
-                         output=output, output_factory=FrozenAttentionOutput, bias=_bias)
 
 
 class FrozenInput:
@@ -715,11 +699,10 @@ def _validate_interventions(model, blocks, prefix, interventions):
         if family.mlp_write_module != "mlp":
             # Raw GeGLU edits precede a nonlinear norm. They are not residual writes.
             del allowed[f"{base}.mlp"]
-        delta = getattr(block, "block_type", None) == "linear_attention"
-        name = f"{base}.{'linear_attn' if delta else 'self_attn'}"
-        projection = "out_proj" if delta else "o_proj"
+        name = f"{base}.self_attn"
+        projection = "o_proj"
         allowed[name] = {"ablate", "add", "patch"}
-        if family.name in (_qwen_family.FAMILY_NAME, "gemma2") and not delta:
+        if family.name == "gemma2":
             # The live add and patch hooks require a tensor, but this module returns a tuple.
             allowed[name] = {"ablate"}
         allowed[f"{name}.{projection}"] = {"ablate", "add", "patch"}
@@ -783,7 +766,6 @@ class FrozenPath:
         if self.dtype not in (torch.float32, torch.float64) and not (
                 self.reference and self.family.name == "gemma2" and self.dtype == torch.bfloat16):
             raise ValueError("trace requires float32 or float64 model weights")
-        self.qwen = model.config.model_type == _qwen_family.FAMILY_NAME
         if self.family.unit_offset_norm and self.dtype != torch.float32 and not (
                 self.reference and self.family.name == "gemma2" and self.dtype == torch.bfloat16):
             raise ValueError(f"{self.family.name} tracing requires float32 model weights")
@@ -794,8 +776,7 @@ class FrozenPath:
         self.layers = len(self.blocks)
         self.tokens = input_ids.shape[1]
         self.width = model.config.hidden_size
-        self.mixer_width = max((getattr(getattr(b, "linear_attn", None), "value_dim", self.width)
-                                for b in self.blocks), default=self.width)
+        self.mixer_width = self.width
         if self.reference:
             # Record tensors, feature buffers, decoder blocks, and vocabulary work.
             self.guard.reserve("reference forward workspace", self.tokens * self.layers * (
@@ -822,17 +803,13 @@ class FrozenPath:
             frames = []
             def enter_forward(mod, args):
                 # Clean patch sources can run a nested model forward inside an intervention.
-                frames.append((dict(values), {key: dict(value) for key, value in values._pending.items()},
-                               dict(recorded)) if frames else None)
+                frames.append((dict(values), dict(recorded)) if frames else None)
             def exit_forward(mod, args, output):
                 frame = frames.pop()
                 if frame is not None:
-                    saved_values, saved_pending, saved_recorded = frame
+                    saved_values, saved_recorded = frame
                     values.clear()
                     values.update(saved_values)
-                    for key, pending in values._pending.items():
-                        pending.clear()
-                        pending.update(saved_pending[key])
                     recorded.clear()
                     recorded.update(saved_recorded)
             install(model.register_forward_pre_hook(enter_forward, prepend=True))
@@ -850,16 +827,13 @@ class FrozenPath:
                     install(block.post_feedforward_layernorm.register_forward_pre_hook(pre(f"{i}.mlp_post_norm"), with_kwargs=True))
                     install(getattr(block, self.family.attention_write_norm).register_forward_pre_hook(
                         pre(f"{i}.attention_post_norm"), with_kwargs=True))
-                delta = self.qwen and block.block_type == "linear_attention"
-                attention_name = f"{prefix}.{i}.{'linear_attn' if delta else 'self_attn'}"
-                projection_name = "out_proj" if delta else "o_proj"
+                attention_name = f"{prefix}.{i}.self_attn"
+                projection_name = "o_proj"
                 for name in (f"{attention_name}.{projection_name}", attention_name):
                     install(modules[name].register_forward_hook(out(name + ".before"), prepend=True))
                     install(modules[name].register_forward_hook(out(name + ".after")))
                 install(block.input_layernorm.register_forward_pre_hook(pre(f"{i}.input_norm"), with_kwargs=True))
                 install(getattr(block, self.family.mlp_read_norm).register_forward_pre_hook(pre(f"{i}.post_norm"), with_kwargs=True))
-                if self.qwen:
-                    _qwen_family.capture_frozen_inputs(block, i, recorded, install, pre, out)
                 def stage_hook(*_, i=i):
                     self.guard.check(f"record layer {i}")
                     check(f"record layer {i}")
@@ -926,32 +900,25 @@ class FrozenPath:
                     _require_finite(self.errors[-1], f"layer {i} reconstruction residual", memory_check, self.guard)
                     self.decoder_biases.append(decoder_bias)
                     self.output_offsets.append(offset.detach())
-                    self.norms.append(FrozenNorm(block.input_layernorm, recorded[f"{i}.input_norm"], qwen=self.family.unit_offset_norm, reference=self.reference_arithmetic))
-                    self.post_norms.append(FrozenNorm(getattr(block, self.family.mlp_read_norm), recorded[f"{i}.post_norm"], qwen=self.family.unit_offset_norm, reference=self.reference_arithmetic))
+                    self.norms.append(FrozenNorm(block.input_layernorm, recorded[f"{i}.input_norm"], unit_offset=self.family.unit_offset_norm, reference=self.reference_arithmetic))
+                    self.post_norms.append(FrozenNorm(getattr(block, self.family.mlp_read_norm), recorded[f"{i}.post_norm"], unit_offset=self.family.unit_offset_norm, reference=self.reference_arithmetic))
                     self.attention_post_norms.append(None if self.family.attention_write_norm is None else
-                        FrozenNorm(getattr(block, self.family.attention_write_norm), recorded[f"{i}.attention_post_norm"], qwen=True, reference=self.reference_arithmetic))
+                        FrozenNorm(getattr(block, self.family.attention_write_norm), recorded[f"{i}.attention_post_norm"], unit_offset=True, reference=self.reference_arithmetic))
                     self.mlp_post_norms.append(None if self.family.mlp_write_module == "mlp" else
-                        FrozenNorm(block.post_feedforward_layernorm, recorded[f"{i}.mlp_post_norm"], qwen=True, reference=self.reference_arithmetic))
+                        FrozenNorm(block.post_feedforward_layernorm, recorded[f"{i}.mlp_post_norm"], unit_offset=True, reference=self.reference_arithmetic))
                     self.residual_inputs.append(FrozenInput(recorded[f"{i}.residual_source"],
                         recorded[f"{i}.input_norm"], [s for s in interventions if s["point"] == f"{base}.resid_pre"]))
                     self.mlp_inputs.append(FrozenInput(recorded[f"{i}.mlp_source"], x,
                         [s for s in interventions if s["point"] == f"{base}.mlp_in"]))
                     pattern = values[f"{base}.attn_pattern"]
-                    if self.qwen:
-                        mixer_name, pattern_kind = self.family.mixer(block)
-                        projection = "out_proj" if pattern_kind == "delta" else "o_proj"
-                        mixer = _qwen_family.frozen_mixer(block, i, recorded, pattern,
-                            _attention_output(model, f"{base}.{mixer_name}", projection, interventions, recorded),
-                            attention=FrozenAttention, delta=FrozenDeltaNet)
-                    else:
-                        mixer = FrozenAttention(block.self_attn, recorded[f"{i}.input_norm"], pattern,
-                                                output=_attention_output(
-                                                    model, f"{base}.self_attn", "o_proj", interventions, recorded))
+                    mixer = FrozenAttention(block.self_attn, recorded[f"{i}.input_norm"], pattern,
+                                            output=_attention_output(
+                                                model, f"{base}.self_attn", "o_proj", interventions, recorded))
                     self.mixers.append(mixer)
                     self.guard.check(f"freeze layer {i}")
                     check(f"freeze layer {i}")
             with autorelease_scope(self.device):
-                self.final_norm = FrozenNorm(root.norm, recorded["final_norm"], qwen=self.family.unit_offset_norm, reference=self.reference_arithmetic)
+                self.final_norm = FrozenNorm(root.norm, recorded["final_norm"], unit_offset=self.family.unit_offset_norm, reference=self.reference_arithmetic)
                 head = model.get_output_embeddings()
                 self.unembedding = head.weight.detach()
                 self.unembedding_mean = self.unembedding.mean(0)

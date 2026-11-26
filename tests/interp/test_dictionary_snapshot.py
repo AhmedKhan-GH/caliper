@@ -347,7 +347,7 @@ def device_snapshot(controlled, monkeypatch):
 
 @pytest.mark.parametrize("model_id,device,retained", [
     (GEMMA_ID, "mps", "mps"), (GEMMA_ID, "mps:0", "mps:0"),
-    (GEMMA_ID, "cpu", "cpu"), ("Qwen/Qwen3.5-0.8B", "mps", "mps"),
+    (GEMMA_ID, "cpu", "cpu"), ("example/model", "mps", "mps"),
     ("fixture", "cpu", "cpu"),
 ])
 def test_snapshot_selects_device_reductions_only_for_gemma_mps(device_snapshot, model_id, device, retained):

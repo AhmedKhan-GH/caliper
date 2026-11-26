@@ -21,7 +21,7 @@ from .checkpoint_state import _save_tensors, dictionary_fingerprint, write_json
 from .evaluation_binding import EvaluationBinding
 from .evaluation_protocol import evaluation_features, evaluation_memory, evaluation_reconstruction
 from .memory_limits import CleanStop, MemoryGuard, StopControl, autorelease_scope
-from .model_load import GEMMA_ID, MODEL_ID, hidden_forward, load_text_model
+from .model_load import GEMMA_ID, hidden_forward, load_text_model
 from .stop_records import clean_stop_record, stop_reason
 from .text_stream import TextStream, evaluation_source_metadata, fineweb_documents, partition_metadata
 
@@ -945,7 +945,7 @@ def evaluate_research(model, dictionary, stream, folder, *, tokens, context, bat
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--dictionary", type=Path, required=True)
-    parser.add_argument("--model", choices=(MODEL_ID, GEMMA_ID), default=MODEL_ID)
+    parser.add_argument("--model", choices=(GEMMA_ID,), default=GEMMA_ID)
     parser.add_argument("--device", choices=("mps", "cpu"), default="mps")
     parser.add_argument("--tokens", type=int, default=200_000)
     parser.add_argument("--context", type=int)
@@ -974,7 +974,7 @@ def main(argv=None):
             memory = MemoryGuard(args.memory_gb, args.device)
             memory.check("start")
             stop.check()
-            selection = {"model_id": args.model} if args.model != MODEL_ID else {}
+            selection = {"model_id": args.model}
             model, tokenizer = load_text_model(device=args.device, memory=memory, **selection)
             stop.check()
             dictionary = load_dictionary(args.dictionary, model=model, device=args.device, dtype=torch.float32,

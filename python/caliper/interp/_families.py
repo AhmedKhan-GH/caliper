@@ -4,8 +4,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 import math
 
-from . import _qwen_family
-
 
 @dataclass(frozen=True)
 class ModelFamily:
@@ -46,8 +44,6 @@ class ModelFamily:
         return root, prefix, layers
 
     def mixer(self, block):
-        if self.name == _qwen_family.FAMILY_NAME:
-            return _qwen_family.mixer(block)
         return "self_attn", "fixture" if self.name == "caliper_tiny" else "gemma_full"
 
     def memory_limit(self, requested):
@@ -59,7 +55,6 @@ class ModelFamily:
 
 _FAMILIES = {
     "caliper_tiny": ModelFamily("caliper_tiny", None, None, None),
-    _qwen_family.FAMILY_NAME: ModelFamily(**_qwen_family.FAMILY_METADATA),
     "gemma2": ModelFamily("gemma2", "Gemma2Model", "Gemma2DecoderLayer",
                           "transformers.models.gemma2.modeling_gemma2", unit_offset_norm=True,
                           mlp_read_norm="pre_feedforward_layernorm",

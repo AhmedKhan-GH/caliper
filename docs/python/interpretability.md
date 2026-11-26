@@ -5,7 +5,7 @@ The model and its dictionary stay in the Python process.
 Library pieces draw the graph, example tokens, and next-token probabilities in the app and browser.
 The [interpretation tools](../agents/interpretation.md) expose the same data through Caliper MCP.
 
-Supported decoder families are the seeded fixture, Gemma 2, and experimental Qwen3.5 text.
+Supported decoder families are the seeded fixture and Gemma 2.
 Generic Llama models are unsupported.
 The `published_dallas_v1` profile targets replication of the published circuit-tracer Gemma 2 2B Dallas example.
 Gemma 2 2B is the only supported model for this profile.
@@ -16,7 +16,7 @@ The [milestone roadmap](../roadmap/milestones.md) records acceptance status.
 `caliper.interp.points(model)` lists the supported probe points.
 Decoder blocks expose `resid_pre`, `mlp_in`, `mlp_out`, and `attn_pattern` beside the existing module and head points.
 The fixture uses names such as `layers.0.mlp_in`.
-Qwen and Gemma use names such as `model.layers.0.mlp_in`.
+Gemma uses names such as `model.layers.0.mlp_in`.
 
 Gemma `mlp_in` is the actual GeGLU input after the pre-feedforward norm and its learned gain.
 Gemma `mlp_out` is the post-feedforward norm output at the residual sum.
@@ -26,7 +26,6 @@ The [Gemma Scope reference](../reference/gemma-scope.md) defines these coordinat
 `caliper.interp.capture(model, points)` captures tensors without a CPU copy.
 Use it as a context manager around the model call.
 The context removes its hooks when it closes.
-Qwen DeltaNet patterns represent signed causal mixing coefficients, which can differ from attention probabilities.
 
 `caliper.interp.publish(name, tensor)` exposes a named tensor to a derive program.
 For example, a publication named `trace.counts` becomes the source `live:trace.counts`.
@@ -88,11 +87,10 @@ The local snapshot is trusted input. Verification does not authenticate its file
 The model must use evaluation mode.
 Set `memory_limit_gb=40` at initial Gemma verification when the complete run needs that budget.
 Later callers cannot raise an earlier verification limit or clear its recorded stop.
-Qwen permits eager and SDPA attention with the same checkpoint identity.
 Gemma requires eager attention because the supported SDPA backend cannot apply its attention softcap.
 Later identity checks refuse changes to weights or forward settings, including changes before dictionary admission or tracer construction.
 
-For default Qwen3.5 text and Gemma 2 RoPE, the verifier reconstructs buffers within a fixed CPU allocation limit.
+For default Gemma 2 RoPE, the verifier reconstructs buffers within a fixed CPU allocation limit.
 It also reconstructs the Gemma embedding-scale scalar.
 It refuses other nonpersistent buffers and nondefault RoPE modes.
 
@@ -108,8 +106,6 @@ The error is the original semantic MLP output minus the reconstruction.
 
 ## Local Resources
 
-The supported Qwen checkpoint is `Qwen/Qwen3.5-0.8B` at revision `2fc06364715b967f1860aea9cf38778875588b17`.
-It has 24 decoder layers and width 1,024.
 Local preparation requires PyTorch 2.15.0 and Transformers 5.24.0.
 Place the complete pinned snapshot in the Hugging Face cache before tool execution.
 
@@ -118,7 +114,7 @@ Tests never download a model or dataset.
 
 The text source is `HuggingFaceFW/fineweb-edu`, configuration `sample-10BT`, split `train`.
 Its pinned revision is `87f09149ef4734204d70ed1d046ddc9ca3f2b8f9`.
-Qwen training, quality checks, and the example index use separate document partitions.
+Quality checks and the example index use separate document partitions.
 The manifest records the source and partition rules.
 Imported Gemma dictionaries bind local evaluation data through a separate `evaluation_source` record.
 Their publisher training provenance and overlap remain unknown.
@@ -134,37 +130,24 @@ The allocation must also fit the remaining process budget.
 Historical peak checks and pressure stop thresholds remain active.
 Other codecs and unbounded decode units are refused before data allocation.
 
-The Qwen preparation commands below document supported interfaces with local resource folders.
-Further Qwen GPU work and acceptance attempts remain shelved.
+The tools below use local resource folders.
 Each full job requires an external resource wrapper, a heavy slot, and an exclusive model slot.
-The wrapper must set `nice -n 10` and enforce exclusive GPU access for training.
+The wrapper must set `nice -n 10` and enforce exclusive GPU access.
 These requirements are run policy. Portable tools do not contain machine-specific lock paths.
 Set `HEAVY_WRAPPER` to the project wrapper, which accepts a job name, a log path, and a command.
 
 ```sh
-"$HEAVY_WRAPPER" TRAIN-DICTIONARY "$TRAIN_LOG" env PYTHONPATH=python:. python -m tools.interp.train_transcoders \
-  --output "$DICTIONARY" --local-dataset-manifest "$DATASET_MANIFEST"
 "$HEAVY_WRAPPER" MODEL-QUALITY "$QUALITY_LOG" env PYTHONPATH=python:. python -m tools.interp.eval_dictionary \
   --dictionary "$DICTIONARY" --local-dataset-manifest "$DATASET_MANIFEST"
 "$HEAVY_WRAPPER" MODEL-INDEX "$INDEX_LOG" env PYTHONPATH=python:. python -m tools.interp.build_index \
   --dictionary "$DICTIONARY" --local-dataset-manifest "$DATASET_MANIFEST"
 ```
 
-The Qwen trainer defaults to 16,384 latents per layer, TopK with `k=32`, and 40 million tokens.
-The context contains 256 tokens.
-The process limit is 24 GB, and the wall-time limit is ten hours.
-The memory guard sets the MPS allocation fraction for the whole process.
-Use a separate process when another workload requires a different MPS limit.
-
-Checkpoints support `--resume`. The periodic checkpoint interval is 240 seconds after each completed save.
-A 270-second work interval forces a clean stop. Checkpoint writes consume additional time within the aggregate cap.
-A bounded pilot must establish time and memory requirements before a full run.
-
 Quality checks use 200,000 separate tokens.
-The Qwen mean unexplained variance limit is 0.40, and the dead-feature fraction limit is 0.15.
-Replacement of all MLPs must increase cross-entropy by at most 0.5 nats.
-These thresholds describe acceptance criteria, not a claim that a local dictionary passed.
-The Qwen example index uses two million other tokens and a 12 GB process limit.
+The evaluator records reconstruction, activity, and cross-entropy measurements.
+The published Gemma replication defines M8 acceptance.
+The example index uses two million other tokens.
+Gemma jobs use a 40 GB process limit and an 8 GB host reserve.
 Index version 2 records the `live_input_v1` encoder policy in its manifest hash.
 It also binds model tensor precision, device, effective forward settings, autocast, and float32 matmul precision.
 Rebuild the index when these settings change, including a move between CPU and MPS.
@@ -183,7 +166,6 @@ The [Gemma Scope reference](../reference/gemma-scope.md) records every source pi
 The ordinary `caliper` profile transposes the source encoder and divides input columns by the learned gain.
 The ordinary hosted Gemma path retains F32.
 The decoder writes after the post-feedforward norm without another normalization.
-A Qwen dictionary cannot serve Gemma.
 
 The explicit `circuit_tracer_82996f14` profile uses an original-coordinate BF16 artifact.
 `W_enc_original` is the direct source encoder transpose cast to BF16.
@@ -201,13 +183,11 @@ Ordinary indexes retain their compatible policies and limits.
 F32 research results provide comparison evidence.
 They cannot qualify BF16 artifacts or indexes, and the published profile adds no quality gate.
 The generic `research_v1` protocol retains its sample, identity, context, and per-layer loss checks.
-Qwen CPU protocol paths remain supported, but further Qwen GPU runs, regrading, and acceptance attempts remain shelved.
 
 Independent arithmetic checks use actual TransformerLens conversion with small CPU models.
 They cover F32 and BF16, contexts of 33, 256, and 1,024 positions, and right padding at 256 positions.
 These checks do not prove full model parity, device memory, trace time, or action time.
 The explicit Gemma process limit remains 40 decimal GB, with an 8 decimal GB host reserve.
-The Qwen quality override does not apply to Gemma.
 
 ## Example Index
 
@@ -234,7 +214,6 @@ The hosted `trace.run` command performs this work at its existing run boundary.
 
 The local replacement model fixes attention routing, normalization denominators, and feature masks from the prompt.
 Each MLP becomes its transcoder output plus a constant error vector.
-Qwen gates and DeltaNet routing factors also remain fixed.
 The graph describes effects through these fixed paths, not the causes of attention choices.
 
 Gemma attention capture preserves its softcap and alternating sliding-window masks before it fixes the probabilities.
@@ -376,7 +355,6 @@ A failed new hook can end without action deferral when earlier live effects need
 Interpretation work can read committed effects after cleanup, even when actions defer.
 Its snapshot describes applied effects, which can differ from queued requests.
 
-Feature requests cannot target layers excluded by an upper-half dictionary.
 The default dictionary identifier binds tensor content, activation type, optional TopK values, and metadata except the quality report.
 JumpReLU identity includes every threshold.
 Generic state restore refuses a different dictionary under that identifier.
@@ -419,7 +397,7 @@ Insufficient features and zero variance do not produce a passing result.
 
 `run.start` with `kind = "inference"` starts the installed hosted runner.
 It requires a local model, dictionary, and prompt.
-The model is `tiny-lm` or an exact pinned Qwen or Gemma snapshot folder in the Hugging Face cache.
+The model is `tiny-lm` or the exact pinned Gemma snapshot folder in the Hugging Face cache.
 The dictionary folder must also contain its compatible example index.
 The loader uses local safe weights and refuses missing or incompatible resources.
 
@@ -536,7 +514,7 @@ This option copies only 18 fixed display tensors to MPS, with a total limit of 2
 The copies use the shared 12 GB process guard, and a resource stop remains in effect.
 The model, dictionary, attribution math, and reference hash stay on the unchanged CPU fixture.
 Ordinary CPU fixture runs leave this option disabled.
-The driver removes this option for Qwen and Gemma.
+The driver removes this option for Gemma.
 
 Use `--show` in place of `--hidden` for a visible interactive instrument.
 This form prepares the baseline instrument without the acceptance batch.
@@ -666,39 +644,8 @@ Missing modules or resources fail setup, while verified absence of Metal permits
 Isolated inference entry checks also cover argument and environment transfer on macOS and Windows.
 Those checks do not establish production attachment, checkpoint restoration, shutdown, or native Windows inference.
 
-Supported local-model test entry points remain available, but Qwen acceptance attempts remain shelved.
-The Qwen entry uses `CALIPER_QWEN_MODEL` and `CALIPER_QWEN_DICTIONARY`, with optional `CALIPER_QWEN_QUALITY_OVERRIDE`.
 The generic Gemma entry uses `CALIPER_GEMMA_MODEL` and `CALIPER_GEMMA_DICTIONARY`.
 These opt-in checks run outside CI with explicit local resources and no downloads.
-
-## Experimental Qwen Limits
-
-Qwen3.5-0.8B remains experimental and does not decide M8 acceptance.
-Its CPU and fixture tests remain in CI.
-Further Qwen GPU runs, research regrading, and acceptance attempts remain shelved.
-Its historical dictionary and index retain their measured limitations.
-
-The historical Qwen dictionary contains 8,192 features per layer across 24 layers and records 40 million training tokens.
-Its held-out FVU is 0.329109366111, dead fraction is 0.261149088542, and cross-entropy rise is 1.18043922644 nats.
-FVU passes the Qwen-specific 0.40 limit but exceeds the original 0.30 limit.
-Dead fraction and cross-entropy fail their unchanged limits of 0.15 and 0.5 nats.
-Its historical index contains two million tokens.
-
-The explicit founder override admits only this exact Qwen dictionary and retains those failed measurements.
-The generic driver accepts it through `--quality-override FILE`, with the full fingerprint and identical measured values.
-Its version 1 record uses authority `founder` and cannot admit Gemma or bypass missing resources and failed nonquality checks.
-The instrument and result retain the override and the failed quality status.
-
-The historical Qwen graph result failed at 6/10 signs and Spearman correlation 0.539394.
-Its historical requirements were 8/10 signs and 0.6.
-The quality override did not change those requirements.
-These Qwen results supply no Gemma quality or acceptance evidence.
-
-The historical influence-based selection, L3 F5742, supplies a secondary comparison.
-It predicted -0.361462 and measured +0.003521.
-The historical primary selection used the largest absolute predicted effect on the top logit outside the last layer.
-Validation used the ten most influential active features.
-Historical Qwen evidence passed 151 of 152 required checks, with graph validation below its thresholds.
 
 ## Refusals And Limits
 
@@ -711,4 +658,4 @@ The [command reference](../agents/interpretation.md) specifies the request and r
 The seeded CPU fixture verifies mathematical identities without a downloaded model.
 Its reference forward hash is `2464295694bd3690f156dcc7248882f0ad289f55972caafbbd7bd23f4e3d109e`.
 Fixture completeness requires a residual at most `1e-9`.
-Qwen and Gemma require at most `0.02` per target and separate learned-model acceptance evidence.
+Gemma requires at most `0.02` per target and separate learned-model acceptance evidence.

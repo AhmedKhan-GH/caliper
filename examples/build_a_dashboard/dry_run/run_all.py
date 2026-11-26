@@ -2,7 +2,7 @@
 
     python examples/build_a_dashboard/dry_run/run_all.py --out <new folder> [--size 1024x640]
         [--steps 1-6] [--story] [--stream producer|train] [--caliper <app>]
-        [--train-python <python>] [--agent-python <python>] [--model qwen3.8:27b]
+        [--train-python <python>] [--agent-python <python>] [--model example-model]
         [--script <N>=<file>]
 
 Each step is a script of its own in this folder, runnable alone, which plays
@@ -109,7 +109,7 @@ EXAMPLE = HERE.parent
 REPO = EXAMPLE.parent.parent
 TRAIN = EXAMPLE / "train.py"
 DATA = [EXAMPLE / "data" / "run_metrics.parquet", EXAMPLE / "data" / "attention.safetensors"]
-MODEL = "qwen3.8:27b"
+MODEL = "example-model"
 OLLAMA = "http://127.0.0.1:11434"
 PRODUCER = "caliper_attention_producer"
 PRODUCER_ARGS = ["--layers", "4", "--heads", "4", "--tokens", "48", "--hz", "8"]   # train.py's shapes

@@ -31,11 +31,9 @@ def gemma_model(layers=3, *, softcap=.15, window=2):
     return model
 
 
-def test_family_entries_retain_fixture_and_qwen_paths():
+def test_family_entries_retain_fixture_and_gemma_paths():
     from .fixture import TinyLM
-    from .test_points import qwen
     for model, name, prefix in ((TinyLM(layers=1), "caliper_tiny", "layers"),
-                                (qwen(layers=1), "qwen3_5_text", "model.layers"),
                                 (gemma_model(1), "gemma2", "model.layers")):
         family = model_family(model)
         assert family.name == name

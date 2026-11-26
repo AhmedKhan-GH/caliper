@@ -69,20 +69,16 @@ python3 -m venv .venv-agent
 export CALIPER_AGENT_PYTHON=$PWD/.venv-agent/bin/python
 ```
 
-Install Ollama and download the model that both agents use:
+Select a local model with tool support. Replace `example-model` with its identifier in the commands below.
+Install Ollama and download that model:
 
 ```sh
-ollama pull qwen3.8:27b
+ollama pull example-model
 ```
 
 Caliper asks Ollama for a context length of 16,384 tokens for ⌘K and 32,768 tokens for the side chat, with every
-request, and Ollama unloads the model a minute after its last request. Left to itself, Ollama would load this model
-with room for its whole context of 262,144 tokens, which took 34 GB here. When a conversation no longer fits its
+request, and Ollama unloads the model a minute after its last request. When a conversation no longer fits its
 context length, the agent does not send the next request and says so, and the turn ends as **LIMIT**.
-
-**What to expect in memory.** In a run of this whole walk-through on a 64 GB Mac, with the model at the side chat's
-32,768 tokens, Ollama's model process took about 22 GB and the training script under 1 GB, and free memory fell from
-60 % to 24 % while the model worked. If you see memory pressure, close other heavy apps before steps 3 and 4.
 
 ### Starting the app
 
@@ -178,8 +174,8 @@ dashboard, open another one or close the window while a dashboard has unsaved ch
 ## 3. Change a panel with ⌘K, accept it and undo it
 
 Open the widget agent's settings with ⌘, (or **⌘, Agent** on the landing screen). Choose the **Ollama** preset, choose
-**List** and then `qwen3.8:27b` under **Model**, and choose **Probe**: Tool calling and Vision say Yes, and Context
-length says 16,384 tokens, from the preset. [Set up the widget agent](../../docs/agents/widget-agent-setup.md)
+**List** and then `example-model` under **Model**, and choose **Probe**. Confirm that the model supports tools. Vision depends on the selected model.
+The preset requests a context length of 16,384 tokens. [Set up the widget agent](../../docs/agents/widget-agent-setup.md)
 explains each setting. A change of these settings applies at once.
 
 Press ⌘B to leave build mode. Click the series panel to focus it; its frame turns bronze. Press ⌘K: a one-line prompt
@@ -240,7 +236,7 @@ It lists the tools, reads the catalog and the open spec, and adds a series panel
 first panel. The edit does not change the dashboard at once: it waits on an approval card in the app from **MCP
 agent**, with its change, and the client's call waits too. Choose **Approve**, and the panel appears on the dashboard
 and the call returns its result. Choose **Deny** instead, and the dashboard stays as it was and the agent is told so.
-With `--model qwen3.8:27b`, the model that Ollama serves chooses the calls instead of the script.
+With `--model example-model`, the model that Ollama serves chooses the calls instead of the script.
 
 ## 6. Save, open again and open in a browser
 
@@ -273,7 +269,7 @@ training run of step 1 itself; without it step 4 plots a small test stream. Each
 same options (`--caliper`, `--out`, `--size`, and `--train-python` or `--agent-python` where it needs one); its
 `--help` lists them.
 
-Steps 3 and 4 need Ollama with `qwen3.8:27b`, and the runner stops before starting anything when it is missing.
+Steps 3 and 4 need Ollama with `example-model`, and the runner stops before starting anything when it is missing.
 During those steps it prints the free memory every 5 seconds and stops them if memory runs short (`--memory-low`,
 `--memory-critical`). Step 6 needs Node and Playwright from the web package (`cd web && npm ci`), with its headless
 Chromium (`npx playwright install chromium-headless-shell` in `web/`). The scripts themselves need only Python's

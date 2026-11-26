@@ -6,7 +6,8 @@ import torch
 
 from caliper import interp
 from caliper.interp import _points
-from .test_points import hooks, qwen
+from .test_points import hooks
+from .test_gemma_family import gemma_model
 
 
 def overlap(monkeypatch, first, second, paused, resume):
@@ -54,7 +55,7 @@ def overlap(monkeypatch, first, second, paused, resume):
 
 
 def test_last_restore_and_new_capture_share_one_owner(monkeypatch):
-    model = qwen()
+    model = gemma_model(4)
     config = model.config
     config._attn_implementation = "sdpa"
     point = "model.layers.3.attn_pattern"
@@ -89,7 +90,7 @@ def test_last_restore_and_new_capture_share_one_owner(monkeypatch):
 def test_teardown_waits_for_complete_hook_install(monkeypatch, teardown):
     from caliper import watch
 
-    model = qwen()
+    model = gemma_model(4)
     model.config._attn_implementation = "sdpa"
     watched = watch(model, activations=False, groups=False, scene=False) if teardown == "watch" else None
     existing = model.model.layers[0].register_forward_hook(lambda *args: None)
@@ -108,7 +109,7 @@ def test_teardown_waits_for_complete_hook_install(monkeypatch, teardown):
         remove = watched.remove if watched is not None else lambda: values.close(clear=True)
         overlap(monkeypatch, values.__enter__, remove, paused, resume)
         assert hooks(model) == 1
-        assert not values._handles and not values._configs and not values._pending
+        assert not values._handles and not values._configs
         assert model.config._attn_implementation == "sdpa"
         assert id(model.config) not in _points._EAGER
         assert id(values) not in _points._ACTIVE.get(model, {})
@@ -123,7 +124,7 @@ def test_teardown_waits_for_complete_hook_install(monkeypatch, teardown):
 
 @pytest.mark.parametrize("clear", [False, True])
 def test_late_hooks_cannot_change_closed_results(clear):
-    model = qwen()
+    model = gemma_model(4)
     point = "model.layers.3.attn_pattern"
     values = interp.capture(model, [point]).__enter__()
     attention = model.model.layers[3].self_attn
@@ -141,74 +142,28 @@ def test_late_hooks_cannot_change_closed_results(clear):
     assert hooks(model) == 0
 
 
-def test_late_delta_hooks_cannot_retain_projection_tensors():
-    model = qwen()
-    point = "model.layers.0.attn_pattern"
-    values = interp.capture(model, [point]).__enter__()
-    attention = model.model.layers[0].linear_attn
-    start = next(iter(attention._forward_pre_hooks.values()))
-    keep = next(iter(attention.in_proj_qkv._forward_hooks.values()))
-    finish = next(iter(attention._forward_hooks.values()))
-    pending = values._pending[point]
-    keep(attention.in_proj_qkv, (), torch.ones(1, 2, attention.conv_dim))
-    assert pending
-    values.close(clear=True)
-    assert not pending
-    start(attention, (), {})
-    keep(attention.in_proj_qkv, (), torch.ones(1, 2, attention.conv_dim))
-    finish(attention, (), None)
-    assert not values and not values._pending
-    assert hooks(model) == 0
-
-
 @pytest.mark.parametrize("suffix,module", [
     ("resid_pre", "model.layers.0"),
     ("mlp_in", "model.layers.0.mlp"),
-    ("attn_pattern", "model.layers.0.linear_attn"),
 ])
 def test_removed_pre_hook_tolerates_pytorch_dispatch_without_kwargs(suffix, module):
-    model = qwen(1)
+    model = gemma_model(1)
     values = interp.capture(model, ["model.layers.0." + suffix]).__enter__()
     # PyTorch snapshots hooks, but checks with_kwargs membership just before each call.
     stop = model.get_submodule(module).register_forward_pre_hook(
         lambda *_: values.close(clear=True), prepend=True)
     try:
         model(torch.tensor([[1, 2]]), use_cache=False)
-        assert not values and not values._pending
+        assert not values
         assert hooks(model) == 1
     finally:
         stop.remove()
         values.close(clear=True)
 
 
-def test_close_during_delta_computation_discards_late_result(monkeypatch):
-    model = qwen(1)
-    values = interp.capture(model, ["model.layers.0.attn_pattern"]).__enter__()
-    paused, resume = threading.Event(), threading.Event()
-
-    def pattern(module, observed):
-        assert set(observed) == {"qkv", "a", "b"}
-        paused.set()
-        assert resume.wait(5)
-        return observed["qkv"].new_ones(1, 2, 2, 2)
-
-    def close():
-        values.close(clear=True)
-        assert not resume.is_set(), "Close must not wait for the tensor computation."
-
-    monkeypatch.setattr(_points, "_delta_pattern", pattern)
-    try:
-        overlap(monkeypatch, lambda: model(torch.tensor([[1, 2]]), use_cache=False),
-                close, paused, resume)
-        assert not values and not values._pending
-        assert hooks(model) == 0
-    finally:
-        values.close(clear=True)
-
-
-@pytest.mark.parametrize("backend", ["eager", "sdpa"])
+@pytest.mark.parametrize("backend", ["eager"])
 def test_nested_patterns_preserve_weights_masks_and_backend(backend):
-    model = qwen()
+    model = gemma_model(4)
     model.config._attn_implementation = backend
     point = "model.layers.3.attn_pattern"
     ids = torch.tensor([[1, 2, 3], [4, 5, 0]])
@@ -236,31 +191,8 @@ def test_nested_patterns_preserve_weights_masks_and_backend(backend):
     assert hooks(model) == 0
 
 
-def test_pattern_backend_remains_visible_to_evaluation_binding():
-    from tools.interp.evaluation_binding import EvaluationBinding, _evaluation_settings
-
-    model = qwen()
-    model.config._attn_implementation = "sdpa"
-    # Exercise the actual runtime guard before artifact checks, without an artifact.
-    binding = EvaluationBinding.__new__(EvaluationBinding)
-    binding.model, binding.memory = model, None
-    binding.model_stamps = binding._model_stamps()
-    binding.model_settings = _evaluation_settings(model, None)
-    before = dict(binding.model_settings)
-    with interp.capture(model, ["model.layers.3.attn_pattern"]):
-        current = _evaluation_settings(model, None)
-        assert current["config._attn_implementation"] == '"eager"'
-        with pytest.raises(ValueError, match="forward setting changed: .*_attn_implementation"):
-            binding.check()
-    assert _evaluation_settings(model, None) == before
-    # A deliberate backend change must produce the same refusal after capture ends.
-    model.config._attn_implementation = "eager"
-    with pytest.raises(ValueError, match="forward setting changed: .*_attn_implementation"):
-        binding.check()
-
-
 def test_failed_nested_install_preserves_other_owner(monkeypatch):
-    model = qwen()
+    model = gemma_model(4)
     model.config._attn_implementation = "sdpa"
     point = "model.layers.3.attn_pattern"
     with interp.capture(model, [point]) as outer:

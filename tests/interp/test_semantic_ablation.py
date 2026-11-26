@@ -89,20 +89,3 @@ def test_mlp_output_ablation_has_no_feature_or_error_cancellation(suffix, imperf
         actual = model.layers[1].mlp(value)
         assert actual.count_nonzero() == 0
         assert torch.autograd.grad(actual.sum(), value)[0].count_nonzero() == 0
-
-
-@pytest.mark.parametrize("suffix", ["resid_pre", "mlp_in", "mlp_out"])
-def test_qwen_semantic_ablation_forward(suffix):
-    from .test_trace import qwen_for_trace
-    model = qwen_for_trace()
-    dictionary = random_dictionary(model)
-    point = f"model.layers.1.{suffix}"
-    with active_ablation(model, [point]):
-        path = FrozenPath(model, torch.tensor([[1, 2, 3]]), dictionary,
-                          interventions=[{"op": "ablate", "point": point}])
-        assert path.direct_forward_residual < 2e-5
-        assert path.replacement_forward_residual < 2e-2
-        if suffix == "mlp_out":
-            assert path.features[1].count_nonzero() == path.errors[1].count_nonzero() == 0
-        else:
-            assert path.inputs[1].count_nonzero() == 0

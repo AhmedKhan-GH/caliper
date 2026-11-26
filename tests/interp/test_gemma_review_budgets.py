@@ -12,7 +12,7 @@ from .test_dictionary import write_fixture
 from .test_gemma_context_index import tokenizer as gemma_tokenizer
 from .test_gemma_runtime import gemma_model, local_gemma
 from .test_memory_phases import process_guard
-from .test_trace import qwen_for_trace, random_dictionary
+from .test_trace import random_dictionary
 
 
 def test_public_dictionary_load_preserves_supplied_history(tmp_path):
@@ -41,10 +41,8 @@ def test_validation_refuses_wrong_device_before_prompt(monkeypatch, explicit):
                                  prompt="A", guard=guard, memory_limit_gb=12 if explicit else None)
 
 
-@pytest.mark.parametrize("family", ["tiny", "qwen"])
-def test_validation_caps_implicit_family_budget_and_tracks_dynamic_lower_limit(family):
-    model = (TinyLM(layers=2, width=8, heads=2, latents=8, k=2) if family == "tiny"
-             else qwen_for_trace(layers=4))
+def test_validation_caps_implicit_family_budget_and_tracks_dynamic_lower_limit():
+    model = TinyLM(layers=2, width=8, heads=2, latents=8, k=2)
     dictionary = random_dictionary(model, latents=8, k=2)
     readings = {"current": 1_000, "peak": 2_000}
     supplied = process_guard(28_000_000_000, readings)
@@ -91,7 +89,7 @@ def test_cached_verification_keeps_lower_budget_and_historical_stop(tmp_path, mo
     assert verified.memory.peak == guard.peak == 18_000_000_000
 
 
-@pytest.mark.parametrize("model_id", [model_load.MODEL_ID, model_load.GEMMA_ID])
+@pytest.mark.parametrize("model_id", [model_load.GEMMA_ID])
 def test_text_loader_refuses_wrong_device_before_source_access(monkeypatch, model_id):
     import huggingface_hub
     guard = process_guard(28_000_000_000, {"current": 0, "peak": 0})
@@ -99,14 +97,6 @@ def test_text_loader_refuses_wrong_device_before_source_access(monkeypatch, mode
     monkeypatch.setattr(huggingface_hub, "snapshot_download", lambda *a, **k: pytest.fail("source admission skipped"))
     with pytest.raises(ValueError, match="guard for its device"):
         model_load.load_text_model(model_id=model_id, device="cpu", memory=guard)
-
-
-def test_qwen_loader_caps_supplied_budget_before_source_access(monkeypatch):
-    import huggingface_hub
-    guard = process_guard(28_000_000_000, {"current": 13_000_000_000, "peak": 13_000_000_000})
-    monkeypatch.setattr(huggingface_hub, "snapshot_download", lambda *a, **k: pytest.fail("source admission skipped"))
-    with pytest.raises(CleanStop, match="supplied process memory limit"):
-        model_load.load_text_model(device="cpu", memory=guard)
 
 
 def test_hosted_gemma_factory_retains_owner_guard(monkeypatch):

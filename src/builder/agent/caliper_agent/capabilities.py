@@ -6,7 +6,7 @@ that holds a key, and the file never holds one). It keeps one entry per base
 URL and model:
 
     {"version": 1, "entries": [
-      {"base_url": "http://localhost:11434/v1", "model": "qwen3.8:27b",
+      {"base_url": "http://localhost:11434/v1", "model": "example-model",
        "probed_at": 1763251200.0, "used_at": 1763251200.0,
        "result": {"tools": {"value": true, "source": "probe"}, "vision": {...},
                   "context_length": {...}, "quirks": {"strict": true, ...}},

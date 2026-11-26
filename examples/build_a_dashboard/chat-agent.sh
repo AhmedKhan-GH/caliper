@@ -12,7 +12,7 @@
 #                         repository's .venv/bin/python when there is one,
 #                         else python3 on PATH, unless that is the stub of a
 #                         Mac without the Command Line Tools
-#   CALIPER_CHAT_MODEL    the model (default qwen3.8:27b)
+#   CALIPER_CHAT_MODEL    the model (default example-model)
 #   CALIPER_CHAT_CONTEXT  the context length in tokens (default: the Ollama
 #                         preset's own for the chat, 32,768)
 #   CALIPER_CHAT_BASE_URL Ollama's address (default http://127.0.0.1:11434/v1)
@@ -58,6 +58,6 @@ if ! PYTHONPATH="$source" "$python" -P -c "import caliper_agent, pydantic_ai, op
 fi
 
 set -- --preset ollama --base-url "${CALIPER_CHAT_BASE_URL:-http://127.0.0.1:11434/v1}" \
-    --model "${CALIPER_CHAT_MODEL:-qwen3.8:27b}" ${CALIPER_CHAT_CONTEXT:+--context-length "$CALIPER_CHAT_CONTEXT"} "$@"
+    --model "${CALIPER_CHAT_MODEL:-example-model}" ${CALIPER_CHAT_CONTEXT:+--context-length "$CALIPER_CHAT_CONTEXT"} "$@"
 export PYTHONPATH="$source" PYTHONDONTWRITEBYTECODE=1
 exec "$python" -P -m caliper_agent "$@"

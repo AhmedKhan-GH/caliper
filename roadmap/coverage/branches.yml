@@ -418,15 +418,6 @@ entries:
 - branch: inspector
   state: unique
   wip: false
-  commits: 1 commit, b3eabdf3
-  item: 'Running Qwen3.5-0.8B from the app with MLX: generation with the chat template (thinking on or
-    off), the tensor list, sampled views and in-memory weight edits with exact revert; docs/live-requests.md
-    documents the protocol.'
-  ids:
-  - INT-09
-- branch: inspector
-  state: unique
-  wip: false
   commits: 1 commit, f19f429b
   item: Run to max tokens bans the end-of-turn tokens so that the model writes to the limit, in the trace
     and in plain generation.
@@ -482,18 +473,6 @@ entries:
 - branch: inspector
   state: unique
   wip: false
-  commits: 1 commit, 06bf7e43
-  item: Reading the model through a Jacobian lens (unembed of final norm of the average Jacobian from
-    block l to the last block, for Qwen3.5-0.8B with a lens file converted from a published fit) in qwen_jspace.py,
-    which runs the text model block by block so the residual stream can be read and changed after any
-    block. Follows the J-space paper and its reference code.
-  ids:
-  - INT-15
-  - INT-32
-  - INT-18
-- branch: inspector
-  state: unique
-  wip: false
   commits: 2 commits, 06bf7e43 cfa67232
   item: 'Interventions in J-space across a band of layers at chosen or all positions: ablation of the
     k most active lens tokens (sparing the clean run top outputs), removal of given tokens directions,
@@ -514,31 +493,12 @@ entries:
 - branch: inspector
   state: unique
   wip: false
-  commits: 2 commits, b8925f9e d5bd0cfb
-  item: Generate in the Inference pane runs a trace and streams the J-space grid and, for the six full-attention
-    layers of Qwen3.5-0.8B, the attention patterns recomputed from queries, keys and mask, token by token;
-    both lenses are read in one stacked unembedding (about 6 to 39 tokens a second).
-  ids:
-  - INT-15
-  - INT-09
-- branch: inspector
-  state: unique
-  wip: false
   commits: 3 commits, 4118a3a6 59692488 fce1053b
   item: A playback clock for the Trace pane that replays the computation at a chosen pace from 30 seconds
     a layer to full speed with Pause and Step, never running ahead of the model, plus a tape above the
     grid that shows the whole trace squeezed to the grid width.
   ids:
   - INT-15
-- branch: inspector
-  state: unique
-  wip: false
-  commits: 2 commits, 13b4176b 9c84b561
-  item: The Embedding view draws all 248,320 rows of the embedding table in 3-D (UMAP or PCA, grouped
-    by kind, legend toggles, hover names a token) through a GeomCanvas of imported Metal buffers; the
-    Qwen host serves embedding_map and decode.
-  ids:
-  - INT-28
 - branch: inspector
   state: unique
   wip: false
@@ -560,19 +520,11 @@ entries:
   state: unique
   wip: false
   commits: 1 commit, 0c4f577e (only on the local inspector)
-  item: Two research examples written as live scripts. induction_heads.py finds GPT-2 small induction
-    heads with induction and previous-token scores per head, attention patterns and a zero-ablation of
-    the top heads. truth_direction.py finds a truth direction in Qwen2.5-1.5B and pushes along it across
-    six layers.
+  item: The induction_heads.py example finds GPT-2 small induction heads. It records attention patterns,
+    induction scores, and previous-token scores, and tests ablation of the top heads.
   ids:
   - INT-31
   - INT-16
-- branch: inspector
-  state: unique
-  wip: false
-  commits: 2 commits, 4a15a8dd 792faa18
-  item: A lock file for the Python dependencies with uv, and a path change in the Qwen examples.
-  reason: maintenance
 - branch: inspector
   state: unique
   wip: false

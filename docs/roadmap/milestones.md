@@ -14,7 +14,7 @@ This page lists the milestones of Caliper's current trajectory, Agent-Built Play
 | M5, Programmable Graphics | Pieces with a derive half in the run and a draw half in the viewer, written by the agent, in the app and the browser | Done | [#34](https://github.com/AhmedKhan-GH/caliper/pull/34) |
 | M6, Graphics Consolidation | Library scene pieces, typed resources, dashboard parity, and removal of the built-in draw route | Done | [#42](https://github.com/AhmedKhan-GH/caliper/pull/42) |
 | M7, Derivation Catalog | Model probes, feature dictionaries, a dataset index of top examples, and attribution graphs with their layout as library pieces and commands | Done | [#45](https://github.com/AhmedKhan-GH/caliper/pull/45) |
-| M8, Steering and Intervention | Steer, scale, clamp and patch on a live model. Target: reproduces the published circuit-tracer Gemma 2 2B Dallas example. Qwen3.5-0.8B remains experimental | Held | [#46](https://github.com/AhmedKhan-GH/caliper/pull/46) |
+| M8, Steering and Intervention | Steer, scale, clamp and patch on a live model. Target: reproduces the published circuit-tracer Gemma 2 2B Dallas example | Held | [#46](https://github.com/AhmedKhan-GH/caliper/pull/46) |
 | M9, Saved and Editable Instruments | Saved instruments with their pieces, and the node editor | Planned | |
 | M10, Browser Parity | The rest of an instrument in the browser | Planned | |
 | M11, Training Debugger | First acceptance demo | Planned | |
@@ -76,8 +76,6 @@ The actual circuit-tracer reference completed all seven cases and CPU pruning.
 Caliper comparison and product acceptance remain pending.
 Verified hidden startup proof covers browser assets, program views, and error retention, but it does not establish published replication.
 Evidence collection remains separate from independent acceptance review.
-Qwen3.5-0.8B stays experimental, with further GPU runs, regrading, and acceptance attempts shelved.
-Its supported CPU and fixture paths remain available.
 
 Generic projections wait for a demo that needs them.
 M9 adds saved and editable instruments with the node editor.

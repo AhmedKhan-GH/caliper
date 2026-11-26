@@ -18753,7 +18753,6 @@
                   "description": "The optional attention pattern form, or null for another semantic probe.",
                   "enum": [
                     "softmax",
-                    "signed_value_mixing",
                     null
                   ],
                   "type": [

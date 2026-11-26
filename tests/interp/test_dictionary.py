@@ -158,15 +158,15 @@ def test_metadata_numeric_ranges(tmp_path, section, field, value):
 
 def test_hf_identity_requires_resolved_checkpoint():
     revision = "a" * 40
-    model = SimpleNamespace(config=SimpleNamespace(model_type="qwen3_5_text",
-                            _name_or_path="Qwen/Qwen3.5-0.8B", _commit_hash=revision))
-    assert _dictionary._hf_identity(model.config) == f"hf:Qwen/Qwen3.5-0.8B@{revision}"
+    model = SimpleNamespace(config=SimpleNamespace(model_type="unsupported_decoder",
+                            _name_or_path="example/model", _commit_hash=revision))
+    assert _dictionary._hf_identity(model.config) == f"hf:example/model@{revision}"
     with pytest.raises(ValueError, match="configuration does not verify"):
         model_identity(model)
     model.config._commit_hash = "main"
     with pytest.raises(ValueError, match="exact HF"):
         model_identity(model)
-    model.config._name_or_path = f"cache/models--Qwen--Qwen3.5-0.8B/snapshots/{revision}"
+    model.config._name_or_path = f"cache/models--example--model/snapshots/{revision}"
     model.config._commit_hash = None
     assert _dictionary._hf_identity(model.config).endswith("@" + revision)
     model.config._commit_hash = "b" * 40
@@ -178,10 +178,10 @@ def test_hf_identity_requires_resolved_checkpoint():
 @pytest.mark.parametrize("prefix", ["cache", "C:/cache", "//server/cache"])
 def test_hf_snapshot_separators_and_revision_conflict(separator, prefix):
     revision = "a" * 40
-    name = f"{prefix}/models--Qwen--Qwen3.5-0.8B/snapshots/{revision}".replace("/", separator)
-    model = SimpleNamespace(config=SimpleNamespace(model_type="qwen3_5_text",
+    name = f"{prefix}/models--example--model/snapshots/{revision}".replace("/", separator)
+    model = SimpleNamespace(config=SimpleNamespace(model_type="unsupported_decoder",
                             _name_or_path=name, _commit_hash=None))
-    assert _dictionary._hf_identity(model.config) == f"hf:Qwen/Qwen3.5-0.8B@{revision}"
+    assert _dictionary._hf_identity(model.config) == f"hf:example/model@{revision}"
     with pytest.raises(ValueError, match="configuration does not verify"):
         model_identity(model)
     model.config._commit_hash = "b" * 40
@@ -190,13 +190,13 @@ def test_hf_snapshot_separators_and_revision_conflict(separator, prefix):
 
 
 def header_only_dictionary(tmp_path, monkeypatch, *, latents, stored_dtype):
-    """Supply Qwen-size headers without weights, a model, or device allocation."""
+    """Supply synthetic headers without weights, a model, or device allocation."""
     import safetensors
 
     data = fixture_manifest(TinyLM(layers=1, width=8, heads=2, latents=16, k=2))
-    revision = "2fc06364715b967f1860aea9cf38778875588b17"
-    data.update(model_id="Qwen/Qwen3.5-0.8B", revision=revision,
-                model_hash=f"hf:Qwen/Qwen3.5-0.8B@{revision}", layers=24,
+    revision = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    data.update(model_id="example/model", revision=revision,
+                model_hash=f"hf:example/model@{revision}", layers=24,
                 width=1024, latents=latents, k=32,
                 read_points=[f"model.layers.{i}.mlp_in" for i in range(24)],
                 write_points=[f"model.layers.{i}.mlp_out" for i in range(24)])
@@ -248,7 +248,7 @@ def test_oversized_headers_refuse_before_tensor_or_device_allocation(
 
 @pytest.mark.parametrize("latents,expected_bytes", [(16_384, 3_222_896_640), (8192, 1_611_497_472)])
 @pytest.mark.parametrize("stored_dtype", ["F16", "F32"])
-def test_qwen_header_envelopes_fit_without_materialization(
+def test_generic_header_envelopes_fit_without_materialization(
     tmp_path, monkeypatch, memory_readers, latents, expected_bytes, stored_dtype,
 ):
     data, calls = header_only_dictionary(tmp_path, monkeypatch, latents=latents, stored_dtype=stored_dtype)

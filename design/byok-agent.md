@@ -640,19 +640,17 @@ page has the details and the decisions.
 ### Ollama's own chat API and the context length
 
 **Built.** Ollama's OpenAI-compatible endpoint ignores `options.num_ctx`, so a request through it loads the model at
-the context length Ollama chooses; for `qwen3.8:27b` on a 64 GB Mac that was its whole 262,144 tokens, which grew
-Ollama's server from 20 GB to 34 GB and left 12 percent of memory free for one short request. The Ollama preset
+the context length Ollama chooses. The Ollama preset
 (`chat_api: ollama` in `presets.json`) keeps the OpenAI client and Pydantic AI's OpenAI chat model, and puts
 `OllamaNativeTransport` (`ollama_native.py`) under the client: each chat request goes to `/api/chat`, translated, with
 `options.num_ctx` and `keep_alive: 60s`, and the streamed reply comes back as chat completion chunks (thinking as
 `reasoning`, tool calls with an id made when Ollama sends none, the finish reason and the usage from
 `prompt_eval_count` and `eval_count`). The probe's test calls take the same route, so the probe loads the model as the
-agent will. With it, the same probe left `/api/ps` at a context of 16,384 tokens and 16.5 GB, and 47 percent free.
+agent will.
 
 - **A context length per role.** `presets.json` gives the Ollama preset 16,384 tokens for the widget role and 32,768
   for the general role. The widget role's first request (ten tools, the bundle and the render) is about 7,000 tokens
-  and the general role's (34 tools) about 11,000, growing with each tool result; the side chat builder measured one
-  general turn growing from 10,820 to 20,341 prompt tokens over five requests. The provider sends the role's length
+  and the general role's (34 tools) about 11,000, with more tokens for each tool result. The provider sends the role's length
   in each request (`extra_body.options.num_ctx`, which the transport takes). The person's setting replaces it: the
   widget agent's Context length in the app (an override in the cache, read for the widget role only) and
   `--context-length` (both roles).
@@ -664,8 +662,8 @@ agent will. With it, the same probe left `/api/ps` at a context of 16,384 tokens
   (`estimate_prompt_tokens()`): from the prompt tokens the server counted for the last one, plus what was added since,
   or, for a session's first request, from the whole request, each kind of content at its own rate (instructions 3.5
   characters a token, counted once; tool schemas 3.4; the messages' text 1.6, since numbers take a token a digit; 350
-  tokens an image; 200 for the template). A test keeps the estimate at or above Ollama's own counts of recorded ⌘K and
-  side chat requests and within 30 percent of them. When the request would leave less than an eighth of the context
+  tokens an image; 200 for the template). Tests check the estimate with synthetic requests.
+  When the request would leave less than an eighth of the context
   (at most 4,096 tokens) for the reply, it sends nothing; otherwise it asks for no more output than the context leaves
   after the prompt. A request refused as too long, the check's own refusal and a reply cut at the end of the context,
   tool calls or not, all end the turn with `max_tokens`, which the side chat and the ⌘K prompt show as LIMIT rather
@@ -687,20 +685,6 @@ agent will. With it, the same probe left `/api/ps` at a context of 16,384 tokens
 - **Open: compaction for a full context.** Instead of ending the turn when the conversation no longer fits, the
   sidecar could summarize the earlier conversation and go on, as the Claude API's server-side compaction does. Not
   built; the person starts again or raises the context length.
-
-### One run on a local model
-
-During the spike the dashboard prompt of the acceptance test ran once against a local model, as a manual check:
-`tests/manual_local_model.py` starts `caliper-builder-host` on a fresh workspace with the two data files and runs
-`caliper-acp-harness` with the sidecar on the OpenAI-compatible route. The model was Qwen 3.8 27B (Q4_K_M) on Ollama,
-which reports tool support; it was already running, and nothing was installed or downloaded for the check. In 135
-seconds the model imported both files, looked up the two catalog entries, created the spec, added the two sources
-with the three transforms and the three panels, set the layout, validated the spec and saved the applet, over fifteen
-tool calls and seven permission requests (six spec edits shown as diffs, and the save); its three calls to
-`panel.render` failed because the stand-in host has no renderer. The
-saved spec had the requested sources, transforms, panels, bindings and layout, with titles and options of its own
-where the prompt gave none. This was one run of one model, not a guarantee for that model or any other; the provider
-conformance suite of the Widget agent page is where models will be compared.
 
 ### The ACP Python SDK
 
@@ -864,8 +848,8 @@ A fake Caliper API runs on loopback in the test process, and a fake OpenAI-compa
 - `tests/test_key_store.cpp` (doctest): the memory store with one key per provider, the presets table, the Custom
   account, the checks of providers and keys, the placement of each provider's key in a child's environment and of none
   for a local server, the offline switch passed through, and that no error quotes a key.
-- `tests/manual_local_model.py`: not a test of the suite, but the manual run against a local model server described
-  [above](#one-run-on-a-local-model); it starts no server and pulls no model.
+- `tests/manual_local_model.py` provides a manual check against a local model server.
+  It starts no server and pulls no model.
 
 Open items in the tests' timing, seen in a sweep and left for later:
 

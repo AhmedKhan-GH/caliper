@@ -634,19 +634,16 @@ def suspend(model):
 def _preserve_captures(model):
     """Keep an internal source forward out of existing probe capture maps."""
     from ._points import _ACTIVE
-    saved = [(values, dict(values), {key: dict(part) for key, part in values._pending.items()})
+    saved = [(values, dict(values))
              for values in list(_ACTIVE.get(model, {}).values())]
     try:
         yield
     finally:
-        for values, tensors, pending in saved:
+        for values, tensors in saved:
             if values._closed:
                 continue
             values.clear()
             values.update(tensors)
-            for key, part in values._pending.items():
-                part.clear()
-                part.update(pending[key])
 
 
 @contextmanager
@@ -1128,7 +1125,7 @@ class InterventionService:
             inputs = {k: v.to(device) for k, v in inputs.items()}
             config = getattr(self.model, "config", None)
             kwargs = {"use_cache": False} if config is not None else {}
-            if getattr(config, "model_type", None) in ("qwen3_5_text", "gemma2"):
+            if getattr(config, "model_type", None) == "gemma2":
                 kwargs["logits_to_keep"] = 1
             self.preparing_source = True
             sources = {}

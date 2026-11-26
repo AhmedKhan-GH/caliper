@@ -8,25 +8,24 @@ The standalone frozen path applies the same check.
 
 ## Supported Points
 
-`<block>` is a decoder block, such as `layers.0` on the fixture or `model.layers.0` on Qwen3.5 and Gemma 2.
-`<attention>` is `<block>.self_attn` for full attention or `<block>.linear_attn` for DeltaNet.
-The output projection is `o_proj` for full attention and `out_proj` for DeltaNet.
+`<block>` is a decoder block, such as `layers.0` on the fixture or `model.layers.0` on Gemma 2.
+`<attention>` is `<block>.self_attn`.
+The output projection is `o_proj`.
 
 | Point | Families | Frozen Effect |
 |---|---|---|
-| `<block>.mlp` | Fixture, Qwen3.5 | Zero features, decoder bias, and MLP output |
-| `<block>.mlp_out` | Fixture, Qwen3.5, Gemma 2 | Zero features, decoder bias, and semantic residual write |
-| `<block>.resid_pre` | Fixture, Qwen3.5, Gemma 2 | Zero the residual before the block |
-| `<block>.mlp_in` | Fixture, Qwen3.5, Gemma 2 | Zero the transcoder read input |
-| `<attention>` | Fixture, Qwen3.5, Gemma 2 | Zero the attention output |
-| `<attention>.<output_projection>` | Fixture, Qwen3.5, Gemma 2 | Zero the attention output |
+| `<block>.mlp` | Fixture | Zero features, decoder bias, and MLP output |
+| `<block>.mlp_out` | Fixture, Gemma 2 | Zero features, decoder bias, and semantic residual write |
+| `<block>.resid_pre` | Fixture, Gemma 2 | Zero the residual before the block |
+| `<block>.mlp_in` | Fixture, Gemma 2 | Zero the transcoder read input |
+| `<attention>` | Fixture, Gemma 2 | Zero the attention output |
+| `<attention>.<output_projection>` | Fixture, Gemma 2 | Zero the attention output |
 | `<attention>#<head>` | Resolver-dependent | Zero the same output-projection input slice as the live head ablation |
 
 A head point must pass the live ablation resolver for that attention module.
 The tracer does not infer head support from a point name alone.
 A whole MLP ablation removes its feature nodes, because the MLP makes no feature contribution.
 A complete forward check and direct-effect checks verify the supported paths on the CPU fixture.
-The local MPS run traces the pinned Qwen checkpoint and tests feature clamps.
 The supported module and head ablations in this table retain CPU fixture coverage.
 
 ## Gemma Coordinates
@@ -49,7 +48,7 @@ Generic Llama support remains deferred.
 
 The tracer refuses MLP submodules, including `down_proj`, `gate_proj`, and `up_proj`.
 It also refuses attention input projections, internal attention normalization, decoder normalization, whole decoder blocks, and the final normalization or output head.
-Examples include `self_attn.v_proj`, `linear_attn.in_proj_qkv`, `linear_attn.norm`, and `<block>.input_layernorm`.
+Examples include `self_attn.v_proj` and `<block>.input_layernorm`.
 The error identifies the unsupported ablation or intervention point.
 
 These ablations need separate frozen-path semantics.

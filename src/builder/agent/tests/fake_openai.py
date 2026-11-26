@@ -47,10 +47,10 @@ PROBE_TOOL = "record_number"
 
 # Ollama's model metadata (POST /api/show) of a hybrid 27B model: 65 layers, one in four with attention,
 # 4 key and value heads of 256: 17 x 4 x 512 x 2 bytes, 68 KiB of context cache a token.
-HYBRID_27B_INFO = {"general.architecture": "qwen35", "qwen35.block_count": 65, "qwen35.full_attention_interval": 4,
-                   "qwen35.attention.head_count": 24, "qwen35.attention.head_count_kv": 4,
-                   "qwen35.attention.key_length": 256, "qwen35.attention.value_length": 256,
-                   "qwen35.context_length": 262144}
+HYBRID_27B_INFO = {"general.architecture": "synthetic_hybrid", "synthetic_hybrid.block_count": 65, "synthetic_hybrid.full_attention_interval": 4,
+                   "synthetic_hybrid.attention.head_count": 24, "synthetic_hybrid.attention.head_count_kv": 4,
+                   "synthetic_hybrid.attention.key_length": 256, "synthetic_hybrid.attention.value_length": 256,
+                   "synthetic_hybrid.context_length": 262144}
 
 _COLOURS = {"red": (220, 30, 30), "green": (30, 170, 40), "blue": (30, 60, 220), "yellow": (240, 215, 20)}
 

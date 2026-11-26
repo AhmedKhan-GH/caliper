@@ -91,12 +91,12 @@ TEST_CASE("side chat: a custom command is split like shell words and run without
     const fs::path bin = fresh("chat-custom/bin");
     fake_program(bin, "my-agent");
     ChatAgent a;
-    REQUIRE(custom_chat_agent("Local agent", "my-agent --model 'qwen3 8b' $HOME", bin.string(), &a).ok());
+    REQUIRE(custom_chat_agent("Local agent", "my-agent --model 'example model' $HOME", bin.string(), &a).ok());
     CHECK(a.custom);
     CHECK(a.id == "custom");
     CHECK(a.title == "Local agent");
     CHECK(a.found);
-    CHECK(a.argv == std::vector<std::string>{(bin / "my-agent").string(), "--model", "qwen3 8b", "$HOME"});
+    CHECK(a.argv == std::vector<std::string>{(bin / "my-agent").string(), "--model", "example model", "$HOME"});
 
     REQUIRE(custom_chat_agent("", "nowhere-agent acp", bin.string(), &a).ok());
     CHECK(a.title == "Custom agent");

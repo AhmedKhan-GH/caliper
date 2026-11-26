@@ -2,7 +2,7 @@
 
 Caliper LIB supports Gemma 2 semantic probes, frozen attribution paths, and JumpReLU dictionaries.
 The converter imports the pinned Gemma Scope selection for `google/gemma-2-2b`.
-Qwen3.5 support remains experimental, and generic Llama models are unsupported.
+Other external decoder families are unsupported.
 The `published_dallas_v1` profile targets replication of the published circuit-tracer Gemma 2 2B Dallas example.
 Gemma 2 2B is the only supported model for this profile.
 The [milestone roadmap](../roadmap/milestones.md) records acceptance status.
@@ -311,9 +311,6 @@ The live response also checks both index policies against the current model and 
 Example admission includes the additional prefix position and retains a lower memory limit when supplied.
 The public Gemma tokenizer and index windows both place BOS before content.
 
-Legacy Qwen evaluation retains its existing context preparation, replacement behavior, and metric targets.
-The Qwen index format remains unchanged.
-
 ## Reference Index
 
 The published profile requires a new index over exactly 2,000,000 source positions from the pinned index partition.
@@ -341,7 +338,7 @@ The stored index and its identity remain unchanged.
 
 ## Research Evaluation Protocol
 
-The explicit `research_v1` protocol retains CPU-tested aggregation and context code for Gemma and experimental Qwen.
+The explicit `research_v1` protocol retains CPU-tested aggregation and context code for Gemma and synthetic fixtures.
 M8 comparison evidence uses Gemma only.
 Use `--protocol research_v1` with `tools.interp.eval_dictionary`, or pass `protocol="research_v1"` to `evaluate`.
 This mode defaults to 1,024 model positions and a batch limit of 1,024 positions.
@@ -359,14 +356,10 @@ The dataset and sample differ from the paper, and these results do not reproduce
 Each Gemma context starts with genuine BOS ID 2.
 EOS ID 1, BOS ID 2, and padding ID 0 do not enter FVU or activity statistics.
 A full Gemma context has one prefix position and at most 1,023 source positions.
-The pinned Qwen tokenizer declares no BOS, and its text configuration declares no BOS ID.
-Qwen records `bos_policy="native_no_bos"` and uses no prefix or substitute token.
-A full Qwen context can contain 1,024 source positions.
 
 The metric mask selects source positions whose IDs are not genuine BOS, EOS, or padding.
 The CE mask selects an attended predictor whose next position is a nonspecial source target in the same context row.
 Thus, Gemma can use BOS to predict its first nonspecial source token.
-Qwen has no first-position target because that position has no predictor.
 A special predictor remains eligible when its next target satisfies the mask.
 No loss pair crosses a document or context boundary.
 
@@ -375,7 +368,6 @@ The denominator uses one mean vector over all metric observations in that layer.
 It does not average context FVU ratios or normalize by the uncentered activation norm.
 CPU float64 statistics merge the mean shifts between chunks and batches.
 Each layer also reports mean L0 and the fraction of features without a positive activation.
-Inactive fallback layers retain null metric entries.
 
 The baseline forward supplies the reconstruction observations once per batch attempt.
 Separate forwards replace each active MLP alone, then all active MLPs together.
@@ -433,7 +425,7 @@ Verification and dictionary admission permit more than 12 GB only for the exact 
 
 The trace family permits an explicit limit up to 40 GB for Gemma 2.
 Hosted Gemma inference and the Gemma acceptance profile select 40 GB explicitly.
-Qwen and fixture paths retain 12 GB, and the Qwen trainer retains 24 GB.
+Fixture paths retain 12 GB.
 
 Shared Parquet admission leaves at least 8 decimal GB of available host memory after each requested allocation.
 The same allocation must fit the remaining process budget.
@@ -499,7 +491,6 @@ Trace time must remain at most 20 seconds, and each complete intervention action
 Preparation time remains separate, and cached outputs cannot satisfy action timing.
 Visual, pixel, app/browser parity, the 40 decimal GB process cap, and the 8 decimal GB host reserve remain required.
 The five-point clamp, 8/10 signs, Spearman 0.6, and largest-effect selection do not define published Gemma acceptance.
-The Qwen quality override and upper-half fallback do not apply to Gemma.
 
 Startup evidence covers browser assets, program views, and error retention.
 These checks do not establish published Dallas replication or product acceptance.

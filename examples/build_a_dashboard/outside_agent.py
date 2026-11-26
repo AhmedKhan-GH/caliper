@@ -20,7 +20,7 @@ Two ways to choose the calls:
   key is sent.
 
     python3 outside_agent.py --mcp <build>/caliper-mcp [--api-file <the app's api.json>]
-    python3 outside_agent.py --mcp <build>/caliper-mcp --model qwen3.8:27b
+    python3 outside_agent.py --mcp <build>/caliper-mcp --model example-model
 
 caliper-mcp finds the API file itself (api.json in the app-data folder, or in
 CALIPER_DATA_DIR) unless --api-file names it. It prints what it does, one line

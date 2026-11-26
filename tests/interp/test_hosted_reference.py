@@ -83,7 +83,7 @@ def test_unknown_hosted_profile_refuses_before_loads(loader, profile):
     assert not loader.calls and not loader.snapshots.calls
 
 
-@pytest.mark.parametrize("model", ["tiny-lm", "google/gemma-2-2b", "Qwen/Qwen3-0.6B", "missing"])
+@pytest.mark.parametrize("model", ["tiny-lm", "google/gemma-2-2b", "example/unsupported", "missing"])
 def test_published_profile_refuses_unsupported_models_before_loads(loader, model):
     with pytest.raises(ValueError, match="local snapshot"):
         _hosted.load_resources(model, loader.folder, replication_profile="published_dallas_v1")

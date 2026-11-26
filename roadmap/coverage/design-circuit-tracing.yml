@@ -8,7 +8,7 @@ not_features:
   - Verified Base
 entries:
   - heading: Model And Dictionary
-    item: The exact Qwen checkpoint and per-layer transcoder artifact define dictionary identity.
+    item: The exact Gemma checkpoint and published transcoder artifact define dictionary identity.
     ids: [INT-36]
   - heading: Existing Interfaces
     item: Semantic probes, text parameters, and intervention commands extend the existing interfaces.
@@ -17,10 +17,13 @@ entries:
     item: Text limits require two pages of eight examples in the graph instrument.
     ids: [INT-37, INT-39]
   - heading: Dictionary Contract
-    item: Bounded tools train and qualify per-layer dictionaries and index their top examples.
+    item: Bounded tools import and evaluate published dictionaries and index their top examples.
     ids: [INT-36, INT-37]
   - heading: Replacement Model
     item: Frozen routing and normalization produce direct effects with explicit error nodes.
+    ids: [INT-38]
+  - heading: Published Reconstruction
+    item: The published graph profile binds reconstruction settings, source coordinates, and complete graph pages.
     ids: [INT-38]
   - heading: Tensor Contract
     item: Fixed tensor shapes publish graph counts, nodes, and edges with bounded identities.
@@ -34,4 +37,16 @@ entries:
     note: INT-40 promotes the former feature-steering candidate into the registry.
   - heading: Validation And Delivery
     item: Fixture identities, hidden acceptance, resource limits, and platform checks verify delivery.
+    reason: test
+  - heading: Published Actions
+    item: Published actions bind exact prompts, donor activations, and feature coordinates to the hosted profile.
+    ids: [INT-40, INT-42]
+  - heading: Live And Collection Paths
+    item: The live instrument and hidden collection use separate paths with independent acceptance review.
+    ids: [INT-39, INT-42]
+  - heading: Visual And Resource Checks
+    item: Pixel, text, app/browser parity, and resource checks verify the published instrument.
+    reason: test
+  - heading: Ordinary Checks
+    item: Seeded CPU fixtures retain mathematical identity, intervention, and resource checks.
     reason: test

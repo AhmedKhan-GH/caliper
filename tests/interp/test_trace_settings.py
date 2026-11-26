@@ -6,7 +6,7 @@ from caliper.interp._dictionary import model_identity, weights_hash
 from caliper.interp._graph import Graph
 from caliper.interp._trace import Tracer, _versions
 from .fixture import TinyLM, TinyTokenizer
-from .test_trace import exact_dictionary, qwen_for_trace, random_dictionary
+from .test_trace import exact_dictionary, random_dictionary
 
 
 @pytest.fixture
@@ -134,56 +134,4 @@ def test_mid_trace_setting_mutation_is_not_published(tracer, monkeypatch, stage)
     finally:
         if handle is not None:
             handle.remove()
-    assert not tracer._cache and tracer._forward_cache is None
-
-
-@pytest.mark.parametrize(("module", "field", "value"), [
-    ("model.norm", "eps", 1.0),
-    ("model.layers.0.input_layernorm", "eps", 1.0),
-    ("model.layers.3.post_attention_layernorm", "eps", 1.0),
-    ("model.layers.3.self_attn.q_norm", "eps", 1.0),
-    ("model.layers.3.self_attn.k_norm", "eps", 1.0),
-    ("model.layers.0.linear_attn.norm", "variance_epsilon", 1.0),
-    ("model.layers.0.linear_attn.norm", "activation", "relu"),
-    ("model.layers.3.self_attn", "scaling", 1.0),
-    ("model.layers.3.self_attn", "training", True),
-    ("model.layers.0.linear_attn", "activation", "relu"),
-    ("model.layers.0.mlp", "act_fn", torch.nn.Tanh()),
-    ("model.rotary_emb", "attention_scaling", 2.0),
-])
-def test_small_qwen_forward_settings_are_refused(monkeypatch, module, field, value):
-    monkeypatch.setattr(Graph, "publish", lambda graph: graph)
-    model = qwen_for_trace()
-    class Tokenizer:
-        def __call__(self, *args, **kwargs):
-            return {"input_ids": torch.tensor([[1, 2, 3]])}
-
-        def decode(self, ids):
-            return str(ids[0])
-
-    tokenizer = Tokenizer()
-    tracer = Tracer(model, tokenizer, random_dictionary(model, latents=4, k=2))
-    first = tracer.trace("fixture", 0)
-    assert tracer.trace("fixture", 0) is first
-    identity = model_identity(model)
-    setattr(model.get_submodule(module), field, value)
-    assert model_identity(model) != identity
-    with pytest.raises(ValueError, match="dictionary model identity mismatch"):
-        tracer.trace("fixture", 0)
-    assert not tracer._cache and tracer._forward_cache is None
-
-
-def test_qwen_mutable_config_cannot_change_under_cached_graph(monkeypatch):
-    monkeypatch.setattr(Graph, "publish", lambda graph: graph)
-    model = qwen_for_trace()
-    # Use byte token IDs that fit the small Qwen vocabulary.
-    tokenizer = TinyTokenizer()
-    tokenizer.bos_token_id = 0
-    tracer = Tracer(model, tokenizer, random_dictionary(model, latents=4, k=2))
-    baseline = tracer.trace("\x01\x02", 0)
-    assert tracer.trace("\x01\x02", 0) is baseline
-    # A list mutation must not also mutate the admission snapshot.
-    model.config.layer_types[0] = "full_attention"
-    with pytest.raises(ValueError, match="dictionary model identity mismatch"):
-        tracer.trace("\x01\x02", 0)
     assert not tracer._cache and tracer._forward_cache is None

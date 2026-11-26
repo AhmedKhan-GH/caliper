@@ -4,7 +4,7 @@
         [--out <folder>] [--work <folder>] [--size 1440x900] [--workspace <folder> --app-data <folder>]
         [--runs N] [--request series|heatmap|both|selection|property|all]
 
-It needs Ollama running on 127.0.0.1:11434 (or --ollama) with the model qwen3.8:27b (or the one given with --model), the
+It needs Ollama running on 127.0.0.1:11434 (or --ollama) with the model example-model (or the one given with --model), the
 caliper executable built with the builder, a Python interpreter that has caliper-agent's dependencies
 (--agent-python, or CALIPER_AGENT_PYTHON), and the two data files of make_data.py in data/ beside this folder
 (or in --data). It stops with exit code 2 and says what is missing when any of them is not there.

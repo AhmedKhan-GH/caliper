@@ -119,9 +119,8 @@ REFUSAL_CHANGES_STAY = " Changes this turn already made in Caliper stay; you can
 # for the reply, and the characters a token is taken to be.
 CONTEXT_RESERVE_MAX = 4096
 # The characters a token is taken to be, by kind, and the tokens of an image and of the chat template's own text,
-# from Ollama's prompt_eval_count of real requests of qwen3.8:27b (tests/test_context_estimate.py keeps the estimate
-# at or above those counts, and within 30 percent of them): tool schemas are dense JSON, and the messages' text
-# holds numbers, of which each digit can be a token.
+# used by the generic request estimate. Tool schemas contain dense JSON, and
+# each digit in message text can be a token.
 CHARS_PER_TOKEN_INSTRUCTIONS = 3.5
 CHARS_PER_TOKEN_TOOLS = 3.4
 CHARS_PER_TOKEN_TEXT = 1.6

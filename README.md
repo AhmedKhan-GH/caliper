@@ -28,13 +28,6 @@
 <br>
 
 <p align="center">
-  <img src="site/assets/inspector-model3d.jpg" alt="The Caliper inspector attached to Qwen3.5-0.8B: the parameter tree, the Trace pane reading every layer through the Jacobian lens while the model writes, Model 3D with every tensor at its true shape, and the inference output" width="100%">
-  <br>
-  <sub>The Caliper inspector attached to Qwen3.5-0.8B: the parameter tree, the Trace pane reading every layer<br>
-  through the Jacobian lens while the model writes, Model 3D with every tensor at its true shape, and the inference output.</sub>
-</p>
-
-<p align="center">
   <a href="#quick-start">Quick Start</a> ·
   <a href="#prerequisites">Prerequisites</a> ·
   <a href="#build-options">Build Options</a> ·

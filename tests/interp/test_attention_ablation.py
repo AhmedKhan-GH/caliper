@@ -119,65 +119,6 @@ def test_attention_ablation_direct_effect_matches_real_frozen_forward(mode):
         assert unmasked(perturbation, 0.)[:, -1].abs().max() > 1e-6
 
 
-@pytest.mark.parametrize("layer,attention", [(0, "linear_attn"), (3, "self_attn")])
-def test_qwen_attention_module_ablation_removes_value_derivatives(layer, attention):
-    from caliper._ablate import ablate, points as ablation_points
-    from caliper.interp._frozen import FrozenPath
-    from caliper.interp._trace import _DirectEffects
-    from .test_trace import qwen_for_trace, random_dictionary
-
-    model = qwen_for_trace()
-    dictionary = random_dictionary(model)
-    ids = torch.tensor([[1, 2, 3]])
-    name = f"model.layers.{layer}.{attention}"
-    assert [p["point"] for p in ablation_points(model) if p["point"].startswith(name + "#")] == [
-        name + "#0", name + "#1"]
-    with active_ablation(model, [name]):
-        path = FrozenPath(model, ids, dictionary, interventions=[{"op": "ablate", "point": name}])
-        assert path.forward_residual < 2e-5
-        mixer = path.mixers[layer]
-        value = path.embedding.clone().requires_grad_(True)
-        assert mixer(value).count_nonzero() == 0
-        assert mixer.offset.count_nonzero() == 0
-        assert torch.autograd.grad(mixer(value).sum(), value)[0].count_nonzero() == 0
-        effects = _DirectEffects(path, dictionary, ids[0].tolist(), TinyTokenizer())
-        targets = [i for i in effects.feature_nodes if effects.nodes[i]["layer"] == layer
-                   and effects.nodes[i]["position"] == path.tokens - 1]
-        source = 0 if layer == 0 else next(i for i in effects.feature_nodes
-                                         if effects.nodes[i]["layer"] == layer - 1
-                                         and effects.nodes[i]["position"] == 0)
-        weights, diagnostics = effects.backward(targets)
-        assert weights[source].count_nonzero() == 0
-        assert max(d["absolute_residual"] for d in diagnostics) < 2e-5
-        source_node = effects.nodes[source]
-        vector = path.embedding[0, 0] if layer == 0 else (
-            source_node["activation"] * dictionary.layers[layer - 1].W_dec[source_node["feature"]])
-        directions = torch.stack([effects.target(i).direction for i in targets])
-
-        def actual_read(scale):
-            reads = []
-            with ExitStack() as stack:
-                stack.enter_context(torch.no_grad())
-                for index, block in enumerate(model.model.layers):
-                    def fixed_write(module, args, output, index=index):
-                        value = path.outputs[index].clone()
-                        if index == layer - 1:
-                            value[:, 0] += scale * vector
-                        return value
-                    stack.callback(block.mlp.register_forward_hook(fixed_write).remove)
-                stack.callback(model.model.layers[layer].mlp.register_forward_pre_hook(
-                    lambda module, args: reads.append(args[0].detach().clone())).remove)
-                embedding = path.embedding.clone()
-                if layer == 0:
-                    embedding[:, 0] += scale * vector
-                model(inputs_embeds=embedding, use_cache=False)
-            return reads[0][0, -1] @ directions.T
-
-        # A whole-module ablation blocks this route even with live routing and norms.
-        measured = (actual_read(.01) - actual_read(-.01)) / .02
-        assert measured.count_nonzero() == 0
-
-
 @pytest.mark.parametrize("whole_module", [False, True])
 def test_attention_projection_bias_obeys_ablation_scope(whole_module):
     from caliper._ablate import ablate

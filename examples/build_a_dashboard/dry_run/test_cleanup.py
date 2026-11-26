@@ -53,9 +53,9 @@ class FakeOllama(http.server.BaseHTTPRequestHandler):
     """Ollama's version, model list and model metadata, and the OpenAI-compatible model list; no model."""
 
     ANSWERS = {"/api/version": {"version": "test"},
-               "/api/tags": {"models": [{"name": "qwen3.8:27b", "model": "qwen3.8:27b"}]},
+               "/api/tags": {"models": [{"name": "example-model", "model": "example-model"}]},
                "/api/show": {"capabilities": ["completion", "tools"]},
-               "/v1/models": {"data": [{"id": "qwen3.8:27b"}]}}
+               "/v1/models": {"data": [{"id": "example-model"}]}}
 
     def answer(self):
         body = json.dumps(self.ANSWERS.get(self.path.split("?")[0], {})).encode()

@@ -7,12 +7,12 @@ import torch
 from caliper.interp import Tracer
 from caliper.interp._frozen import FrozenPath
 from caliper.interp._trace import _DirectEffects
-from .test_output_affine import setup, feature_at, specs_for, qwen_oracle, fixed_patch_sources
+from .test_output_affine import setup, feature_at, specs_for, fixed_patch_sources
 
 
 def direct_oracle(model, dictionary, ids, path, effects, source, target, *, coefficient=1., constant=0.):
     """Measure one direct source edge through actual modules with independent MLP writes."""
-    blocks = model.model.layers if path.qwen else model.layers
+    blocks = model.layers
     source_node, target_node = effects.nodes[source], effects.nodes[target]
     magnitude = torch.zeros((), dtype=path.dtype, requires_grad=True)
     perturbation = torch.zeros_like(path.embedding)
@@ -121,45 +121,6 @@ def test_tiny_attention_output_order_and_position_derivatives(case):
         assert all(error.count_nonzero() == 0 for error in path.errors)
 
 
-@pytest.mark.parametrize("layer", [0, 3])
-def test_qwen_attention_patch_and_add_match_value_and_direct_derivatives(layer, monkeypatch):
-    with setup(qwen=True) as (model, tokenizer, dictionary, owner, service):
-        ids = tokenizer("AB")["input_ids"]
-        with torch.no_grad():
-            model(input_ids=ids, use_cache=False)
-        name = f"model.layers.{layer}." + ("linear_attn" if layer == 0 else "self_attn.o_proj")
-        service.set({"kind": "patch", "point": name, "positions": [1], "source_prompt": "CD", "source_position": 2})
-        service.set({"kind": "add", "point": name, "positions": [1, 2],
-                     "vector": [.02] * model.config.hidden_size, "coefficient": 1.})
-        owner.step()
-        tracer = Tracer(model, tokenizer, dictionary, controls=owner)
-        cold = tracer.trace("AB", max_targets=24)
-        path = tracer._forward_cache[1]
-        assert path.forward_residual < 2e-5
-        effects = _DirectEffects(path, dictionary, ids[0].tolist(), tokenizer)
-        targets = [next(i for i in effects.feature_nodes if effects.nodes[i]["layer"] == layer
-                        and effects.nodes[i]["position"] == position) for position in (1, 2)]
-        weights, _ = effects.backward(targets)
-        with fixed_patch_sources(model, tokenizer, service), qwen_oracle(model, dictionary, ids, monkeypatch):
-            expected = torch.stack([direct_oracle(model, dictionary, ids, path, effects, 0, target)
-                                    for target in targets])
-            torch.testing.assert_close(weights[0], expected, atol=2e-5, rtol=1e-5)
-            actual_input = path.embedding.detach().clone().requires_grad_(True)
-            actual = model(inputs_embeds=actual_input, use_cache=False).logits[:, -1]
-            frozen_input = path.embedding.detach().clone().requires_grad_(True)
-            _, final = path.replacement(frozen_input, dictionary)
-            frozen = model.lm_head(final[:, -1])
-            torch.testing.assert_close(frozen, actual, atol=2e-5, rtol=1e-5)
-            actual_gradient = torch.autograd.grad(actual.sum(), actual_input)[0]
-            frozen_gradient = torch.autograd.grad(frozen.sum(), frozen_input)[0]
-            torch.testing.assert_close(frozen_gradient, actual_gradient, atol=2e-5, rtol=1e-5)
-        assert tracer.trace("AB", max_targets=24) is cold
-        tracer._cache.clear()
-        tracer._forward_cache = None
-        warm = tracer.trace("AB", max_targets=24)
-        assert warm.nodes == cold.nodes and warm.edges == cold.edges
-
-
 @pytest.mark.parametrize("point", ["layers.0.self_attn.v_proj", "layers.0", "norm"])
 def test_unsupported_module_forms_refuse_before_forward(point, monkeypatch):
     with setup() as (model, tokenizer, dictionary, owner, service):
@@ -169,19 +130,4 @@ def test_unsupported_module_forms_refuse_before_forward(point, monkeypatch):
             raise AssertionError("unsupported intervention must fail before a forward")
         monkeypatch.setattr(model, "forward", forbidden)
         with pytest.raises(ValueError, match="trace does not support ablation point"):
-            Tracer(model, tokenizer, dictionary, controls=owner).trace("AB", max_targets=0)
-
-
-def test_qwen_tuple_output_add_has_a_narrow_refusal(monkeypatch):
-    with setup(qwen=True) as (model, tokenizer, dictionary, owner, service):
-        ids = tokenizer("AB")["input_ids"]
-        with torch.no_grad():
-            model(input_ids=ids, use_cache=False)
-        service.set({"kind": "add", "point": "model.layers.3.self_attn",
-                     "vector": [.02] * model.config.hidden_size, "coefficient": 1.})
-        owner.step()
-        def forbidden(*args, **kwargs):
-            raise AssertionError("tuple output refusal must precede a forward")
-        monkeypatch.setattr(model, "forward", forbidden)
-        with pytest.raises(NotImplementedError, match="no exact affine intervention path for add"):
             Tracer(model, tokenizer, dictionary, controls=owner).trace("AB", max_targets=0)

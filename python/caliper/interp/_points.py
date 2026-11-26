@@ -7,7 +7,6 @@ import threading
 import weakref
 
 from ._families import model_family
-from ._qwen_family import _delta_pattern, capture_delta
 
 
 @dataclass(frozen=True)
@@ -65,7 +64,7 @@ def semantic_points(model, *, required=True):
              "type": type(modules[p.module]).__name__,
              "shape": list(shapes[p.point]) if p.point in shapes else None,
              "probe": p.point.rsplit(".", 1)[1], "layer": p.layer,
-             "pattern": ("signed_value_mixing" if p.family == "delta" else "softmax")
+             "pattern": "softmax"
              if p.event == "pattern" else None} for p in probes.values()]
 
 
@@ -73,8 +72,7 @@ def points(model):
     """Return module, head, and semantic point dictionaries for a supported decoder.
 
     Semantic rows add ``probe``, ``layer``, and ``pattern`` to the adapter fields.
-    DeltaNet patterns map post-convolution values to the recurrent output before normalization.
-    Their shape is ``(batch, value_heads, target_position, source_position)``.
+    Attention patterns have shape ``(batch, heads, target_position, source_position)``.
     """
     _architecture(model)
     from .._ablate import points as adapter_points
@@ -121,7 +119,6 @@ class Capture(dict):
                 _find(model, point)
         self._handles = []
         self._configs = []
-        self._pending = {}
         self._entered = False
         self._closed = False
 
@@ -161,10 +158,6 @@ class Capture(dict):
                 self._save(name, tensor)
         return hook
 
-    def _delta(self, probe, module):
-        capture_delta(self, probe, module, lambda: _LIFECYCLE_LOCK,
-                      lambda mod, observed: _delta_pattern(mod, observed))
-
     def __enter__(self):
         with _LIFECYCLE_LOCK:
             return self._enter_locked()
@@ -197,8 +190,6 @@ class Capture(dict):
                     self._handles.append(module.register_forward_hook(self._output(name)))
                 elif probe.family == "fixture":
                     self._handles.append(module.pattern.register_forward_hook(self._output(name)))
-                elif probe.family == "delta":
-                    self._delta(probe, module)
                 else:
                     # Eager attention exposes the real weights, including masks and dropout.
                     # The shared decoder config also selects its causal mask implementation.
@@ -233,9 +224,6 @@ class Capture(dict):
             if state[2] == 0:
                 config._attn_implementation = state[1]
                 del _EAGER[id(config)]
-        for values in self._pending.values():
-            values.clear()
-        self._pending.clear()
         model = self._model()
         if model is not None and model in _ACTIVE:
             _ACTIVE[model].pop(id(self), None)

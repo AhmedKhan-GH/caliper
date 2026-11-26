@@ -106,31 +106,3 @@ def test_overlapping_input_effects_keep_live_order_and_row_scope(patch_first):
         assert without_rows.completeness["forward_residual"] < 1e-9
         assert without_rows.nodes == suspended.nodes
         assert without_rows.edges == suspended.edges
-
-
-@pytest.mark.parametrize("point", ["model.layers.2.resid_pre", "model.layers.3.mlp_in"])
-def test_random_cpu_qwen_input_patch_retains_hybrid_forward(point):
-    from .test_trace import qwen_for_trace, random_dictionary
-    model = qwen_for_trace()
-    dictionary = random_dictionary(model)
-    owner = Controls()
-    service = owner.interventions_on(model)
-
-    def tokenizer(text, **kwargs):
-        return {"input_ids": torch.tensor([[1, 2, 3] if text == "target" else [1, 4, 5]])}
-
-    service.configure(dictionary=dictionary, tokenizer=tokenizer)
-    try:
-        service.set({"kind": "patch", "point": point, "source_prompt": "source", "positions": [1]})
-        owner.step()
-        path = FrozenPath(model, tokenizer("target")["input_ids"], dictionary,
-                          interventions=service.specifications())
-        assert path.forward_residual < 2e-5
-        assert next(model.parameters()).device.type == "cpu"
-        x = path.embedding
-        first = path.run(x, path.writes, bias_masks=(0., 0., 0., 0.))
-        doubled = path.run(2 * x, [2 * y for y in path.writes], bias_masks=(0., 0., 0., 0.))
-        for a, b in zip(first[0] + [first[1]], doubled[0] + [doubled[1]]):
-            torch.testing.assert_close(b, 2 * a, atol=2e-6, rtol=1e-5)
-    finally:
-        service.remove()

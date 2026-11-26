@@ -55,7 +55,7 @@ METRICS = EXAMPLE / "data" / "run_metrics.parquet"
 ATTENTION = EXAMPLE / "data" / "attention.safetensors"
 EXPECTED_SPEC = HERE / "expected.spec.toml"
 DEFAULT_SIZE = "1440x900"
-MODEL = "qwen3.8:27b"
+MODEL = "example-model"
 SYSTEM_PATH = "/usr/bin:/bin:/usr/sbin:/sbin"
 
 OK, FAILED, MISSING, INTERRUPTED = 0, 1, 2, 130

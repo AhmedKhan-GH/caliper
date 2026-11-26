@@ -123,7 +123,7 @@ can show. Every other `session/new` answer carries the model's facts. Caliper gi
 the context length and whether to send a render:
 
 ```json
-{"_meta": {"caliper": {"model": {"id": "qwen3.8:27b", "tools": true, "vision": false, "context_length": 32768,
+{"_meta": {"caliper": {"model": {"id": "example-model", "tools": true, "vision": false, "context_length": 32768,
                                   "sources": {"tools": "probe", "vision": "probe", "context_length": "override"}}}}}
 ```
 

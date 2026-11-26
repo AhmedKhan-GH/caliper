@@ -46,12 +46,8 @@ def _head_count(module) -> int:
     if kind in (
         "transformers.models.gemma2.modeling_gemma2.Gemma2Attention",
         "caliper.interp._gemma_reference.ReferenceAttention",
-        "transformers.models.qwen3_5.modeling_qwen3_5.Qwen3_5Attention",
     ):
         value = getattr(getattr(module, "config", None), "num_attention_heads", None)
-    elif kind == "transformers.models.qwen3_5.modeling_qwen3_5.Qwen3_5GatedDeltaNet":
-        # DeltaNet concatenates value heads before its output projection.
-        value = getattr(module, "num_v_heads", None)
     else:
         value = None
     if type(value) is int and value > 0:

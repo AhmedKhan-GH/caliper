@@ -62,6 +62,6 @@ def test_public_tokenizer_default_matches_context_prefix():
         context_policy(model(), 4, tokenizer=tokenizer)
 
 
-@pytest.mark.parametrize("family", ["qwen3_5_text", "caliper_tiny"])
+@pytest.mark.parametrize("family", ["unsupported_decoder", "caliper_tiny"])
 def test_other_families_retain_their_existing_context_path(family):
     assert context_policy(model(family), 256) is None

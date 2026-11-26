@@ -120,7 +120,7 @@ or the address changed.
 
 ```json
 {"version": 1, "preset": "ollama",
- "providers": {"ollama": {"base_url": "http://localhost:11434/v1", "model": "qwen3.8:27b"},
+ "providers": {"ollama": {"base_url": "http://localhost:11434/v1", "model": "example-model"},
                "anthropic": {"model": "claude-haiku-5-5", "effort": "low"}}}
 ```
 

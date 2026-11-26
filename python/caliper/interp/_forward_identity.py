@@ -7,8 +7,6 @@ from itertools import chain
 
 import torch
 
-from . import _qwen_family
-
 
 _MAX_CHECKPOINT_BUFFER_BYTES = 1024 * 1024
 _ARITHMETIC_CONTEXT = "__arithmetic_context__"
@@ -18,9 +16,8 @@ _MODULE_FIELDS = (
     "training", "eps", "variance_epsilon", "layer_norm_epsilon", "frozen_scale", "frozen_pattern",
     "num_heads", "n_heads", "n_head", "head_dim", "in_features", "out_features", "k",
     "num_key_value_groups", "scaling", "attention_dropout", "is_causal", "layer_idx",
-    *_qwen_family.ROUTING_FIELDS, "layer_type", *_qwen_family.DELTA_HEAD_FIELDS,
-    *_qwen_family.DELTA_DIM_FIELDS, "hidden_size", "intermediate_size", *_qwen_family.DELTA_CONV_FIELDS, "activation",
-    "rope_type", "attention_scaling", *_qwen_family.ROTARY_FIELDS, "max_seq_len_cached",
+    "layer_type", "hidden_size", "intermediate_size", "activation",
+    "rope_type", "attention_scaling", "max_seq_len_cached",
     "original_max_seq_len", "long_inv_freq", "max_norm", "norm_type",
     "padding_idx", "scale_grad_by_freq", "sparse", "inplace", "approximate",
     "kernel_size", "stride", "padding", "dilation", "groups", "padding_mode",
@@ -30,7 +27,7 @@ _CONFIG_FIELDS = (
     "model_type", "num_hidden_layers", "hidden_size", "intermediate_size", "vocab_size",
     "layer_types", "is_causal", "rope_parameters", "max_position_embeddings", "head_dim",
     "num_attention_heads", "num_key_value_heads", "hidden_act", "rms_norm_eps",
-    "attention_dropout", "attention_bias", *_qwen_family.CONFIG_FIELDS,
+    "attention_dropout", "attention_bias",
     "sliding_window", "query_pre_attn_scalar", "attn_logit_softcapping", "final_logit_softcapping",
     "tie_word_embeddings", "use_bidirectional_attention",
 )
@@ -107,8 +104,8 @@ def _activation_settings(function, prefix, record):
 def forward_settings(model, *, tensor_hash):
     """Record effective settings with stable callable names and tensor contents.
 
-    Qwen permits eager and SDPA attention. Gemma requires eager attention for
-    its softcap. Cache outputs and placement are absent from this signature.
+    Gemma requires eager attention for its softcap. Cache outputs and placement
+    are absent from this signature.
     Runtime arithmetic belongs to source, trace, and evaluation evidence. It
     does not change checkpoint verification against a reference on meta.
     """
@@ -189,7 +186,7 @@ def _settings(model, *, tensor_hash, source):
         family = getattr(config, "model_type", None)
         if family == "gemma2" and backend != "eager":
             raise ValueError("Gemma checkpoint identity requires eager attention for its softcap")
-        if (not source or family in ("gemma2", _qwen_family.FAMILY_NAME)) and backend not in (None, "eager", "sdpa"):
+        if (not source or family == "gemma2") and backend not in (None, "eager", "sdpa"):
             raise ValueError("checkpoint identity supports eager or sdpa attention")
         if source and hasattr(config, "_attn_implementation"):
             record(prefix + "config._attn_implementation", backend)
@@ -238,7 +235,6 @@ def _checkpoint_buffers(reference, model, *, admit):
     # Cover the result, constructor intermediates, and dtype conversion together.
     admit(4 * _MAX_CHECKPOINT_BUFFER_BYTES)
 
-    qwen_rotary = _qwen_family.rotary_class()
     from transformers.models.gemma2.modeling_gemma2 import Gemma2RotaryEmbedding, Gemma2TextScaledWordEmbedding
 
     buffers = {}
@@ -254,7 +250,7 @@ def _checkpoint_buffers(reference, model, *, admit):
             buffers[full_name] = torch.tensor(module.scalar_embed_scale, dtype=torch.float32,
                                                device="cpu").to(dtype=actual[full_name].dtype)
             continue
-        rotary_types = (qwen_rotary, Gemma2RotaryEmbedding)
+        rotary_types = (Gemma2RotaryEmbedding,)
         if _reference_profile(model) is not None:
             from ._gemma_reference import ReferenceRotaryEmbedding
             rotary_types += (ReferenceRotaryEmbedding,)
@@ -271,9 +267,6 @@ def _checkpoint_buffers(reference, model, *, admit):
 
 def checkpoint_settings(model, data, *, tensor_hash, admit_buffers):
     """Derive settings and buffer identity without checkpoint parameter storage."""
-    # The text-only class uses the nested text config of a multimodal snapshot.
-    if getattr(model.config, "model_type", None) == _qwen_family.FAMILY_NAME:
-        data = _qwen_family.checkpoint_config(data)
     factory = getattr(type(model.config), "from_dict", None)
     if factory is None:
         raise ValueError("checkpoint verification requires a reconstructible model config")

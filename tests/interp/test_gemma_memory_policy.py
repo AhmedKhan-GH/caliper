@@ -42,18 +42,18 @@ def test_invalid_limits_refuse_before_any_memory_read(limit):
         _dictionary._memory_limit(limit, _dictionary._GEMMA_IDENTITY, "verification")
 
 
-def test_qwen_keeps_12_gb_and_gemma_requires_an_explicit_larger_budget():
-    qwen = SimpleNamespace(config=SimpleNamespace(model_type="qwen3_5_text"))
-    assert family_memory_limit(qwen) == family_memory_limit(GEMMA) == 12
-    assert family_memory_limit(qwen, 12) == 12
+def test_tiny_keeps_12_gb_and_gemma_requires_an_explicit_larger_budget():
+    tiny = SimpleNamespace(config=SimpleNamespace(model_type="caliper_tiny"))
+    assert family_memory_limit(tiny) == family_memory_limit(GEMMA) == 12
+    assert family_memory_limit(tiny, 12) == 12
     with pytest.raises(ValueError, match="at most 12 GB"):
-        family_memory_limit(qwen, 12.000000001)
+        family_memory_limit(tiny, 12.000000001)
 
 
 @pytest.mark.parametrize("identity", [
     _dictionary._GEMMA_IDENTITY,
     "hf:google/gemma-2-2b@" + "0" * 40,
-    "hf:Qwen/Qwen3.5-0.8B@2fc06364715b967f1860aea9cf38778875588b17",
+    "hf:example/model@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 ])
 def test_larger_dictionary_budget_requires_exact_pinned_identity(identity):
     if identity == _dictionary._GEMMA_IDENTITY:
@@ -118,7 +118,7 @@ def test_index_gemma_budget_defaults_to_40_and_keeps_smaller_requests(requested)
     assert parsed.memory_gb == (40 if requested is None else requested)
 
 
-@pytest.mark.parametrize("model,limit", [(_admission.GEMMA_ID, 40.000000001), (build_index.MODEL_ID, 12.000000001)])
+@pytest.mark.parametrize("model,limit", [(_admission.GEMMA_ID, 40.000000001)])
 def test_index_rejects_budget_above_selected_family_cap(model, limit):
     with pytest.raises(SystemExit):
         build_index.parser().parse_args(["--dictionary", "fixture", "--model", model, "--memory-gb", str(limit)])

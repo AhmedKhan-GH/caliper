@@ -64,7 +64,7 @@ def synthetic_effects(features=3, dtype=torch.bfloat16):
 
     def norm():
         module = SimpleNamespace(weight=torch.zeros(path.width, dtype=path.dtype), eps=1e-6, bias=None)
-        return FrozenNorm(module, path.embedding, qwen=True, reference=True)
+        return FrozenNorm(module, path.embedding, unit_offset=True, reference=True)
 
     for layer in range(path.layers):
         path.norms.append(norm())

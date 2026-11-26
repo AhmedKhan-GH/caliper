@@ -14,7 +14,6 @@ import torch
 from ._dictionary import _HASH_CHUNK_BYTES, _canonical_device, _state_hash, weights_hash
 from ._families import model_family
 from ._forward_identity import arithmetic_settings
-from . import _qwen_family
 from ._frozen import (FrozenPath, MemoryGuard, _validate_dictionary, _validate_ablation_points,
                       _validate_intervention_positions, _finite_max, _no_check,
                       _DictionaryAdmission, _ENCODER_BLOCK_ELEMENTS)
@@ -488,7 +487,7 @@ def _versions(module):
 
 
 def _forward_settings(model, memory):
-    """Snapshot settings read by the fixture and Qwen text forward paths.
+    """Snapshot settings read by the fixture and Gemma forward paths.
 
     Bind runtime arithmetic separately from checkpoint and dictionary hashes.
     Capture temporarily selects eager attention. The configured backend does not
@@ -496,14 +495,12 @@ def _forward_settings(model, memory):
     """
     fields = (
         "training", "eps", "variance_epsilon", "frozen_scale", "frozen_pattern",
-        # Fixture attention and TopK, then Qwen full attention.
+        # Fixture attention, TopK, and full attention.
         "num_heads", "n_heads", "n_head", "head_dim", "in_features", "k",
         "num_key_value_groups", "scaling", "attention_dropout",
-        # Qwen block routing, DeltaNet dimensions, and both SiLU gates.
-        *_qwen_family.ROUTING_FIELDS, *_qwen_family.DELTA_HEAD_FIELDS,
-        *_qwen_family.DELTA_DIM_FIELDS, *_qwen_family.DELTA_CONV_FIELDS, "activation",
+        "activation",
         # Rotary factors and the embedding's optional weight normalization.
-        "rope_type", "attention_scaling", *_qwen_family.ROTARY_FIELDS, "max_seq_len_cached",
+        "rope_type", "attention_scaling", "max_seq_len_cached",
         "original_max_seq_len", "long_inv_freq", "max_norm", "norm_type",
         "padding_idx", "scale_grad_by_freq", "sparse", "inplace",
         # Gemma attention routing, softcaps, and scaled embedding.
@@ -529,7 +526,7 @@ def _forward_settings(model, memory):
             if hasattr(module, field):
                 record(prefix + field, getattr(module, field))
         if hasattr(module, "act_fn"):
-            # The Qwen MLP calls this object, not config.hidden_act.
+            # The MLP calls this object, not config.hidden_act.
             record(prefix + "act_fn", id(module.act_fn))
         config = getattr(module, "config", None)
         for field in config_fields:

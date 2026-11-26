@@ -356,7 +356,8 @@ def test_clean_source_uses_internal_scope_and_decoder_options(controlled, monkey
     # This fixture checks keyword dispatch only. Its probes retain the fixture map.
     monkeypatch.setattr(_points, "_architecture", lambda _: probes)
     monkeypatch.setattr(_intervene, "_architecture", lambda _: probes)
-    model.config.model_type = "qwen3_5_text"
+    model.config.model_type = "gemma2"
+    model.config._attn_implementation = "eager"
     original = model.forward
     observed = []
 

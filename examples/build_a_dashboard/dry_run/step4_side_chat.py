@@ -10,7 +10,7 @@ draws the stream live on the spec page beside the chat.
 
     python3 step4_side_chat.py --agent-python <python> [--caliper <app>] [--out <folder>] [--work <folder>]
         [--size 1440x900] [--url <stream link> | --stream producer|train --train-python <python>]
-        [--workspace <folder> --app-data <folder>] [--model qwen3.8:27b]
+        [--workspace <folder> --app-data <folder>] [--model example-model]
         [--base-url http://127.0.0.1:11434/v1] [--context-length 32768] [--runs 1] [--minutes 10]
 
 The options are those of hidden_app.py.

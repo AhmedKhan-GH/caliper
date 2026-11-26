@@ -118,6 +118,4 @@ A person publishes results by hand. The person runs the suite, reads the Markdow
 table below in a change to this page. The result JSON goes with the change for review. A row describes one run on one
 machine, not a guarantee for the model.
 
-| Preset | Model | Server | Hardware | Sidecar | Date | Verdict | Tasks passed | Median time |
-|---|---|---|---|---|---|---|---|---|
-| ollama | qwen3.8:27b (Q4_K_M) | Ollama 0.40.16 | Apple M5 Max, 64 GB | caliper-agent 0.1.0 | 2026-11-16 | partial | 10 of 12 | 15.9 s |
+No current model result is recorded.

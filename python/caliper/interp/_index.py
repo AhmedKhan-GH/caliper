@@ -328,7 +328,7 @@ class _TopTable:
 def _forward(model, input_ids, attention_mask):
     _reference_runtime(model)
     with internal_forward():
-        if model.config.model_type in ("qwen3_5_text", "gemma2"):
+        if model.config.model_type == "gemma2":
             # The decoder supplies MLP probes without a vocabulary-sized logit tensor.
             result = model.model(input_ids=input_ids, attention_mask=attention_mask, use_cache=False)
         else:
@@ -345,26 +345,22 @@ def _forward_bytes(model, dictionary, rows, context):
     heads = getattr(config, "num_attention_heads", 1)
     head_dim = getattr(config, "head_dim", None) or width // heads
     intermediate = getattr(config, "intermediate_size", latents)
-    key_dim = getattr(config, "linear_key_head_dim", head_dim)
-    value_dim = getattr(config, "linear_value_head_dim", head_dim)
-    value_heads = getattr(config, "linear_num_value_heads", heads)
-    key_heads = getattr(config, "linear_num_key_heads", heads)
-    dimensions = (width, latents, heads, head_dim, intermediate, key_dim, value_dim, value_heads, key_heads)
+    dimensions = (width, latents, heads, head_dim, intermediate)
     if any(type(value) is not int or not 1 <= value <= 2**20 for value in dimensions):
         raise ValueError("example admission requires bounded model dimensions")
     size = max(4, *(p.element_size() for p in model.parameters()),
                *(layer.W_enc.element_size() for layer in dictionary.layers))
     tokens = rows * context
-    mixer = max(width, heads * head_dim, key_heads * key_dim, value_heads * value_dim)
+    mixer = max(width, heads * head_dim)
     workspace = tokens * (32 * width + 8 * intermediate + 8 * mixer + 4 * latents)
     if _reference_coordinates(dictionary.metadata) is not None:
         workspace += tokens * width * len(dictionary.layers)
     # Attention patterns can remain on fixture modules after each layer.
     patterns = 4 * rows * heads * context**2 * len(dictionary.layers)
-    recurrent = 4 * rows * value_heads * key_dim * value_dim
-    logits = 0 if config.model_type in ("qwen3_5_text", "gemma2") else tokens * config.vocab_size
+    head_workspace = 4 * rows * heads * head_dim**2
+    logits = 0 if config.model_type == "gemma2" else tokens * config.vocab_size
     # Include token tensors, output lists, temporary copies, and allocator reserve.
-    return size * (workspace + patterns + recurrent + logits) + tokens * 32 + 512_000_000
+    return size * (workspace + patterns + head_workspace + logits) + tokens * 32 + 512_000_000
 
 
 class _QualificationMemory(BudgetMemory):

@@ -6,19 +6,12 @@ from caliper._ablate import ablate, points
 from caliper.interp._gemma_reference import PROFILE, ReferenceAttention, install_reference_profile
 from .test_gemma_family import gemma_model
 from .test_gemma_reference import reference_fixture
-from .test_points import qwen
 
 
-@pytest.mark.parametrize("family", ["gemma", "qwen_full", "qwen_delta"])
-def test_hf_head_discovery_and_live_ablation(family):
-    model = gemma_model(1) if family == "gemma" else qwen()
+def test_hf_head_discovery_and_live_ablation():
+    model = gemma_model(1)
     model.config._attn_implementation = "eager"
-    if family == "gemma":
-        name, heads, projection = "model.layers.0.self_attn", 2, "o_proj"
-    elif family == "qwen_full":
-        name, heads, projection = "model.layers.3.self_attn", 2, "o_proj"
-    else:
-        name, heads, projection = "model.layers.0.linear_attn", 2, "out_proj"
+    name, heads, projection = "model.layers.0.self_attn", 2, "o_proj"
     advertised = {row["point"] for row in points(model) if row["kind"] == "head"}
     assert {f"{name}#{head}" for head in range(heads)} <= advertised
     assert f"{name}#{heads}" not in advertised

@@ -60,16 +60,14 @@ def test_gemma_loader_selects_explicit_reference_only(local_snapshots, qualified
             "model_snapshot": local_snapshots.model}
 
 
-@pytest.mark.parametrize("model_id,mode,profile", [
-    (model_load.MODEL_ID, "inference", PROFILE),
-    (model_load.MODEL_ID, "training", PROFILE),
-    (model_load.GEMMA_ID, "training", PROFILE),
-    *[(model_load.GEMMA_ID, "inference", value) for value in ("caliper", "other", False, {}, 1)],
+@pytest.mark.parametrize("model_id,profile", [
+    ("example/unsupported", PROFILE),
+    *[(model_load.GEMMA_ID, value) for value in ("caliper", "other", False, {}, 1)],
 ])
-def test_invalid_reference_selection_refuses_before_resources(monkeypatch, model_id, mode, profile):
+def test_invalid_reference_selection_refuses_before_resources(monkeypatch, model_id, profile):
     monkeypatch.setattr(model_load, "MemoryGuard", lambda *args: pytest.fail("resource admission ran"))
     with pytest.raises(ValueError):
-        model_load.load_text_model(model_id=model_id, mode=mode, reference_profile=profile)
+        model_load.load_text_model(model_id=model_id, reference_profile=profile)
 
 
 def test_cli_default_and_invalid_reference_model(tmp_path):
@@ -78,7 +76,7 @@ def test_cli_default_and_invalid_reference_model(tmp_path):
     explicit = command.parser().parse_args([*args, "--model", model_load.GEMMA_ID, "--profile", PROFILE])
     assert explicit.profile == PROFILE and explicit.memory_gb == 40
     with pytest.raises(SystemExit) as error:
-        command.parser().parse_args([*args, "--profile", PROFILE])
+        command.parser().parse_args([*args, "--model", "example/unsupported", "--profile", PROFILE])
     assert error.value.code == 2
 
 

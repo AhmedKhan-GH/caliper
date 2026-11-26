@@ -498,7 +498,7 @@ def test_reference_frozen_norm_preserves_cast_order_and_gradient():
     install_reference_profile(model, PROFILE)
     norm = model.model.layers[0].pre_feedforward_layernorm
     recorded = torch.linspace(-2.71, 3.13, 7 * 24).reshape(1, 7, 24).bfloat16()
-    frozen = FrozenNorm(norm, recorded, qwen=True, reference=True)
+    frozen = FrozenNorm(norm, recorded, unit_offset=True, reference=True)
     torch.testing.assert_close(frozen(recorded), norm(recorded), atol=0, rtol=0)
     actual = (recorded * .73).requires_grad_()
     independent = actual.detach().clone().requires_grad_()
@@ -510,7 +510,7 @@ def test_reference_frozen_norm_preserves_cast_order_and_gradient():
     observed.sum().backward()
     expected.sum().backward()
     torch.testing.assert_close(actual.grad, independent.grad, atol=0, rtol=0)
-    ordinary = FrozenNorm(norm, recorded, qwen=True)
+    ordinary = FrozenNorm(norm, recorded, unit_offset=True)
     assert not torch.equal(ordinary(recorded), norm(recorded))
 
 

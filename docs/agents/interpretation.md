@@ -157,7 +157,6 @@ At that limit, raster order determines the pixel ID. Enlarge the panel or zoom t
 
 All node records and IDs remain in the published resource.
 Gemma acceptance captures require every visible node ID in the raster buffer.
-Qwen acceptance attempts remain shelved.
 Token, hover, and selected labels retain the existing bounds and overlap checks.
 
 ### Output Bars

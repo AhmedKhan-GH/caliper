@@ -80,7 +80,7 @@ Each module of `model.named_modules()` is a point, with its dotted name, such as
 
 The run command errors above also apply, such as `run.not_attached`.
 
-Semantic probes keep `kind: "module"` and add `probe`, `layer` and `pattern` metadata. The `probe` value is `resid_pre`, `mlp_in`, `mlp_out` or `attn_pattern`. The `layer` value is the decoder layer index, from zero. The read-only `attn_pattern` probe uses `softmax` for full attention or `signed_value_mixing` for DeltaNet. Other semantic probes set `pattern` to null. Legacy module and head points omit these fields, and the MCP tool `intervene_points` preserves the same fields.
+Semantic probes keep `kind: "module"` and add `probe`, `layer` and `pattern` metadata. The `probe` value is `resid_pre`, `mlp_in`, `mlp_out` or `attn_pattern`. The `layer` value is the decoder layer index, from zero. The read-only `attn_pattern` probe uses `softmax`. Other semantic probes set `pattern` to null. Legacy module and head points omit these fields, and the MCP tool `intervene_points` preserves the same fields.
 
 ## Toggle Control
 

@@ -172,11 +172,13 @@ def test_trace_reserves_and_identity_keep_dynamic_inner_lower_guard(monkeypatch)
         _dictionary._state_hash(dictionary.state_dict(), memory=tracer.guard._guard)
 
 
-@pytest.mark.parametrize("family", ["qwen3_5_text", "caliper_tiny"])
+@pytest.mark.parametrize("family", ["unsupported_decoder", "caliper_tiny"])
 @pytest.mark.parametrize("route", ["index", "build", "tracer", "validation"])
 def test_explicit_gemma_budget_cannot_raise_other_family_limits(tmp_path, family, route):
     model = SimpleNamespace(config=SimpleNamespace(model_type=family))
-    with pytest.raises(ValueError, match="at most 12 GB"):
+    error, message = ((NotImplementedError, "do not support decoder") if family == "unsupported_decoder"
+                      else (ValueError, "at most 12 GB"))
+    with pytest.raises(error, match=message):
         if route == "index":
             _index.FeatureIndex(tmp_path, model=model, tokenizer=None, memory_limit_gb=40)
         elif route == "build":
@@ -187,7 +189,8 @@ def test_explicit_gemma_budget_cannot_raise_other_family_limits(tmp_path, family
         else:
             _validate._validation_guard(model, None, SimpleNamespace(),
                                          process_guard(40_000_000_000, {"current": 0, "peak": 0}), 40)
-    assert family_memory_limit(model) == 12
+    if family == "caliper_tiny":
+        assert family_memory_limit(model) == 12
 
 
 def test_budget_adapter_preserves_stage_only_latch_and_historical_readings():

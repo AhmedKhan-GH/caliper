@@ -138,11 +138,6 @@ entries:
   item: At most 20 strict tools in one Claude request.
   ids:
   - AGT-05
-- heading: Providers
-  item: One manual run of the dashboard prompt against Qwen 3.8 27B on Ollama built the dashboard in 135
-    seconds.
-  ids:
-  - AGT-05
 - heading: Refusals
   item: A refusal ends the prompt with a card that offers Rephrase, Retry and Model, with server-side
     fallbacks off.
@@ -193,10 +188,6 @@ entries:
   - AGT-14
 - heading: The provider conformance suite
   item: Real conformance runs are manual and opt-in, and need --real and CALIPER_CONFORMANCE_REAL=1.
-  ids:
-  - AGT-14
-- heading: The provider conformance suite
-  item: 'The suite ran once against Qwen 3.8 27B on Ollama: 10 of 12 tasks passed.'
   ids:
   - AGT-14
 - heading: The provider conformance suite

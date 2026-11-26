@@ -164,11 +164,6 @@ entries:
     the turn.'
   ids:
   - AGT-28
-- heading: One run on a local model
-  item: One manual run of the dashboard prompt on a local model through the OpenAI-compatible route, 135
-    seconds.
-  ids:
-  - AGT-05
 - heading: The ACP Python SDK
   item: The official ACP Python SDK is used in tests only, and the hand-written agent side stays.
   ids:

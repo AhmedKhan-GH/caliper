@@ -80,8 +80,8 @@ def test_mask_refusal_restores_original_model(mode, kind):
     assert (tuple(model.modules()), hooks(model)) == before
 
 
-def test_legacy_qwen_rejects_mask_instead_of_ignoring_it():
-    model, dictionary = fixture("qwen")
+def test_legacy_tiny_rejects_mask_instead_of_ignoring_it():
+    model, dictionary = fixture("tiny")
     with pytest.raises(ValueError, match="require Gemma"):
         with evaluation.replace_all_mlps(model, dictionary, content_mask=torch.ones((1, 4), dtype=torch.bool)):
             pytest.fail("mask was ignored")

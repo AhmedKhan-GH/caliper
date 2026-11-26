@@ -366,7 +366,7 @@ def test_t2_stream_restores_documents_and_skips_duplicates():
 
 
 @pytest.mark.parametrize("option,value", [("--tokens", "2000001"), ("--tokens", "0"),
-                                         ("--memory-gb", "12.1"), ("--memory-gb", "nan"),
+                                         ("--memory-gb", "40.1"), ("--memory-gb", "nan"),
                                          ("--memory-gb", "0"), ("--partition", "train"),
                                          ("--partition", "quality"), ("--context", "257")])
 def test_cli_caps(option, value):
@@ -418,7 +418,7 @@ def test_cli_fixture_build_and_query(tmp_path, monkeypatch, capsys, source_kind)
         def check(self, stage, **kwargs):
             stages.append(stage)
     monkeypatch.setattr(command, "MemoryGuard", Memory)
-    args = ["--dictionary", str(tmp_path), "--device", "cpu"]
+    args = ["--dictionary", str(tmp_path), "--device", "cpu", "--memory-gb", "12"]
     assert command.main([*args, *source_args, "--tokens", "73", "--context", "17"]) == 0
     index = FeatureIndex(tmp_path, model=model, tokenizer=TinyTokenizer())
     assert index.metadata["tokens"] == 73
@@ -478,7 +478,7 @@ def test_cli_clean_memory_stop(tmp_path, monkeypatch):
             if stage == "dictionary":
                 raise command.CleanStop("fixture memory limit")
     monkeypatch.setattr(command, "MemoryGuard", Memory)
-    assert command.main(["--dictionary", str(tmp_path), "--device", "cpu"]) == 2
+    assert command.main(["--dictionary", str(tmp_path), "--device", "cpu", "--memory-gb", "12"]) == 2
     assert not (tmp_path / "index" / "index.json").exists()
 
 
@@ -626,7 +626,7 @@ def test_cli_shared_guard_enforces_twelve_gb_before_model_load(tmp_path, monkeyp
     monkeypatch.setattr(command, "MemoryGuard", lambda gb, device: MemoryGuard(
         gb, device, resident=lambda: 0, footprint=lambda: 0, peak=lambda: 12_000_000_001,
         driver=lambda: 0, pressure=lambda: 50))
-    assert command.main(["--dictionary", str(tmp_path), "--device", "cpu"]) == 2
+    assert command.main(["--dictionary", str(tmp_path), "--device", "cpu", "--memory-gb", "12"]) == 2
     assert not (tmp_path / "index").exists()
 
 
@@ -695,7 +695,7 @@ def test_cli_local_parquet_preserves_source_and_closes_stream(tmp_path, monkeypa
         opened.append(value)
         return value
     monkeypatch.setattr(command, "TextStream", stream)
-    assert command.main(["--dictionary", str(tmp_path), "--device", "cpu", "--tokens", "73",
+    assert command.main(["--dictionary", str(tmp_path), "--device", "cpu", "--memory-gb", "12", "--tokens", "73",
                          "--context", "17", "--local-dataset-manifest", str(manifest)]) == 0
     assert len(opened) == 1 and opened[0].closed
     with FeatureIndex(tmp_path, model=model, tokenizer=TinyTokenizer()) as index:

@@ -11,7 +11,6 @@ from caliper.interp._dictionary import _state_hash, model_identity, verify_hf_mo
 from caliper.interp._forward_identity import arithmetic_settings, forward_settings, source_settings
 from caliper.interp._intervene import InterventionService
 from .test_gemma_runtime import gemma_model, local_gemma
-from .test_trace import qwen_for_trace
 
 
 @contextmanager
@@ -68,8 +67,6 @@ def test_canonical_default_adds_no_fields_and_ignores_disabled_dtype():
 @pytest.mark.parametrize(("factory", "checkpoint", "source"), [
     (gemma_model, "7e5f76d90a9b78b9397b7c57b3dcfbbc5d42950533fb3d7b345732f9d9adbe0a",
      "f1165d903a00f7e44de0e68fafe80dd177d03d2ff851072079612e6f1794ebdf"),
-    (qwen_for_trace, "197c2a3437bacc1c3b3392b1acdb0988e865e21856f8ca7534864d2439bcc3fb",
-     "4520990fac8303b09917b4a76a38e9e415e6e760c53cd391fdc75e6e79479f89"),
 ])
 def test_default_checkpoint_and_source_hashes_match_legacy(factory, checkpoint, source):
     # These hashes come from the parent revision, before arithmetic evidence.

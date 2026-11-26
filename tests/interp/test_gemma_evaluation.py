@@ -8,7 +8,7 @@ import torch
 from torch.nn import functional as F
 
 from tools.interp import build_index, eval_dictionary as evaluation, text_stream
-from tools.interp.model_load import GEMMA_ID, GEMMA_REVISION, MODEL_ID, hidden_forward
+from tools.interp.model_load import GEMMA_ID, GEMMA_REVISION, hidden_forward
 from .test_gemma_runtime import gemma_model, gemma_semantics, manual_gemma, runtime_dictionary
 
 
@@ -64,9 +64,9 @@ def test_gemma_chunked_cross_entropy_matches_softcapped_model_logits():
     assert abs(observed - uncapped.item()) > .1
 
 
-@pytest.mark.parametrize("model_id,bound", [(GEMMA_ID, .30), (MODEL_ID, .40)])
+@pytest.mark.parametrize("model_id,bound", [(GEMMA_ID, .30), ("tiny-lm", .40)])
 @pytest.mark.parametrize("fvu,expected", [(.30, "passed"), (.35, None), (.401, "failed")])
-def test_quality_thresholds_keep_gemma_and_qwen_separate(model_id, bound, fvu, expected):
+def test_quality_thresholds_keep_gemma_and_synthetic_separate(model_id, bound, fvu, expected):
     stats = evaluation.quality_stats({"model_id": model_id, "layers": 1, "width": 2,
                                       "latents": 20, "training": {}})
     stats.count, stats.ce_tokens = 200_000, 199_000
@@ -97,7 +97,7 @@ def test_gemma_quality_retains_dead_feature_and_cross_entropy_gates(dead, delta,
     assert stats.metrics()["status"] == status
 
 
-def test_gemma_quality_refuses_qwen_upper_half_fallback():
+def test_gemma_quality_refuses_synthetic_upper_half_fallback():
     from .test_upper_half import fallback_manifest, tiny_model
     metadata = fallback_manifest(tiny_model())
     metadata["model_id"] = GEMMA_ID
@@ -161,13 +161,13 @@ def test_imported_source_requires_exact_canonical_fields(tmp_path, field):
     assert not list(tmp_path.iterdir())
 
 
-def test_qwen_source_checks_still_require_its_training_source():
+def test_synthetic_source_checks_still_require_its_training_source():
     meta = imported_metadata()
-    qwen = {"model_id": MODEL_ID, "training": deepcopy(meta["evaluation_source"])}
-    assert "publisher_training_overlap" not in build_index.validate_partitions(qwen)
-    qwen["training"]["partitions"]["index"] = [9400, 10000]
+    synthetic = {"model_id": "tiny-lm", "training": deepcopy(meta["evaluation_source"])}
+    assert "publisher_training_overlap" not in build_index.validate_partitions(synthetic)
+    synthetic["training"]["partitions"]["index"] = [9400, 10000]
     with pytest.raises(ValueError, match="training dataset"):
-        build_index.validate_partitions(qwen)
+        build_index.validate_partitions(synthetic)
 
 
 def test_imported_index_source_requires_same_pinned_evaluation_identity(monkeypatch):
@@ -191,9 +191,9 @@ def test_imported_quality_refuses_mismatched_source_before_artifact_read(tmp_pat
         evaluation.evaluate(None, dictionary, stream, tmp_path)
 
 
-def test_index_cli_model_selection_keeps_old_defaults_and_gemma_ceiling():
+def test_index_cli_model_selection_uses_gemma_default_and_ceiling():
     parsed = build_index.parser().parse_args(["--dictionary", "unused"])
-    assert parsed.model == MODEL_ID and parsed.memory_gb == 12
+    assert parsed.model == GEMMA_ID and parsed.memory_gb == 40
     parsed = build_index.parser().parse_args(["--dictionary", "unused", "--model", GEMMA_ID])
     assert parsed.memory_gb == 40 and parsed.tokens == 2_000_000
     with pytest.raises(SystemExit):
@@ -235,7 +235,7 @@ def test_evaluator_explicit_gemma_selection_passes_budget_and_preserves_old_load
     assert observed == [("cpu", guard, GEMMA_ID)]
 
 
-@pytest.mark.parametrize("model,limit", [(GEMMA_ID, 40.000000001), (MODEL_ID, 12.000000001)])
+@pytest.mark.parametrize("model,limit", [(GEMMA_ID, 40.000000001)])
 def test_evaluator_refuses_excess_budget_before_guard_or_model(tmp_path, monkeypatch, model, limit):
     def unexpected(*args, **kwargs):
         pytest.fail("Excess evaluator budget reached allocation")

@@ -13,7 +13,6 @@ nav:
   - wire-protocol-3-2.md
   - folders-and-environment.md
   - refusal-messages.md
-  - upper-half-dictionaries.md
   - external-model-verification.md
   - gemma-scope.md
   - trace-ablation-support.md

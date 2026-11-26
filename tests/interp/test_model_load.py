@@ -40,7 +40,7 @@ class FixtureHFModel(torch.nn.Linear):
 
 
 def hf_model():
-    config = FixtureConfig(model_type="qwen3_5_text", _name_or_path=model_load.MODEL_ID,
+    config = FixtureConfig(model_type="synthetic_checkpoint", _name_or_path=model_load.MODEL_ID,
                            _commit_hash=model_load.MODEL_REVISION, rms_norm_eps=1e-6)
     with torch.random.fork_rng(devices=[]):
         torch.manual_seed(19)
@@ -138,61 +138,6 @@ def test_trusted_forward_mutation_refuses_dictionary_before_file_access(memory, 
         dictionary.load_dictionary("unused", model=model)
 
 
-@pytest.mark.parametrize("field", ["norm", "config", "activation", "scaling", "rotary", "routing"])
-def test_external_forward_settings_use_checkpoint_before_admission(tmp_path, memory, monkeypatch, field):
-    import safetensors
-    from .test_trace import qwen_for_trace
-
-    model = qwen_for_trace(layers=4)
-    model.config._name_or_path = model_load.MODEL_ID
-    model.config._commit_hash = model_load.MODEL_REVISION
-    snapshot = local_snapshot(tmp_path, model)
-    if field == "norm":
-        model.model.layers[0].linear_attn.norm.variance_epsilon = .1
-    elif field == "config":
-        model.config.rms_norm_eps = .1
-    elif field == "activation":
-        model.model.layers[0].mlp.act_fn = torch.nn.ReLU()
-    elif field == "scaling":
-        model.model.layers[3].self_attn.scaling = .1
-    elif field == "rotary":
-        model.model.rotary_emb.mrope_section = [1, 1, 1]
-    else:
-        model.model.layers[0].block_type = "full_attention"
-    monkeypatch.setattr(safetensors, "safe_open", lambda *_a, **_k: pytest.fail("header access ran"))
-    with pytest.raises(ValueError, match="forward settings differ from the local checkpoint"):
-        dictionary.verify_hf_model(model, snapshot)
-    assert model not in dictionary._VERIFIED_MODELS
-
-
-@pytest.mark.parametrize("backend", ["eager", "sdpa"])
-def test_supported_backend_preserves_checkpoint_identity(tmp_path, memory, backend):
-    from .test_trace import qwen_for_trace
-
-    model = qwen_for_trace(layers=1)
-    model.config._name_or_path = model_load.MODEL_ID
-    model.config._commit_hash = model_load.MODEL_REVISION
-    snapshot = local_snapshot(tmp_path, model)
-    model.config._attn_implementation = backend
-    identity = dictionary.verify_hf_model(model, snapshot)
-    model.config._attn_implementation = "sdpa" if backend == "eager" else "eager"
-    assert dictionary.model_identity(model) == identity
-
-
-def test_trusted_qwen_mutation_refuses_new_trace(tmp_path, memory):
-    from .test_trace import qwen_for_trace, random_dictionary
-    from caliper.interp._trace import Tracer
-
-    model = qwen_for_trace(layers=1)
-    model.config._name_or_path = model_load.MODEL_ID
-    model.config._commit_hash = model_load.MODEL_REVISION
-    dictionary._record_verified_hf_load(model, memory=memory)
-    source = random_dictionary(model)
-    model.model.layers[0].linear_attn.norm.variance_epsilon = .1
-    with pytest.raises(ValueError, match="forward settings changed"):
-        Tracer(model, None, source)
-
-
 def test_unverified_model_refusal_precedes_content_transfer(monkeypatch):
     model = hf_model()
     monkeypatch.setattr(dictionary, "_UNVERIFIED_CPU_BYTES", 1)
@@ -263,7 +208,7 @@ def test_noncontiguous_weights_refuse_before_copy(memory, monkeypatch):
 
 
 def local_snapshot(tmp_path, model, *, prefix=""):
-    snapshot = tmp_path / "models--Qwen--Qwen3.5-0.8B" / "snapshots" / model_load.MODEL_REVISION
+    snapshot = tmp_path / "models--google--gemma-2-2b" / "snapshots" / model_load.MODEL_REVISION
     snapshot.mkdir(parents=True)
     save_file({prefix + name: value.detach().clone() for name, value in model.state_dict().items()},
               snapshot / "model.safetensors")
@@ -301,107 +246,6 @@ def test_external_settings_reference_has_no_tensor_storage(tmp_path, memory, mon
     assert dictionary.verify_hf_model(model, snapshot).startswith("hf:")
     assert devices and set(devices) == {"meta"}
     assert torch.equal(torch.get_rng_state(), rng)
-
-
-class FixtureTextModel(torch.nn.Module):
-    def __init__(self, config):
-        super().__init__()
-        self.config = config
-        self.model = torch.nn.Module()
-        self.model.embed_tokens = torch.nn.Embedding(4, 2, dtype=torch.bfloat16)
-        self.model.norm = torch.nn.Linear(2, 2, bias=False, dtype=torch.bfloat16)
-        self.lm_head = torch.nn.Linear(2, 4, bias=False, dtype=torch.bfloat16)
-        self.lm_head.weight = self.model.embed_tokens.weight
-
-
-def text_subset_snapshot(tmp_path):
-    model = FixtureTextModel(hf_model().config).eval()
-    state = {"model.language_model." + name: value.detach().clone()
-             for name, value in model.model.state_dict().items()}
-    _, excluded = dictionary._checkpoint_subset(
-        model, dictionary._hf_identity(model.config), "qwen3.5-0.8b-text", None)
-    assert len(excluded) == 168
-    state.update({name: torch.zeros(1) for name in excluded})
-    snapshot = tmp_path / "models--Qwen--Qwen3.5-0.8B" / "snapshots" / model_load.MODEL_REVISION
-    snapshot.mkdir(parents=True)
-    save_file(state, snapshot / "model.safetensors")
-    (snapshot / "config.json").write_text(json.dumps({"text_config": model.config.to_dict()}))
-    return model.float(), snapshot, state
-
-
-def test_public_text_subset_verifies_tied_weights_without_source_changes(tmp_path, memory, monkeypatch):
-    import safetensors
-    from caliper.interp import verify_hf_model
-    model, snapshot, state = text_subset_snapshot(tmp_path)
-    checkpoint = snapshot / "model.safetensors"
-    before = checkpoint.read_bytes()
-    original = safetensors.safe_open
-
-    class TextOnly:
-        def __init__(self, *args, **kwargs):
-            self.source = original(*args, **kwargs)
-
-        def __enter__(self):
-            self.source.__enter__()
-            return self
-
-        def __exit__(self, *args):
-            return self.source.__exit__(*args)
-
-        def keys(self):
-            return self.source.keys()
-
-        def get_slice(self, key):
-            assert key.startswith("model.language_model.")
-            return self.source.get_slice(key)
-
-    monkeypatch.setattr(safetensors, "safe_open", TextOnly)
-    identity = verify_hf_model(model, snapshot, checkpoint_subset="qwen3.5-0.8b-text")
-    assert identity == f"hf:{model_load.MODEL_ID}@{model_load.MODEL_REVISION}"
-    assert dictionary.model_identity(model) == identity
-    assert checkpoint.read_bytes() == before
-    model.lm_head.weight.data[0, 0] += 1
-    with pytest.raises(ValueError, match="identity mismatch"):
-        dictionary.model_identity(model)
-
-
-@pytest.mark.parametrize("damage", ["strict", "text_extra", "vision_extra", "mtp_extra", "missing_text",
-                                  "missing_vision", "untied_head", "duplicate", "mapping", "subset", "weights"])
-def test_public_text_subset_refuses_incomplete_or_undeclared_weights(tmp_path, memory, damage):
-    from caliper.interp import verify_hf_model
-    model, snapshot, state = text_subset_snapshot(tmp_path)
-    options = {"checkpoint_subset": "qwen3.5-0.8b-text"}
-    if damage == "strict":
-        options = {"key_mapping": {"model.language_model.": "model."}}
-    elif damage in ("text_extra", "vision_extra", "mtp_extra"):
-        prefix = {"text_extra": "model.language_model.", "vision_extra": "model.visual.", "mtp_extra": "mtp."}[damage]
-        state[prefix + "undeclared.weight"] = torch.zeros(1)
-    elif damage == "missing_text":
-        del state["model.language_model.norm.weight"]
-    elif damage == "missing_vision":
-        del state["model.visual.pos_embed.weight"]
-    elif damage == "untied_head":
-        model.lm_head.weight = torch.nn.Parameter(model.lm_head.weight.detach().clone())
-    elif damage == "duplicate":
-        save_file({"model.visual.pos_embed.weight": torch.zeros(1)}, snapshot / "extra.safetensors")
-    elif damage == "mapping":
-        options["key_mapping"] = {"model.language_model.": "model."}
-    elif damage == "subset":
-        options["checkpoint_subset"] = "unknown"
-    elif damage == "weights":
-        model.model.norm.weight.data[0, 0] += 1
-    save_file(state, snapshot / "model.safetensors")
-    with pytest.raises(ValueError):
-        verify_hf_model(model, snapshot, **options)
-    assert model not in dictionary._VERIFIED_MODELS
-
-
-@pytest.mark.parametrize("field,value", [("_commit_hash", "b" * 40), ("model_type", "other")])
-def test_text_subset_requires_the_declared_revision_and_architecture(field, value):
-    model = hf_model()
-    setattr(model.config, field, value)
-    with pytest.raises(ValueError, match="unsupported checkpoint subset"):
-        dictionary._checkpoint_subset(model, dictionary._hf_identity(model.config), "qwen3.5-0.8b-text", None)
 
 
 @pytest.mark.parametrize("damage", ["random", "missing", "extra", "shape", "revision", "mapping"])
@@ -461,9 +305,10 @@ def test_verified_digest_honors_lower_load_limit(memory, monkeypatch):
 
 
 def test_public_model_dictionary_verification_and_random_weight_refusal(tmp_path, memory):
-    from .test_trace import qwen_for_trace, random_dictionary
+    from .test_trace import random_dictionary
+    from .test_gemma_family import gemma_model
 
-    model = qwen_for_trace(layers=1)
+    model = gemma_model(layers=1)
     model.config._name_or_path = model_load.MODEL_ID
     model.config._commit_hash = model_load.MODEL_REVISION
     snapshot = local_snapshot(tmp_path, model)
@@ -488,7 +333,6 @@ def test_public_model_dictionary_verification_and_random_weight_refusal(tmp_path
 
 def mocked_loader(tmp_path, monkeypatch, model, info):
     snapshot = local_snapshot(tmp_path, model)
-    (snapshot / "config.json").write_text(json.dumps({"text_config": {"num_hidden_layers": 24, "hidden_size": 1024}}))
     calls = []
 
     def download(repository, **kwargs):
@@ -502,21 +346,19 @@ def mocked_loader(tmp_path, monkeypatch, model, info):
         assert kwargs["local_files_only"] is True
         assert kwargs["output_loading_info"] is True
         assert kwargs["dtype"] == torch.float32
-        assert kwargs["key_mapping"] == {r"^model\.language_model\.": "model."}
-        model.config = kwargs["config"]
-        model.config.model_type = "qwen3_5_text"
+        assert kwargs["trust_remote_code"] is False
         calls.append("weights")
         return model, info
 
     def tokenizer(path, **kwargs):
-        assert path == snapshot and kwargs == {"local_files_only": True}
+        assert path == snapshot and kwargs == {"local_files_only": True, "trust_remote_code": False}
         calls.append("tokenizer")
         return object()
 
     monkeypatch.setitem(sys.modules, "huggingface_hub", SimpleNamespace(snapshot_download=download))
     monkeypatch.setitem(sys.modules, "transformers", SimpleNamespace(
-        Qwen3_5TextConfig=lambda **kwargs: SimpleNamespace(**kwargs),
-        Qwen3_5ForCausalLM=SimpleNamespace(from_pretrained=load),
+        Gemma2Config=lambda **kwargs: SimpleNamespace(model_type="gemma2", num_hidden_layers=26, hidden_size=2304, vocab_size=256000),
+        Gemma2ForCausalLM=SimpleNamespace(from_pretrained=load),
         AutoTokenizer=SimpleNamespace(from_pretrained=tokenizer)))
     return calls
 
@@ -535,6 +377,6 @@ def test_trusted_loader_preserves_existing_manifest_identity(tmp_path, monkeypat
 def test_incomplete_trusted_load_never_records_provenance(tmp_path, monkeypatch, memory, key):
     model = hf_model()
     mocked_loader(tmp_path, monkeypatch, model, {key: ["weight"]})
-    with pytest.raises(ValueError, match="incomplete"):
+    with pytest.raises(ValueError, match="weights do not match"):
         model_load.load_text_model(device="cpu", memory=memory)
     assert model not in dictionary._VERIFIED_MODELS

@@ -155,8 +155,6 @@ Slang takes most of a 12.7 s configure. A fresh torch-free configure takes 6.5 s
 
 ## Widget Agent Models
 
-With a local model, `qwen3.8:27b` on an Apple M5 Max took 5 to 30 seconds for each ⌘K request in tests. The first request takes longer while Ollama loads the model. The model has a context length of 262,144 tokens, and its context cache is about 18 GB at full length. The cache is about 1 GB at 16,384 tokens for ⌘K and about 2 GB at 32,768 tokens for the side chat.
-
 The first request of the widget agent has about 7,000 tokens before the reply of the model. It holds ten tools, the context bundle and the render, and the default `num_ctx` is 16,384. The first request of the general role has every command of the table as a tool. It has about 11,000 tokens and grows with each tool result, and the default `num_ctx` is 32,768. The OpenAI-compatible endpoint of Ollama ignores `options.num_ctx`.
 
 ## HTTP API Threads

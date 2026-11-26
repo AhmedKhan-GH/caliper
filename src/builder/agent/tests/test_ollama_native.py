@@ -36,7 +36,7 @@ def ollama_agent(caliper):
         # Protocol fixtures need only this command. The full table has a separate context-limit check.
         tool_args = ["--tools", tools] if tools is not None else []
         agent = AgentProcess(script=None, api_file=caliper.api_file, key=None,
-                             extra_args=["--preset", preset, "--base-url", server.base_url, "--model", "qwen-test",
+                             extra_args=["--preset", preset, "--base-url", server.base_url, "--model", "example-model",
                                          *tool_args, *extra])
         started.append((agent, server))
         return agent, server
@@ -105,7 +105,7 @@ def test_a_turn_runs_on_the_native_api_with_the_context_length(ollama_agent, cal
     first, second = server.native_requests
     for request in (first, second):   # a general session: the general role's context length
         assert request["options"]["num_ctx"] == GENERAL_CONTEXT and request["keep_alive"] == "60s"
-        assert request["stream"] is True and request["model"] == "qwen-test"
+        assert request["stream"] is True and request["model"] == "example-model"
     assert "catalog_list" in [t["function"]["name"] for t in first["tools"]]
     call = next(m for m in second["messages"] if m["role"] == "assistant")["tool_calls"][0]
     assert call["function"] == {"name": "catalog_list", "arguments": {"kind": "table"}}
@@ -274,10 +274,10 @@ def test_lm_studio_stays_on_the_openai_compatible_endpoint(ollama_agent):
 
 
 def test_the_probe_loads_the_model_with_the_presets_context_length(tmp_path):
-    server = FakeOpenAI(models=[{"id": "qwen-test"}], reasoning="reasoning")
+    server = FakeOpenAI(models=[{"id": "example-model"}], reasoning="reasoning")
     try:
         cache = tmp_path / "settings"
-        code, doc, err = run_probe_cli("--preset", "ollama", "--base-url", server.base_url, "--model", "qwen-test",
+        code, doc, err = run_probe_cli("--preset", "ollama", "--base-url", server.base_url, "--model", "example-model",
                                        "--cache-dir", str(cache))
         assert code == 0, err
         assert doc["capabilities"]["tools"]["value"] is True and doc["capabilities"]["vision"]["value"] is True
@@ -291,7 +291,7 @@ def test_the_probe_loads_the_model_with_the_presets_context_length(tmp_path):
         assert server.native_requests[1]["messages"][0]["images"]   # the vision call's picture
 
         # The person's context length, kept as an override, is what the next probe loads.
-        code, doc, err = run_probe_cli("--preset", "ollama", "--base-url", server.base_url, "--model", "qwen-test",
+        code, doc, err = run_probe_cli("--preset", "ollama", "--base-url", server.base_url, "--model", "example-model",
                                        "--cache-dir", str(cache), "--set", "context_length=8192", "--refresh")
         assert code == 0, err
         assert doc["capabilities"]["context_length"]["value"] == 8192
@@ -300,12 +300,10 @@ def test_the_probe_loads_the_model_with_the_presets_context_length(tmp_path):
         server.close()
 
 
-
-
 def test_the_probe_reads_how_much_cache_a_token_takes(tmp_path):
-    server = FakeOpenAI(models=[{"id": "qwen-test"}], show=HYBRID_27B_INFO)
+    server = FakeOpenAI(models=[{"id": "example-model"}], show=HYBRID_27B_INFO)
     try:
-        code, doc, err = run_probe_cli("--preset", "ollama", "--base-url", server.base_url, "--model", "qwen-test",
+        code, doc, err = run_probe_cli("--preset", "ollama", "--base-url", server.base_url, "--model", "example-model",
                                        "--cache-dir", str(tmp_path))
         assert code == 0, err
         # 17 attention layers x 4 key and value heads x (256 + 256) x 2 bytes: 68 KiB a token.
@@ -315,7 +313,7 @@ def test_the_probe_reads_how_much_cache_a_token_takes(tmp_path):
 
         # A Custom address of an Ollama server: the model's metadata gives the most it can take, not what the server
         # runs it with, so it is not the context length; without the server's word the length stays unknown.
-        code, doc, err = run_probe_cli("--preset", "custom", "--base-url", server.base_url, "--model", "qwen-test",
+        code, doc, err = run_probe_cli("--preset", "custom", "--base-url", server.base_url, "--model", "example-model",
                                        "--cache-dir", str(tmp_path / "custom"))
         assert code == 0, err
         assert doc["probe"]["context_length"]["value"] is None
@@ -324,9 +322,9 @@ def test_the_probe_reads_how_much_cache_a_token_takes(tmp_path):
     finally:
         server.close()
     # With the model loaded, Ollama's /api/ps states the context in force, which the probe takes.
-    server = FakeOpenAI(models=[{"id": "qwen-test"}], show=HYBRID_27B_INFO, ps_context=32768)
+    server = FakeOpenAI(models=[{"id": "example-model"}], show=HYBRID_27B_INFO, ps_context=32768)
     try:
-        code, doc, err = run_probe_cli("--preset", "custom", "--base-url", server.base_url, "--model", "qwen-test",
+        code, doc, err = run_probe_cli("--preset", "custom", "--base-url", server.base_url, "--model", "example-model",
                                        "--cache-dir", str(tmp_path / "custom-ps"))
         assert code == 0, err
         assert doc["capabilities"]["context_length"] == {

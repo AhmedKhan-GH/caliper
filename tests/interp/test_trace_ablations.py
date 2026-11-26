@@ -61,29 +61,3 @@ def test_valid_untraced_ablation_refuses_before_model_work(point, monkeypatch):
         assert handle.calls == 0
     finally:
         handle()
-
-
-@pytest.mark.parametrize("point", ["model.layers.0.mlp.down_proj", "model.layers.0.mlp.gate_proj",
-                                  "model.layers.0.mlp.up_proj", "model.layers.0.linear_attn.in_proj_qkv",
-                                  "model.layers.0.linear_attn.norm", "model.layers.1.self_attn.v_proj",
-                                  "model.layers.1.input_layernorm", "model.layers.1"])
-def test_qwen_submodule_ablation_preflight_without_model_execution(point, monkeypatch):
-    from caliper.interp import _frozen
-    model = torch.nn.Module()
-    model.config = SimpleNamespace(model_type="qwen3_5_text")
-    model.model = torch.nn.Module()
-    model.model.layers = torch.nn.ModuleList([torch.nn.Module(), torch.nn.Module()])
-    for index, block in enumerate(model.model.layers):
-        block.block_type = "linear_attention" if index == 0 else "full_attention"
-        mixer = torch.nn.Module()
-        setattr(mixer, "out_proj" if index == 0 else "o_proj", torch.nn.Linear(2, 2))
-        setattr(block, "linear_attn" if index == 0 else "self_attn", mixer)
-    monkeypatch.setattr(_frozen, "_architecture", lambda _: {
-        "model.layers.0.mlp_in": None, "model.layers.1.mlp_in": None})
-    with pytest.raises(ValueError, match="trace does not support ablation point"):
-        _validate_ablation_points(model, [{"point": point, "op": "ablate"}])
-    _validate_ablation_points(model, [
-        {"point": "model.layers.0.linear_attn", "op": "ablate"},
-        {"point": "model.layers.0.linear_attn.out_proj", "op": "ablate"},
-        {"point": "model.layers.1.self_attn.o_proj", "op": "ablate"},
-    ])

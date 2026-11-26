@@ -541,8 +541,7 @@ The worked example is opencode on Ollama, with the facts read on 15 November 202
 Ollama's [opencode](https://docs.ollama.com/integrations/opencode), [context length](https://docs.ollama.com/context-length)
 and [FAQ](https://docs.ollama.com/faq) pages:
 
-1. Install Ollama and pull a model that supports tool calling, for example `ollama pull qwen3:8b`, the model that
-   opencode's providers page uses. Ollama binds 127.0.0.1, port 11434, by default.
+1. Install Ollama and pull a model that supports tool calling, with `ollama pull <model>`. Ollama binds 127.0.0.1, port 11434, by default.
 2. Give the model a context of at least 64,000 tokens. Ollama's opencode page says that opencode needs 64k or more.
    Ollama's context length page gives a default that depends on the video memory (4k below 24 GiB, 32k from 24 to
    48 GiB and 256k from 48 GiB), while its FAQ still says 4,096; set it with the slider in the Ollama app or with
@@ -573,17 +572,10 @@ What is verified and what is not:
   agent's tasks, not the side chat's), and the whole path on Windows, where Ollama runs as a native application and the
   agent registry lists opencode binaries.
 
-The other worked example, which was run, is Caliper's own agent: `caliper-agent` in its general role as the custom
-command, on the Ollama preset (`--preset ollama --base-url http://127.0.0.1:11434/v1 --model qwen3.8:27b`, from the
-repository's source). It starts no MCP server and calls Caliper API with the API file of the `caliper` server that
-`session/new` hands it, so its commands run as `agent` and wait on the approval cards; it refuses a session whose
-Caliper server names no file. The preset loads the model through Ollama's own chat API with a context of 32,768 tokens
-for this role. **Measured** in the hidden app on 16 November 2026, with the request "Plot attention entropy per layer
-while it trains" over `caliper_attention_producer`'s stream: the turn read the catalog, made a spec with one source
-per layer and a series panel of the six layers' entropy, every edit approved on its card, in about 80 seconds and 7
-model requests of 10,820 to 17,258 prompt tokens, and the app showed the spec page drawing the stream live. The
-model's tool schemas alone are about 10,000 tokens, so the role needs more than 16,384 tokens of context for a turn
-that reads the catalog first. The dry run is `examples/build_a_dashboard/dry_run/step4_side_chat.py`.
+Caliper's own agent also supports a custom command in its general role.
+Use the Ollama preset with an explicit local model identifier.
+The agent calls Caliper API and submits edits for approval.
+The example driver is `examples/build_a_dashboard/dry_run/step4_side_chat.py`.
 
 ### The handoff from the widget agent
 
