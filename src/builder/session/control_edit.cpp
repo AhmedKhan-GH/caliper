@@ -434,14 +434,21 @@ json control_result_json(const Control& c) {
                                                                        : spec::reference_json(std::get<spec::Reference>(field));
         if (!fields.empty()) options["fields"] = std::move(fields);
     }
-    return json{{"id", c.id},
-                {"kind", spec::control_kind_name(c.kind)},
-                {"title", c.title ? json(*c.title) : json()},
-                {"bind", c.bind},
-                {"options", std::move(options)}};
+    json out{{"id", c.id},
+             {"kind", spec::control_kind_name(c.kind)},
+             {"title", c.title ? json(*c.title) : json()},
+             {"bind", c.bind},
+             {"options", std::move(options)}};
+    if (c.closable) out["closable"] = *c.closable;
+    return out;
 }
 
 SpecEdit control_create(const spec::Spec& s, const json& args, const spec::SourceResolver& resolver) {
+    if (s.applet.layout_locked.value_or(false))
+        return refuse(fail("layout.locked",
+                           "The instrument's layout is locked, so you cannot add a control; unlock the layout with "
+                           "layout.lock first.",
+                           "applet.layout_locked"));
     const std::string id = str_arg(args, "id");
     if (s.find_control(id))
         return refuse(fail("control.exists", "The spec already has a control " + id + "; choose another id.", "args.id"));
@@ -455,6 +462,11 @@ SpecEdit control_create(const spec::Spec& s, const json& args, const spec::Sourc
     if (Error e = set_kind(c, args.contains("kind") ? args["kind"] : json(), "args.kind")) return refuse(std::move(e));
     c.bind = str_arg(args, "bind");
     if (args.contains("title") && args["title"].is_string()) c.title = args["title"].get<std::string>();
+    if (args.contains("closable")) {
+        if (!args["closable"].is_boolean())
+            return refuse(fail("spec.wrong_type", "A control's closable flag is true or false.", "args.closable"));
+        c.closable = args["closable"].get<bool>();
+    }
     if (args.contains("options"))
         if (Error e = merge_options(c.options, args["options"], "args.options")) return refuse(std::move(e));
 
@@ -494,6 +506,10 @@ SpecEdit control_patch(const spec::Spec& s, const json& args, const spec::Source
             if (v.is_null()) c.title.reset();
             else if (v.is_string()) c.title = v.get<std::string>();
             else return refuse(fail("spec.wrong_type", "A control's title is text.", where));
+        } else if (key == "closable") {
+            if (v.is_null()) c.closable.reset();
+            else if (v.is_boolean()) c.closable = v.get<bool>();
+            else return refuse(fail("spec.wrong_type", "A control's closable flag is true or false.", where));
         } else if (key == "bind") {
             if (!v.is_string()) return refuse(fail("spec.wrong_type", "A control's bind is a target string.", where));
             c.bind = v.get<std::string>();
@@ -514,6 +530,15 @@ SpecEdit control_remove(const spec::Spec& s, const json& args, const spec::Sourc
     const std::string id = str_arg(args, "id");
     const std::size_t index = control_index(s, id);
     if (index == s.controls.size()) return refuse(fail("control.not_found", "The spec has no control " + id + ".", "args.id"));
+    if (s.applet.layout_locked.value_or(false))
+        return refuse(fail("layout.locked",
+                           "The instrument's layout is locked, so you cannot remove a control; unlock the layout with "
+                           "layout.lock first.",
+                           "applet.layout_locked"));
+    if (!s.controls[index].closable.value_or(true))
+        return refuse(fail("control.not_closable",
+                           "The control " + id + " is not closable; set closable to true before removing it.",
+                           "args.id"));
     spec::Spec next = s;
     next.controls.erase(next.controls.begin() + static_cast<std::ptrdiff_t>(index));
     // A spec without a layout keeps the default, which places what is left.

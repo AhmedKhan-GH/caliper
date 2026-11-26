@@ -1739,6 +1739,10 @@
             "pattern": "^[a-z][a-z0-9_-]{0,63}$",
             "type": "string"
           },
+          "layout_locked": {
+            "description": "Spec version 1: whether the whole layout is locked, making every component non-closable and fixing its layout; false when absent.",
+            "type": "boolean"
+          },
           "title": {
             "description": "The applet's title for a person.",
             "maxLength": 256,
@@ -3791,6 +3795,10 @@
             "required": [],
             "type": "object"
           },
+          "closable": {
+            "description": "Spec version 1: whether the panel can be closed or removed; true when absent.",
+            "type": "boolean"
+          },
           "dry_run": {
             "default": false,
             "description": "Whether to check the change and return its diff without applying it, so that it can be shown for approval first; false when absent.",
@@ -4987,6 +4995,13 @@
                 "required": [],
                 "type": "object"
               },
+              "closable": {
+                "description": "Spec version 1: whether the panel can be closed or removed; null restores the default (true).",
+                "type": [
+                  "boolean",
+                  "null"
+                ]
+              },
               "entity": {
                 "description": "scene: the entities of the scene; the list replaces the panel's own, and null removes them.",
                 "items": {
@@ -6039,6 +6054,10 @@
                 "required": [],
                 "type": "object"
               },
+              "closable": {
+                "description": "Spec version 1: whether the person or a command can close or remove the panel; true when absent.",
+                "type": "boolean"
+              },
               "id": {
                 "description": "The panel's id.",
                 "maxLength": 64,
@@ -6601,7 +6620,7 @@
         ],
         "type": "object"
       },
-      "summary": "Removes a panel from the open spec and from its layout. The id comes from spec.get. Undo restores it in its place. The result holds the change as a diff; with dry_run true the change is only checked and not applied."
+      "summary": "Removes a panel from the open spec and from its layout. Refuses with panel.not_closable when the panel sets closable to false, and with layout.locked when the layout is locked. The id comes from spec.get. Undo restores it in its place. The result holds the change as a diff; with dry_run true the change is only checked and not applied."
     },
     {
       "agents": true,
@@ -7307,6 +7326,89 @@
       "args": {
         "additionalProperties": false,
         "properties": {
+          "dry_run": {
+            "default": false,
+            "description": "Whether to check the change and return its diff without applying it, so that it can be shown for approval first; false when absent.",
+            "type": "boolean"
+          },
+          "locked": {
+            "description": "Whether to lock the layout (true) or unlock it (false).",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "locked"
+        ],
+        "type": "object"
+      },
+      "destructive": false,
+      "effect": "edit",
+      "examples": [
+        {
+          "locked": true
+        }
+      ],
+      "frame_thread": true,
+      "mutates": true,
+      "name": "layout.lock",
+      "result": {
+        "additionalProperties": false,
+        "properties": {
+          "applied": {
+            "description": "Whether the change was applied: to the open spec, or to the preview when the call names one; false for a dry run.",
+            "type": "boolean"
+          },
+          "diff": {
+            "description": "The change as a unified diff of the spec's canonical TOML text, before and after; empty when the text does not change.",
+            "type": "string"
+          },
+          "locked": {
+            "description": "Whether the layout is locked now, or would be after a dry run.",
+            "type": "boolean"
+          },
+          "warnings": {
+            "description": "What the validator warns about, such as spec.not_portable for a source that cannot run in the browser viewer.",
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "code": {
+                  "description": "A stable code, such as spec.unknown_primitive or spec.not_portable.",
+                  "type": "string"
+                },
+                "message": {
+                  "description": "One plain sentence that says what is wrong.",
+                  "type": "string"
+                },
+                "where": {
+                  "description": "Where in the spec: a path such as panel[2].bind.y, or a line and column such as 12:7; empty when it is not located.",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "code",
+                "message",
+                "where"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "locked",
+          "warnings",
+          "diff",
+          "applied"
+        ],
+        "type": "object"
+      },
+      "summary": "Locks or unlocks the open spec's whole layout. While locked, every panel and control is non-closable and layout edits (adding, removing, moving or replacing components) are refused with layout.locked until unlocked. Undo restores the previous lock state. The result holds the change as a diff; with dry_run true the change is only checked and not applied."
+    },
+    {
+      "agents": true,
+      "args": {
+        "additionalProperties": false,
+        "properties": {
           "id": {
             "description": "The new preview's id; one is made when absent.",
             "maxLength": 64,
@@ -7895,6 +7997,10 @@
             "pattern": "^(param:.{1,63}|action:.{1,63}|run:pause|value|state:[a-z][a-z0-9_-]{0,63}|cursor|intervene:.{1,255})$",
             "type": "string"
           },
+          "closable": {
+            "description": "Whether the control can be closed or removed; true when absent.",
+            "type": "boolean"
+          },
           "dry_run": {
             "default": false,
             "description": "Whether to check the change and return its diff without applying it, so that it can be shown for approval first; false when absent.",
@@ -8229,6 +8335,13 @@
                 "pattern": "^(param:.{1,63}|action:.{1,63}|run:pause|value|state:[a-z][a-z0-9_-]{0,63}|cursor|intervene:.{1,255})$",
                 "type": "string"
               },
+              "closable": {
+                "description": "Whether the control can be closed or removed; null restores the default (true).",
+                "type": [
+                  "boolean",
+                  "null"
+                ]
+              },
               "kind": {
                 "description": "What the control is.",
                 "enum": [
@@ -8520,6 +8633,10 @@
               "bind": {
                 "description": "The control's target, such as param:lr.",
                 "type": "string"
+              },
+              "closable": {
+                "description": "Whether the person or a command can close or remove the control; true when absent.",
+                "type": "boolean"
               },
               "id": {
                 "description": "The control's id.",
@@ -8843,7 +8960,7 @@
         ],
         "type": "object"
       },
-      "summary": "Removes a control from the open spec and from its layout. The id comes from spec.get. Undo restores it in its place. The result holds the change as a diff; with dry_run true the change is only checked and not applied."
+      "summary": "Removes a control from the open spec and from its layout. Refuses with control.not_closable when the control sets closable to false, and with layout.locked when the layout is locked. The id comes from spec.get. Undo restores it in its place. The result holds the change as a diff; with dry_run true the change is only checked and not applied."
     },
     {
       "agents": true,

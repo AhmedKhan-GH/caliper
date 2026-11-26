@@ -1300,7 +1300,7 @@ struct Session::Impl {
     Error check_scope(const Preview& p, const std::string& name, const json& args) const {
         if (p.panel.empty() && p.source.empty()) return {};
         const std::string target = p.panel.empty() ? "source " + p.source : "panel " + p.panel;
-        if (name == "spec.set_text" || name == "layout.set")
+        if (name == "spec.set_text" || name == "layout.set" || name == "layout.lock")
             return Error("preview.out_of_scope",
                          "A preview of the " + target + " cannot replace the whole spec or the whole layout; change "
                                                         "the target with the other edits.",
@@ -1829,8 +1829,8 @@ struct Session::Impl {
         bind("spec.get", &Impl::spec_get);
         bind("spec.validate", &Impl::spec_validate);
         for (const char* name : {"spec.set_text", "source.add", "source.patch", "source.remove", "panel.create",
-                                 "panel.patch", "panel.remove", "layout.place", "layout.set", "control.create",
-                                 "control.patch", "control.remove", "program.create",
+                                 "panel.patch", "panel.remove", "layout.place", "layout.set", "layout.lock",
+                                 "control.create", "control.patch", "control.remove", "program.create",
                                  "program.patch", "program.remove", "state.create", "state.patch", "state.remove",
                                  "entity.set", "entity.remove", "annotation.set", "annotation.remove", "camera.save"})
             bind(name, &Impl::spec_edit);

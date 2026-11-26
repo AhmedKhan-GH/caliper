@@ -182,6 +182,50 @@ TEST_CASE("panel.patch and panel.remove keep the layout whole") {
     CHECK(edit(empty, "panel.remove", {{"id", "b"}}).error.code == "panel.not_found");
 }
 
+TEST_CASE("non-closable panels and locked layouts refuse close and layout mutations") {
+    spec::Spec s = two_sources();
+    s = must(edit(s, "panel.create", {{"id", "a"}, {"primitive", "series"}, {"closable", false}, {"bind", {{"y", "m.loss"}}}}));
+    CHECK(s.version == spec::kInstrumentVersion);
+    REQUIRE(s.panels.size() == 1);
+    CHECK(s.panels[0].closable == std::optional<bool>(false));
+    s = must(edit(s, "panel.create", {{"id", "b"}, {"primitive", "heatmap"}, {"bind", {{"values", "h"}}}}));
+
+    // A non-closable panel refuses panel.remove with panel.not_closable.
+    const SpecEdit refused = edit(s, "panel.remove", {{"id", "a"}});
+    CHECK(refused.error.code == "panel.not_closable");
+    CHECK(refused.error.where == "args.id");
+
+    // Patching closable back to true (or null) restores removal.
+    const SpecEdit patched = edit(s, "panel.patch", {{"id", "a"}, {"patch", {{"closable", true}}}});
+    REQUIRE(patched.error.ok());
+    CHECK(patched.result["panel"]["closable"] == true);
+    CHECK(edit(patched.spec, "panel.remove", {{"id", "a"}}).error.ok());
+
+    // layout.lock locks the whole instrument: every close and layout edit is refused with layout.locked.
+    const SpecEdit locked_edit = edit(s, "layout.lock", {{"locked", true}});
+    REQUIRE(locked_edit.error.ok());
+    CHECK(locked_edit.result == json{{"locked", true}});
+    CHECK(locked_edit.spec.applet.layout_locked == std::optional<bool>(true));
+    CHECK(edit(locked_edit.spec, "panel.remove", {{"id", "b"}}).error.code == "layout.locked");
+    CHECK(edit(locked_edit.spec, "panel.remove", {{"id", "a"}}).error.code == "layout.locked");
+    CHECK(edit(locked_edit.spec, "panel.create", {{"id", "c"}, {"primitive", "text"}, {"options", {{"text", "x"}}}})
+              .error.code == "layout.locked");
+    CHECK(edit(locked_edit.spec, "layout.place", {{"panel", "b"}, {"target", "a"}, {"where", "below"}}).error.code ==
+          "layout.locked");
+    CHECK(edit(locked_edit.spec, "layout.set", {{"layout", {{"root", "a"}, {"nodes", json::array()}}}}).error.code ==
+          "layout.locked");
+    // Property edits still succeed while locked.
+    CHECK(edit(locked_edit.spec, "panel.patch", {{"id", "b"}, {"patch", {{"title", "Locked heat"}}}}).error.ok());
+
+    // Unlocking restores layout edits and removal of closable panels, while non-closable panels stay protected.
+    const SpecEdit unlocked = edit(locked_edit.spec, "layout.lock", {{"locked", false}});
+    REQUIRE(unlocked.error.ok());
+    CHECK(unlocked.result == json{{"locked", false}});
+    CHECK_FALSE(unlocked.spec.applet.layout_locked.has_value());
+    CHECK(edit(unlocked.spec, "panel.remove", {{"id", "b"}}).error.ok());
+    CHECK(edit(unlocked.spec, "panel.remove", {{"id", "a"}}).error.code == "panel.not_closable");
+}
+
 TEST_CASE("layout.place moves a panel next to another") {
     spec::Spec s = two_sources();
     s = must(edit(s, "panel.create", {{"id", "a"}, {"primitive", "series"}, {"bind", {{"y", "m.loss"}}}}));

@@ -243,6 +243,7 @@ const std::pair<const char*, const char*> kFragments[] = {
         "id": {"$use": "id", "description": "The panel's id."},
         "primitive": {"type": "string", "enum": ["series", "heatmap", "points", "histogram", "table", "image", "text", "scene"], "description": "What the panel draws."},
         "title": {"type": ["string", "null"], "description": "The panel's title, or null when it has none."},
+        "closable": {"type": "boolean", "description": "Spec version 1: whether the person or a command can close or remove the panel; true when absent."},
         "bind": {"$use": "bind", "description": "The panel's bindings, by slot."},
         "options": {"$use": "options", "description": "The panel's options."}}})json"},
 
@@ -291,6 +292,7 @@ const std::pair<const char*, const char*> kFragments[] = {
         "id": {"$use": "id", "description": "The control's id."},
         "kind": {"type": "string", "enum": ["slider", "button", "range", "toggle", "picker", "text", "segmented", "readout", "transport"], "description": "What the control is."},
         "title": {"type": ["string", "null"], "description": "The control's title, or null when it has none."},
+        "closable": {"type": "boolean", "description": "Whether the person or a command can close or remove the control; true when absent."},
         "bind": {"type": "string", "description": "The control's target, such as param:lr."},
         "options": {"$use": "control_options", "description": "The control's options."}}})json"},
 
@@ -866,7 +868,8 @@ const Row kRows[] = {
       "properties": {
         "id": {"$use": "id", "description": "The applet's id, such as attention-entropy."},
         "title": {"type": "string", "minLength": 1, "maxLength": 256, "description": "The applet's title for a person."},
-        "description": {"type": "string", "maxLength": 4096, "description": "What the applet shows, in a sentence or two."}}})json",
+        "description": {"type": "string", "maxLength": 4096, "description": "What the applet shows, in a sentence or two."},
+        "layout_locked": {"type": "boolean", "description": "Spec version 1: whether the whole layout is locked, making every component non-closable and fixing its layout; false when absent."}}})json",
      R"json({"type": "object", "additionalProperties": false, "required": ["id", "text"],
       "properties": {
         "id": {"type": "string", "description": "The applet's id."},
@@ -994,6 +997,7 @@ const Row kRows[] = {
         "id": {"$use": "id", "description": "The new panel's id."},
         "primitive": {"type": "string", "enum": ["series", "heatmap", "points", "histogram", "table", "image", "text", "scene"], "description": "What the panel draws. Required slots: series y; heatmap values; points x and y, or positions; histogram values; table rows; image values; text none; scene scene (spec version 1)."},
         "title": {"type": "string", "minLength": 1, "maxLength": 256, "description": "The panel's title; the id when absent."},
+        "closable": {"type": "boolean", "description": "Spec version 1: whether the panel can be closed or removed; true when absent."},
         "bind": {"$use": "bind", "description": "The bindings by slot: a spec source id, or <source>.<column> for one column of a tabular source."},
         "entity": {"type": "array", "maxItems": 256, "items": {"description": "An entity table, a JSON object."}, "description": "scene: the entities of the panel's scene, as a list of entity tables."},
         "annotation": {"type": "array", "maxItems": 256, "items": {"description": "An annotation table, a JSON object."}, "description": "The annotations of the panel, as a list of annotation tables."},
@@ -1023,6 +1027,7 @@ const Row kRows[] = {
                   "description": "The keys to change; null removes one.",
                   "properties": {
                     "title": {"type": ["string", "null"], "minLength": 1, "maxLength": 256, "description": "The panel's title."},
+                    "closable": {"type": ["boolean", "null"], "description": "Spec version 1: whether the panel can be closed or removed; null restores the default (true)."},
                     "primitive": {"type": "string", "enum": ["series", "heatmap", "points", "histogram", "table", "image", "text", "scene"], "description": "What the panel draws."},
                     "bind": {"$patch": "bind", "description": "Slots to bind, or null to unbind one."},
                     "options": {"$patch": "options", "description": "Options to set, or null to clear one."},
@@ -1037,8 +1042,10 @@ const Row kRows[] = {
         "applied": {"$use": "applied"}}})json",
      R"json({"id": "heat", "patch": {"title": "Entropy", "options": {"colormap": "magma", "y_label": null}}})json"},
     {"panel.remove", true, false, true,
-     "Removes a panel from the open spec and from its layout. The id comes from spec.get. Undo restores it in its "
-     "place. The result holds the change as a diff; with dry_run true the change is only checked and not applied.",
+     "Removes a panel from the open spec and from its layout. Refuses with panel.not_closable when the panel sets "
+     "closable to false, and with layout.locked when the layout is locked. The id comes from spec.get. Undo restores "
+     "it in its place. The result holds the change as a diff; with dry_run true the change is only checked and not "
+     "applied.",
      R"json({"type": "object", "additionalProperties": false, "required": ["id"],
       "properties": {
         "id": {"$use": "id", "description": "The panel's id in the open spec."},
@@ -1133,6 +1140,22 @@ const Row kRows[] = {
         "diff": {"$use": "diff"},
         "applied": {"$use": "applied"}}})json",
      R"json({"layout": {"root": "main", "nodes": [{"id": "main", "split": "horizontal", "ratio": 0.6, "children": ["heat", "right"]}, {"id": "right", "split": "vertical", "ratio": null, "children": ["mean", "loss"]}]}})json"},
+    {"layout.lock", true, false, true,
+     "Locks or unlocks the open spec's whole layout. While locked, every panel and control is non-closable and layout "
+     "edits (adding, removing, moving or replacing components) are refused with layout.locked until unlocked. Undo "
+     "restores the previous lock state. The result holds the change as a diff; with dry_run true the change is only "
+     "checked and not applied.",
+     R"json({"type": "object", "additionalProperties": false, "required": ["locked"],
+      "properties": {
+        "locked": {"type": "boolean", "description": "Whether to lock the layout (true) or unlock it (false)."},
+        "dry_run": {"$use": "dry_run"}}})json",
+     R"json({"type": "object", "additionalProperties": false, "required": ["locked", "warnings", "diff", "applied"],
+      "properties": {
+        "locked": {"type": "boolean", "description": "Whether the layout is locked now, or would be after a dry run."},
+        "warnings": {"$use": "warnings"},
+        "diff": {"$use": "diff"},
+        "applied": {"$use": "applied"}}})json",
+     R"json({"locked": true})json"},
 
     // preview
     {"preview.begin", false, false, true,
@@ -1273,6 +1296,7 @@ const Row kRows[] = {
         "id": {"$use": "id", "description": "The new control's id; panels and controls share one set of ids."},
         "kind": {"type": "string", "enum": ["slider", "button", "range", "toggle", "picker", "text", "segmented", "readout", "transport"], "description": "slider sets a number in a range; button acts once when pressed; toggle is on or off, and ablates intervene:<point> or sets a boolean param:<name>. range sets [lo, hi]; picker chooses one value from choices or choices_from; text sets a text; segmented is a row of 2 to 16 buttons, one on or, with multiple, any number; readout shows bound text and binds nothing; transport binds cursor and draws the step controls."},
         "title": {"type": "string", "minLength": 1, "maxLength": 256, "description": "The control's label; the id when absent."},
+        "closable": {"type": "boolean", "description": "Whether the control can be closed or removed; true when absent."},
         "bind": {"$use": "control_bind"},
         "options": {"$use": "control_options", "description": "The control's options."},
         "place": {"type": "object", "additionalProperties": false, "required": ["target", "where"],
@@ -1302,6 +1326,7 @@ const Row kRows[] = {
                   "properties": {
                     "kind": {"type": "string", "enum": ["slider", "button", "range", "toggle", "picker", "text", "segmented", "readout", "transport"], "description": "What the control is."},
                     "title": {"type": ["string", "null"], "minLength": 1, "maxLength": 256, "description": "The control's label."},
+                    "closable": {"type": ["boolean", "null"], "description": "Whether the control can be closed or removed; null restores the default (true)."},
                     "bind": {"$use": "control_bind"},
                     "options": {"$patch": "control_options", "description": "Options to set, or null to clear one."}}},
         "dry_run": {"$use": "dry_run"}}})json",
@@ -1313,8 +1338,10 @@ const Row kRows[] = {
         "applied": {"$use": "applied"}}})json",
      R"json({"id": "lr", "patch": {"title": "Learning rate", "options": {"min": 0.0001, "max": 0.1}}})json"},
     {"control.remove", true, false, true,
-     "Removes a control from the open spec and from its layout. The id comes from spec.get. Undo restores it in its "
-     "place. The result holds the change as a diff; with dry_run true the change is only checked and not applied.",
+     "Removes a control from the open spec and from its layout. Refuses with control.not_closable when the control "
+     "sets closable to false, and with layout.locked when the layout is locked. The id comes from spec.get. Undo "
+     "restores it in its place. The result holds the change as a diff; with dry_run true the change is only checked "
+     "and not applied.",
      R"json({"type": "object", "additionalProperties": false, "required": ["id"],
       "properties": {
         "id": {"$use": "id", "description": "The control's id in the open spec."},
@@ -2066,6 +2093,7 @@ const std::pair<const char*, CommandEffect> kEffects[] = {
     {"panel.data", E::read},
     {"layout.place", E::edit},
     {"layout.set", E::edit},
+    {"layout.lock", E::edit},
     {"preview.begin", E::read},  // a proposal: the workspace does not change
     {"preview.diff", E::read},
     {"preview.commit", E::edit},

@@ -31,7 +31,8 @@ const char* const kV0[] = {
     "data.query",      "data.import",     "loader.list",    "loader.describe", "loader.create",  "loader.update",
     "loader.run",      "loader.delete",   "spec.new",       "spec.open",     "spec.get",         "spec.set_text",
     "spec.validate",   "source.add",      "source.patch",   "source.remove", "panel.create",     "panel.patch",
-    "panel.remove",    "panel.render",    "panel.data",     "layout.place",  "layout.set",       "preview.begin",
+    "panel.remove",    "panel.render",    "panel.data",     "layout.place",  "layout.set",       "layout.lock",
+    "preview.begin",
     "preview.diff",    "preview.commit",  "preview.discard", "applet.save",  "applet.open",      "applet.list",
     "review.status",   "capture.frame",   "control.create", "control.patch", "control.remove",
     // The eighteen commands of design/instrument-interface.md, Commands.
@@ -142,7 +143,7 @@ TEST_CASE("the flags follow the design page") {
           std::set<std::string>{"data.import", "loader.create", "loader.update", "loader.run", "loader.delete",
                                 "spec.new", "spec.open", "spec.set_text", "source.add", "source.patch",
                                 "source.remove", "panel.create", "panel.patch", "panel.remove", "layout.place",
-                                "layout.set", "preview.commit", "applet.save", "applet.open", "control.create",
+                                "layout.set", "layout.lock", "preview.commit", "applet.save", "applet.open", "control.create",
                                 "control.patch", "control.remove", "program.create",
                                 "program.patch", "program.remove", "history.undo", "history.redo", "state.create",
                                 "state.patch", "state.remove", "entity.set", "entity.remove", "annotation.set",
@@ -151,7 +152,7 @@ TEST_CASE("the flags follow the design page") {
     CHECK(names_where([](const CommandDescriptor& d) { return d.frame_thread; }) ==
           std::set<std::string>{"app.applets", "app.launch", "spec.new", "spec.open", "spec.get", "spec.set_text",
                                 "spec.validate", "source.add", "source.patch", "source.remove", "panel.create",
-                                "panel.patch", "panel.remove", "panel.render", "panel.data", "layout.place", "layout.set",
+                                "panel.patch", "panel.remove", "panel.render", "panel.data", "layout.place", "layout.set", "layout.lock",
                                 "preview.begin", "preview.diff", "preview.commit", "preview.discard",
                                 "applet.save", "applet.open", "capture.frame", "control.create", "control.patch",
                                 "control.remove", "state.create", "state.patch", "state.remove", "state.set",
