@@ -273,6 +273,85 @@ def _json(obj) -> bytes:
     return (json.dumps(obj, indent=2, sort_keys=True, ensure_ascii=False) + "\n").encode("utf-8")
 
 
+def intervention_cases():
+    """Shared accepted and refused M8 intervention specifications."""
+    return [
+        {"name": "legacy", "accepted": True, "specification": {"point": "layers.0.mlp", "op": "ablate"}},
+        {"name": "kind", "accepted": True, "specification": {"point": "layers.0.mlp", "kind": "ablate"}},
+        {"name": "both", "accepted": True, "specification": {"point": "layers.0.mlp", "op": "ablate", "kind": "ablate"}},
+        {"name": "add", "accepted": True, "specification": {"point": "layers.0.mlp_out", "kind": "add", "vector": [1.0, -1.0], "coefficient": 0.5, "positions": [0, 31]}},
+        {"name": "scale", "accepted": True, "specification": {"point": "layers.0.mlp_out", "kind": "scale", "feature": 0, "multiplier": -2.0, "dictionary": "fixture"}},
+        {"name": "clamp", "accepted": True, "specification": {"point": "layers.0.mlp_out", "op": "clamp", "feature": 1, "value": 0.0, "positions": []}},
+        {"name": "patch", "accepted": True, "specification": {"point": "layers.0.mlp_out", "kind": "patch", "source_prompt": "A café", "source_position": 1}},
+        {"name": "reserved", "accepted": True, "specification": {"point": "layers.0.mlp", "op": "steer"}},
+        {"name": "missing discriminator", "accepted": False, "specification": {"point": "layers.0.mlp"}},
+        {"name": "conflicting discriminators", "accepted": False, "specification": {"point": "layers.0.mlp", "op": "ablate", "kind": "add"}},
+        {"name": "unknown kind", "accepted": False, "specification": {"point": "layers.0.mlp", "kind": "multiply"}},
+        {"name": "extra field", "accepted": False, "specification": {"point": "layers.0.mlp", "kind": "ablate", "value": 1}},
+        {"name": "bool feature", "accepted": False, "specification": {"point": "layers.0.mlp_out", "kind": "scale", "feature": True, "multiplier": 1}},
+        {"name": "missing vector", "accepted": False, "specification": {"point": "layers.0.mlp_out", "kind": "add", "coefficient": 1}},
+        {"name": "bool coefficient", "accepted": False, "specification": {"point": "layers.0.mlp_out", "kind": "add", "vector": [1], "coefficient": True}},
+        {"name": "empty vector", "accepted": False, "specification": {"point": "layers.0.mlp_out", "kind": "add", "vector": [], "coefficient": 1}},
+        {"name": "duplicate positions", "accepted": False, "specification": {"point": "layers.0.mlp_out", "kind": "patch", "source_prompt": "AB", "positions": [0, 0]}},
+        {"name": "position out of range", "accepted": False, "specification": {"point": "layers.0.mlp_out", "kind": "patch", "source_prompt": "AB", "positions": [32]}},
+        {"name": "bool source position", "accepted": False, "specification": {"point": "layers.0.mlp_out", "kind": "patch", "source_prompt": "AB", "source_position": True}},
+        {"name": "empty prompt", "accepted": False, "specification": {"point": "layers.0.mlp_out", "kind": "patch", "source_prompt": ""}},
+        {"name": "empty dictionary", "accepted": False, "specification": {"point": "layers.0.mlp_out", "kind": "clamp", "feature": 1, "value": 0, "dictionary": ""}},
+        {"name": "bad schedule", "accepted": False, "specification": {"point": "layers.0.mlp", "kind": "ablate", "from_step": 10, "until_step": 10}},
+        {"name": "bool schedule", "accepted": False, "specification": {"point": "layers.0.mlp", "kind": "ablate", "from_step": True}},
+    ]
+
+
+def trace_cases():
+    """Shared accepted and refused trace.run and trace.read requests."""
+    def req(method, **params):
+        return {"version": 1, "method": method, "params": params}
+
+    return [
+        {"name": "full trace settings", "accepted": True, "request": req(
+            "trace.run", prompt="Fact: the capital of the state containing Dallas is",
+            max_targets=5000, max_nodes=8192, max_edges=262144, max_n_logits=10,
+            desired_logit_prob=0.95, node_threshold=0.7, edge_threshold=0.9,
+            batch_size=512, update_interval=4)},
+        {"name": "small trace ceilings", "accepted": True, "request": req(
+            "trace.run", prompt="AB", max_targets=512, max_nodes=512, max_edges=8192)},
+        {"name": "default batch null", "accepted": True, "request": req(
+            "trace.run", prompt="AB", batch_size=None)},
+        {"name": "boundary thresholds zero and one", "accepted": True, "request": req(
+            "trace.run", prompt="AB", desired_logit_prob=0, node_threshold=0.0, edge_threshold=1.0,
+            max_n_logits=1, batch_size=1, update_interval=1)},
+        {"name": "read full offsets", "accepted": True, "request": req(
+            "trace.read", node_offset=8192, edge_offset=262144, node_limit=256, edge_limit=256)},
+        {"name": "removed profile field", "accepted": False, "request": req(
+            "trace.run", prompt="AB", profile="caliper")},
+        {"name": "targets above ceiling", "accepted": False, "request": req(
+            "trace.run", prompt="AB", max_targets=5001)},
+        {"name": "nodes above ceiling", "accepted": False, "request": req(
+            "trace.run", prompt="AB", max_nodes=8193)},
+        {"name": "edges above ceiling", "accepted": False, "request": req(
+            "trace.run", prompt="AB", max_edges=262145)},
+        {"name": "batch above ceiling", "accepted": False, "request": req(
+            "trace.run", prompt="AB", batch_size=513)},
+        {"name": "batch zero", "accepted": False, "request": req(
+            "trace.run", prompt="AB", batch_size=0)},
+        {"name": "logits zero", "accepted": False, "request": req(
+            "trace.run", prompt="AB", max_n_logits=0)},
+        {"name": "logits above ten", "accepted": False, "request": req(
+            "trace.run", prompt="AB", max_n_logits=11)},
+        {"name": "update interval above limit", "accepted": False, "request": req(
+            "trace.run", prompt="AB", update_interval=129)},
+        {"name": "threshold below zero", "accepted": False, "request": req(
+            "trace.run", prompt="AB", node_threshold=-0.01)},
+        {"name": "threshold above one", "accepted": False, "request": req(
+            "trace.run", prompt="AB", edge_threshold=1.01)},
+        {"name": "bool threshold", "accepted": False, "request": req(
+            "trace.run", prompt="AB", desired_logit_prob=True)},
+        {"name": "empty prompt", "accepted": False, "request": req("trace.run", prompt="")},
+        {"name": "read edge offset above ceiling", "accepted": False, "request": req(
+            "trace.read", edge_offset=262145)},
+    ]
+
+
 def render() -> dict[str, bytes]:
     """Every file of the fixture folder, by path relative to it."""
     files = {}
@@ -298,6 +377,8 @@ def render() -> dict[str, bytes]:
         files[f"v3_2/invalid/{name}.bin"] = buf
         expect_32[f"{name}.bin"] = want
     files["v3_2/invalid/expect.json"] = _json(expect_32)
+    files["m8_interventions.json"] = (json.dumps(intervention_cases(), indent=2, ensure_ascii=False) + "\n").encode("utf-8")
+    files["replication_trace.json"] = (json.dumps(trace_cases(), indent=2, ensure_ascii=False) + "\n").encode("utf-8")
     return files
 
 

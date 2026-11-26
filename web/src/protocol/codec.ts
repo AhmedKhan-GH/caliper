@@ -11,7 +11,7 @@ import {
   type SessionIdentity, type SnapshotMsg, type UnknownMsg, type ViewEntry, type InterpretationRequest, type InterpretationResult,
 } from './messages.js';
 import {
-  INTERVENTION_STATES, MAX_INTERVENTIONS, MAX_POINTS_LISTED, MAX_PROGRAMS, OUTPUT_GEOMETRY, OUTPUT_PIXELS, OUTPUT_TENSOR, POINT_MAX, PROGRAM_ARRAYS,
+  INTERVENTION_LIMITS, INTERVENTION_STATES, MAX_INTERVENTIONS, MAX_POINTS_LISTED, MAX_PROGRAMS, OUTPUT_GEOMETRY, OUTPUT_PIXELS, OUTPUT_TENSOR, POINT_MAX, PROGRAM_ARRAYS,
   PROGRAM_EVERY_MAX, PROGRAM_ID_MAX, PROGRAM_MAX_COUNT, PROGRAM_MAX_INPUTS, PROGRAM_MEMORY_MB_MAX, PROGRAM_BUILTIN_MAX, PROGRAM_PARAM_NAME_MAX, PROGRAM_PARAMS, PROGRAM_PARAMS_MAX, PROGRAM_REMOVE, PROGRAM_SET, STATUS_OPERATOR, TENSOR_AXES_MAX, TENSOR_ELEMENTS_MAX,
   PROGRAM_SIDE_MAX, PROGRAM_SOURCE_MAX, PROGRAM_STATES, PROGRAM_TIME_MS_MAX, PROGRAM_WORKGROUPS_MAX, SECTION_WGSL, TENSOR_NAME_MAX,
   PIECE_COMMON_MAX, PIECE_NAME_MAX, PIECE_SEGMENTS_MAX, PIECE_VERSION_MAX, RESOURCE_MAX_BYTES, RESOURCE_ELEMENTS, RESOURCE_PART_WAIT, RESOURCE_SIDE_MAX, RESOURCE_STRIDE_MAX, RESOURCE_VERSION_MAX_BYTES, RESOURCE_TEXTURE_VERSION_MAX_BYTES, RESOURCE_MAX_PARTS, TEXTURE_FORMATS,
@@ -30,7 +30,7 @@ const LITTLE = new Uint8Array(new Uint16Array([1]).buffer)[0] === 1;
 const utf8 = new TextEncoder();
 const utf8Strict = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true });
 
-// JSON.parse erases the distinction between 1 and 1.0. Interpretation integer
+// JSON.parse erases the distinction between 1 and 1.0. Structured integer
 // fields must retain that distinction, as in the Python and C++ codecs.
 const numberSources = new WeakMap<object, Record<string, unknown>>();
 function numericSources(json: string): Record<string, unknown> {
@@ -126,8 +126,8 @@ export function decodeFrame(buf: ArrayBuffer | Uint8Array): Frame {
   if (type === MSG.controls || type === MSG.control || type === MSG.control_reply) {
     const sources = numericSources(metaJson!);
     numberSources.set(m, sources);
-    const key = type === MSG.control ? 'interpretation' : 'result';
-    if (isObj(m[key])) numberSources.set(m[key] as object, sources[key] as Record<string, unknown>);
+    for (const key of ['interpretation', 'result', 'intervene', 'interventions'])
+      if (isObj(m[key])) numberSources.set(m[key] as object, sources[key] as Record<string, unknown>);
   }
   const sections: Section[] = [];
   const descs = m.sections;
@@ -202,7 +202,9 @@ function frameAt(type: number, meta: Record<string, unknown>, sections: Section[
   const source = numberSources.get(meta);
   const interpretationKey = meta.op === 'interpret'
     ? (type === MSG.control ? 'interpretation' : type === MSG.control_reply ? 'result' : undefined) : undefined;
-  const mbytes = utf8.encode(canonicalObject(m, (value, key) => canonicalJson(value, sourceField(source, key), key === interpretationKey)));
+  const mbytes = utf8.encode(canonicalObject(m, (value, key) => canonicalJson(value, sourceField(source, key), key === interpretationKey
+    || (type === MSG.control && meta.op === 'intervene' && key === 'intervene')
+    || (type === MSG.controls && key === 'interventions'))));
   if (mbytes.length > LIMITS.maxMetaBytes) throw new WireError('too_big', `metadata of ${mbytes.length} bytes`, CLOSE.tooBig);
   let pos = HEADER_BYTES + 4 * sections.length + mbytes.length;
   const offsets: number[] = [];
@@ -373,16 +375,19 @@ function isInterpretationObject(v: unknown, source?: unknown): boolean {
 }
 
 const INTERPRET_PARAMS: Record<string, readonly string[]> = {
-  'feature.dictionary': [], 'trace.status': [],
+  'feature.dictionary': [], 'trace.status': [], 'trace.validate': [],
+  'patch.sweep': ['clean_prompt', 'corrupted_prompt', 'metric'],
   'feature.show': ['layer', 'feature', 'node'],
   'feature.examples': ['layer', 'feature', 'node', 'limit'],
-  'trace.run': ['prompt', 'max_targets', 'max_nodes', 'max_edges'],
+  'trace.run': ['prompt', 'max_targets', 'max_nodes', 'max_edges', 'max_n_logits',
+    'desired_logit_prob', 'node_threshold', 'edge_threshold', 'batch_size', 'update_interval'],
   'trace.read': ['node_offset', 'node_limit', 'edge_offset', 'edge_limit'],
 };
 const INTERPRET_BOUNDS: Record<string, readonly [number, number]> = {
-  layer: [0, 4095], feature: [0, 2147483647], node: [0, 511], limit: [0, 16],
-  max_targets: [0, 512], max_nodes: [1, 512], max_edges: [0, 8192],
-  node_offset: [0, 512], edge_offset: [0, 8192], node_limit: [0, 256], edge_limit: [0, 256],
+  layer: [0, 4095], feature: [0, 2147483647], node: [0, 8191], limit: [0, 16],
+  max_targets: [0, 5000], max_nodes: [1, 8192], max_edges: [0, 262144],
+  max_n_logits: [1, 10], update_interval: [1, 128],
+  node_offset: [0, 8192], edge_offset: [0, 262144], node_limit: [0, 256], edge_limit: [0, 256],
 };
 function isInterpretationRequest(v: unknown, source?: unknown): boolean {
   if (!isInterpretationObject(v, source)) return false;
@@ -397,7 +402,23 @@ function isInterpretationRequest(v: unknown, source?: unknown): boolean {
   if (o.method === 'feature.show' || o.method === 'feature.examples')
     return ('node' in params && !('layer' in params) && !('feature' in params))
       || (!('node' in params) && 'layer' in params && 'feature' in params);
-  return o.method !== 'trace.run' || interpretationText(params.prompt, INTERPRET_LIMITS.maxString, false);
+  if (o.method === 'patch.sweep') {
+    if (!interpretationText(params.clean_prompt, INTERPRET_LIMITS.maxString, false)
+      || !interpretationText(params.corrupted_prompt, INTERPRET_LIMITS.maxString, false) || !isObj(params.metric)) return false;
+    const metric = params.metric as Record<string, unknown>;
+    const raw = sourceField(rawParams, 'metric');
+    return Object.keys(metric).length === 2
+      && ['positive_token', 'negative_token'].every((key) => interpretationInteger(metric[key], sourceField(raw, key), 0, 2147483647))
+      && metric.positive_token !== metric.negative_token;
+  }
+  if (o.method === 'trace.run') {
+    if (Object.hasOwn(params, 'batch_size') && params.batch_size !== null
+      && !interpretationInteger(params.batch_size, sourceField(rawParams, 'batch_size'), 1, 512)) return false;
+    for (const key of ['desired_logit_prob', 'node_threshold', 'edge_threshold'])
+      if (Object.hasOwn(params, key) && (!isFinite(params[key]) || (params[key] as number) < 0 || (params[key] as number) > 1)) return false;
+    return interpretationText(params.prompt, INTERPRET_LIMITS.maxString, false);
+  }
+  return true;
 }
 
 const isAscending = (v: number[]) => v.every((x, i) => i === 0 || v[i - 1] < x);
@@ -658,7 +679,7 @@ function decodeMessage(f: Frame): Message | UnknownMsg {
       const name = opt<string | undefined>(f, 'name', isName, 'a parameter or action name', undefined);
       if ((op === 'set' || op === 'run') && name === undefined) bad(t, `'${op}' needs 'name'`);
       const intervene = op === 'intervene'
-        ? req<InterveneRequest>(f, 'intervene', isInterveneRequest, 'exactly one of {set: {point, op, from_step, until_step}}, {clear: point} and {clear_all: true}')
+        ? req<InterveneRequest>(f, 'intervene', isInterveneRequest, 'exactly one of {set: specification}, {clear: point} and {clear_all: true}')
         : undefined;
       const interpretation = op === 'interpret'
         ? req<InterpretationRequest>(f, 'interpretation', (v) => isInterpretationRequest(v, numberSources.get(f.meta)?.interpretation), 'a version 1 interpretation request')
@@ -817,9 +838,11 @@ export function encode(msg: Message, minor: number = PROTOCOL_MINOR): Uint8Array
     }
     case 'controls':
       if (msg.params.some((p) => p.type === 'text' && (!isParamText(p.value) || (p.pending != null && !isParamText(p.pending))))) bad(id, 'invalid text parameter');
+      if (msg.interventions != null && !isInterventions(msg.interventions)) bad(id, 'invalid interventions metadata');
       return encodeFrame(id, drop({ run: msg.run, params: msg.params, actions: msg.actions, interventions: msg.interventions }), msg.stamp ? [stampSection('stamp', msg.stamp, [msg.stamp.length])] : []);
     case 'control':
       if (msg.op === 'set' && !isSetValue(msg.value)) bad(id, 'invalid parameter value');
+      if (msg.op === 'intervene' && !isInterveneRequest(msg.intervene)) bad(id, 'invalid intervention request');
       if (msg.op === 'interpret' && !isInterpretationRequest(msg.interpretation)) bad(id, 'invalid interpretation request');
       if (msg.op !== 'interpret' && msg.interpretation !== undefined) bad(id, 'interpretation requires op interpret');
       return encodeFrame(id, drop({ request_id: msg.request_id, op: msg.op, name: msg.name, value: msg.value, count: msg.count, intervene: msg.intervene, interpretation: msg.interpretation }));
@@ -1847,7 +1870,6 @@ const intIn = (lo: number, hi: number) => (v: unknown) => isInt(v) && v >= lo &&
 const listOf = (ok: (v: unknown) => boolean, most: number, least = 0) => (v: unknown) =>
   Array.isArray(v) && v.length >= least && v.length <= most && v.every((x) => ok(x));
 const isPoint = boundedText(POINT_MAX);
-const isOptStep = (v: unknown) => v === undefined || v === null || isSafeUint(v);
 const present = (v: unknown) => v !== undefined && v !== null;
 
 /** `req` and `opt` of the meta of a message on a plain object (a declaration, a status item). */
@@ -2210,16 +2232,66 @@ export function encodeResource(m: ResourceMsg, minor: number = PROTOCOL_MINOR): 
   return frameAt(MSG.resource, meta, [{ name: SECTION_RESOURCE, dtype: DTYPE.u8, shape: [m.data.length], encoding: 0, bytes: m.data }], minor);
 }
 
+const INTERVENTION_FIELDS: Record<string, readonly string[]> = {
+  ablate: [], steer: [], add: ['vector', 'coefficient', 'positions'],
+  scale: ['feature', 'multiplier', 'positions', 'dictionary'],
+  clamp: ['feature', 'value', 'positions', 'dictionary'],
+  patch: ['source_prompt', 'source_position', 'positions'],
+};
+const interventionNumber = (v: unknown, source: unknown): boolean => typeof v === 'number'
+  && Number.isFinite(v) && (typeof source !== 'string' || /[.eE]/.test(source) || Number.isSafeInteger(v));
+
+function isInterventionSpec(v: unknown, lifecycle: boolean, source: unknown): boolean {
+  if (!isObj(v)) return false;
+  const o = v as Record<string, unknown>;
+  if (present(o.op) && present(o.kind) && o.op !== o.kind) return false;
+  const kind = o.kind ?? o.op;
+  if (typeof kind !== 'string' || !Object.hasOwn(INTERVENTION_FIELDS, kind) || !interpretationText(o.point, POINT_MAX, false)) return false;
+  const fields = ['point', 'op', 'kind', 'from_step', 'until_step', ...INTERVENTION_FIELDS[kind]];
+  if (lifecycle) {
+    fields.push('since_step', 'state', 'error', 'error_code');
+    if (typeof o.state !== 'string' || !INTERVENTION_STATES.includes(o.state)) return false;
+    if (Object.hasOwn(o, 'error') && !interpretationText(o.error, 1024)) return false;
+    if (Object.hasOwn(o, 'error_code') && !interpretationText(o.error_code, 63, false)) return false;
+  }
+  if (Object.keys(o).some((key) => !fields.includes(key))) return false;
+  for (const key of ['from_step', 'until_step', 'since_step'])
+    if (present(o[key]) && !interpretationInteger(o[key], sourceField(source, key), 0, Number.MAX_SAFE_INTEGER)) return false;
+  if (present(o.from_step) && present(o.until_step) && (o.until_step as number) <= (o.from_step as number)) return false;
+  if (Object.hasOwn(o, 'positions')) {
+    const positions = o.positions;
+    const raw = sourceField(source, 'positions');
+    if (!Array.isArray(positions) || positions.length > INTERVENTION_LIMITS.maxPositions
+      || !positions.every((x, i) => interpretationInteger(x, sourceField(raw, i), 0, 31))
+      || new Set(positions).size !== positions.length) return false;
+  }
+  if (Object.hasOwn(o, 'dictionary') && !interpretationText(o.dictionary, 255, false)) return false;
+  if (kind === 'add') {
+    const raw = sourceField(source, 'vector');
+    if (!Array.isArray(o.vector) || !o.vector.length || o.vector.length > INTERVENTION_LIMITS.maxVector
+      || !o.vector.every((x, i) => interventionNumber(x, sourceField(raw, i)))
+      || !interventionNumber(o.coefficient, sourceField(source, 'coefficient'))) return false;
+  }
+  if (kind === 'scale' || kind === 'clamp') {
+    const key = kind === 'scale' ? 'multiplier' : 'value';
+    if (!interpretationInteger(o.feature, sourceField(source, 'feature'), 0, 2147483647)
+      || !interventionNumber(o[key], sourceField(source, key))) return false;
+  }
+  if (kind === 'patch') {
+    if (!interpretationText(o.source_prompt, 4096, false)) return false;
+    if (Object.hasOwn(o, 'source_position') && !interpretationInteger(o.source_position, sourceField(source, 'source_position'), 0, 31)) return false;
+  }
+  return utf8.encode(canonicalJson(v, source, true)).length <= INTERVENTION_LIMITS.maxBytes;
+}
+
 /** CONTROL's intervene: exactly one of set, clear and clear_all. */
 function isInterveneRequest(v: unknown): boolean {
   if (!isObj(v)) return false;
   const o = v as Record<string, unknown>;
+  if (Object.keys(o).some((key) => !['set', 'clear', 'clear_all'].includes(key))) return false;
   if (['set', 'clear', 'clear_all'].filter((k) => present(o[k])).length !== 1) return false;
-  if (present(o.set)) {
-    const st = o.set as Record<string, unknown>;
-    return isObj(st) && isPoint(st.point) && isName(st.op) && isOptStep(st.from_step) && isOptStep(st.until_step);
-  }
-  if (present(o.clear)) return isPoint(o.clear);
+  if (present(o.set)) return isInterventionSpec(o.set, false, numberSources.get(o)?.set);
+  if (present(o.clear)) return interpretationText(o.clear, POINT_MAX, false);
   return o.clear_all === true;
 }
 
@@ -2230,16 +2302,11 @@ function isPointEntry(v: unknown): boolean {
     && (!present(o.type) || isName(o.type)) && (!present(o.shape) || listOf(isSafeUint, MAX_SHAPE_DIMS)(o.shape));
 }
 
-function isActiveEntry(v: unknown): boolean {
-  if (!isObj(v)) return false;
-  const o = v as Record<string, unknown>;
-  return isPoint(o.point) && isName(o.op) && ['from_step', 'until_step', 'since_step'].every((k) => isOptStep(o[k]))
-    && typeof o.state === 'string' && INTERVENTION_STATES.includes(o.state);
-}
-
 /** CONTROLS' interventions: points (at most MAX_POINTS_LISTED) and active (at most MAX_INTERVENTIONS). */
 function isInterventions(v: unknown): boolean {
   if (!isObj(v)) return false;
   const o = v as Record<string, unknown>;
-  return listOf(isPointEntry, MAX_POINTS_LISTED)(o.points) && listOf(isActiveEntry, MAX_INTERVENTIONS)(o.active);
+  const source = numberSources.get(o)?.active;
+  return listOf(isPointEntry, MAX_POINTS_LISTED)(o.points) && Array.isArray(o.active) && o.active.length <= MAX_INTERVENTIONS
+    && o.active.every((x, i) => isInterventionSpec(x, true, sourceField(source, i)));
 }

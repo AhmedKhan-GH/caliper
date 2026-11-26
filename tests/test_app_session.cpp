@@ -21,6 +21,7 @@
 #include "job_system.h"
 #include "test_temp.h"
 #include "probe_metadata.h"
+#include "intervention_metadata.h"
 #ifndef _WIN32
 #include "test_proc.h"
 #endif
@@ -1471,6 +1472,55 @@ TEST_CASE("app session: the run control reports each applied and each stopped in
     CHECK(rec.fields()[2] == json{{"change", "intervene"}, {"point", "head"}, {"op", nullptr}, {"step", 20}});
 }
 
+TEST_CASE("app session: positioned feature events preserve the published group identity") {
+    caliper_host::AppRunControl rc;
+    Recorder rec;
+    const auto member = [](const char* point, int feature, json positions) {
+        return json{{"point", point}, {"kind", "clamp"}, {"feature", feature}, {"positions", positions},
+                    {"value", 0.0}, {"state", "active"}, {"since_step", 1}};
+    };
+    json active = json::array({
+        member("layers.4.mlp_out", 4257, {9}), member("layers.4.mlp_out", 11570, {9}),
+        member("layers.4.mlp_out", 13154, {9}), member("layers.19.mlp_out", 12274, {9}),
+        member("layers.19.mlp_out", 12274, {10})});
+    rc.feed_interventions({{"active", active}}, 1, false, rec);
+    REQUIRE(rec.events.size() == 5);
+    rc.feed_interventions({{"active", active}}, 2, false, rec);
+    CHECK(rec.events.size() == 5);
+    active.erase(active.begin() + 3);
+    rc.feed_interventions({{"active", active}}, 3, false, rec);
+    REQUIRE(rec.events.size() == 6);
+    CHECK(rec.fields().back() == json{{"change", "intervene"}, {"point", "layers.19.mlp_out"}, {"op", nullptr}, {"step", 3}});
+    active.back()["since_step"] = 4;
+    rc.feed_interventions({{"active", active}}, 4, false, rec);
+    REQUIRE(rec.events.size() == 7);
+    rc.feed_interventions({{"active", json::array()}}, 5, true, rec);
+    CHECK(rec.events.size() == 11);
+}
+
+TEST_CASE("app session: position order and specification values do not change event identity") {
+    caliper_host::AppRunControl rc;
+    Recorder rec;
+    json positioned{{"point", "layer|\"name"}, {"op", "scale"}, {"feature", 7}, {"positions", {10, 9}},
+                    {"multiplier", 2.0}, {"state", "active"}, {"since_step", 1}};
+    auto legacy = positioned;
+    legacy.erase("positions");
+    auto empty = positioned;
+    empty["positions"] = json::array();
+    json active = json::array({positioned, legacy, empty});
+    rc.feed_interventions({{"active", active}}, 1, true, rec);
+    active[0]["positions"] = {9, 10};
+    active[0]["multiplier"] = 3.0;
+    active[1]["feature"] = 8;
+    rc.feed_interventions({{"active", active}}, 2, false, rec);
+    CHECK(rec.events.empty());
+    active.erase(active.begin());
+    rc.feed_interventions({{"active", active}}, 3, false, rec);
+    CHECK(rec.events.size() == 1);
+    rc.feed_interventions({{"active", json::array()}}, 4, false, rec);
+    CHECK(rec.events.size() == 3);
+}
+
 TEST_CASE("app session: an intervention that the script ended while the link was down is a run event at its return") {
     caliper_host::AppRunControl rc;
     FakeLink link;
@@ -1590,4 +1640,45 @@ TEST_CASE("app session: the status bar and the settings say when the file still 
     s.close();
     opened.session.reset();
     fs::remove_all(root, ec);
+}
+
+TEST_CASE("app session: structured intervention fields survive both adapters") {
+    caliper_host::AppRunControl control;
+    FakeLink link;
+    control.set_link(&link);
+    const json specification{{"point","layers.0.mlp_out"},{"kind","clamp"},{"feature",3},{"value",-.5},
+                             {"positions",{1}},{"dictionary","fixture"}};
+    json entry = specification;
+    entry.update(json{{"op","clamp"},{"from_step",nullptr},{"until_step",nullptr},
+                      {"since_step",12},{"state","active"}});
+    const auto metadata = json{{"points",json::array()},{"active",json::array({entry})}}.dump();
+    std::string error;
+    REQUIRE(caliper_net::Json::parse(metadata.data(),metadata.size(),&link.ctl.interventions,&error));
+    const auto list = control.interventions();
+    REQUIRE(list.size() == 1);
+    CHECK(list[0].specification == entry);
+    CHECK_FALSE(control.intervene_set(list[0]));
+    REQUIRE(link.sent.size() == 1);
+    const auto sent = json::parse(link.sent[0].value).at("set");
+    for (auto it = specification.begin(); it != specification.end(); ++it) CHECK(sent[it.key()] == it.value());
+    CHECK_FALSE(sent.contains("state"));
+    CHECK_FALSE(sent.contains("since_step"));
+}
+
+TEST_CASE("app session: intervention discriminators survive the attached route") {
+    TempDir temp("intervention-discriminators");
+    FakeLink link;
+    const auto records = caliper_test::intervention_records();
+    link.ctl.interventions = caliper_test::intervention_controls(records).interventions;
+    caliper_host::AppRunControl control(&link);
+    auto opened = cb::Session::open(temp.str("workspace"));
+    REQUIRE(opened.session);
+    opened.session->set_run_control(&control);
+    const auto interventions = caliper_test::check_intervention_records(control, *opened.session, records);
+    for (const auto& intervention : interventions) REQUIRE(control.intervene_set(intervention).ok());
+    REQUIRE(link.sent.size() == interventions.size());
+    for (std::size_t index = 0; index < link.sent.size(); ++index) {
+        CHECK(link.sent[index].op == "intervene");
+        CHECK(json::parse(link.sent[index].value).at("set") == cb::intervention_set_spec(interventions[index]));
+    }
 }

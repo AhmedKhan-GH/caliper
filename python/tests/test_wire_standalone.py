@@ -29,6 +29,7 @@ def standalone(monkeypatch):
     monkeypatch.setitem(sys.modules, "caliper", None)
     # An unrelated module on the import path must not supply the validators.
     monkeypatch.setitem(sys.modules, "_interpret_protocol", None)
+    monkeypatch.setitem(sys.modules, "_intervention_protocol", None)
     return monkeypatch
 
 
@@ -268,3 +269,17 @@ def test_invalid_interventions(wire, intervene):
     with pytest.raises(wire.MessageError):
         wire.decode(_raw(wire, wire.MsgType.CONTROL,
                          {"request_id": 1, "op": "intervene", "intervene": intervene}))
+
+
+def test_feature_interventions_round_trip_without_package(wire, encode):
+    spec = {"point": "blocks.0.mlp_out", "kind": "clamp", "feature": 3, "value": 0.0,
+            "positions": [1]}
+    message = wire.Control(1, "intervene", intervene={"set": spec})
+    assert wire.decode(encode(message)) == message
+    controls = wire.Controls({"state": "none"}, [], interventions={
+        "points": [], "active": [{**spec, "state": "active", "since_step": 1}]})
+    assert wire.decode(encode(controls)) == controls
+    invalid = {**spec, "positions": [True]}
+    with pytest.raises(wire.MessageError):
+        wire.decode(_raw(wire, wire.MsgType.CONTROL,
+                         {"request_id": 1, "op": "intervene", "intervene": {"set": invalid}}))

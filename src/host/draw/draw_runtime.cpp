@@ -1575,8 +1575,13 @@ bool DrawRuntime::encode(std::vector<caliper_gfx::Frame>* frames, const FrameInp
     }
     std::vector<std::uint8_t> params = m.params_default;
     if (m.params_bytes) {
-        std::memcpy(params.data(), in.params.data(), std::min<std::size_t>(params.size(), in.params.size()));
-        g.write_buffer(m.params, 0, params.data(), params.size());
+        if (!in.params.empty())
+            std::memcpy(params.data(), in.params.data(), std::min<std::size_t>(params.size(), in.params.size()));
+        if (!g.write_buffer(m.params, 0, params.data(), params.size())) {
+            stop(m, cp::kProgramLayerRefused,
+                 "The graphics layer refused the draw parameters: " + g.last_error(), -1, "params");
+            return false;
+        }
     }
     if (m.counts_bytes) {
         std::vector<std::uint8_t> counts(m.counts_bytes, 0);

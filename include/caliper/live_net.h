@@ -543,7 +543,7 @@ static inline uint32_t caliper_net_align(uint32_t n) {
 #define CALIPER_NET_PROGRAM_PARAMS       "params"     /* PROGRAM "op": new parameter values, no source */
 #define CALIPER_NET_SECTION_WGSL         "wgsl"       /* u8 (B,): the WGSL source as UTF-8  */
 #define CALIPER_NET_OP_INTERVENE         "intervene"  /* CONTROL "op", key "intervene"      */
-#define CALIPER_NET_INTERVENE_ABLATE     "ablate"     /* the only op; scale, steer, patch reserved */
+#define CALIPER_NET_INTERVENE_ABLATE     "ablate"     /* legacy zero-output intervention */
 #define CALIPER_NET_MAX_PROGRAMS         16u          /* programs of a producer; items of PROGRAM_STATE */
 #define CALIPER_NET_PROGRAM_ID_MAX       55u          /* bytes of an id, [a-z0-9_-] from a letter, or operator.<id>.<n>: "program.<id>" fits NAME_MAX */
 #define CALIPER_NET_PROGRAM_SOURCE_MAX   65536u       /* bytes of the section "wgsl"        */

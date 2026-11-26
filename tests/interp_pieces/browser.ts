@@ -5,7 +5,8 @@ import { REPO, WEB, serve } from '../../web/test/util.js';
 import { mockApp, openSpec, ready, VIEWS_FILES, type MockApp } from '../../web/test/spec-mock.js';
 
 // These limits match web/test/draw_parity.spec.ts: two channel levels in interiors,
-// at most one percent differing edge pixels, and identical interior IDs. There is no bloom.
+// at most one percent edge pixels with no adjacent color match on either side,
+// and identical interior IDs. There is no bloom.
 function compare(size: number, app: Uint8Array, aIds: Uint32Array, web: Uint8Array, wIds: Uint32Array) {
   const sameAround = (ids: Uint32Array, x: number, y: number) => {
     const p = y * size + x;
@@ -48,7 +49,7 @@ function compare(size: number, app: Uint8Array, aIds: Uint32Array, web: Uint8Arr
 }
 
 export function registerInterpPieceTests(test: typeof import('../../web/node_modules/@playwright/test/index').test, expect: Expect) {
-  for (const variant of ['', 'density', 'density_narrow', 'narrow_cells']) test(
+  for (const variant of ['', 'density', 'density_narrow', 'narrow_cells', 'connected_cells', 'exposure', 'sparse_graph']) test(
     `interpretation pieces preserve native colors and picks in the browser${variant ? ` (${variant})` : ''}`, async ({ page }, info) => {
     test.skip(info.project.name === 'canvas2d', 'Piece draws require WebGPU.');
     const fixture = path.join(process.env.CALIPER_INTERP_PIECES_OUT ?? path.join(REPO, 'cmake-build-release/tests/interp_pieces/out'), variant);
@@ -66,11 +67,14 @@ export function registerInterpPieceTests(test: typeof import('../../web/node_mod
     const plan = JSON.parse(fs.readFileSync(path.join(fixture, 'plan.json'), 'utf8'));
     const picks = JSON.parse(fs.readFileSync(path.join(fixture, 'picks.json'), 'utf8'));
     const frames = fs.readFileSync(path.join(fixture, 'frames.bin')).toString('base64');
-    const rasterCount = variant === 'narrow_cells' ? 16 : 512;
+    const density = variant !== '' && variant !== 'exposure' && variant !== 'sparse_graph';
+    const rasterCount = variant === 'narrow_cells' ? 16 : variant === 'connected_cells' ? 93 : 512;
     expect(plan.programs.map((p: { id: string }) => p.id).sort()).toEqual(
-      variant ? ['graph_dense'] : ['examples_0', 'examples_1', 'graph', 'graph_selected', 'logits', 'recovery']);
-    if (variant) {
-      expect(plan.size).toBe(variant === 'density' ? 512 : 256);
+      density ? ['graph_dense'] : variant === 'exposure' ? ['graph', 'graph_selected', 'graph_selected_weak'] :
+        variant === 'sparse_graph' ? ['graph', 'graph_selected'] :
+        ['examples_0', 'examples_1', 'graph', 'graph_selected', 'logits', 'recovery']);
+    if (density) {
+      expect(plan.size).toBe(variant === 'density' || variant === 'connected_cells' ? 512 : 256);
       expect(picks.graph_dense).toHaveLength(rasterCount);
       expect(new Set(picks.graph_dense.map(([x, y]: number[]) => `${x},${y}`)).size).toBe(rasterCount);
     }
@@ -132,14 +136,15 @@ export function registerInterpPieceTests(test: typeof import('../../web/node_mod
         expect.soft(comparison.interiorOver, `${pp.id}: ${comparison.first}`).toBe(0);
         expect.soft(comparison.edgeShare, pp.id).toBeLessThanOrEqual(0.01);
         expect.soft(comparison.idMismatch, pp.id).toBe(0);
-        if (variant) {
+        if (density) {
           const visible = new Map<number, number>();
           for (let p = 0; p < webIds.length; p += 2) {
             if (webIds[p] !== pp.pick_id) continue;
             visible.set(webIds[p + 1], (visible.get(webIds[p + 1]) ?? 0) + 1);
           }
           expect([...visible.keys()].sort((a, b) => a - b)).toEqual(Array.from({ length: rasterCount }, (_, i) => i));
-          expect([...visible.values()].every((count) => count === 1), 'Each density marker occupies one pixel.').toBe(true);
+          const markers = [...visible.entries()].filter(([id]) => variant !== 'connected_cells' || id < 91);
+          expect(markers.every(([, count]) => count === 1), 'Each density marker occupies one pixel.').toBe(true);
         }
         for (const [x, y, item] of picks[pp.id]) {
           const p = 2 * (y * plan.size + x);
@@ -231,8 +236,7 @@ export function registerInterpPieceTests(test: typeof import('../../web/node_mod
     test.setTimeout(120_000);
     const program = JSON.parse(fs.readFileSync(path.join(fixture, 'hover.json'), 'utf8'));
     expect(program.instance.manifest.draw.text.hover).toEqual({ anchor: 33, string_offset: 32 });
-    program.params.hovered_node = -1;
-    program.instance.params.hovered_node = -1;
+    expect(program.instance.manifest.draw.text.selected).toEqual({ anchor: 32, param: 'selected_node', string_offset: 32 });
     for (const r of program.resources) { r.base64 = Buffer.from(r.bytes).toString('base64'); delete r.bytes; }
     const panel = program.id as string;
     const spec = {
@@ -318,6 +322,9 @@ export function registerInterpPieceTests(test: typeof import('../../web/node_mod
     expect(second).toBe(`label ${32 + picked.item}`);
     expect(picked.fields.index).toBe(picked.item);
     expect(await page.evaluate(() => (window as any).caliperSpec.programs.localState.selected_node)).toBe(picked.item);
+    await page.mouse.move(1, 1);
+    const nodeLabels = async () => (await labels()).filter((s) => /^label (3[2-9]|4[0-7])$/.test(s));
+    await expect.poll(nodeLabels).toEqual([second]);
     expect(app.requests.filter((r) => ['state.set', 'selection.set', 'trace.run'].includes(r.name))).toEqual([]);
   });
 }

@@ -100,6 +100,8 @@ std::string run_card_text(const CommandInvocation& invocation, const std::string
 
 // A start of run.start, after the handler checked it.
 struct RunStartRequest {
+    std::string kind = "script";
+    std::string model, dictionary, prompt;  // local inference resources and bounded text
     std::string script_path;     // absolute and canonical, a file in the workspace
     std::string script;          // the same path relative to the workspace, with '/'
     std::vector<std::string> args;

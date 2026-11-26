@@ -101,6 +101,24 @@ const gfx::DrawList& list_of(const gfx::Frame& f, std::size_t i) {
 
 }  // namespace
 
+TEST_CASE("draw parameter upload handles empty input and stops on buffer failure") {
+    Host h;
+    cd::DrawRuntime rt(h.gfx, true, checks());
+    const cs::Piece piece = ex::attention_field();
+    REQUIRE(rt.install(piece, {}, 1).ok());
+    REQUIRE(rt.set_resource(version("pattern", std::vector<float>{1}, 7)).ok());
+    cd::FrameInputs in;
+    REQUIRE(frame(h, rt, in).size() == 1);
+    CHECK(rt.status().frames == 1);
+    h.gfx.release(rt.internals().params);
+    std::vector<gfx::Frame> frames;
+    CHECK(!rt.encode(&frames, in, h.target));
+    CHECK(frames.empty());
+    CHECK(rt.status().state == cd::DrawState::stopped);
+    CHECK(rt.status().error.code == cp::kProgramLayerRefused);
+    CHECK(rt.status().error.where == "params");
+}
+
 TEST_CASE("the field installs, waits for its resource, then draws one full-screen triangle") {
     for (bool webgpu : modes()) {
         CAPTURE(webgpu);

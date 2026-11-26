@@ -196,7 +196,7 @@ TEST_CASE("interventions: intervene.set checks the op, the point and the range, 
     CHECK(fake.sets[1].from_step == 1300);
     CHECK(fake.sets[1].until_step == 1400);
 
-    for (const char* op : {"scale", "steer", "patch"})
+    for (const char* op : {"steer"})
         CHECK(err(*s, "intervene.set", {{"point", "head"}, {"op", op}}) == kInterveneOpReserved);
     CHECK(err(*s, "intervene.set", {{"point", "blocks.9"}, {"op", "ablate"}}) == kInterveneUnknownPoint);
     CHECK(err(*s, "intervene.set", {{"point", "head"}, {"op", "ablate"}, {"from_step", 1500}, {"until_step", 1500}}) ==
@@ -264,11 +264,11 @@ TEST_CASE("interventions: the effect run asks an agent, with a rule key for one 
 
 TEST_CASE("interpretation: every command binds with bounded schema and correct effects") {
     auto session = open_session(fresh_dir("interpret_bound") + "/workspace");
-    for (const char* name : {"feature.dictionary", "feature.show", "feature.examples", "trace.run", "trace.status", "trace.read"}) {
+    for (const char* name : {"feature.dictionary", "feature.show", "feature.examples", "trace.run", "trace.status", "trace.read", "patch.sweep", "trace.validate"}) {
         CAPTURE(name);
         const auto* descriptor = find_command_descriptor(name);
         REQUIRE(descriptor);
-        CHECK(descriptor->effect == (std::string(name) == "trace.run" ? CommandEffect::run : CommandEffect::read));
+        CHECK(descriptor->effect == (std::string(name) == "trace.run" || std::string(name) == "patch.sweep" || std::string(name) == "trace.validate" ? CommandEffect::run : CommandEffect::read));
         CHECK(descriptor->frame_thread);
         auto result = invoke(*session, name, descriptor->examples.front());
         CHECK_FALSE(result.ok);
@@ -297,6 +297,58 @@ TEST_CASE("interpretation: invalid prompt bytes stop before the run transport") 
     session->set_run_control(nullptr);
 }
 
+TEST_CASE("interventions: all supported kinds retain their fields and reject incompatible fields") {
+    auto session = open_session(fresh_dir("intervene_m8") + "/workspace");
+    auto run = training();
+    run.pts.clear();
+    session->set_run_control(&run);
+    std::vector<json> specifications = {
+        {{"point","layers.0.mlp"},{"kind","ablate"}},
+        {{"point","layers.0.mlp_out"},{"kind","add"},{"vector",{1.,-1.}},{"coefficient",.5}},
+        {{"point","layers.0.mlp_out"},{"kind","scale"},{"feature",0},{"multiplier",2.},{"positions",{0,1}},{"dictionary","fixture"}},
+        {{"point","layers.0.mlp_out"},{"kind","clamp"},{"feature",0},{"value",0.}},
+        {{"point","layers.0.mlp_out"},{"kind","patch"},{"source_prompt","AB"},{"source_position",1}}};
+    for (const auto& spec : specifications) {
+        ok(*session,"intervene.set",spec);
+        CHECK(run.sets.back().specification == spec);
+        const auto sent = intervention_set_spec(run.sets.back());
+        CHECK(sent["kind"] == spec["kind"]);
+        CHECK(sent["op"] == spec["kind"]);
+        CHECK_FALSE(check_intervention_spec(sent,"args"));
+    }
+    auto invalid = specifications[1];
+    invalid["positions"] = {0,0};
+    CHECK(err(*session,"intervene.set",invalid) == "command.invalid_args");
+    invalid = specifications[3]; invalid["value"] = true;
+    CHECK(err(*session,"intervene.set",invalid) == "command.invalid_args");
+    invalid = specifications[4]; invalid["source_prompt"] = std::string(4097,'x');
+    CHECK(err(*session,"intervene.set",invalid) == "command.invalid_args");
+    invalid = specifications[1]; invalid["op"] = "scale";
+    CHECK(err(*session,"intervene.set",invalid) == "command.invalid_args");
+    CHECK(run.sets.size() == 5);
+    CHECK(err(*session,"patch.sweep",{{"clean_prompt","A"}},CommandOrigin::ui) == "command.invalid_args");
+    CHECK(err(*session,"patch.sweep",{{"request_id",1}},CommandOrigin::mcp) == "interpret.unknown_request");
+    CHECK(err(*session,"trace.validate",json::object(),CommandOrigin::agent) == "command.needs_approval");
+    session->set_run_control(nullptr);
+}
+
+TEST_CASE("interventions: command handlers refuse null discriminator fields") {
+    auto run = training();
+    run.pts.clear();
+    const auto* descriptor = find_command_descriptor("intervene.set");
+    REQUIRE(descriptor);
+    for (const bool null_kind : {false, true}) {
+        CommandInvocation request;
+        request.name = "intervene.set";
+        request.args = {{"point", "layers.0.mlp_out"}, {"feature", 0}, {"value", 0.},
+                        {"kind", null_kind ? json() : json("clamp")},
+                        {"op", null_kind ? json("clamp") : json()}};
+        const auto result = intervene_command(CommandContext{request, *descriptor}, &run);
+        CHECK(result.error.code == "command.invalid_args");
+        CHECK(run.sets.empty());
+    }
+}
+
 TEST_CASE("interpretation: one approval admits a request and polling cannot submit work") {
     auto session = open_session(fresh_dir("interpret_poll") + "/workspace");
     auto run = training();
@@ -313,7 +365,7 @@ TEST_CASE("interpretation: one approval admits a request and polling cannot subm
     CHECK(session->registry().pending_approvals().empty());
     CHECK(run.interpretations.size() == 1);
     CHECK(err(*session, "trace.run", {{"request_id", 99}}, CommandOrigin::mcp) == "interpret.unknown_request");
-    CHECK(err(*session, "feature.dictionary", {{"request_id", id}}, CommandOrigin::mcp) == "interpret.unknown_request");
+    CHECK(err(*session, "trace.validate", {{"request_id", id}}, CommandOrigin::mcp) == "interpret.unknown_request");
     const auto mixed = invoke(*session, "trace.run", {{"request_id", id}, {"prompt", "new"}}, CommandOrigin::mcp);
     REQUIRE(mixed.error.code == "command.needs_approval");
     CHECK(session->registry().approve(mixed.approval).error.code == "command.invalid_args");
@@ -326,5 +378,35 @@ TEST_CASE("interpretation: one approval admits a request and polling cannot subm
     CHECK(other.interpretations.empty());
     REQUIRE(session->set_agent_mode(AgentPrincipal::mcp, AgentMode::read_only).ok());
     CHECK(err(*session, "trace.run", {{"request_id", id}}, CommandOrigin::mcp) == "command.denied");
+    session->set_run_control(nullptr);
+}
+
+
+TEST_CASE("interpretation: trace settings reach the transport with unified limits") {
+    auto session = open_session(fresh_dir("reference_trace") + "/workspace");
+    FakeRun run = training();
+    session->set_run_control(&run);
+    const json params{{"prompt", "Fact: the capital of the state containing Dallas is"},
+        {"max_targets", 5000}, {"max_nodes", 8192},
+        {"max_edges", 262144}, {"max_n_logits", 10}, {"desired_logit_prob", 0.95},
+        {"node_threshold", 0.7}, {"edge_threshold", 0.9}, {"batch_size", 512}, {"update_interval", 4}};
+    CHECK(ok(*session, "trace.run", params)["pending"] == true);
+    REQUIRE(run.interpretations.size() == 1);
+    CHECK(run.interpretations.back() == params);
+    auto with_profile = params;
+    with_profile["profile"] = "caliper";
+    CHECK(err(*session, "trace.run", with_profile) == "command.invalid_args");
+    for (const auto* field : {"max_n_logits", "batch_size", "update_interval"}) {
+        auto malformed = params;
+        malformed[field] = 4.0;
+        CHECK(err(*session, "trace.run", malformed) == "command.invalid_args");
+    }
+    auto automatic = params;
+    automatic["batch_size"] = nullptr;
+    CHECK(ok(*session, "trace.run", automatic)["pending"] == true);
+    CHECK(run.interpretations.back() == automatic);
+    CHECK(ok(*session, "trace.read", {{"node_offset", 8192}, {"edge_offset", 262144},
+                                     {"node_limit", 256}, {"edge_limit", 256}})["pending"] == true);
+    CHECK(err(*session, "trace.read", {{"edge_limit", 257}}) == "command.invalid_args");
     session->set_run_control(nullptr);
 }

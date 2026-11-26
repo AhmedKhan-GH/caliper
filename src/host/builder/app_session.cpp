@@ -325,8 +325,9 @@ std::vector<cb::Intervention> interventions_of(const json& interventions) {
     for (const json& a : interventions["active"]) {
         if (!a.is_object()) continue;
         cb::Intervention i;
+        i.specification = a;
         i.point = a.value("point", std::string());
-        i.op = a.value("op", std::string("ablate"));
+        i.op = cb::intervention_op(a);
         i.from_step = opt_int(a, "from_step");
         i.until_step = opt_int(a, "until_step");
         i.since_step = opt_int(a, "since_step");
@@ -365,9 +366,7 @@ std::vector<cb::Intervention> AppRunControl::interventions() {
 cb::Error AppRunControl::intervene_set(const cb::Intervention& i) {
     if (link_ && link_->attached() && !interventions_supported())
         return cb::Error(cb::kInterveneNotSupported, "The script " + link_->script() + " takes no interventions.");
-    json set{{"point", i.point}, {"op", i.op}};
-    set["from_step"] = i.from_step ? json(*i.from_step) : json();
-    set["until_step"] = i.until_step ? json(*i.until_step) : json();
+    json set = cb::intervention_set_spec(i);
     return send_net(kOpIntervene, "", to_net_json(json{{"set", std::move(set)}}), 0);
 }
 
@@ -380,23 +379,32 @@ cb::Error AppRunControl::intervene_clear(const std::string& point) {
 
 void AppRunControl::feed_interventions(const json& interventions, const json& step, bool baseline,
                                        cb::EventSink& sink) {
-    // The interventions the script applies now, by point and op, with the
-    // step it applied each at.
-    std::map<std::pair<std::string, std::string>, json> now;
-    for (const cb::Intervention& i : interventions_of(interventions))
-        if (i.state == "active") now[{i.point, i.op}] = i.since_step ? json(*i.since_step) : step;
+    std::map<std::string, json> now;
+    for (const cb::Intervention& i : interventions_of(interventions)) {
+        if (i.state != "active") continue;
+        json key = json::array({i.point, i.op});
+        if ((i.op == "clamp" || i.op == "scale") && i.specification.contains("positions")) {
+            auto positions = i.specification.at("positions").get<std::vector<std::int64_t>>();
+            std::sort(positions.begin(), positions.end());
+            key.push_back(i.specification.at("feature"));
+            key.push_back(positions);
+        }
+        now[key.dump()] = {{"point", i.point}, {"op", i.op}, {"step", i.since_step ? json(*i.since_step) : step}};
+    }
     if (!baseline) {
-        for (const auto& [key, since] : now) {
+        for (const auto& [key, fields] : now) {
             const auto it = applied_.find(key);
-            if (it == applied_.end() || it->second != since)
-                push_run(sink, json{{"change", "intervene"}, {"point", key.first}, {"op", key.second}, {"step", since}});
+            if (it == applied_.end() || it->second != fields) {
+                auto event = fields;
+                event["change"] = "intervene";
+                push_run(sink, std::move(event));
+            }
         }
     }
-    // A stop also in a baseline: applied_ then holds what the same script applied before its
-    // link dropped (feed()), else nothing.
-    for (const auto& [key, since] : applied_)
+    // A baseline also reports effects that ended while the link was absent.
+    for (const auto& [key, fields] : applied_)
         if (!now.count(key))
-            push_run(sink, json{{"change", "intervene"}, {"point", key.first}, {"op", nullptr}, {"step", step}});
+            push_run(sink, json{{"change", "intervene"}, {"point", fields.at("point")}, {"op", nullptr}, {"step", step}});
     applied_ = std::move(now);
 }
 

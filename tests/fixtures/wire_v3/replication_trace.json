@@ -1,0 +1,245 @@
+[
+  {
+    "name": "full trace settings",
+    "accepted": true,
+    "request": {
+      "version": 1,
+      "method": "trace.run",
+      "params": {
+        "prompt": "Fact: the capital of the state containing Dallas is",
+        "max_targets": 5000,
+        "max_nodes": 8192,
+        "max_edges": 262144,
+        "max_n_logits": 10,
+        "desired_logit_prob": 0.95,
+        "node_threshold": 0.7,
+        "edge_threshold": 0.9,
+        "batch_size": 512,
+        "update_interval": 4
+      }
+    }
+  },
+  {
+    "name": "small trace ceilings",
+    "accepted": true,
+    "request": {
+      "version": 1,
+      "method": "trace.run",
+      "params": {
+        "prompt": "AB",
+        "max_targets": 512,
+        "max_nodes": 512,
+        "max_edges": 8192
+      }
+    }
+  },
+  {
+    "name": "default batch null",
+    "accepted": true,
+    "request": {
+      "version": 1,
+      "method": "trace.run",
+      "params": {
+        "prompt": "AB",
+        "batch_size": null
+      }
+    }
+  },
+  {
+    "name": "boundary thresholds zero and one",
+    "accepted": true,
+    "request": {
+      "version": 1,
+      "method": "trace.run",
+      "params": {
+        "prompt": "AB",
+        "desired_logit_prob": 0,
+        "node_threshold": 0.0,
+        "edge_threshold": 1.0,
+        "max_n_logits": 1,
+        "batch_size": 1,
+        "update_interval": 1
+      }
+    }
+  },
+  {
+    "name": "read full offsets",
+    "accepted": true,
+    "request": {
+      "version": 1,
+      "method": "trace.read",
+      "params": {
+        "node_offset": 8192,
+        "edge_offset": 262144,
+        "node_limit": 256,
+        "edge_limit": 256
+      }
+    }
+  },
+  {
+    "name": "removed profile field",
+    "accepted": false,
+    "request": {
+      "version": 1,
+      "method": "trace.run",
+      "params": {
+        "prompt": "AB",
+        "profile": "caliper"
+      }
+    }
+  },
+  {
+    "name": "targets above ceiling",
+    "accepted": false,
+    "request": {
+      "version": 1,
+      "method": "trace.run",
+      "params": {
+        "prompt": "AB",
+        "max_targets": 5001
+      }
+    }
+  },
+  {
+    "name": "nodes above ceiling",
+    "accepted": false,
+    "request": {
+      "version": 1,
+      "method": "trace.run",
+      "params": {
+        "prompt": "AB",
+        "max_nodes": 8193
+      }
+    }
+  },
+  {
+    "name": "edges above ceiling",
+    "accepted": false,
+    "request": {
+      "version": 1,
+      "method": "trace.run",
+      "params": {
+        "prompt": "AB",
+        "max_edges": 262145
+      }
+    }
+  },
+  {
+    "name": "batch above ceiling",
+    "accepted": false,
+    "request": {
+      "version": 1,
+      "method": "trace.run",
+      "params": {
+        "prompt": "AB",
+        "batch_size": 513
+      }
+    }
+  },
+  {
+    "name": "batch zero",
+    "accepted": false,
+    "request": {
+      "version": 1,
+      "method": "trace.run",
+      "params": {
+        "prompt": "AB",
+        "batch_size": 0
+      }
+    }
+  },
+  {
+    "name": "logits zero",
+    "accepted": false,
+    "request": {
+      "version": 1,
+      "method": "trace.run",
+      "params": {
+        "prompt": "AB",
+        "max_n_logits": 0
+      }
+    }
+  },
+  {
+    "name": "logits above ten",
+    "accepted": false,
+    "request": {
+      "version": 1,
+      "method": "trace.run",
+      "params": {
+        "prompt": "AB",
+        "max_n_logits": 11
+      }
+    }
+  },
+  {
+    "name": "update interval above limit",
+    "accepted": false,
+    "request": {
+      "version": 1,
+      "method": "trace.run",
+      "params": {
+        "prompt": "AB",
+        "update_interval": 129
+      }
+    }
+  },
+  {
+    "name": "threshold below zero",
+    "accepted": false,
+    "request": {
+      "version": 1,
+      "method": "trace.run",
+      "params": {
+        "prompt": "AB",
+        "node_threshold": -0.01
+      }
+    }
+  },
+  {
+    "name": "threshold above one",
+    "accepted": false,
+    "request": {
+      "version": 1,
+      "method": "trace.run",
+      "params": {
+        "prompt": "AB",
+        "edge_threshold": 1.01
+      }
+    }
+  },
+  {
+    "name": "bool threshold",
+    "accepted": false,
+    "request": {
+      "version": 1,
+      "method": "trace.run",
+      "params": {
+        "prompt": "AB",
+        "desired_logit_prob": true
+      }
+    }
+  },
+  {
+    "name": "empty prompt",
+    "accepted": false,
+    "request": {
+      "version": 1,
+      "method": "trace.run",
+      "params": {
+        "prompt": ""
+      }
+    }
+  },
+  {
+    "name": "read edge offset above ceiling",
+    "accepted": false,
+    "request": {
+      "version": 1,
+      "method": "trace.read",
+      "params": {
+        "edge_offset": 262145
+      }
+    }
+  }
+]

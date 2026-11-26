@@ -1,5 +1,6 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <doctest/doctest.h>
+#include <algorithm>
 #include "pieces.h"
 #include <caliper_builder/programs/sandbox.h>
 #include <caliper_builder/session/piece_commands.h>
@@ -35,7 +36,27 @@ TEST_CASE("graph passes piece.check with the frozen shapes and budgets") {
         REQUIRE(cp::element_layout(resource.layout, &layout).ok());
         bytes += cp::layout_bytes(layout, resource.count);
     }
-    CHECK(bytes < (1u << 20));
+    CHECK(bytes < (16u << 20));
+    const auto capacity = [&](const char* id) {
+        const auto found = std::find_if(piece.resources.begin(), piece.resources.end(),
+            [&](const auto& resource) { return resource.id == id; });
+        REQUIRE(found != piece.resources.end());
+        return found->count;
+    };
+    CHECK(capacity("nodes") == 8192);
+    CHECK(capacity("curves") == 262144);
+    CHECK(capacity("strings") == 8224);
+    CHECK(capacity("cells") == 8192);
+    CHECK(capacity("offset_a") == 8192);
+    CHECK(capacity("offset_b") == 8192);
+    for (const auto& resource : piece.resources) if (resource.id == "cells") {
+        cp::ElementLayout layout;
+        REQUIRE(cp::element_layout(resource.layout,&layout).ok());
+        CHECK(layout.stride == 40); // Exposure occupies the former tail padding.
+    }
+    CHECK(piece.params[0].max == 8191);
+    for (const auto& pass : piece.derive->passes)
+        CHECK(pass.workgroups[0] * 64 == (pass.entry == "edge_curves" ? 262144 : 8192));
 }
 
 TEST_CASE("example, output, and recovery pieces compile within their budgets") {

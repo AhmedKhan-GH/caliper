@@ -367,8 +367,11 @@ Error check_closed_node(const json& s, const std::string& path, const std::vecto
     }
     if (s.contains("items"))
         if (Error err = check_closed_node(s["items"], path + "[]", open_paths, depth + 1)) return err;
-    if (s.contains("additionalProperties") && s["additionalProperties"].is_object())
-        return bad_schema("additionalProperties must be false, not a schema.", path);
+    if (s.contains("additionalProperties") && s["additionalProperties"].is_object()) {
+        if (std::find(open_paths.begin(), open_paths.end(), path) == open_paths.end())
+            return bad_schema("additionalProperties must be false, not a schema.", path);
+        return check_closed_node(s["additionalProperties"], path + "{}", open_paths, depth + 1);
+    }
     return {};
 }
 

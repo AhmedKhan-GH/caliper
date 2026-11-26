@@ -19,6 +19,7 @@
 #include <fstream>
 #include <limits>
 #include <random>
+#include <limits>
 #include <string>
 #include <vector>
 
@@ -885,6 +886,55 @@ TEST_CASE("net/wire: interpretation encoding rejects invalid UTF-8 prompt bytes 
     CHECK(std::get<Control>(decoded).interpretation == request.interpretation);
 }
 
+TEST_CASE("net/wire: M8 intervention cases match the shared Python fixtures") {
+    const auto cases = read_json(fixtures() / "m8_interventions.json");
+    for (const auto& item : cases.items()) {
+        INFO(item.find("name")->as_string());
+        Control request;
+        request.request_id = 1;
+        request.op = "intervene";
+        request.intervene = Json::object();
+        request.intervene.set("set", *item.find("specification"));
+        std::vector<uint8_t> bytes;
+        Message message;
+        const bool accepted = encode(request, &bytes) && decode_bytes(bytes,&message).ok();
+        CHECK(accepted == item.find("accepted")->as_bool());
+        if (accepted) {
+            CHECK(std::get<Control>(message).intervene == request.intervene);
+        }
+    }
+    Control request;
+    request.request_id = 2; request.op = "intervene";
+    Json spec = Json::object();
+    spec.set("point","layers.0.mlp_out"); spec.set("kind","add"); spec.set("coefficient",1.);
+    Json vector = Json::array(); vector.push(Json(std::numeric_limits<double>::quiet_NaN()));
+    spec.set("vector",vector); request.intervene = Json::object(); request.intervene.set("set",spec);
+    std::vector<uint8_t> bytes;
+    Message result;
+    CHECK_FALSE((encode(request,&bytes) && decode_bytes(bytes,&result).ok()));
+    vector = Json::array();
+    for (int i = 0; i < 16385; ++i) vector.push(1.);
+    spec.set("vector",vector); request.intervene.set("set",spec);
+    CHECK_FALSE((encode(request,&bytes) && decode_bytes(bytes,&result).ok()));
+    vector = Json::array(); vector.push(1.); spec.set("vector",vector);
+    spec.set("point",std::string(256,'x')); request.intervene.set("set",spec);
+    CHECK_FALSE((encode(request,&bytes) && decode_bytes(bytes,&result).ok()));
+}
+
+TEST_CASE("net/wire: M8 operations require bounded prompts and distinct metric token IDs") {
+    const auto accepted = [](const std::string& envelope) {
+        Message message;
+        const auto bytes = frame_of(CALIPER_NET_MSG_CONTROL,
+            "{\"request_id\":1,\"op\":\"interpret\",\"interpretation\":" + envelope + "}");
+        return decode_bytes(bytes,&message).ok();
+    };
+    CHECK(accepted(R"({"version":1,"method":"trace.validate","params":{}})"));
+    CHECK_FALSE(accepted(R"({"version":1,"method":"trace.validate","params":{"prompt":"A"}})"));
+    CHECK(accepted(R"({"version":1,"method":"patch.sweep","params":{"clean_prompt":"AB","corrupted_prompt":"AC","metric":{"positive_token":1,"negative_token":2}}})"));
+    CHECK_FALSE(accepted(R"({"version":1,"method":"patch.sweep","params":{"clean_prompt":"AB","corrupted_prompt":"AC","metric":{"positive_token":1,"negative_token":1}}})"));
+    CHECK_FALSE(accepted(R"({"version":1,"method":"patch.sweep","params":{"clean_prompt":"AB","corrupted_prompt":"AC","metric":{"positive_token":true,"negative_token":1}}})"));
+}
+
 TEST_CASE("net/wire: outbound interpretation results enforce structured limits") {
     ControlReply reply;
     reply.request_id = 1; reply.op = "interpret"; reply.status = "ok";
@@ -1102,6 +1152,20 @@ TEST_CASE("net/wire: free-text parameters preserve exact byte limits") {
     CHECK(CALIPER_NET_NAME_MAX == 63);
 }
 
+TEST_CASE("net/wire: M8 intervention numbers preserve raw integer limits") {
+    for (const auto& item : std::vector<std::pair<std::string, bool>>{
+             {"9007199254740991", true}, {"9007199254740992", false},
+             {"100000000000000000000", false}, {"-100000000000000000000", false},
+             {"1e20", true}, {"100000000000000000000.0", true}}) {
+        CAPTURE(item.first);
+        const std::string spec = R"({"point":"layers.0.mlp_out","kind":"clamp","feature":1,"value":)" + item.first + "}";
+        const auto bytes = raw_frame_of(CALIPER_NET_MSG_CONTROL,
+            R"({"request_id":1,"op":"intervene","intervene":{"set":)" + spec + "}}");
+        Message decoded;
+        CHECK(decode_bytes(bytes, &decoded).ok() == item.second);
+    }
+}
+
 TEST_CASE("net/wire: outbound set values reject invalid scalars and containers") {
     for (const Json& value : {Json(), Json(std::numeric_limits<double>::quiet_NaN()),
                              Json(std::numeric_limits<double>::infinity()),
@@ -1159,5 +1223,29 @@ TEST_CASE("net/wire: legacy set values retain v3.1 round trips") {
         REQUIRE(encode(reply, &bytes, nullptr, 1));
         REQUIRE(decode_bytes(bytes, &decoded).ok());
         CHECK(std::get<ControlReply>(decoded).value == value);
+    }
+}
+
+
+TEST_CASE("net/wire: replication trace requests match the shared codec contract") {
+    const auto cases = read_json(fixtures() / "replication_trace.json");
+    for (const auto& item : cases.items()) {
+        INFO(item.find("name")->as_string());
+        Control request;
+        request.request_id = 1;
+        request.op = "interpret";
+        request.interpretation = *item.find("request");
+        const bool expected = item.find("accepted")->as_bool();
+        std::vector<uint8_t> bytes;
+        CHECK(encode(request, &bytes) == expected);
+        Message message;
+        const auto inbound = frame_of(CALIPER_NET_MSG_CONTROL,
+            "{\"request_id\":1,\"op\":\"interpret\",\"interpretation\":" + request.interpretation.dump() + "}");
+        CHECK(decode_bytes(inbound, &message).ok() == expected);
+        if (expected) {
+            CHECK(std::get<Control>(message).interpretation == request.interpretation);
+            REQUIRE(decode_bytes(bytes, &message).ok());
+            CHECK(std::get<Control>(message).interpretation == request.interpretation);
+        }
     }
 }

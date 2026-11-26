@@ -504,7 +504,7 @@ TEST_CASE("runner commands: a fork with a refused intervention gets no card and 
         INFO("run.fork answered " << r.error.code << ": " << r.error.message);
         return r.error.code;
     };
-    CHECK(fork_error(json::array({iv("blocks.1.attn#2", "scale")})) == kInterveneOpReserved);
+    CHECK(fork_error(json::array({iv("blocks.1.attn#2", "steer")})) == kInterveneOpReserved);
     json same = iv("a");
     same["from_step"] = std::uint64_t(5);
     same["until_step"] = std::uint64_t(5);
@@ -521,7 +521,7 @@ TEST_CASE("runner commands: a fork with a refused intervention gets no card and 
     // The precheck gives the same refusals directly, before any card.
     CommandInvocation inv;
     inv.name = "run.fork";
-    inv.args = {{"run", "train-1"}, {"interventions", json::array({iv("a", "scale")})}};
+    inv.args = {{"run", "train-1"}, {"interventions", json::array({iv("a", "steer")})}};
     CHECK(runner_precheck(inv, &f.runner, f.ws).code == kInterveneOpReserved);
     inv.args = {{"run", "train-1"}, {"interventions", json::array({same})}};
     CHECK(runner_precheck(inv, &f.runner, f.ws).code == kInterveneBadRange);
@@ -565,4 +565,89 @@ TEST_CASE("runner commands: the card of a fork shows its step and each intervent
     // Without a step the fork still waits for the next checkpoint.
     CHECK(card.find("at its next checkpoint") != std::string::npos);
     CHECK(card.find("newest kept checkpoint") == std::string::npos);
+}
+
+TEST_CASE("runner commands: a fork retains all structured intervention fields") {
+    Fixture f("runner_fork_m8");
+    f.runner.runs.push_back(running("train-1"));
+    const json spec{{"point","layers.0.mlp_out"},{"kind","clamp"},{"feature",7},{"value",-.5},
+                    {"positions",{1,2}},{"dictionary","fixture"}};
+    approved(*f.s,"run.fork",{{"run","train-1"},{"interventions",json::array({spec})}});
+    REQUIRE(f.runner.forks.size() == 1);
+    const auto& sent = f.runner.forks[0].interventions.at(0);
+    for (auto it = spec.begin(); it != spec.end(); ++it) CHECK(sent[it.key()] == it.value());
+    CHECK(sent["op"] == "clamp");
+    CommandInvocation invocation;
+    invocation.name = "run.fork";
+    invocation.args = {{"run","train-1"},{"interventions",json::array({spec})}};
+    CHECK(run_card_text(invocation,"train.py").find("clamp layers.0.mlp_out") != std::string::npos);
+}
+
+TEST_CASE("runner inference uses local resources and a fixed module") {
+    Fixture f("runner_inference");
+    std::filesystem::create_directories(f.ws + "/dictionary");
+    json args{{"kind", "inference"}, {"model", "tiny-lm"}, {"dictionary", "dictionary"},
+              {"prompt", "A quoted \"prompt\"\n--model=untrusted"}, {"id", "inference-test"}};
+    approved(*f.s, "run.start", args);
+    REQUIRE(f.runner.starts.size() == 1);
+    const auto& request = f.runner.starts.front();
+    CHECK(request.kind == "inference");
+    CHECK(request.script == "caliper.interp._hosted");
+    CHECK(request.script_path.empty());
+    CHECK(request.model == "tiny-lm");
+    CHECK(request.dictionary == std::filesystem::canonical(f.ws + "/dictionary").u8string());
+    CHECK(request.prompt == args["prompt"].get<std::string>());
+    CHECK(request.args.empty());
+    CommandInvocation inv;
+    inv.name = "run.start";
+    inv.args = args;
+    const auto card = run_card_text(inv, "");
+    CHECK(card.find("tiny-lm") != std::string::npos);
+    CHECK(card.find("\\n--model=untrusted") != std::string::npos);
+}
+
+TEST_CASE("runner inference refuses mixed or nonlocal start data") {
+    Fixture f("runner_inference_refusal");
+    std::filesystem::create_directories(f.ws + "/dictionary");
+    const json valid{{"kind", "inference"}, {"model", "tiny-lm"}, {"dictionary", "dictionary"}, {"prompt", "A"}};
+    for (const auto& change : std::vector<json>{
+             {{"script", "scripts/train.py"}}, {{"args", json::array({"-c", "code"})}},
+             {{"params", json::array()}}, {{"kind", "unknown"}}, {{"prompt", ""}},
+             {{"prompt", std::string(4097, 'a')}}, {{"model", "https://example.invalid/model"}},
+             {{"dictionary", "missing"}}, {{"prompt", std::string("A\0B", 3)}}}) {
+        CommandInvocation inv;
+        inv.name = "run.start";
+        inv.args = valid;
+        inv.args.update(change);
+        CHECK(bool(runner_precheck(inv, &f.runner, f.ws)));
+    }
+    CHECK(f.runner.starts.empty());
+}
+
+TEST_CASE("runner commands: explicit script kind preserves script arguments and refuses mixed fields") {
+    Fixture f("runner_explicit_script");
+    const json args{{"kind", "script"}, {"script", "scripts/train.py"}, {"args", {"--epochs", "3"}},
+                    {"params", json::array({{{"name", "prompt"}, {"value", "A café"}}})}};
+    const auto pending = send(*f.s, "run.start", args, CommandOrigin::mcp, "");
+    CHECK(pending.error.code == "command.needs_approval");
+    CHECK(f.runner.starts.empty());
+    approved(*f.s, "run.start", args);
+    REQUIRE(f.runner.starts.size() == 1);
+    const auto& request = f.runner.starts[0];
+    CHECK(request.kind == "script");
+    CHECK(request.script == "scripts/train.py");
+    CHECK(request.args == std::vector<std::string>{"--epochs", "3"});
+    CHECK(request.params == json{{"prompt", "A café"}});
+    for (const bool explicit_kind : {false, true}) {
+        for (const char* field : {"model", "dictionary", "prompt"}) {
+            auto mixed = args;
+            if (!explicit_kind) mixed.erase("kind");
+            mixed[field] = "fixture";
+            CHECK(err(*f.s, "run.start", mixed) == "command.invalid_args");
+        }
+    }
+    auto unknown = args;
+    unknown["kind"] = "unknown";
+    CHECK(err(*f.s, "run.start", unknown) == "command.invalid_args");
+    CHECK(f.runner.starts.size() == 1);
 }

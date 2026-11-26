@@ -1847,7 +1847,7 @@ struct Session::Impl {
         bind("program.read", &Impl::resource_cmd);
         for (const char* name : {"intervene.points", "intervene.set", "intervene.clear", "intervene.list"})
             bind(name, &Impl::intervene_cmd);
-        for (const char* name : {"feature.dictionary", "feature.show", "feature.examples", "trace.run", "trace.status", "trace.read"})
+        for (const char* name : {"feature.dictionary", "feature.show", "feature.examples", "trace.run", "trace.status", "trace.read", "patch.sweep", "trace.validate"})
             bind(name, &Impl::interpretation_cmd);
         // The run commands and events.wait (design/instruments.md).
         for (const char* name : {"run.state", "run.set_param", "run.action", "run.pause"}) bind(name, &Impl::run_cmd);
@@ -2125,7 +2125,7 @@ struct Session::Impl {
         if (!review_of(inv).is_null()) return ApprovalDecision::ask;
         // A request ID alone reads a retained reply. The transport verifies
         // the method and run, and an unknown ID cannot submit an operation.
-        if (inv.name == "trace.run" &&
+        if ((inv.name == "trace.run" || inv.name == "trace.validate" || inv.name == "patch.sweep") &&
             inv.args.is_object() && inv.args.size() == 1) {
             const auto request = inv.args.find("request_id");
             if (request != inv.args.end() && request->is_number_integer() &&

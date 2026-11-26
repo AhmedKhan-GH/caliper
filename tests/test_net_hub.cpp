@@ -173,7 +173,7 @@ public:
             }
         }
     }
-    void close(uint16_t code = 1000) { client_.close(code); }
+    void close(uint16_t code = 1000, const std::string& reason = {}) { client_.close(code, reason); }
     size_t queued() const { return client_.queued_bytes(); }
 
     template <typename T>
@@ -1171,6 +1171,33 @@ TEST_CASE("net/hub: a session that ended is forgotten after its time; silence is
     CHECK(quiet->close_code == CALIPER_NET_CLOSE_IDLE_TIMEOUT);
     CHECK_FALSE(v->closed);
     CHECK(v->count<wire::Ping>() >= 1);
+}
+
+TEST_CASE("net/hub: close diagnostics identify the endpoint without peer text") {
+    bool local = false;
+    SUBCASE("Peer Close") { local = false; }
+    SUBCASE("Hub Idle Timeout") { local = true; }
+    std::vector<std::string> logs;
+    HubOptions o;
+    o.ping_interval_ms = 100;
+    o.idle_timeout_ms = 300;
+    o.log = [&](const std::string& line) { logs.push_back(line); };
+    HubRunner h(o);
+    World w;
+    auto v = viewer(w, h);
+    if (local) v->answer_pings = false;
+    else v->close(1000, "private-close-marker\nprivate-second-line");
+    REQUIRE(w.until([&] { return v->closed; }));
+    h.stop();   // The log callback ends before the test reads its output.
+    const std::string expected = local ? "closed: role=viewer code=4004 local=true" :
+                                         "closed: role=viewer code=1000 local=false";
+    size_t matches = 0;
+    for (const auto& line : logs) {
+        CHECK(line.find("private-close-marker") == std::string::npos);
+        CHECK(line.find("private-second-line") == std::string::npos);
+        matches += line.find(expected) != std::string::npos;
+    }
+    CHECK(matches == 1);
 }
 
 TEST_CASE("net/hub: a slow viewer does not slow a fast one or the producer") {

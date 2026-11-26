@@ -160,9 +160,7 @@ public:
     cb::Error intervene_set(const cb::Intervention& i) override {
         if (!interventions_supported())
             return fail(cb::kInterveneNotSupported, "The script of " + id_ + " takes no interventions.");
-        json set{{"point", i.point}, {"op", i.op}};
-        set["from_step"] = i.from_step ? json(*i.from_step) : json();
-        set["until_step"] = i.until_step ? json(*i.until_step) : json();
+        json set = cb::intervention_set_spec(i);
         return send("intervene", "", json{{"set", std::move(set)}}, 1);
     }
     cb::Error intervene_clear(const std::string& point) override {
@@ -181,6 +179,8 @@ private:
 struct Run {
     cb::RunEntry entry;
     std::string script_path;   // absolute
+    std::string kind = "script";
+    std::string model, dictionary, prompt;
     std::string dir, link_file, output;
     std::unique_ptr<ChildProcess> proc;
     Clock::time_point started = Clock::now();
@@ -355,8 +355,9 @@ std::vector<cb::Intervention> ConnectionControl::interventions() {
     for (const json& a : iv["active"]) {
         if (!a.is_object() || !a.contains("point") || !a["point"].is_string()) continue;
         cb::Intervention i;
+        i.specification = a;
         i.point = a["point"].get<std::string>();
-        i.op = a.value("op", std::string("ablate"));
+        i.op = cb::intervention_op(a);
         i.from_step = opt_int(a, "from_step");
         i.until_step = opt_int(a, "until_step");
         i.since_step = opt_int(a, "since_step");
@@ -589,14 +590,25 @@ ChildSpec run_spec(const ModelRunner::Options& o, const std::string& python, con
                    const std::vector<std::pair<std::string, std::string>>& extra) {
     ChildSpec spec;
     spec.program = python;
-    spec.args.push_back(r.script_path);
-    spec.args.insert(spec.args.end(), r.entry.args.begin(), r.entry.args.end());
+    if (r.kind == "inference") {
+        // Use installed packages, including editable installs, without lookup
+        // through the workspace or Python environment overrides. Keep the
+        // selected interpreter and its normal site packages.
+        spec.args = {"-E", "-P", "-u", "-m", "caliper.interp._entry", "--model=" + r.model,
+                     "--dictionary=" + r.dictionary};
+    } else {
+        spec.args.push_back(r.script_path);
+        spec.args.insert(spec.args.end(), r.entry.args.begin(), r.entry.args.end());
+    }
     for (auto& kv : current_environment())
         if (kv.first.rfind("CALIPER_RUN_", 0) != 0 && kv.first != "PYTHONUNBUFFERED") spec.env.push_back(kv);
     spec.env.emplace_back("CALIPER_RUN_ID", r.entry.id);
     spec.env.emplace_back("CALIPER_RUN_DIR", r.dir);
     spec.env.emplace_back("CALIPER_RUN_LINK_FILE", r.link_file);
     spec.env.emplace_back("CALIPER_RUN_APP_PID", std::to_string(current_process_id()));
+    // The private run environment already carries parameters and interventions.
+    // Keep the initial prompt separate from fork parameter overrides and argv.
+    if (r.kind == "inference") spec.env.emplace_back("CALIPER_RUN_PROMPT", r.prompt);
     if (!r.entry.params.empty()) spec.env.emplace_back("CALIPER_RUN_PARAMS", r.entry.params.dump());
     if (!r.interventions.empty()) spec.env.emplace_back("CALIPER_RUN_INTERVENTIONS", r.interventions);
     spec.env.insert(spec.env.end(), extra.begin(), extra.end());
@@ -728,7 +740,7 @@ cb::Error ModelRunner::start(const cb::RunStartRequest& request, cb::RunEntry* o
         std::string id = request.id;
         std::error_code ec;
         if (id.empty()) {
-            const std::string base = id_base(request.script);
+            const std::string base = request.kind == "inference" ? "inference" : id_base(request.script);
             for (int n = 1; n < 100000 && id.empty(); ++n) {
                 const std::string c = base + "-" + std::to_string(n);
                 if (!s.find(c) && !fs::exists(runs / c, ec)) id = c;
@@ -749,6 +761,10 @@ cb::Error ModelRunner::start(const cb::RunStartRequest& request, cb::RunEntry* o
         run->entry.args = request.args;
         run->entry.params = request.params.is_object() ? request.params : json::object();
         run->script_path = request.script_path;
+        run->kind = request.kind;
+        run->model = request.model;
+        run->dictionary = request.dictionary;
+        run->prompt = request.prompt;
         run->dir = dir.u8string();
         run->link_file = (dir / "link.txt").u8string();
         run->output = (dir / "output.log").u8string();
@@ -800,7 +816,7 @@ cb::Error ModelRunner::fork(const cb::RunForkRequest& request, cb::RunEntry* out
         std::error_code ec;
         std::string id = request.id;
         if (id.empty()) {
-            const std::string base = id_base(parent->entry.script);
+            const std::string base = parent->kind == "inference" ? "inference" : id_base(parent->entry.script);
             for (int n = 1; n < 100000 && id.empty(); ++n) {
                 const std::string c = base + "-" + std::to_string(n);
                 if (!s.find(c) && !fs::exists(runs / c, ec)) id = c;
@@ -880,6 +896,10 @@ cb::Error ModelRunner::fork(const cb::RunForkRequest& request, cb::RunEntry* out
         run->entry.params = request.params.is_object() ? request.params : json::object();
         run->entry.parent = request.parent;
         run->script_path = parent->script_path;
+        run->kind = parent->kind;
+        run->model = parent->model;
+        run->dictionary = parent->dictionary;
+        run->prompt = parent->prompt;
         run->dir = dir.u8string();
         run->link_file = (dir / "link.txt").u8string();
         run->output = (dir / "output.log").u8string();

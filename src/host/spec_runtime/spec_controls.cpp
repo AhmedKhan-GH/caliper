@@ -981,7 +981,6 @@ std::string spec_button_label(const caliper_builder::spec::Control& control, con
     if (t.kind == spec::ControlTarget::Kind::run_pause) return state.state != "paused" ? "Pause" : "Resume";
     std::string label = control.title.value_or(control.id);
     if (t.kind != spec::ControlTarget::Kind::action) return label;
-    label += " (" + spec::control_target_string(t) + ")";
     const cb::RunAction* a = state.attached ? find_action(state, t.name) : nullptr;
     if (a && (a->queued || a->running)) label += a->running ? "  \xC2\xB7 running" : "  \xC2\xB7 queued";   // ·
     return label;
