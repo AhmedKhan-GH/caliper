@@ -18,7 +18,7 @@ from .._interpret_protocol import MAX_STRING, text as _valid_text
 from .._intervention_protocol import InterventionError, internal_forward
 from ._graph import Graph, LARGE_EDGE_CAP, LARGE_NODE_CAP
 from ._labels import token_label
-from ._memory import autorelease_scope
+from ._memory import autorelease_scope, mps_batch_pool_scope
 
 os.environ.setdefault("TRANSFORMERLENS_ALLOW_MPS", "1")
 
@@ -26,7 +26,7 @@ WINDOW_TOKENS = 33
 DEFAULT_CORPUS = (
     "Fact: the capital of the state containing Dallas is",
     "Fact: the capital of the state containing Oakland is",
-    "Fact: the capital of the province containing Vancouver is",
+    "Fact: the capital of the territory containing Vancouver is",
     "Fact: the capital of the country containing Shanghai is",
 )
 
@@ -575,7 +575,10 @@ class Backend:
         active_guard = guard if guard is not None else self.guard
         ids = self.tokenize(prompt_or_ids) if isinstance(prompt_or_ids, str) else prompt_or_ids.to(self.device)
         ids_1d = ids[0] if ids.ndim == 2 else ids
-        tuples = self.specs_to_tuples(ids_1d, interventions)
+        if interventions and all(not isinstance(iv, dict) for iv in interventions):
+            tuples = list(interventions)
+        else:
+            tuples = self.specs_to_tuples(ids_1d, interventions)
         with suspend(self.model), internal_forward(), torch.no_grad(), autorelease_scope(self.device):
             if active_guard is not None:
                 active_guard.check("backend feature intervention start")
@@ -967,7 +970,7 @@ class Backend:
                 max_nodes=max_nodes, max_edges=max_edges, trace_id=trace_id, guard=active_guard,
             )
 
-        with internal_forward(), autorelease_scope(self.device):
+        with internal_forward(), autorelease_scope(self.device), mps_batch_pool_scope(self.device):
             if active_guard is not None:
                 active_guard.check("attribute start")
             ct_graph = attribute(
@@ -1318,10 +1321,7 @@ def _load_local_transcoder_set(dict_dir: Path, n_layers: int, *, device: torch.d
     for layer in range(n_layers):
         npz_path = _resolve_gemma_scope_npz(dict_dir / f"layer_{layer}", layer)
         with autorelease_scope(device):
-            # Load on CPU first so Metal never queues 26 layers into one command buffer.
-            tc_cpu = load_gemma_scope_transcoder(str(npz_path), layer, device=torch.device("cpu"), dtype=dtype)
-            tc_modules[layer] = tc_cpu.to(device=device, dtype=dtype)
-            del tc_cpu
+            tc_modules[layer] = load_gemma_scope_transcoder(str(npz_path), layer, device=device, dtype=dtype)
     mps_cleanup(device)
     scan = "gemma" if "gemma-scope" in str(dict_dir) else dict_dir.name
     return TranscoderSet(

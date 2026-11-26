@@ -324,6 +324,9 @@ class HostedInference:
         self._clamp_version = None
         self._selected_version = None
         self._retrace = False
+        self._preset_tuples = None
+        self._preset_cell = None
+        self._dallas_cache = None
         self.parameters: list = []
         self.actions: list = []
 
@@ -495,6 +498,7 @@ class HostedInference:
                 caliper.action("reset", self.reset),
                 caliper.action("apply_clamp", self.apply_clamp),
             ]
+            self._register_dallas_actions(caliper)
             if self.restored is not None:
                 self.interventions.load_state_dict(self.restored["interventions"], restore_active=True)
                 self.selection = deepcopy(self.restored.get("selection"))
@@ -642,15 +646,147 @@ class HostedInference:
     def apply_clamp(self) -> str:
         self._check_stop()
         with internal_forward():
+            self._preset_tuples = None
+            self._preset_cell = None
             self.update_controls()
             self._set_clamp()
             self._sync_clamp_status()
             self.update_output(force=True)
         return "The selected feature clamp is applied."
 
+    def _dallas_manifest_path(self) -> Path | None:
+        manifest = Path(__file__).resolve().parents[3] / "demos" / "circuit_trace" / "published_dallas_v1.json"
+        return manifest if manifest.is_file() else None
+
+    def _register_dallas_actions(self, caliper) -> None:
+        manifest_path = self._dallas_manifest_path()
+        if (manifest_path is None or self.dictionary.kind != "transcoder"
+                or self.dictionary.metadata["layers"] != 26 or self.dictionary.metadata["latents"] < 16384):
+            return
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        for case in manifest["interventions"]:
+            cell = int(case["cell"])
+            self.actions.append(
+                caliper.action(f"dallas.cell{cell}", lambda _c=cell: self._run_dallas_cell(_c), help=case["label"])
+            )
+
+    def _ensure_dallas_cache(self) -> dict:
+        if self._dallas_cache is not None:
+            return self._dallas_cache
+        manifest_path = self._dallas_manifest_path()
+        if manifest_path is None:
+            raise ValueError("Published Dallas manifest is unavailable.")
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        t0 = time.perf_counter()
+        prompt_acts: dict[str, torch.Tensor] = {}
+        dallas_logits = None
+        for key, prompt_text in manifest["prompts"].items():
+            logits, acts = self.backend.activations(prompt_text, sparse=False)
+            prompt_acts[key] = acts.detach().cpu()
+            if key == "dallas":
+                dallas_logits = logits.detach()
+            del logits, acts
+        self._dallas_cache = {
+            "manifest": manifest,
+            "acts": prompt_acts,
+            "dallas_logits": dallas_logits,
+            "cache_seconds": time.perf_counter() - t0,
+        }
+        return self._dallas_cache
+
+    def _run_dallas_cell(self, cell: int) -> str:
+        from ._output import _decode_raw_token
+        from ._publish import _publication_scope, _publish_many
+
+        self._check_stop()
+        with internal_forward():
+            with self.controls.lock:
+                self._discard_owned_clamp()
+            self._apply_interventions()
+            cache = self._ensure_dallas_cache()
+            manifest = cache["manifest"]
+            case = next(c for c in manifest["interventions"] if int(c["cell"]) == cell)
+            tuples = []
+            for op in case["operations"]:
+                src_acts = cache["acts"][op["activation_prompt"]]
+                factor = op["factor"]
+                for node in manifest["groups"][op["group"]]:
+                    orig_val = src_acts[node["layer"], node["position"], node["feature"]]
+                    tuples.append((node["layer"], node["position"], node["feature"], factor * orig_val))
+
+            dallas_prompt = manifest["prompts"]["dallas"]
+            t0 = time.perf_counter()
+            iv_logits, iv_acts = self.backend.intervene_logits(
+                dallas_prompt,
+                tuples,
+                freeze_attention=True,
+                return_activations=(cell == 29),
+                guard=self.guard,
+            )
+            elapsed = time.perf_counter() - t0
+
+            with autorelease_scope(self.backend.device):
+                base_last = cache["dallas_logits"].squeeze(0)[-1]
+                iv_last = iv_logits.squeeze(0)[-1]
+                base_probs = base_last.softmax(-1)
+                iv_probs = iv_last.softmax(-1)
+                base_p, base_i = base_probs.topk(1)
+                obs_p, obs_i = iv_probs.topk(1)
+                base_id = int(base_i[0].item())
+                obs_id = int(obs_i[0].item())
+                base_top = {
+                    "id": base_id,
+                    "text": _decode_raw_token(self.tokenizer, base_id),
+                    "probability": float(base_p[0].item()),
+                    "logit": float(base_last[base_id].item()),
+                }
+                steered_top = {
+                    "id": obs_id,
+                    "text": _decode_raw_token(self.tokenizer, obs_id),
+                    "probability": float(obs_p[0].item()),
+                    "logit": float(iv_last[obs_id].item()),
+                }
+                say_vic = float(iv_acts[21, 10, 2236].item()) if cell == 29 and iv_acts is not None else None
+                paired = torch.stack((base_last, iv_last), dim=0)
+            del iv_logits, iv_acts
+
+            with _publication_scope(self.model):
+                tensors, comp = self.output.prepare_logits(paired)
+                _publish_many(tensors)
+
+            self._preset_tuples = tuples
+            self._preset_cell = cell
+            state = self._input_state()
+            with self._inference_lock:
+                self._comparison = {
+                    **self._input_hashes(state),
+                    "argmax_token_ids": [base_id, obs_id],
+                    "baseline_top_text": base_top["text"],
+                    "baseline_top_probability": base_top["probability"],
+                    "baseline_top": base_top,
+                    "steered_top": steered_top,
+                    "cell": cell,
+                    "label": case["label"],
+                    "say_victoria_activation": say_vic,
+                    "dallas_cache_seconds": cache["cache_seconds"],
+                    "completed_step": self.controls.n,
+                    "compute_publish_seconds": elapsed,
+                }
+            self._output_key = deepcopy(state)
+            summary = (
+                f"Cell {cell} ({case['label']}): {base_top['text']!r} ({base_top['probability']:.4f}) -> "
+                f"{steered_top['text']!r} ({steered_top['probability']:.4f})"
+            )
+            self.clamp_status.set(bounded_text(summary))
+            self.status.set("ready")
+            return summary
+
     def update_output(self, *, force: bool = False) -> None:
         key = self._input_state()
         changed = self._output_key != key
+        if changed:
+            self._preset_tuples = None
+            self._preset_cell = None
         if changed or force:
             started = time.perf_counter()
             comparison = self.output.compare(key[0])
@@ -676,7 +812,8 @@ class HostedInference:
                 elif self.fixture_display is not None:
                     self.fixture_display.publish()
         self._retrace = self.retrace.value
-        self._sync_clamp_status()
+        if self._preset_cell is None:
+            self._sync_clamp_status()
         if self.guard is not None:
             self.guard.check("inference boundary", force=False)
 
@@ -685,8 +822,18 @@ class HostedInference:
         state = self._input_state()
         with self._inference_lock:
             gen_id = self._generation["id"] + 1
+        t0 = time.perf_counter()
         with internal_forward():
-            result = self.output.generate(state[0])
+            if self._preset_tuples is not None:
+                raw = self.backend.generate(state[0], self._preset_tuples, max_new_tokens=24, guard=self.guard)
+                result = {
+                    "baseline": bounded_text(raw["baseline"]),
+                    "steered": bounded_text(raw["steered"]),
+                    "token_ids": raw["token_ids"],
+                }
+            else:
+                result = self.output.generate(state[0])
+        gen_seconds = time.perf_counter() - t0
         ids = result["token_ids"]
         texts = [result["baseline"], result["steered"]]
         self.baseline_text.set(texts[0])
@@ -697,6 +844,7 @@ class HostedInference:
             "token_ids": deepcopy(ids),
             "counts": [len(ids[0]), len(ids[1])],
             "completed_step": self.controls.n,
+            "seconds": gen_seconds,
             "text_hashes": [hashlib.sha256(t.encode("utf-8")).hexdigest() for t in texts],
         }
         with self._inference_lock:
@@ -706,6 +854,8 @@ class HostedInference:
     def reset(self) -> str:
         self._check_stop()
         with internal_forward():
+            self._preset_tuples = None
+            self._preset_cell = None
             with self.controls.lock:
                 self._discard_owned_clamp()
             self._apply_interventions()
@@ -717,7 +867,7 @@ class HostedInference:
                 except ValueError:
                     self.status.set("The clamp is reset. Correct the prompt to update the output.")
                 else:
-                    self.update_output()
+                    self.update_output(force=True)
             finally:
                 self._sync_clamp_status()
         return "The feature clamp is reset."

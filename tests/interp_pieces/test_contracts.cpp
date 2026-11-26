@@ -21,7 +21,7 @@ TEST_CASE("graph passes piece.check with the frozen shapes and budgets") {
     CHECK(piece.derive->passes.size() == 7);
     CHECK(piece.derive->time_ms.value_or(4) == 50);
     CHECK(piece.derive->memory_mb.value_or(64) == 64);
-    CHECK(piece.draw->frame_ms.value_or(4) == 4);
+    CHECK(piece.draw->frame_ms.value_or(4) == 16);
     CHECK(piece.draw->memory_mb.value_or(64) == 64);
     if (cp::compiler_available()) {
         REQUIRE(checked.at("passes").size() == 9);

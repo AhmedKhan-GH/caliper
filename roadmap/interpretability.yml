@@ -311,7 +311,7 @@ features:
     title: Model Probes
     status: shipped
     scope: core
-    summary: Model probes expose residual streams, MLP inputs and outputs, and attention patterns without a CPU copy.
+    summary: Model probes expose residual streams, MLP inputs and outputs, and attention patterns on PyTorch and HookedTransformer models without a CPU copy.
     depends_on: [INT-34]
     docs: docs/python/interpretability.md#model-probes
     issue: null
@@ -320,7 +320,7 @@ features:
     title: Feature Dictionaries
     status: shipped
     scope: core
-    summary: Per-layer transcoder dictionaries reconstruct MLP outputs through sparse features and refuse incompatible model identities.
+    summary: Dictionary adapters connect SAELens sparse autoencoders and circuit-tracer transcoders to Caliper with staged device loads and lazy decoder lookups.
     depends_on: [INT-35]
     docs: docs/python/interpretability.md#feature-dictionaries
     issue: null
@@ -329,7 +329,7 @@ features:
     title: Example Index
     status: shipped
     scope: core
-    summary: The dataset index retains each feature's top 16 activations and supplies token windows with real activation values.
+    summary: Live and disk indexes retrieve top activating 33-token windows from Neuronpedia or local prompts and publish ranked windows to token strips.
     depends_on: [INT-36]
     docs: docs/python/interpretability.md#example-index
     issue: null
@@ -338,7 +338,7 @@ features:
     title: Attribution Graphs
     status: shipped
     scope: core
-    summary: The tracer calculates direct effects through a local replacement model and publishes bounded graphs with completeness diagnostics.
+    summary: Circuit attribution runs circuit-tracer over ReplacementModel transcoders, prunes on CPU, and publishes up to 8,192 nodes and 262,144 edges.
     depends_on: [INT-35, INT-36]
     docs: docs/python/interpretability.md#attribution-graphs
     issue: null
@@ -347,31 +347,34 @@ features:
     title: Graph Pieces
     status: shipped
     scope: core
-    summary: Library pieces draw attribution graphs, feature examples, and next-token probabilities from the same sources in the app and browser.
+    summary: Library pieces draw attribution graphs, feature examples, activation heatmaps, and paired output probabilities in the native app and browser viewer.
     depends_on: [INT-38]
     docs: docs/python/interpretability.md#graph-pieces
     issue: null
 
   - id: INT-40
     title: Feature Steering
-    status: planned
+    status: shipped
     scope: core
-    summary: Feature interventions add vectors, scale activations, or clamp features on the live model at selected positions.
+    summary: Feature interventions clamp or scale transcoder and SAE features or add vectors at selected positions, with live baseline-versus-steered bars.
     depends_on: [INT-34, INT-36]
+    docs: docs/python/interpretability.md#feature-steering
     issue: null
 
   - id: INT-41
     title: Activation Patching
-    status: planned
+    status: shipped
     scope: core
-    summary: Activation patches replace selected values from a clean prompt, and a bounded sweep measures recovery across layers and positions.
+    summary: Activation patches substitute clean prompt activations, and patch.sweep measures normalized recovery across all layers and token positions.
     depends_on: [INT-35, INT-40]
+    docs: docs/python/interpretability.md#activation-patching
     issue: null
 
   - id: INT-42
     title: Inference Runs
-    status: planned
+    status: shipped
     scope: core
-    summary: Hosted inference runs expose prompt controls, traced features, paired output probabilities, and greedy generation.
+    summary: Hosted inference runs expose prompt controls, traced features, one-click circuit interventions, fork checkpoints, and paired greedy generation.
     depends_on: [INT-38, INT-39, INT-40, INT-41]
+    docs: docs/agents/interpretation.md#inference-runs
     issue: null

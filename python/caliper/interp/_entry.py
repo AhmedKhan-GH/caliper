@@ -1,11 +1,11 @@
 """Private native inference entry through the managed run environment."""
+from __future__ import annotations
 
 import argparse
 import os
 
 
-def main(argv=None):
-    # Remove the prompt even when argument validation rejects this request.
+def main(argv=None) -> None:
     prompt = os.environ.pop("CALIPER_RUN_PROMPT", None)
     parser = argparse.ArgumentParser(description="Native Inference Run")
     parser.add_argument("--model", required=True)
@@ -13,7 +13,6 @@ def main(argv=None):
     args = parser.parse_args(argv)
     if not prompt:
         parser.error("the native runner did not supply a prompt")
-
     from ._hosted import main as hosted_main
     hosted_main(["--model=" + args.model, "--dictionary=" + args.dictionary, "--prompt=" + prompt])
 

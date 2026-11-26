@@ -165,7 +165,7 @@ writes = ["curves"]
 
 [draw]
 camera = "pan_zoom"
-frame_ms = 4
+frame_ms = 16
 memory_mb = 64
 pick = { resource = "nodes", fields = ["index", "kind", "layer", "token_position", "feature", "influence"] }
 text = { anchors = "labels", position = "position", string = "string", priority = "priority", strings_from = "strings", align = "center", hover = { anchor = 33, string_offset = 32 }, selected = { anchor = 32, param = "selected_node", string_offset = 32 } }

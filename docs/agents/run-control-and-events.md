@@ -53,23 +53,24 @@ A script allows control when it starts its server with `caliper.serve(control=Tr
 
 ## Intervention Commands
 
-An intervention changes a module of the model at a step boundary while the run trains. The first intervention is `ablate`, which sets the output of a module to zero. For an attention module that gives heads, it sets the slice of one head. The names `scale`, `steer` and `patch` are reserved, and `intervene.set` refuses them with `intervene.op_reserved`. A script offers interventions only under `caliper.watch(model, optimizer)`.
+An intervention changes a point of the model at a step boundary during a training or hosted inference run. Legacy requests pass `op: "ablate"` to zero a module output or one attention head slice. Structured requests pass `kind` (`"ablate"`, `"add"`, `"scale"`, `"clamp"`, or `"patch"`): `add` adds a scaled `vector` at `positions`, `scale` multiplies a dictionary `feature` by `multiplier`, `clamp` sets a `feature` to `value`, and `patch` substitutes clean activations from `source_prompt` (with optional `source_position`). A script offers interventions under `caliper.watch(model, optimizer)` or under a hosted inference watch (`caliper.watch(model, activations=False)`).
 
 | Command | Arguments | Result |
 |---|---|---|
 | `intervene.points` | `match`, a glob over the point names | `points`, each with `point`, `kind` (`module` or `head`), `module`, `head`, `type` and `shape`, plus optional `probe`, `layer` and `pattern` |
-| `intervene.set` | `point`, `op`, `from_step`, `until_step` | `point`, `op`, `pending: true` |
-| `intervene.clear` | `point`, or `all: true` | `cleared` (the points) and `pending: true` |
-| `intervene.list` | None | `interventions`, each with `point`, `op`, `from_step`, `until_step`, `since_step` and `state` (`pending`, `active` or `ended`) |
+| `intervene.set` | `point`, plus `op: "ablate"` or structured `kind` (`ablate`, `add`, `scale`, `clamp`, `patch`) and optional `feature`, `positions`, `multiplier`, `value`, `vector`, `source_prompt`, `source_position`, `dictionary`, `from_step`, `until_step` | `point`, `op`, `pending: true` |
+| `intervene.clear` | `point` (with optional `op` and `feature`), or `all: true` | `cleared` (the points) and `pending: true` |
+| `intervene.list` | None | `interventions`, each with `point`, `op`, `from_step`, `until_step`, `since_step`, `state` (`pending`, `active` or `ended`), plus optional `feature`, `positions` and `error` |
 
-Each module of `model.named_modules()` is a point, with its dotted name, such as `blocks.0.attn`. A module gives heads when it has an integer attribute `num_heads`, `n_heads` or `n_head`, and one child `nn.Linear` named `out_proj`, `o_proj`, `c_proj` or `proj` whose `in_features` divides by the head count. Each head is then a point `<module>#<h>`, such as `blocks.0.attn#3`. A module of the class `nn.MultiheadAttention` gives no heads, because it never calls its `out_proj`. A point holds at most one intervention of each op.
+Each module of `model.named_modules()` is a point, with its dotted name, such as `blocks.0.attn`. A module gives heads when it has an integer attribute `num_heads`, `n_heads` or `n_head`, and one child `nn.Linear` named `out_proj`, `o_proj`, `c_proj` or `proj` whose `in_features` divides by the head count. Each head is then a point `<module>#<h>`, such as `blocks.0.attn#3`. A module of the class `nn.MultiheadAttention` gives no heads, because it never calls its `out_proj`. Multiple `scale` and `clamp` interventions can share a layer on distinct features.
 
-`intervene.set` answers at once, and the script applies the intervention at its next step. A `run` event of change `intervene` then reports each applied change, with the `point`, the `op` and the `step`. The `op` is null when the interventions of the point were cleared. The commands have the effect class `run`, thus they follow the Approval Rules above. The cards read "Ablate `<point>` in `<script>` from the next step.", "Clear the interventions on `<point>` in `<script>` at the next step." and "Clear every intervention in `<script>` at the next step.". A rule allows one point, with the key `intervene.set:<point>` or `intervene.clear:<point>`, and clearing all interventions always asks.
+`intervene.set` answers at once, and the script applies the intervention at its next step. A `run` event of change `intervene` then reports each applied change, with the `point`, the `op` and the `step`. The `op` is null when the interventions of the point were cleared. The commands have the effect class `run`, thus they follow the Approval Rules above. A rule allows one point, with the key `intervene.set:<point>` or `intervene.clear:<point>`, and clearing all interventions always asks.
 
 | Code | Cause |
 |---|---|
 | `intervene.unknown_point` | The model has no point of this name |
-| `intervene.op_reserved` | The op is `scale`, `steer` or `patch` |
+| `intervene.unknown_dictionary` | Feature interventions require a registered dictionary write point |
+| `intervene.bad_request` | Feature, position, vector, or patch parameters are invalid |
 | `intervene.bad_range` | `until_step` is not above `from_step`, or a step is in the past |
 | `intervene.not_supported` | The attached script did not announce `interventions` |
 

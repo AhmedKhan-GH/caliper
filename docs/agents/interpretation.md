@@ -1,100 +1,69 @@
 # Interpretation Tools
 
-Caliper MCP queries feature dictionaries, example indexes, and attribution graphs through the attached run.
-The model, dictionary, and index stay in the Python process.
-The app sends bounded requests and retains their replies.
-The app does not wait for a model operation on its frame thread.
+Caliper MCP queries feature dictionaries, example windows, attribution graphs, activation sweeps, and hosted inference runs.
+The model, transcoders, and sparse autoencoders stay inside the Python process.
+The app forwards bounded requests over wire protocol v3 and never blocks its render thread on model execution.
 
 ## Commands
 
-Each command has one MCP tool. Replace the dot with an underscore, as in `feature_examples`.
-Read commands keep the `read` effect. `trace.run` has the `run` effect and uses the existing approval policy.
-A read-only stream accepts interpretation reads. It refuses trace changes.
+Each command maps to one MCP tool by replacing the dot with an underscore, such as `trace_run` or `patch_sweep`.
+Read commands use the `read` effect.
+`trace.run`, `patch.sweep`, and `trace.validate` use the `run` effect and follow the run approval rules.
 
 | Command | Request Fields | Result Data |
 |---|---|---|
-| `feature.dictionary` | None | Registered dictionary metadata |
-| `feature.show` | `layer`, `feature`, or `node` | Label, count, maximum, promoted tokens, example tokens |
-| `feature.examples` | `layer`, `feature`, or `node`; optional `limit` | Real example windows and tensor bindings |
-| `trace.run` | `prompt`; optional `max_targets`, `max_nodes`, `max_edges` | Trace state, step, duration, counts, diagnostics |
-| `trace.status` | None | Last trace state and diagnostics |
-| `trace.read` | Optional node and edge offsets and limits | Graph records, counts, diagnostics, next offsets |
+| `feature.dictionary` | None | Registered dictionary metadata and index identity |
+| `feature.show` | `layer` and `feature`, or `node` | Label, count, maximum, promoted tokens, example tokens |
+| `feature.examples` | `layer` and `feature`, or `node`, plus optional `limit` | Ranked 33-token windows and `live:examples.*` bindings |
+| `trace.run` | `prompt`, plus optional `max_targets`, `max_nodes`, `max_edges`, `max_n_logits`, `desired_logit_prob`, `node_threshold`, `edge_threshold`, `batch_size`, `update_interval` | Trace state, step, duration, counts, completeness |
+| `trace.status` | None | Latest trace status, diagnostics, and hosted `inference` state |
+| `trace.read` | Optional `node_offset`, `node_limit`, `edge_offset`, `edge_limit` | Paged node and edge records, counts, next offsets |
+| `patch.sweep` | `clean_prompt`, `corrupted_prompt`, `metric` (`positive_token`, `negative_token`) | Clean and corrupted metrics, `(layers, positions)` recovery grid, `live:patch.grid` |
+| `trace.validate` | None | Zero-ablation effects for up to ten top features, Spearman correlation, sign matches |
 
 Every command returns `request_id`, `pending`, and `result`.
 When `pending` is true, `result` is null.
-Call the same command with only `request_id` to read its retained reply.
-This call does not start another operation.
-For a long trace, `trace.status` also reports `pending`, `running`, `done`, or `error` in its result data.
-A successful queue response does not imply successful execution.
+Call the same tool with only `request_id` to poll the retained reply without starting a second operation.
 
-Feature queries accept either a graph row in `node`, or both `layer` and `feature`.
-The node must identify a feature in the current completed graph.
-Examples retain their indexed order and stable `example_id` values.
-Each of at most sixteen examples has 33 token slots, with null values at document boundaries.
-The response keeps full token text and real per-token activations.
-
-A prompt has at most 4,096 UTF-8 bytes and 32 model tokens, including special tokens.
-The tracer refuses excess tokens without truncation.
-The maximum values are 512 feature targets, 512 nodes, and 8,192 edges.
-A graph page has at most 256 nodes and 256 edges.
-The default page has 128 nodes and 256 edges.
+Feature queries accept either a `node` row in the current graph or explicit `layer` and `feature` integers.
+Prompts accept 1 to 4,096 UTF-8 bytes and 1 to 32 model tokens, including special tokens.
+`trace.run` accepts `max_targets` up to `5,000`, `max_nodes` up to `8,192`, and `max_edges` up to `262,144`.
+`trace.read` returns at most 256 nodes and 256 edges per page.
 
 ## Run Service
 
-A script registers the service before it starts its stream.
-The service accepts the actual dictionary, `FeatureIndex`, and `Tracer`, or lazy factories for those objects.
-A factory takes no arguments and runs once on the run thread.
-The public `caliper.interp.Tracer` import remains lazy.
+A custom script can register `InterpretationService` before starting its control loop:
 
 ```python
+from caliper.interp import LiveFeatureIndex, Tracer, load_backend
 from caliper.interp._service import register_service, unregister_service
 
+backend = load_backend("tiny-lm")
+index = LiveFeatureIndex(backend)
+tracer = Tracer(backend.model, backend.tokenizer, backend.dictionary, backend=backend, index=index)
 service = register_service(
-    model=model,
-    tokenizer=tokenizer,
-    dictionary=dictionary,
-    index_factory=lambda: FeatureIndex(dictionary_path, model=model,
-                                       tokenizer=tokenizer, dictionary=dictionary),
+    model=backend.model,
+    tokenizer=backend.tokenizer,
+    dictionary=backend.dictionary,
+    index=index,
+    tracer=tracer,
 )
 try:
-    # The script calls caliper.step() at each run boundary.
     run_loop()
 finally:
     unregister_service(service)
+    index.close()
 ```
 
-`register_service` returns an `InterpretationService`.
-An explicit `controls` argument selects a control owner for an embedded run.
-The service queues at most 32 requests.
-`Controls` applies pending parameters and interventions before it calls `service.step(step)`.
-The service rejects recursive execution during internal model forwards.
-An inference runner must also suppress its own forward checkpoint callback during those internal forwards.
-
-`trace.status` reads a cached result without a model forward.
-Other requests execute at the next boundary and send a deferred reply.
-Feature queries suspend active interventions when the run supplies an intervention service.
-Thus example activations refer to the indexed baseline.
-With legacy ablation hooks, feature queries return `interpret.baseline_required` before index access.
-Clear those ablations at a step boundary before the query.
-Unregistration refuses queued requests and waits for active work and its final reply.
-Service replacement also waits before it changes the registered owner.
-Call these lifecycle operations from the script, outside an active service request or an app event loop.
-An active request cannot re-register, replace, or close its current service and receives `interpret.busy` if it tries.
-An idle service can register again with the same owner.
-Resource ownership remains with the script. Close the index after unregistration returns.
-
-Missing resources produce structured errors, including `interpret.missing_dictionary`, `interpret.missing_index`, and `interpret.missing_model`.
-An absent service or capability produces `interpret.unsupported`.
-An absent graph produces `interpret.missing_trace`.
-No missing resource produces a successful result with invented data.
+`InterpretationService` queues at most 32 pending requests and executes them at `caliper.step()`.
+`trace.status` returns cached state immediately without running a model forward pass.
+`feature.show` and `feature.examples` suspend active interventions so feature activations reflect the clean baseline.
+Missing resources return structured error codes such as `interpret.missing_dictionary`, `interpret.missing_trace`, and `interpret.unsupported`.
 
 ## Example Panel Bindings
 
-A graph pick exposes its display row as `index`.
-Use the existing pick action to set the shared integer state `selected_node` to that value.
-Bind the graph parameter `selected_node` to the same state.
-After the pick event, read that state and call `feature.examples` with `node`.
-When its reply completes, the run publishes the tensor sources below.
+When a viewer picks a feature node in `attribution_graph@1`, set shared state `selected_node` and call `feature.examples` with `node`.
+When `feature.examples` completes, the service publishes five tensors for `token_strip@1`:
 
 | `token_strip@1` Input | Source | Shape |
 |---|---|---|
@@ -104,113 +73,52 @@ When its reply completes, the run publishes the tensor sources below.
 | `valid_tokens` | `live:examples.valid_tokens` | `(16,)` |
 | `label_text` | `live:examples.label_text` | `(400, 16)` |
 
-The strip displays eight rows and 25 columns.
-Its `page` parameter accepts zero or one, which exposes both sets of eight examples.
-The service selects the central 25 slots and removes document-edge padding from each visible prefix.
-It preserves the original 33-slot windows in the command result.
-Missing example rows have ID minus one and no valid tokens.
+The strip displays eight rows of 25 tokens per page across pages `0` and `1`.
+Packed labels use 16 little-endian `uint32` words per token (at most 63 UTF-8 bytes plus a zero byte).
+Set `activation_max` from `feature.show` (`max(1e-6, maximum)`).
 
-Packed labels use sixteen little-endian `u32` words per token.
-Each label has at most 63 UTF-8 bytes and a zero terminator.
-The service cuts a label only at a UTF-8 boundary.
-Each visible page has 200 labels, below the renderer limit of 512.
-Set `activation_max` from the selected feature maximum, with a positive minimum of `1e-6`.
-
-Use `graph_counts`, `node_i`, `node_f`, `edge_i`, and `edge_f` for the graph inputs.
-Their sources are `live:trace.counts`, `live:trace.node_i`, `live:trace.node_f`, `live:trace.edge_i`, and `live:trace.edge_f`.
-The graph and example strip use the existing pieces and shared state tools.
-The optional graph `label_text` input uses `live:trace.label_text`, with shape `(544, 16)`.
-Rows zero through 31 contain prompt tokens. Row `32 + index` contains the node label.
-The graph exposes at most 34 labels, and the token strip exposes 200 per page.
+`attribution_graph@1` binds `graph_counts`, `node_i`, `node_f`, `edge_i`, `edge_f`, and `label_text` to `live:trace.*`.
+For graphs up to 512 nodes, `trace.label_text` has shape `(544, 16)`.
+For graphs above 512 nodes (up to 8,192 nodes), `trace.label_text` has shape `(8224, 16)`.
 
 ### Graph Density
 
-The graph uses an orthographic camera that fits both panel axes.
-Token positions run across the panel, and layers run upward.
-Each cell contains a grid of nodes in descending influence order, across each row and then down.
-Equal influence uses node index order.
-The grid stays inside its token column and layer band, and edge endpoints follow the node centers.
-
-The node radius is one quarter of the smaller grid spacing.
-Horizontal relaxation moves a center at most 15 percent of its column spacing.
-The draw shader projects this radius without a minimum size.
-At a radius below two physical pixels, the node becomes a density marker at the pixel that contains its center.
-The marker retains the node color and ID, occupies one pixel, and never enlarges the projected radius.
-Zoom restores the square, disc, diamond, or triangle when the radius reaches two pixels.
-
-Distinct center picks require distinct center pixels.
-Raster tests require all 512 IDs in one cell at both 512 by 512 and 256 by 256 pixels.
-They also require 16 distinct center picks with 32 token columns and 24 layers at 256 by 256 pixels.
-Smaller panels, more token columns, or more layers can place multiple centers in one pixel.
-At that limit, raster order determines the pixel ID. Enlarge the panel or zoom to separate the centers before individual selection.
-
-All node records and IDs remain in the published resource.
-The Qwen acceptance capture still requires every visible node ID in its raster buffer.
-Token, hover, and selected labels retain the existing bounds and overlap checks.
+`attribution_graph@1` fits token columns horizontally and layer bands vertically in an orthographic projection.
+Nodes within each `(layer, position)` cell sort in descending influence order.
+When the projected node radius falls below two physical pixels, the draw shader renders a single-pixel density marker that preserves the node color and pick ID.
+Zooming in restores full node shapes once the radius reaches two pixels.
 
 ### Output Bars
 
-Use `logit_bars@1` for the traced baseline distribution:
+In a hosted inference run, bind `logit_bars@1` to the paired live comparison sources:
 
 | Input | Source | Shape |
 |---|---|---|
-| `probs` | `live:trace.probs` | `(2, 10)` |
-| `tokens` | `live:trace.logit_tokens` | `(10,)` |
-| `label_text` | `live:trace.logit_label_text` | `(10, 16)` |
+| `probs` | `live:output.probs` | `(2, 10)` |
+| `tokens` | `live:output.tokens` | `(10,)` |
+| `label_text` | `live:output.label_text` | `(10, 16)` |
 
-Both probability rows contain the same traced values and share token order.
-Unused slots have zero probability, token ID minus one, and an empty label.
-These tensors come from graph logit records without another model forward.
-The graph, strip, and bars use at most 244 visible labels together.
+Row `0` holds clean baseline probabilities and row `1` holds steered probabilities across a shared union of top tokens.
+Standalone M7 traces without `Output` also publish baseline-only `live:trace.probs`, `live:trace.logit_tokens`, and `live:trace.logit_label_text`.
+
+## Inference Runs
+
+`run.start` accepts `kind: "inference"` with `model`, `dictionary`, and `prompt` to launch a managed `HostedInference` process (`caliper.interp._hosted`).
+Hosted inference registers parameters `prompt`, `selected_node`, `clamp`, `clamp.status`, `retrace`, `output.baseline`, `output.steered`, and `output.status`.
+It also registers actions `apply_clamp`, `reset`, and `generate` (plus `dallas.cell14` through `dallas.cell29` on 26-layer Gemma Scope transcoders).
+
+`run.fork` checkpoints the active prompt, feature selection, and intervention specifications into `.json` metadata and starts a branched inference run without copying model weights.
+`trace.status` includes an `inference` dictionary with `prompt_hash`, `interventions_hash`, latest `comparison` top tokens, and `generation` token counts.
 
 ## Text Parameters
 
-`caliper.param("prompt", "")` registers a free-text parameter.
-A string with `choices` retains the existing choice behavior.
-A free-text value accepts at most 4,096 UTF-8 bytes, including spaces and an empty value.
-Invalid UTF-8 and embedded zero characters are refused.
-A text parameter does not accept numeric bounds or a logarithmic scale.
-
-An app control with `kind = "text"` accepts `bind = "param:prompt"`.
-It shows the script value or its pending value.
-Return or loss of focus submits the edit at the next run boundary.
-The control is disabled when the parameter is absent, has another type, or the connection cannot change the run.
-The existing `value` and `state:` text bindings retain their behavior.
-
-The browser `<caliper-controls>` element uses the same submit behavior.
-Shift+Return inserts a new line in its text parameters.
-Invalid drafts remain in the field after focus loss and background updates.
-Shorten or correct the draft, then submit it again.
-
-`trace.run` and text parameters share the 4,096-byte limit.
-The executor also checks the 32-token limit, including special tokens.
-No path truncates the prompt. Invalid UTF-8 and NUL are refused.
-A spec text field bound to `param:prompt` uses this limit. An explicit smaller `max_length` rejects longer edits without truncation.
-Help, error, name, choice, and spec text fields bound to `value` or `state:` retain their limits.
+`caliper.param("prompt", "")` registers a free-text parameter under the `text_params` wire capability.
+Values accept up to 4,096 UTF-8 bytes without embedded NUL characters.
+Spec controls with `kind = "text"` bind to `param:prompt`, `param:output.baseline`, and `param:output.steered`.
+Pressing Return or leaving the field submits edits at the next run boundary.
 
 ## Structured Wire Metadata
 
-The extension uses the existing CONTROL and CONTROL_REPLY frame types.
-Both peers announce the `interpretation` capability.
-A request uses `op = "interpret"` and the object below as `interpretation`.
-
-```json
-{"version": 1, "method": "feature.examples", "params": {"layer": 0, "feature": 7}}
-```
-
-A reply retains the request ID and uses `queued`, `ok`, or `error`.
-A final successful reply carries a structured object in `result`.
-An error carries its code and message in `error`.
-The extension never stores JSON in a text scalar.
-Older peers retain their original controls and cannot send interpretation requests.
-
-Each structured object has a 256 KiB byte limit.
-It permits at most eight nested levels, 64 fields per object, 512 entries per list, and 16,384 total values.
-Strings have at most 4,096 UTF-8 bytes.
-Numbers must be finite. Integer magnitudes cannot exceed `2**53 - 1`.
-Method-specific limits apply before the run queues work.
-Both native and Python codecs enforce these limits.
-
-The separate `text_params` capability enables the text parameter type.
-A producer or hub omits text parameters from CONTROLS for an older peer.
-Numeric, Boolean, and choice parameters retain their original types and behavior.
+Interpretation requests travel over wire protocol v3 CONTROL and CONTROL_REPLY frames when both peers announce `interpretation`.
+Requests use `op = "interpret"` with `{"version": 1, "method": ..., "params": ...}`, and replies return `queued`, `ok`, or `error` with structured JSON payloads.
+Each structured payload has a 256 KiB byte limit, at most eight nesting levels, 64 keys per object, 512 items per list, and 16,384 total values.

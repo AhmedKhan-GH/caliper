@@ -53,6 +53,45 @@ def autorelease_scope(device):
         pop(pool)
 
 
+@contextmanager
+def mps_batch_pool_scope(device):
+    """Drain per-batch Objective-C Metal allocations during multi-batch attribution."""
+    if torch.device(device).type != "mps" or sys.platform != "darwin" or sys.getprofile() is not None:
+        yield
+        return
+    push, pop = _autorelease_functions()
+    pools: dict[int, object] = {}
+    tracked = {
+        "compute_batch",
+        "compute_partial_influences",
+        "cache_activations",
+        "calculate_delta_hook",
+        "_get_decoder_vectors",
+    }
+
+    def _profiler(frame, event, _arg):
+        if event not in ("call", "return"):
+            return
+        fn = frame.f_code.co_name
+        if fn not in tracked or "circuit_tracer/" not in frame.f_code.co_filename:
+            return
+        key = id(frame)
+        if event == "call":
+            pools[key] = push()
+        elif key in pools:
+            pop(pools.pop(key))
+            if fn == "compute_batch" and torch.backends.mps.is_available():
+                torch.mps.synchronize()
+
+    sys.setprofile(_profiler)
+    try:
+        yield
+    finally:
+        sys.setprofile(None)
+        for pool in reversed(list(pools.values())):
+            pop(pool)
+
+
 def free_percent():
     if sys.platform == "darwin":
         result = subprocess.check_output(["memory_pressure"], text=True)
