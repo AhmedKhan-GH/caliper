@@ -67,9 +67,9 @@ export function drawProgressOverlay(ctx: CanvasRenderingContext2D, prog: PanelPr
   const heading = fitText(ctx, 'ui', SIZE.ui, prog.label || (prog.error ? 'Error' : 'Working'), innerW);
   const hw = textWidth(ctx, 'ui', SIZE.ui, heading);
 
-  const barH = prog.error ? 0 : 6;
-  const barW = prog.error ? 0 : Math.max(48, Math.min(innerW, 260));
-  const gapBar = prog.error ? 0 : 9;
+  const barH = 6;
+  const barW = Math.max(48, Math.min(innerW, 260));
+  const gapBar = 9;
 
   let detail = prog.detail ?? '';
   if (!prog.error && !detail) {
@@ -107,27 +107,27 @@ export function drawProgressOverlay(ctx: CanvasRenderingContext2D, prog: PanelPr
   text(ctx, 'ui', SIZE.ui, Math.round(cx - hw / 2), y, prog.error ? COL.errorText : COL.text, heading);
   y += SIZE.ui;
 
-  if (!prog.error && barW > 0) {
+  if (barW > 0) {
     y += gapBar;
     const bx = Math.round(cx - barW / 2), by = Math.round(y), bw = Math.round(barW);
-    fill(ctx, bx, by, bw, barH, COL.plate);
-    if (typeof prog.total === 'number' && prog.total > 0) {
-      const d = typeof prog.done === 'number' ? prog.done : 0;
-      const frac = Math.max(0, Math.min(1, d / prog.total));
-      const fw = Math.round(bw * frac);
-      if (fw > 0) fill(ctx, bx, by, fw, barH, COL.accent);
+    if (prog.error) {
+      fill(ctx, bx, by, bw, barH, COL.statusError);
     } else {
-      const phase = ((Math.max(0, nowMs) / 1000) * 0.65) % 1;
-      const seg = Math.max(24, Math.round(bw * 0.28));
-      const sx = bx - seg + phase * (bw + seg);
-      ctx.save();
-      ctx.beginPath();
-      ctx.rect(bx, by, bw, barH);
-      ctx.clip();
-      fill(ctx, sx, by, seg, barH, COL.accent);
-      ctx.restore();
+      fill(ctx, bx, by, bw, barH, COL.plate);
+      if (typeof prog.total === 'number' && prog.total > 0) {
+        const d = typeof prog.done === 'number' ? prog.done : 0;
+        const frac = Math.max(0, Math.min(1, d / prog.total));
+        const fw = Math.round(bw * frac);
+        if (fw > 0) fill(ctx, bx, by, fw, barH, COL.accent);
+      } else {
+        const t = Math.max(0, nowMs) / 1000;
+        const phase = 0.5 - 0.5 * Math.cos(t * 2.4);
+        const seg = Math.max(28, Math.round(bw * 0.30));
+        const sx = bx + phase * Math.max(0, bw - seg);
+        fill(ctx, sx, by, Math.min(seg, bx + bw - sx), barH, COL.accent);
+      }
+      outline(ctx, bx, by, bx + bw, by + barH, COL.rule);
     }
-    outline(ctx, bx, by, bx + bw, by + barH, COL.rule);
     y += barH;
   }
 

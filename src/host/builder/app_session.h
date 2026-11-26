@@ -139,8 +139,10 @@ public:
     // The link to act through; null detaches. Frame thread.
     void set_link(caliper_live::RunLink* link) { link_ = link; }
     caliper_live::RunLink* link() const { return link_; }
+    void set_model_runner(caliper_builder::ModelRunner* runner) { runner_ = runner; }
 
     caliper_builder::RunState state() override;
+    nlohmann::json progress_state() override;
     caliper_builder::Error set_param(const std::string& name, const nlohmann::json& value) override;
     std::string param_error(const std::string& name) const override {
         return link_ ? link_->param_error(name) : std::string();
@@ -185,6 +187,8 @@ private:
                                     std::int64_t count);
 
     caliper_live::RunLink* link_ = nullptr;
+    caliper_builder::ModelRunner* runner_ = nullptr;
+    std::map<std::string, double> starting_since_;
     // What feed() saw last.
     bool attached_ = false;
     std::string script_;

@@ -30,6 +30,7 @@
 
 #include <algorithm>
 #include <cfloat>
+#include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <cctype>
@@ -878,6 +879,136 @@ void draw_hint(const std::string& label_in, const std::string& hint_in, const Im
     text_at(dl, L.ui, L.ui_size, ImVec2(cx - b.x * 0.5f, top + a.y + gap), L.faint, hint);
 }
 
+// Sternbild progress or error overlay inside a panel's content rectangle:
+// replaces empty/placeholder content when opaque, or floats in a framed plate
+// card over a translucent scrim while existing content updates.
+void draw_progress_overlay(const PanelProgress& prog, const ImRect& c, const SpecLook& L) {
+    if (!prog.active || c.GetWidth() < 16.0f || c.GetHeight() < 16.0f) return;
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    const float s = L.text_scale;
+    dl->PushClipRect(c.Min, c.Max, true);
+    if (prog.translucent) {
+        dl->AddRectFilled(c.Min, c.Max, IM_COL32(0x14, 0x13, 0x11, 204));
+    } else {
+        dl->AddRectFilled(c.Min, c.Max, L.ground);
+    }
+
+    const float pad_x = std::round(16.0f * s);
+    const float pad_y = std::round(12.0f * s);
+    const float inner_w = std::max(40.0f, std::min(c.GetWidth() - 2.0f * pad_x, std::round(320.0f * s)));
+    const std::string heading = fit_text(L.ui, L.ui_size, prog.label.empty() ? (prog.error ? "Error" : "Working") : prog.label, inner_w);
+    const ImVec2 hs = text_size(L.ui, L.ui_size, heading);
+
+    const float bar_h = std::max(4.0f, std::round(6.0f * s));
+    const float bar_w = std::max(48.0f, std::min(inner_w, std::round(260.0f * s)));
+    const float gap_bar = std::round(9.0f * s);
+
+    std::string detail = prog.detail;
+    if (!prog.error && detail.empty()) {
+        std::string parts;
+        if (prog.total > 0) parts = std::to_string(std::max(0, prog.done)) + " / " + std::to_string(prog.total);
+        if (prog.elapsed_s >= 0.0) {
+            const std::string dur = caliper_builder::format_elapsed_seconds(prog.elapsed_s);
+            if (!dur.empty()) parts = parts.empty() ? dur : (parts + "  \xC2\xB7  " + dur);
+        }
+        detail = std::move(parts);
+    }
+
+    ImFont* detail_font = prog.error ? font_or_current(L.ui) : font_or_current(L.mono);
+    const float detail_size = prog.error ? L.small_size : std::max(10.0f, L.mono_size - 1.0f);
+    ImVec2 ds(0.0f, 0.0f);
+    std::string detail_shown;
+    if (!detail.empty()) {
+        if (prog.error) {
+            detail_shown = detail;
+            ds = detail_font->CalcTextSizeA(detail_size, FLT_MAX, inner_w, detail_shown.c_str());
+            ds.y = std::min(ds.y, detail_size * 4.2f);
+        } else {
+            detail_shown = fit_text(L.mono, detail_size, detail, inner_w);
+            ds = text_size(L.mono, detail_size, detail_shown);
+        }
+    }
+    const float gap_det = detail_shown.empty() ? 0.0f : std::round(8.0f * s);
+    const float block_h = hs.y + (bar_h > 0.0f ? gap_bar + bar_h : 0.0f) + (ds.y > 0.0f ? gap_det + ds.y : 0.0f);
+    const float cx = (c.Min.x + c.Max.x) * 0.5f;
+    const float top = std::round(c.Min.y + std::max(pad_y, (c.GetHeight() - block_h) * 0.5f));
+
+    if (prog.translucent) {
+        const float card_w = std::min(c.GetWidth() - 12.0f * s, std::max({hs.x, bar_w, ds.x}) + 2.0f * pad_x);
+        const float card_h = std::min(c.GetHeight() - 12.0f * s, block_h + 2.0f * pad_y);
+        const ImVec2 ca(std::round(cx - card_w * 0.5f), std::round(top - pad_y));
+        const ImVec2 cb(ca.x + std::round(card_w), ca.y + std::round(card_h));
+        dl->AddRectFilled(ca, cb, L.plate);
+        dl->AddRect(ca, cb, prog.error ? sternbild::col::status_error : L.rule);
+    }
+
+    float y = top;
+    text_at(dl, L.ui, L.ui_size, ImVec2(std::round(cx - hs.x * 0.5f), y),
+            prog.error ? sternbild::col::error_text : L.text, heading);
+    y += hs.y;
+
+    if (bar_w > 0.0f) {
+        y += gap_bar;
+        const ImVec2 b0(std::round(cx - bar_w * 0.5f), std::round(y));
+        const ImVec2 b1(b0.x + std::round(bar_w), b0.y + bar_h);
+        if (prog.error) {
+            dl->AddRectFilled(b0, b1, sternbild::col::status_error);
+        } else {
+            dl->AddRectFilled(b0, b1, L.plate);
+            if (prog.total > 0) {
+                const float frac = std::clamp(static_cast<float>(prog.done) / static_cast<float>(prog.total), 0.0f, 1.0f);
+                const float fill_w = std::round(bar_w * frac);
+                if (fill_w > 0.0f) dl->AddRectFilled(b0, ImVec2(b0.x + fill_w, b1.y), L.accent);
+            } else {
+                const double t = std::max(0.0, ImGui::GetTime());
+                const float phase = static_cast<float>(0.5 - 0.5 * std::cos(t * 2.4));
+                const float seg = std::max(28.0f * s, std::round(bar_w * 0.30f));
+                const float sx0 = b0.x + phase * std::max(0.0f, bar_w - seg);
+                dl->AddRectFilled(ImVec2(sx0, b0.y), ImVec2(std::min(b1.x, sx0 + seg), b1.y), L.accent);
+            }
+            dl->AddRect(b0, b1, L.rule);
+        }
+        y += bar_h;
+    }
+
+    if (!detail_shown.empty()) {
+        y += gap_det;
+        if (prog.error) {
+            const float dx = std::round(cx - std::min(ds.x, inner_w) * 0.5f);
+            dl->AddText(detail_font, detail_size, ImVec2(dx, y), L.secondary, detail_shown.c_str(), nullptr, inner_w);
+        } else {
+            text_at(dl, L.mono, detail_size, ImVec2(std::round(cx - ds.x * 0.5f), y), L.faint, detail_shown);
+        }
+    }
+    dl->PopClipRect();
+}
+
+bool is_placeholder_panel(const SpecPanelView& view) {
+    if (!view.data.state.ready()) return true;
+    if (view.data.primitive == spec::Primitive::text && !view.data.text.has_value) {
+        const std::string& t = view.data.text.text;
+        return t.empty() || t == "The trace is not available." || t == "No feature is selected.";
+    }
+    return false;
+}
+
+PanelProgress panel_progress_from_json(const nlohmann::json& obj, double elapsed_s, bool translucent) {
+    PanelProgress p;
+    if (!obj.is_object()) return p;
+    const std::string state = obj.value("state", std::string());
+    if (state.empty() || state == "ready" || state == "idle") return p;
+    p.active = true;
+    p.error = (state == "error");
+    p.stage = obj.value("stage", state);
+    p.label = obj.value("label", p.error ? std::string("Error") : state);
+    if (obj.contains("done") && obj["done"].is_number_integer()) p.done = obj["done"].get<int>();
+    if (obj.contains("total") && obj["total"].is_number_integer()) p.total = obj["total"].get<int>();
+    if (p.error && obj.contains("error") && obj["error"].is_string()) p.detail = obj["error"].get<std::string>();
+    p.elapsed_s = elapsed_s;
+    p.translucent = translucent;
+    return p;
+}
+
 }  // namespace
 
 // ---- the look ----------------------------------------------------------------------
@@ -1093,8 +1224,14 @@ SpecPanelFrame draw_spec_panel(SpecPanelView& view, const ImRect& rect, const Sp
     }
     if (f.content.GetWidth() < 8.0f || f.content.GetHeight() < 8.0f) return f;
 
-    if (!view.data.state.ready()) {
+    const bool has_progress = view.progress && view.progress->active;
+    if (has_progress && !view.progress->translucent && view.data.primitive != spec::Primitive::scene) {
+        draw_progress_overlay(*view.progress, f.content, L);
+        ImGui::SetCursorScreenPos(f.content.Min);
+        ImGui::Dummy(ImVec2(0.0f, 0.0f));
+    } else if (!view.data.state.ready()) {
         draw_state(view.data.state, f.content, L);
+        if (has_progress) draw_progress_overlay(*view.progress, f.content, L);
         ImGui::SetCursorScreenPos(f.content.Min);
         ImGui::Dummy(ImVec2(0.0f, 0.0f));
     } else {
@@ -1114,13 +1251,16 @@ SpecPanelFrame draw_spec_panel(SpecPanelView& view, const ImRect& rect, const Sp
             case spec::Primitive::scene:
                 // The live scene of the attached script; a scene the script
                 // does not send shows as an offline source, as a live: source does.
-                if (!view.scene || !view.scene(f.content))
-                    draw_state({PanelStateKind::offline, "Source offline",
-                                view.data.scene.empty() ? std::string() : "live:" + view.data.scene},
-                               f.content, L);
+                if (!view.scene || !view.scene(f.content)) {
+                    if (!has_progress)
+                        draw_state({PanelStateKind::offline, "Source offline",
+                                    view.data.scene.empty() ? std::string() : "live:" + view.data.scene},
+                                   f.content, L);
+                }
                 break;
         }
         ImGui::PopClipRect();
+        if (has_progress) draw_progress_overlay(*view.progress, f.content, L);
     }
     // An item at the content's corner, so the child window's bounds come from
     // an item and not from a moved cursor (ImGui reports that as an error).
@@ -2029,6 +2169,12 @@ void SpecRuntime::draw(const ImRect& area, const SpecLook& L) {
     // Only the panels shown are resolved; a panel in a hidden tab is resolved
     // when its tab is chosen.
     update_only(&layout_);
+    const nlohmann::json run_prog = run_ ? run_->progress_state() : nlohmann::json();
+    const double run_elapsed = caliper_builder::progress_elapsed_seconds(run_prog);
+    const std::string run_state = run_prog.is_object() ? run_prog.value("state", std::string()) : std::string();
+    const bool run_active = !run_state.empty() && run_state != "ready" && run_state != "idle";
+    const auto draw_statuses = !shown.programs.empty() ? program_host().host.status()
+                                                       : std::map<std::string, caliper_draw::DrawStatus>{};
     for (const auto& t : layout_.tabs) draw_tabs(t, L);
     for (const auto& lp : layout_.panels) {
         if (lp.control) {
@@ -2076,6 +2222,53 @@ void SpecRuntime::draw(const ImRect& area, const SpecLook& L) {
         e.view.preview = preview || whole != nullptr;
         e.view.added = added;
         e.view.selection = &selection_;
+        e.view.progress.reset();
+        {
+            // Determine whether a scene panel with programs has drawn its first frame yet.
+            bool has_programs = false;
+            bool scene_drawn = false;
+            bool scene_compiled = false;
+            std::string refused_msg;
+            if (e.view.data.primitive == spec::Primitive::scene) {
+                for (const spec::Program& p : shown.programs) {
+                    if (p.panel.value_or("") != lp.id) continue;
+                    has_programs = true;
+                    const auto ds = draw_statuses.find(p.id);
+                    if (ds == draw_statuses.end()) continue;
+                    if (ds->second.frames > 0) scene_drawn = true;
+                    if (ds->second.state == caliper_draw::DrawState::compiled ||
+                        ds->second.state == caliper_draw::DrawState::running)
+                        scene_compiled = true;
+                    if (ds->second.state == caliper_draw::DrawState::refused && refused_msg.empty())
+                        refused_msg = ds->second.error.message.empty() ? ds->second.error.code : ds->second.error.message;
+                }
+            }
+            const bool waiting_first_frame = has_programs && !scene_drawn;
+            const bool empty_or_placeholder = is_placeholder_panel(e.view) || waiting_first_frame;
+            if (run_prog.is_object() && run_prog.contains("panels") && run_prog["panels"].is_object() &&
+                run_prog["panels"].contains(lp.id)) {
+                PanelProgress p = panel_progress_from_json(run_prog["panels"][lp.id], run_elapsed, !empty_or_placeholder);
+                if (p.active) e.view.progress = std::move(p);
+            } else if (run_active && (empty_or_placeholder || run_state == "starting" || run_state == "loading" ||
+                                      (run_state == "error" && empty_or_placeholder))) {
+                PanelProgress p = panel_progress_from_json(run_prog, run_elapsed, !empty_or_placeholder);
+                if (p.active) e.view.progress = std::move(p);
+            }
+            if (!e.view.progress && waiting_first_frame) {
+                PanelProgress p;
+                p.active = true;
+                if (!refused_msg.empty()) {
+                    p.error = true;
+                    p.stage = "error";
+                    p.label = "Program refused";
+                    p.detail = refused_msg;
+                } else {
+                    p.stage = scene_compiled ? "rendering" : "waiting";
+                    p.label = scene_compiled ? "Rendering first frame" : "Waiting for panel data";
+                }
+                e.view.progress = std::move(p);
+            }
+        }
         const ImRect r(ImVec2(lp.rect.x, lp.rect.y), ImVec2(lp.rect.right(), lp.rect.bottom()));
         if (r.GetWidth() < 1.0f || r.GetHeight() < 1.0f) continue;
         // The band an overlay keeps under the strip, asked before the content.

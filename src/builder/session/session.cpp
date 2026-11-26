@@ -909,13 +909,20 @@ struct Session::Impl {
                 std::lock_guard<std::mutex> lock(doc_mutex);
                 shown = doc && doc->spec.applet.id == loaded.spec.applet.id;
             }
-            return CommandOutput::ok({{"open", true},
-                                      {"id", loaded.spec.applet.id},
-                                      {"path", loaded.path},
-                                      {"dirty", false},
-                                      {"open_in_app", shown},
-                                      {"text", spec::to_toml(loaded.spec)},
-                                      {"json", spec::to_json(loaded.spec)}});
+            json out = {{"open", true},
+                        {"id", loaded.spec.applet.id},
+                        {"path", loaded.path},
+                        {"dirty", false},
+                        {"open_in_app", shown},
+                        {"text", spec::to_toml(loaded.spec)},
+                        {"json", spec::to_json(loaded.spec)}};
+            if (shown) {
+                if (RunControl* rc = run_control.load()) {
+                    const json prog = rc->progress_state();
+                    if (prog.is_object()) out["progress"] = prog;
+                }
+            }
+            return CommandOutput::ok(std::move(out));
         }
         std::lock_guard<std::mutex> lock(doc_mutex);
         // No spec open: a first look, answered as a read, not as a failure

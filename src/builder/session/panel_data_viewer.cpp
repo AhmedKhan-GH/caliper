@@ -311,6 +311,14 @@ json control_data_result(const spec::Spec& spec, const spec::Control& c, const V
             const Error e = text::parse_bound_text(bt.format, names, &parsed);
             d["text"] = e ? bt.format : text::format_bound_text(parsed, values);
         }
+        if (run && (c.bind == "param:output.status" || c.id == "trace_status")) {
+            const json prog = run->progress_state();
+            if (prog.is_object()) {
+                d["progress"] = prog;
+                const std::string live = format_progress_status(prog);
+                if (!live.empty()) d["text"] = live;
+            }
+        }
         d["why"] = "";
     } else {
         // A control bound to `value` or to a state: the session's value, else its start.

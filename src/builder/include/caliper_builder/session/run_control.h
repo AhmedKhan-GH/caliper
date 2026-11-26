@@ -187,7 +187,21 @@ public:
         (void)point;
         return Error("command.not_available", "This run control takes no interventions.");
     }
+    // Structured progress JSON of the active run (from param output.progress, or synthesized
+    // from the runner while a managed run starts or fails), or null when unavailable.
+    virtual nlohmann::json progress_state();
 };
+
+// Formats active or error progress into a single Status-row string with elapsed time,
+// or returns empty when the run is ready/idle.
+std::string format_progress_status(const nlohmann::json& progress, double now_epoch_s = -1.0);
+
+// Live elapsed seconds for an active progress payload, using wall time since started_at
+// when available and falling back to elapsed_s. Negative when no active elapsed time applies.
+double progress_elapsed_seconds(const nlohmann::json& progress, double now_epoch_s = -1.0);
+
+// Formats a non-negative duration in seconds concisely (e.g. "4.2s" or "1m 12s").
+std::string format_elapsed_seconds(double seconds);
 
 // The handler of run.state, run.set_param, run.action and run.pause, by the
 // invocation's name. `control` is the session's run control, or null, which
