@@ -65,12 +65,20 @@ class Output:
     def _pure_feature_specs(specs: list[dict]) -> bool:
         return bool(specs) and all(s.get("op") in ("clamp", "scale") for s in specs)
 
-    def compare(self, prompt: str, *, transform=None) -> dict:
+    def compare(self, prompt: str, *, transform=None, progress=None) -> dict:
         from ._publish import _publication_scope, _publish_many
 
+        cb = progress if progress is not None else getattr(self.backend, "progress_callback", None)
         with _publication_scope(self.model), autorelease_scope(self.backend.device):
             ids = self._encode_prompt(prompt)
             specs = self.interventions.specifications()
+            if callable(cb):
+                cb(
+                    stage="intervention" if specs else "output",
+                    label="Applying intervention" if specs else "Recomputing output",
+                    done=None,
+                    total=None,
+                )
             if not specs:
                 with self.interventions.suspend():
                     base_last = self.backend.forward_logits(ids, guard=self.guard)[0, -1]
@@ -127,8 +135,9 @@ class Output:
         }
         return tensors, result
 
-    def generate(self, prompt: str) -> dict:
+    def generate(self, prompt: str, *, progress=None) -> dict:
         """Produce 24 greedy tokens for baseline and steered rows."""
+        cb = progress if progress is not None else getattr(self.backend, "progress_callback", None)
         ids = self._encode_prompt(prompt)
         start = int(ids.shape[1])
         specs = self.interventions.specifications()
@@ -142,7 +151,7 @@ class Output:
 
         if not specs or (self.backend.is_replacement_model and self._pure_feature_specs(specs)):
             with self.interventions.suspend():
-                gen = self.backend.generate(prompt, specs, max_new_tokens=24, guard=self.guard)
+                gen = self.backend.generate(prompt, specs, max_new_tokens=24, guard=self.guard, progress=cb)
             row0, row1 = gen["token_ids"]
             return {
                 "baseline": bounded_text(self.tokenizer.decode(row0)),
@@ -151,11 +160,23 @@ class Output:
             }
 
         paired = ids.repeat(2, 1)
+        if callable(cb):
+            cb(stage="generation", label="Generating tokens (0/24)", done=0, total=24)
         with self.interventions.rows([1]):
-            for _ in range(24):
+            for step_idx in range(24):
                 with autorelease_scope(self.backend.device):
                     nxt = self.backend.forward_logits(paired, guard=self.guard)[:, -1].argmax(-1, keepdim=True)
                     paired = torch.cat((paired, nxt), dim=1)
+                if callable(cb):
+                    partial = paired[:, start:].cpu().tolist()
+                    cb(
+                        stage="generation",
+                        label=f"Generating tokens ({step_idx + 1}/24)",
+                        done=step_idx + 1,
+                        total=24,
+                        baseline=bounded_text(self.tokenizer.decode(partial[0])),
+                        steered=bounded_text(self.tokenizer.decode(partial[1])),
+                    )
         gen_ids = paired[:, start:].cpu().tolist()
         return {
             "baseline": bounded_text(self.tokenizer.decode(gen_ids[0])),

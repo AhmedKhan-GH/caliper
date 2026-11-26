@@ -2,13 +2,16 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+from contextlib import contextmanager
 import gc
 import heapq
 import json
+import logging
 import math
 import os
 from pathlib import Path
 import re
+import sys
 
 import numpy as np
 import torch
@@ -63,6 +66,188 @@ def mps_cleanup(device=None) -> None:
         if torch.backends.mps.is_available():
             torch.mps.synchronize()
             torch.mps.empty_cache()
+
+
+def _emit_progress(callback, stage: str, label: str, done: int | None = None,
+                   total: int | None = None, **extra) -> None:
+    if callable(callback):
+        callback(stage=stage, label=label, done=done, total=total, **extra)
+
+
+@contextmanager
+def _attribute_progress_scope(callback, batch_size: int):
+    """Forward ``circuit_tracer.attribute`` phases and real batch updates to ``callback``."""
+    if not callable(callback):
+        yield
+        return
+    import circuit_tracer.attribution.attribute_transformerlens as at
+
+    phase_labels = (
+        ("Phase 0:", "Tracing: precomputing activations"),
+        ("Phase 1:", "Tracing: forward pass"),
+        ("Phase 2:", "Tracing: building input vectors"),
+        ("Phase 3:", "Tracing: logit attributions"),
+        ("Phase 4:", "Tracing: feature attributions"),
+    )
+
+    class _PhaseHandler(logging.Handler):
+        def emit(self, record):
+            msg = record.getMessage()
+            for prefix, label in phase_labels:
+                if msg.startswith(prefix):
+                    _emit_progress(callback, "attribution", label)
+                    break
+
+    class _BatchProgress:
+        def __init__(self, iterable=None, *args, total=None, **kwargs):
+            self._iterable = iterable
+            self.total_items = int(total) if total is not None else 0
+            self.total_batches = max(1, math.ceil(self.total_items / max(1, batch_size))) if self.total_items > 0 else None
+            self.batches_done = 0
+            self.items_done = 0
+            if self.total_batches is not None:
+                _emit_progress(
+                    callback,
+                    "attribution",
+                    f"Attribution batches (0/{self.total_batches})",
+                    0,
+                    self.total_batches,
+                )
+
+        def update(self, n: int = 1):
+            self.batches_done += 1
+            self.items_done += int(n)
+            if self.total_batches is not None:
+                done = min(self.batches_done, self.total_batches)
+                _emit_progress(
+                    callback,
+                    "attribution",
+                    f"Attribution batches ({done}/{self.total_batches})",
+                    done,
+                    self.total_batches,
+                )
+
+        def close(self):
+            if self.total_batches is not None and self.items_done >= self.total_items and self.batches_done < self.total_batches:
+                _emit_progress(
+                    callback,
+                    "attribution",
+                    f"Attribution batches ({self.total_batches}/{self.total_batches})",
+                    self.total_batches,
+                    self.total_batches,
+                )
+
+        def __iter__(self):
+            if self._iterable is None:
+                return iter(())
+            for item in self._iterable:
+                yield item
+                self.update(1)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_exc):
+            self.close()
+
+    logger = logging.getLogger("attribution")
+    handler = _PhaseHandler()
+    orig_tqdm = at.tqdm
+    orig_level = logger.level
+    orig_set_level = logger.setLevel
+    orig_propagate = logger.propagate
+
+    def _keep_info_level(level):
+        orig_set_level(logging.INFO if level == logging.WARNING else level)
+
+    logger.addHandler(handler)
+    logger.propagate = False
+    orig_set_level(logging.INFO)
+    logger.setLevel = _keep_info_level
+    at.tqdm = _BatchProgress
+    try:
+        yield
+    finally:
+        at.tqdm = orig_tqdm
+        logger.setLevel = orig_set_level
+        logger.removeHandler(handler)
+        logger.setLevel(orig_level)
+        logger.propagate = orig_propagate
+
+
+@contextmanager
+def _generate_progress_scope(model, tokenizer, max_new_tokens: int, pass_name: str, callback):
+    """Report real per-token generation progress (and partial decoded tokens) from ``HookedTransformer.generate``."""
+    if not callable(callback):
+        yield
+        return
+    ht_mod = sys.modules.get("transformer_lens.HookedTransformer")
+    if ht_mod is None or not hasattr(ht_mod, "tqdm"):
+        yield
+        return
+    orig_tqdm_mod = ht_mod.tqdm
+    in_step = [False]
+    generated_ids: list[int] = []
+    hook_handle = None
+
+    def _on_unembed(_module, _args, output):
+        if not in_step[0]:
+            return
+        if isinstance(output, torch.Tensor) and output.ndim == 3 and output.shape[0] >= 1 and output.shape[1] >= 1:
+            generated_ids.append(int(output[0, -1].argmax(dim=-1).item()))
+
+    if hasattr(model, "unembed") and hasattr(model.unembed, "register_forward_hook"):
+        hook_handle = model.unembed.register_forward_hook(_on_unembed)
+
+    prefix = (
+        "Generating tokens" if pass_name == "both"
+        else ("Generating baseline" if pass_name == "baseline" else "Generating steered")
+    )
+
+    class _TqdmProxy:
+        def __getattr__(self, name):
+            return getattr(orig_tqdm_mod, name)
+
+        def tqdm(self, iterable=None, *args, **kwargs):
+            if iterable is None:
+                return orig_tqdm_mod.tqdm(*args, **kwargs)
+            items = list(iterable)
+            total = len(items) if items else max_new_tokens
+
+            def _iter():
+                for step_idx, item in enumerate(items):
+                    in_step[0] = True
+                    try:
+                        yield item
+                    finally:
+                        in_step[0] = False
+                    done = step_idx + 1
+                    extra: dict = {"pass_name": pass_name}
+                    if generated_ids and tokenizer is not None:
+                        try:
+                            text = tokenizer.decode(generated_ids)
+                        except Exception:
+                            text = None
+                        if text is not None:
+                            if pass_name == "both":
+                                extra["baseline"] = text
+                                extra["steered"] = text
+                            elif pass_name == "baseline":
+                                extra["baseline"] = text
+                            else:
+                                extra["steered"] = text
+                    _emit_progress(callback, "generation", f"{prefix} ({done}/{total})", done, total, **extra)
+
+            return _iter()
+
+    _emit_progress(callback, "generation", f"{prefix} (0/{max_new_tokens})", 0, max_new_tokens, pass_name=pass_name)
+    ht_mod.tqdm = _TqdmProxy()
+    try:
+        yield
+    finally:
+        ht_mod.tqdm = orig_tqdm_mod
+        if hook_handle is not None:
+            hook_handle.remove()
 
 
 class _LayerWeightsShim:
@@ -408,6 +593,7 @@ class Backend:
         self.model_id = model_id
         self.guard = guard
         self.recent_prompts: list[str] = []
+        self.progress_callback = None
 
     @property
     def is_replacement_model(self) -> bool:
@@ -654,8 +840,10 @@ class Backend:
         freeze_attention: bool = True,
         open_ended: bool = False,
         guard=None,
+        progress=None,
     ) -> dict:
         """Generate paired greedy continuations while preserving permanent model hooks."""
+        cb = progress if progress is not None else self.progress_callback
         ids = self.tokenize(prompt)
         start = int(ids.shape[1])
         tuples = self.specs_to_tuples(ids, interventions) if interventions and self.dictionary is not None else []
@@ -665,15 +853,17 @@ class Backend:
         with suspend(self.model), internal_forward(), torch.no_grad(), autorelease_scope(self.device):
             if guard is not None:
                 guard.check("backend generate baseline")
+            base_pass = "both" if not tuples else "baseline"
             try:
-                base_out = self.model.generate(
-                    ids,
-                    max_new_tokens=max_new_tokens,
-                    do_sample=False,
-                    verbose=False,
-                    stop_at_eos=False,
-                    prepend_bos=False,
-                )
+                with _generate_progress_scope(self.model, self.tokenizer, max_new_tokens, base_pass, cb):
+                    base_out = self.model.generate(
+                        ids,
+                        max_new_tokens=max_new_tokens,
+                        do_sample=False,
+                        verbose=False,
+                        stop_at_eos=False,
+                        prepend_bos=False,
+                    )
             finally:
                 self.model.reset_hooks(including_permanent=False)
             base_ids = base_out[0, start:].tolist()
@@ -685,18 +875,19 @@ class Backend:
                     guard.check("backend generate steered")
                 prepend = bool(getattr(self.model.cfg, "default_prepend_bos", True))
                 try:
-                    steered_out, _, _ = self.model.feature_intervention_generate(
-                        prompt,
-                        tuples,
-                        freeze_attention=freeze_attention,
-                        return_activations=False,
-                        max_new_tokens=max_new_tokens,
-                        do_sample=False,
-                        verbose=False,
-                        stop_at_eos=False,
-                        prepend_bos=prepend,
-                        return_type="tokens",
-                    )
+                    with _generate_progress_scope(self.model, self.tokenizer, max_new_tokens, "steered", cb):
+                        steered_out, _, _ = self.model.feature_intervention_generate(
+                            prompt,
+                            tuples,
+                            freeze_attention=freeze_attention,
+                            return_activations=False,
+                            max_new_tokens=max_new_tokens,
+                            do_sample=False,
+                            verbose=False,
+                            stop_at_eos=False,
+                            prepend_bos=prepend,
+                            return_type="tokens",
+                        )
                 finally:
                     self.model.reset_hooks(including_permanent=False)
                 steered_ids = steered_out[0, start:].tolist()
@@ -705,6 +896,7 @@ class Backend:
                 for layer, pos, feat, val in tuples:
                     edits_by_layer.setdefault(int(layer), []).append((pos, int(feat), float(val)))
                 cur = ids.clone()
+                _emit_progress(cb, "generation", f"Generating steered (0/{max_new_tokens})", 0, max_new_tokens, pass_name="steered")
                 try:
                     for step_idx in range(max_new_tokens):
                         fwd_hooks = []
@@ -725,6 +917,16 @@ class Backend:
                         step_logits = self.model.run_with_hooks(cur, prepend_bos=False, fwd_hooks=fwd_hooks)
                         nxt = step_logits[:, -1].argmax(dim=-1, keepdim=True)
                         cur = torch.cat((cur, nxt), dim=1)
+                        partial_steered = self.tokenizer.decode(cur[0, start:].tolist())
+                        _emit_progress(
+                            cb,
+                            "generation",
+                            f"Generating steered ({step_idx + 1}/{max_new_tokens})",
+                            step_idx + 1,
+                            max_new_tokens,
+                            pass_name="steered",
+                            steered=partial_steered,
+                        )
                 finally:
                     self.model.reset_hooks(including_permanent=False)
                 steered_ids = cur[0, start:].tolist()
@@ -780,7 +982,9 @@ class Backend:
 
             cells = [(l, p) for l in range(n_layers) for p in range(n_pos)]
             raw_diffs: list[torch.Tensor] = []
-            for start in range(0, len(cells), batch_size):
+            cb = self.progress_callback
+            total_batches = max(1, math.ceil(len(cells) / max(1, batch_size)))
+            for batch_idx, start in enumerate(range(0, len(cells), batch_size)):
                 chunk = cells[start:start + batch_size]
                 if active_guard is not None:
                     active_guard.check("patch sweep batch")
@@ -803,6 +1007,7 @@ class Backend:
                 tiled = corrupt_ids.expand(len(chunk), -1).clone()
                 patched_logits = self.model.run_with_hooks(tiled, prepend_bos=False, fwd_hooks=fwd_hooks)
                 raw_diffs.append((_score(patched_logits) - corrupt_val) / denom)
+                _emit_progress(cb, "sweep", f"Patching sweep ({batch_idx + 1}/{total_batches})", batch_idx + 1, total_batches)
 
             grid = torch.cat(raw_diffs).reshape(n_layers, n_pos).to(torch.float32)
             if not torch.isfinite(grid).all().item():
@@ -866,8 +1071,17 @@ class Backend:
 
         heap: list[tuple[float, int, int, list[int], list[float], str]] = []
         bos_id = getattr(self.tokenizer, "bos_token_id", None)
+        cb = self.progress_callback
+        total_docs = len(seen)
         with internal_forward(), torch.inference_mode(), autorelease_scope(self.device):
             for doc_idx, text_prompt in enumerate(seen):
+                _emit_progress(
+                    cb,
+                    "examples",
+                    f"Loading feature examples ({doc_idx + 1}/{total_docs})",
+                    doc_idx + 1,
+                    total_docs,
+                )
                 try:
                     ids = self.tokenize(text_prompt)
                 except ValueError:
@@ -990,6 +1204,7 @@ class Backend:
         trace_id: str = "trace-1",
         index=None,
         guard=None,
+        progress=None,
     ) -> Graph:
         """Run ``circuit_tracer.attribute``, transfer the graph to CPU, prune, and build a Caliper ``Graph``."""
         if not self.is_replacement_model:
@@ -997,6 +1212,7 @@ class Backend:
         from circuit_tracer import attribute
         from circuit_tracer.graph import compute_graph_scores, compute_node_influence, prune_graph
 
+        cb = progress if progress is not None else self.progress_callback
         eff_node_threshold, eff_edge_threshold = resolve_pruning_thresholds(
             show_more=show_more,
             node_threshold=node_threshold,
@@ -1018,6 +1234,8 @@ class Backend:
         }
 
         if max_feature_nodes == 0:
+            _emit_progress(cb, "attribution", "Computing logit attributions")
+            _emit_progress(cb, "publishing", "Publishing attribution graph")
             # Degenerate zero-feature trace: keep only tokens, errors, and salient logits.
             return self._logit_only_graph(
                 ids, max_n_logits=max_n_logits, desired_logit_prob=desired_logit_prob,
@@ -1028,20 +1246,23 @@ class Backend:
         with internal_forward(), autorelease_scope(self.device), mps_batch_pool_scope(self.device):
             if active_guard is not None:
                 active_guard.check("attribute start")
-            ct_graph = attribute(
-                prompt,
-                self.model,
-                max_n_logits=max_n_logits,
-                desired_logit_prob=desired_logit_prob,
-                batch_size=eff_batch,
-                max_feature_nodes=max_feature_nodes,
-                offload=None,
-                verbose=False,
-                update_interval=update_interval,
-            )
+            _emit_progress(cb, "attribution", "Tracing: starting attribution")
+            with _attribute_progress_scope(cb, eff_batch):
+                ct_graph = attribute(
+                    prompt,
+                    self.model,
+                    max_n_logits=max_n_logits,
+                    desired_logit_prob=desired_logit_prob,
+                    batch_size=eff_batch,
+                    max_feature_nodes=max_feature_nodes,
+                    offload=None,
+                    verbose=callable(cb),
+                    update_interval=update_interval,
+                )
             if active_guard is not None:
                 active_guard.check("attribute complete")
 
+        _emit_progress(cb, "pruning", "Pruning attribution graph")
         ct_graph.to("cpu")
         ct_graph.input_tokens = ct_graph.input_tokens.cpu()
         ct_graph.activation_values = ct_graph.activation_values.cpu()
@@ -1060,6 +1281,7 @@ class Backend:
             logit_weights[-n_logits:] = ct_graph.logit_probabilities.float().cpu()
         infl = compute_node_influence(ct_graph.adjacency_matrix, logit_weights)
 
+        _emit_progress(cb, "publishing", "Publishing attribution graph")
         feature_labels = None
         if index is not None and hasattr(index, "labels"):
             n_feats = len(ct_graph.selected_features)
@@ -1350,7 +1572,7 @@ def _resolve_gemma_scope_npz(layer_dir: Path, layer: int) -> Path:
     raise FileNotFoundError(f"no Gemma Scope params.npz found under {layer_dir}")
 
 
-def _load_local_transcoder_set(dict_dir: Path, n_layers: int, *, device: torch.device, dtype: torch.dtype):
+def _load_local_transcoder_set(dict_dir: Path, n_layers: int, *, device: torch.device, dtype: torch.dtype, progress=None):
     from circuit_tracer.transcoder.single_layer_transcoder import (
         TranscoderSet,
         load_gemma_scope_transcoder,
@@ -1359,6 +1581,7 @@ def _load_local_transcoder_set(dict_dir: Path, n_layers: int, *, device: torch.d
 
     st_files = {l: str(dict_dir / f"layer_{l}.safetensors") for l in range(n_layers) if (dict_dir / f"layer_{l}.safetensors").is_file()}
     if len(st_files) == n_layers:
+        _emit_progress(progress, "transcoders", "Loading transcoders (stage 2/3)")
         return load_transcoder_set(
             st_files,
             scan_name=dict_dir.name,
@@ -1372,9 +1595,11 @@ def _load_local_transcoder_set(dict_dir: Path, n_layers: int, *, device: torch.d
 
     tc_modules = {}
     for layer in range(n_layers):
+        _emit_progress(progress, "transcoders", f"Loading transcoders ({layer}/{n_layers})", layer, n_layers)
         npz_path = _resolve_gemma_scope_npz(dict_dir / f"layer_{layer}", layer)
         with autorelease_scope(device):
             tc_modules[layer] = load_gemma_scope_transcoder(str(npz_path), layer, device=device, dtype=dtype)
+        _emit_progress(progress, "transcoders", f"Loading transcoders ({layer + 1}/{n_layers})", layer + 1, n_layers)
     mps_cleanup(device)
     scan = "gemma" if "gemma-scope" in str(dict_dir) else dict_dir.name
     return TranscoderSet(
@@ -1408,16 +1633,18 @@ def load_backend(
     device: str | torch.device | None = None,
     dtype: torch.dtype | None = None,
     guard=None,
+    progress=None,
 ) -> Backend:
     """Load a staged ``ReplacementModel`` or ``HookedTransformer`` (+ optional ``SAE``) backend."""
     if str(model_ref) == "tiny-lm":
+        _emit_progress(progress, "weights", "Loading model weights (stage 1/3)")
         dev = torch.device(device) if device is not None else torch.device("cpu")
         dt = dtype if dtype is not None else torch.float32
         backend = make_tiny_backend(device=dev, dtype=dt, guard=guard)
         if dictionary_ref is not None:
             p = Path(str(dictionary_ref))
             if p.is_dir() and (p / "layer_0.safetensors").is_file():
-                tc_set = _load_local_transcoder_set(p, int(backend.model.cfg.n_layers), device=dev, dtype=dt)
+                tc_set = _load_local_transcoder_set(p, int(backend.model.cfg.n_layers), device=dev, dtype=dt, progress=progress)
                 backend.model._configure_replacement_model(tc_set)
                 backend.dictionary = DictionaryView(
                     tc_set, kind="transcoder", n_model_layers=int(backend.model.cfg.n_layers),
@@ -1439,6 +1666,7 @@ def load_backend(
         from circuit_tracer.utils.hf_utils import load_transcoder_from_hub
         from transformers import AutoModelForCausalLM, AutoTokenizer
 
+        _emit_progress(progress, "weights", "Loading model weights (stage 1/3)")
         with autorelease_scope(dev):
             if is_local_model:
                 tok = AutoTokenizer.from_pretrained(str(model_path), local_files_only=True)
@@ -1471,13 +1699,15 @@ def load_backend(
                 guard.check("backend model loaded")
 
             if isinstance(dictionary_ref, TranscoderSet):
+                _emit_progress(progress, "transcoders", "Loading transcoders (stage 2/3)")
                 transcoders = dictionary_ref
                 dict_id = getattr(transcoders, "scan_name", None) or "transcoders"
             elif Path(str(dictionary_ref)).is_dir():
                 dict_dir = Path(str(dictionary_ref))
-                transcoders = _load_local_transcoder_set(dict_dir, int(model.cfg.n_layers), device=dev, dtype=dt)
+                transcoders = _load_local_transcoder_set(dict_dir, int(model.cfg.n_layers), device=dev, dtype=dt, progress=progress)
                 dict_id = getattr(transcoders, "scan_name", None) or dict_dir.name
             else:
+                _emit_progress(progress, "transcoders", "Loading transcoders (stage 2/3)")
                 transcoders, _ = load_transcoder_from_hub(
                     str(dictionary_ref),
                     device=dev,
@@ -1503,6 +1733,7 @@ def load_backend(
     from transformer_lens import HookedTransformer
     from transformers import AutoModelForCausalLM, AutoTokenizer
 
+    _emit_progress(progress, "weights", "Loading model weights (stage 1/3)")
     with autorelease_scope(dev):
         if is_local_model:
             tok = AutoTokenizer.from_pretrained(str(model_path), local_files_only=True)
@@ -1540,6 +1771,7 @@ def load_backend(
     view = None
     if dictionary_ref is not None:
         from sae_lens import SAE
+        _emit_progress(progress, "transcoders", "Loading SAE dictionary (stage 2/3)")
         str_dtype = "bfloat16" if dt == torch.bfloat16 else ("float16" if dt == torch.float16 else "float32")
         with autorelease_scope(dev):
             if isinstance(dictionary_ref, SAE):

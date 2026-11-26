@@ -33,8 +33,10 @@ READ_ONLY_PARAMS = frozenset({
     "output.baseline",
     "output.steered",
     "output.status",
+    "output.progress",
     "clamp.status",
 })
+ALL_PANELS = ("graph", "output", "examples")
 
 
 def _accepts_kwarg(fn, name: str) -> bool:
@@ -140,7 +142,7 @@ def fixture_resources(directory: str | Path) -> Path:
     return root
 
 
-def load_resources(model_name: str, dictionary_path: str | Path, *, device=None, memory_limit_gb: float = MAX_PROCESS_GB):
+def load_resources(model_name: str, dictionary_path: str | Path, *, device=None, memory_limit_gb: float = MAX_PROCESS_GB, progress=None):
     """Load ``(backend, index, guard)`` for hosted inference."""
     is_tiny = str(model_name) == "tiny-lm"
     if device is None:
@@ -154,7 +156,9 @@ def load_resources(model_name: str, dictionary_path: str | Path, *, device=None,
         guard = MemoryGuard(memory_limit_gb, actual_dev)
         guard.check("hosted load start")
 
-    backend = load_backend(model_name, dictionary_path, device=dev, guard=guard)
+    backend = load_backend(model_name, dictionary_path, device=dev, guard=guard, progress=progress)
+    if callable(progress):
+        progress(stage="index", label="Loading example index (stage 3/3)", done=None, total=None)
     env_index = os.environ.get("CALIPER_FEATURE_INDEX", "").strip()
     resolved_index = Path(env_index).expanduser() if env_index else FeatureIndex.resolve(dictionary_path)
     if resolved_index is not None:
@@ -167,6 +171,8 @@ def load_resources(model_name: str, dictionary_path: str | Path, *, device=None,
         )
     else:
         index = LiveFeatureIndex(backend, memory=guard, allow_online=os.environ.get("CALIPER_AGENT_OFFLINE") != "1")
+    if callable(progress):
+        progress(stage="index", label="Model resources ready (3/3)", done=3, total=3)
     return backend, index, guard
 
 
@@ -198,6 +204,7 @@ class HostedService(InterpretationService):
             memory=owner.guard,
         )
         self.owner = owner
+        self.progress_callback = owner._on_service_progress
 
     def _bind_controls(self, controls):
         if self.tracer is not None:
@@ -212,7 +219,9 @@ class HostedService(InterpretationService):
     def submit(self, metadata, reply, *, acknowledge=None):
         status, result = super().submit(metadata, reply, acknowledge=acknowledge)
         if metadata["method"] == "trace.status":
-            result["inference"] = self.owner.inference_status()
+            inference = self.owner.inference_status()
+            result["inference"] = inference
+            result["progress"] = deepcopy(inference.get("progress"))
         return status, result
 
     def stop(self, failure, step=None):
@@ -274,6 +283,7 @@ class HostedService(InterpretationService):
             self.owner.traced_state = deepcopy(traced_specs)
             self.owner.traced_show_more = show_more
             self.owner._failed_trace_key = None
+            self.owner._panels_ready.add("graph")
             self.owner._reconcile_selection(self.graph, auto_select=True)
             self.owner._refresh_examples()
             if not self.owner._in_refresh:
@@ -350,23 +360,11 @@ class HostedInference:
 
     READ_ONLY_PARAMS = READ_ONLY_PARAMS
 
-    def __init__(self, model_name: str, dictionary_path: str | Path, prompt: str = DEFAULT_PROMPT, *, resources=None):
+    def __init__(self, model_name: str, dictionary_path: str | Path, prompt: str = DEFAULT_PROMPT, *,
+                 resources=None, defer_load: bool = False, progress=None):
         self.model_name = str(model_name)
         dict_p = Path(str(dictionary_path))
         self.dictionary_path = str(dict_p.resolve()) if dict_p.exists() else str(dictionary_path)
-        if resources is None:
-            self.backend, self.index, self.guard = load_resources(self.model_name, self.dictionary_path)
-        else:
-            self.backend, self.index, self.guard = resources
-        self.model = self.backend.model
-        self.tokenizer = self.backend.tokenizer
-        self.dictionary = self.backend.dictionary
-
-        mps_display = os.environ.get("CALIPER_FIXTURE_DISPLAY_MPS", "0") == "1" and self.model_name == "tiny-lm"
-        self.fixture_display = _FixtureDisplay(MemoryGuard(12, "mps")) if mps_display else None
-
-        prompt_inputs(self.backend, self.tokenizer, prompt)
-        self.backend.record_prompt(prompt)
         self.initial_prompt = prompt
         self.checkpoint_prompt = prompt
         self._last_prompt = prompt
@@ -377,6 +375,15 @@ class HostedInference:
         self._inference_lock = threading.Lock()
         self._inference_ready = False
         self._progress_state = "starting"
+        self._progress_started_at: float | None = time.time()
+        self._panels_ready: set[str] = set()
+        self._active_panels: tuple[str, ...] = ALL_PANELS
+        self._progress = self._build_progress(
+            state="starting",
+            stage="starting",
+            label="Starting inference",
+            panels=ALL_PANELS,
+        )
         self._comparison = None
         self._restore_generation(0)
         self.selection = None
@@ -400,6 +407,70 @@ class HostedInference:
         self._dallas_cache = None
         self.parameters: list = []
         self.actions: list = []
+        self.backend = self.index = self.guard = None
+        self.model = self.tokenizer = self.dictionary = None
+        self.fixture_display = None
+
+        if resources is not None:
+            self._bind_loaded_resources(*resources)
+        elif not defer_load:
+            self._bind_loaded_resources(*load_resources(self.model_name, self.dictionary_path, progress=progress))
+
+    def _bind_loaded_resources(self, backend, index, guard) -> None:
+        self.backend, self.index, self.guard = backend, index, guard
+        self.model = self.backend.model
+        self.tokenizer = self.backend.tokenizer
+        self.dictionary = self.backend.dictionary
+        self.backend.progress_callback = self._on_backend_progress
+        mps_display = os.environ.get("CALIPER_FIXTURE_DISPLAY_MPS", "0") == "1" and self.model_name == "tiny-lm"
+        self.fixture_display = _FixtureDisplay(MemoryGuard(12, "mps")) if mps_display else None
+        prompt_inputs(self.backend, self.tokenizer, self.initial_prompt)
+        self.backend.record_prompt(self.initial_prompt)
+
+    def _build_progress(
+        self,
+        *,
+        state: str,
+        stage: str,
+        label: str,
+        done: int | None = None,
+        total: int | None = None,
+        panels: tuple[str, ...] | dict | None = None,
+        error: str | None = None,
+    ) -> dict:
+        clean_label = bounded_text(str(label), 120)
+        clean_error = bounded_text(str(error), 240) if error else None
+        active = state not in ("ready", "idle")
+        started_at = self._progress_started_at if active else None
+        elapsed_s = round(max(0.0, time.time() - self._progress_started_at), 2) if self._progress_started_at else 0.0
+        panel_map: dict[str, dict] = {}
+        if isinstance(panels, dict):
+            panel_map = panels
+        elif panels:
+            for pid in panels:
+                panel_map[pid] = {
+                    "state": state,
+                    "stage": stage,
+                    "label": clean_label,
+                    "done": done,
+                    "total": total,
+                    "error": clean_error,
+                }
+        return {
+            "state": state,
+            "stage": stage,
+            "label": clean_label,
+            "done": done,
+            "total": total,
+            "started_at": round(started_at, 3) if started_at is not None else None,
+            "elapsed_s": elapsed_s,
+            "error": clean_error,
+            "panels": panel_map,
+        }
+
+    def _progress_json(self, payload: dict | None = None) -> str:
+        data = self._progress if payload is None else payload
+        return json.dumps(data, separators=(",", ":"), ensure_ascii=True, allow_nan=False)
 
     def _latch_failure(self, failure) -> None:
         if self._failure is None:
@@ -491,7 +562,8 @@ class HostedInference:
         with self._inference_lock:
             if not self._inference_ready:
                 return {
-                    "state": "starting",
+                    "state": self._progress_state,
+                    "progress": deepcopy(self._progress),
                     "prompt_hash": None,
                     "interventions_hash": None,
                     "traced_prompt": None,
@@ -507,6 +579,7 @@ class HostedInference:
             return {
                 **hashes,
                 "state": self._progress_state,
+                "progress": deepcopy(self._progress),
                 "traced_prompt": self.traced_prompt,
                 "traced_show_more": self.traced_show_more,
                 "selected_node": selected_node,
@@ -544,7 +617,46 @@ class HostedInference:
         if self.managed is not None:
             self.managed.inference = self
             self.managed.kept.extension = ".json"
+
+        def add_param(name, value, **kwargs):
+            if name in self.READ_ONLY_PARAMS:
+                if _accepts_kwarg(caliper.param, "read_only"):
+                    kwargs.setdefault("read_only", True)
+                elif _accepts_kwarg(caliper.param, "readonly"):
+                    kwargs.setdefault("readonly", True)
+            p = caliper.param(name, value, **kwargs)
+            self.parameters.append(p)
+            if name in self.READ_ONLY_PARAMS:
+                self._readonly_values[name] = value if name == "output.progress" else bounded_text(str(value))
+                self._readonly_versions[name] = p._version
+            return p
+
         try:
+            self.status = add_param("output.status", "Loading model weights" if self.backend is None else "ready")
+            self.progress = add_param("output.progress", self._progress_json())
+            if self.backend is None:
+                if self.managed is not None:
+                    self.managed.write_link(caliper.serve().url)
+                self._progress_started_at = time.time()
+                self._report_progress(
+                    state="loading",
+                    stage="weights",
+                    label="Loading model weights (stage 1/3)",
+                    panels=ALL_PANELS,
+                )
+                try:
+                    loaded = load_resources(
+                        self.model_name,
+                        self.dictionary_path,
+                        progress=self._on_load_progress,
+                    )
+                except Exception as exc:
+                    self._set_progress("error", f"Model load failed: {exc}")
+                    raise
+                self._bind_loaded_resources(*loaded)
+            else:
+                self.backend.progress_callback = self._on_backend_progress
+
             self.service = register_service(HostedService(self), controls=self.controls)
             self.handle = caliper.watch(self.model, activations=False)
             self.interventions = self.controls.intervention_service
@@ -555,19 +667,6 @@ class HostedInference:
                 backend=self.backend,
             )
             self.output = Output(self.backend, self.interventions, guard=self.guard)
-
-            def add_param(name, value, **kwargs):
-                if name in self.READ_ONLY_PARAMS:
-                    if _accepts_kwarg(caliper.param, "read_only"):
-                        kwargs.setdefault("read_only", True)
-                    elif _accepts_kwarg(caliper.param, "readonly"):
-                        kwargs.setdefault("readonly", True)
-                p = caliper.param(name, value, **kwargs)
-                self.parameters.append(p)
-                if name in self.READ_ONLY_PARAMS:
-                    self._readonly_values[name] = bounded_text(str(value))
-                    self._readonly_versions[name] = p._version
-                return p
 
             self.prompt = add_param("prompt", self.initial_prompt)
             prompt_inputs(self.backend, self.tokenizer, self.prompt.value)
@@ -580,7 +679,6 @@ class HostedInference:
             self.show_more = add_param("show_more", False)
             self.baseline_text = add_param("output.baseline", "")
             self.steered_text = add_param("output.steered", "")
-            self.status = add_param("output.status", "ready")
             self.actions = [
                 caliper.action("run", self.run_prompt),
                 caliper.action("generate", self.generate),
@@ -611,8 +709,8 @@ class HostedInference:
             self.close()
             raise
 
-    def _set_readonly_param(self, param, value: str) -> None:
-        text = bounded_text(value)
+    def _set_readonly_param(self, param, value: str, *, raw: bool = False) -> None:
+        text = value if raw else bounded_text(value)
         self._readonly_values[param.name] = text
         if param.value != text:
             param.set(text)
@@ -620,7 +718,7 @@ class HostedInference:
 
     def _enforce_readonly_outputs(self) -> bool:
         reverted = False
-        for param in (self.baseline_text, self.steered_text, self.status, self.clamp_status):
+        for param in (self.baseline_text, self.steered_text, self.status, self.progress, self.clamp_status):
             expected = self._readonly_values.get(param.name)
             if expected is None:
                 continue
@@ -632,12 +730,159 @@ class HostedInference:
             self.controls._publish()
         return reverted
 
+    def _active_panel_set(self, primary: tuple[str, ...]) -> tuple[str, ...]:
+        ordered = list(primary)
+        for pid in ALL_PANELS:
+            if pid not in self._panels_ready and pid not in ordered:
+                ordered.append(pid)
+        return tuple(ordered)
+
+    def _report_progress(
+        self,
+        *,
+        stage: str,
+        label: str,
+        done: int | None = None,
+        total: int | None = None,
+        state: str | None = None,
+        panels: tuple[str, ...] | dict | None = None,
+        error: str | None = None,
+        status_text: str | None = None,
+        baseline: str | None = None,
+        steered: str | None = None,
+    ) -> None:
+        with self._inference_lock:
+            eff_state = state if state is not None else (
+                self._progress_state if self._progress_state not in ("ready", "idle") else "running"
+            )
+            if eff_state in ("loading", "tracing", "running", "starting") and self._progress_started_at is None:
+                self._progress_started_at = time.time()
+            self._progress_state = eff_state
+            if isinstance(panels, tuple):
+                self._active_panels = panels
+            payload = self._build_progress(
+                state=eff_state,
+                stage=stage,
+                label=label,
+                done=done,
+                total=total,
+                panels=panels,
+                error=error,
+            )
+            self._progress = payload
+        if hasattr(self, "progress"):
+            self._set_readonly_param(self.progress, self._progress_json(payload), raw=True)
+        if hasattr(self, "status"):
+            if status_text is not None:
+                self._set_readonly_param(self.status, status_text)
+            elif eff_state == "ready":
+                self._set_readonly_param(self.status, "ready")
+            elif eff_state == "error":
+                self._set_readonly_param(self.status, error or label)
+            else:
+                elapsed = payload["elapsed_s"]
+                self._set_readonly_param(self.status, f"{payload['label']} ({elapsed:.1f}s)")
+        if baseline is not None and hasattr(self, "baseline_text"):
+            self._set_readonly_param(self.baseline_text, baseline)
+        if steered is not None and hasattr(self, "steered_text"):
+            self._set_readonly_param(self.steered_text, steered)
+        if getattr(self, "controls", None) is not None:
+            self.controls._publish()
+
+    def _on_load_progress(self, *, stage: str, label: str, done: int | None = None, total: int | None = None, **_extra) -> None:
+        self._report_progress(
+            state="loading",
+            stage=stage,
+            label=label,
+            done=done,
+            total=total,
+            panels=ALL_PANELS,
+        )
+
+    def _on_backend_progress(
+        self,
+        *,
+        stage: str,
+        label: str,
+        done: int | None = None,
+        total: int | None = None,
+        baseline: str | None = None,
+        steered: str | None = None,
+        **_extra,
+    ) -> None:
+        if stage in ("attribution", "pruning", "publishing"):
+            panels = self._active_panel_set(("graph",))
+            state = "tracing"
+        elif stage in ("output", "intervention", "generation", "sweep"):
+            panels = self._active_panel_set(("output",))
+            state = "running" if self._progress_state == "ready" else self._progress_state
+        elif stage == "examples":
+            panels = ("examples",)
+            state = "running" if self._progress_state == "ready" else self._progress_state
+        else:
+            panels = ALL_PANELS
+            state = "running"
+        self._report_progress(
+            state=state,
+            stage=stage,
+            label=label,
+            done=done,
+            total=total,
+            panels=panels,
+            baseline=baseline,
+            steered=steered,
+        )
+
+    def _on_service_progress(self, *, stage: str, label: str, done: int | None = None, total: int | None = None, **_extra) -> None:
+        if stage == "examples":
+            if self._progress_state == "ready":
+                self._progress_started_at = time.time()
+            self._report_progress(
+                state="running" if self._progress_state == "ready" else self._progress_state,
+                stage="examples",
+                label=label,
+                done=done,
+                total=total,
+                panels=("examples",),
+            )
+        elif stage == "examples_done":
+            self._panels_ready.add("examples")
+            if not self._in_refresh and self._progress_state != "tracing":
+                self._report_progress(state="ready", stage="ready", label="Ready", panels={}, status_text="ready")
+
     def _set_progress(self, state: str, message: str | None = None) -> None:
         text = state if message is None else message
-        self._set_readonly_param(self.status, text)
-        with self._inference_lock:
-            self._progress_state = state
-        self.controls._publish()
+        if state in ("loading", "tracing", "running", "starting"):
+            self._progress_started_at = time.time()
+            stage = "attribution" if state == "tracing" else state
+            label = "Tracing prompt" if state == "tracing" else (text or state)
+            panels = self._active_panel_set(("graph",)) if state == "tracing" else ALL_PANELS
+            self._report_progress(
+                state=state,
+                stage=stage,
+                label=label,
+                panels=panels,
+                status_text=text,
+            )
+        elif state == "error":
+            err_panels = self._active_panels or ALL_PANELS
+            self._report_progress(
+                state="error",
+                stage="error",
+                label="Error",
+                panels=err_panels,
+                error=text,
+                status_text=text,
+            )
+        else:
+            self._report_progress(
+                state=state,
+                stage="ready" if state == "ready" else state,
+                label="Ready" if state == "ready" else text,
+                panels={},
+                status_text=text,
+            )
+            self._progress_started_at = None
 
     def _apply_interventions(self) -> None:
         with self.controls.lock:
@@ -941,7 +1186,16 @@ class HostedInference:
         t0 = time.perf_counter()
         prompt_acts: dict[str, torch.Tensor] = {}
         dallas_logits = None
-        for key, prompt_text in manifest["prompts"].items():
+        items = list(manifest["prompts"].items())
+        for idx, (key, prompt_text) in enumerate(items):
+            self._report_progress(
+                state="running",
+                stage="intervention",
+                label=f"Caching intervention prompts ({idx + 1}/{len(items)})",
+                done=idx + 1,
+                total=len(items),
+                panels=self._active_panel_set(("output",)),
+            )
             logits, acts = self.backend.activations(prompt_text, sparse=False)
             prompt_acts[key] = acts.detach().cpu()
             if key == "dallas":
@@ -995,6 +1249,12 @@ class HostedInference:
                         self._in_refresh = False
 
                 t0 = time.perf_counter()
+                self._report_progress(
+                    state="running",
+                    stage="intervention",
+                    label=f"Applying intervention ({case['label']})",
+                    panels=self._active_panel_set(("output",)),
+                )
                 iv_logits, iv_acts = self.backend.intervene_logits(
                     dallas_prompt,
                     tuples,
@@ -1070,6 +1330,7 @@ class HostedInference:
         started = time.perf_counter()
         comparison = self.output.compare(prompt)
         seconds = time.perf_counter() - started
+        self._panels_ready.add("output")
         with self._inference_lock:
             self._comparison = {
                 **self._input_hashes(state),
@@ -1259,8 +1520,15 @@ class HostedInference:
 
     def generate(self) -> str:
         self._check_stop()
-        self._generate_for_state(self._input_state(), force=True)
-        self.controls._publish()
+        self._progress_started_at = time.time()
+        try:
+            self._generate_for_state(self._input_state(), force=True)
+            self._set_progress("ready")
+        except CleanStop:
+            raise
+        except Exception as exc:
+            self._set_progress("error", str(exc))
+            raise
         return "Generated 24 tokens for each output."
 
     def reset(self) -> str:
@@ -1408,7 +1676,7 @@ def main(argv=None) -> None:
     if not all((args.model, args.dictionary)):
         parser.error("model and dictionary are required")
     prompt = args.prompt if args.prompt is not None else DEFAULT_PROMPT
-    run = HostedInference(args.model, args.dictionary, prompt)
+    run = HostedInference(args.model, args.dictionary, prompt, defer_load=True)
     try:
         run.start()
         print(f"caliper: inference ready at step {run.controls.n}", flush=True)

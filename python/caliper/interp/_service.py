@@ -45,9 +45,15 @@ class InterpretationService:
         self.closed = False
         self.failure = None
         self.owner = None
+        self.progress_callback = None
         from ._memory import CleanStop
         self.stop_exception = CleanStop
         self._bind_resources()
+
+    def _emit_progress(self, stage: str, label: str, done: int | None = None, total: int | None = None, **extra) -> None:
+        cb = self.progress_callback
+        if callable(cb):
+            cb(stage=stage, label=label, done=done, total=total, **extra)
 
     def _bind_resources(self):
         """Use one model, tokenizer, and dictionary for all supplied resources."""
@@ -193,26 +199,30 @@ class InterpretationService:
                 identity["tokenizer_hash"] = idx_meta["tokenizer_hash"]
             return {"metadata": meta, "identity": identity}
         if method in ("feature.show", "feature.examples"):
-            with self._baseline():
-                self._resource("dictionary")
-                index = self._resource("index")
-                layer, feature = self._feature(params)
-                if method == "feature.show":
-                    return index.show(layer, feature)
-                rows = index.examples(layer, feature, limit=params.get("limit", 16))
-            result = {
-                "layer": layer,
-                "feature": feature,
-                "examples": rows,
-                "bindings": {
-                    k: "live:examples." + k
-                    for k in ("tokens", "activations", "example_ids", "valid_tokens", "label_text")
-                },
-            }
-            if not protocol.bounded(result):
-                raise Refused("interpret.result_limit", "The example result exceeds the metadata limits.")
-            self._publish_examples(rows)
-            return result
+            self._emit_progress("examples", "Loading feature examples")
+            try:
+                with self._baseline():
+                    self._resource("dictionary")
+                    index = self._resource("index")
+                    layer, feature = self._feature(params)
+                    if method == "feature.show":
+                        return index.show(layer, feature)
+                    rows = index.examples(layer, feature, limit=params.get("limit", 16))
+                result = {
+                    "layer": layer,
+                    "feature": feature,
+                    "examples": rows,
+                    "bindings": {
+                        k: "live:examples." + k
+                        for k in ("tokens", "activations", "example_ids", "valid_tokens", "label_text")
+                    },
+                }
+                if not protocol.bounded(result):
+                    raise Refused("interpret.result_limit", "The example result exceeds the metadata limits.")
+                self._publish_examples(rows)
+                return result
+            finally:
+                self._emit_progress("examples_done", "Feature examples ready")
         if method == "trace.run":
             started = time.monotonic()
             tracer = self._resource("tracer")
@@ -371,12 +381,16 @@ class InterpretationService:
 
     def publish_feature_examples(self, layer: int, feature: int, *, limit: int = 16) -> list:
         """Query baseline examples for ``(layer, feature)`` and publish display tensors."""
-        with self._baseline():
-            self._resource("dictionary")
-            index = self._resource("index")
-            rows = index.examples(layer, feature, limit=limit)
-        self._publish_examples(rows)
-        return rows
+        self._emit_progress("examples", "Loading feature examples")
+        try:
+            with self._baseline():
+                self._resource("dictionary")
+                index = self._resource("index")
+                rows = index.examples(layer, feature, limit=limit)
+            self._publish_examples(rows)
+            return rows
+        finally:
+            self._emit_progress("examples_done", "Feature examples ready")
 
     def publish_empty_examples(self) -> None:
         """Publish empty example tensors when no feature is selected."""

@@ -315,3 +315,92 @@ def test_output_rows_are_readonly(tmp_path, monkeypatch):
         srv = current_server()
         if srv is not None:
             srv.close()
+
+
+def test_staged_progress_covers_load_trace_generation_examples_and_errors(tmp_path, monkeypatch):
+    import json
+    from caliper._net import current_server
+
+    monkeypatch.setenv("CALIPER_SESSION", "0")
+    published = {}
+    monkeypatch.setattr(_publish, "_TENSORS", published)
+    ctl = _controls.Controls()
+    monkeypatch.setattr(_controls, "CONTROLS", ctl)
+    monkeypatch.setattr(caliper, "_CTL", ctl)
+    monkeypatch.setattr(P, "_PROGS", {})
+    monkeypatch.setattr(P, "_IMPORTS", {})
+    monkeypatch.setattr(P, "_LIVE", {})
+
+    dict_dir = fixture_resources(tmp_path / "tiny-fixture")
+    assert "output.progress" in READ_ONLY_PARAMS
+
+    seen: list[dict] = []
+    orig_publish = ctl._publish
+
+    def record_publish(*args, **kwargs):
+        param = ctl.params.get("output.progress")
+        if param is not None and isinstance(param.value, str) and param.value:
+            seen.append(json.loads(param.value))
+        return orig_publish(*args, **kwargs)
+
+    monkeypatch.setattr(ctl, "_publish", record_publish)
+
+    run = HostedInference("tiny-lm", dict_dir, "ABCD", defer_load=True)
+    run.start()
+    try:
+        stages = [item["stage"] for item in seen]
+        assert "weights" in stages
+        assert "transcoders" in stages
+        assert "index" in stages
+        assert stages.index("weights") < stages.index("transcoders") < stages.index("index")
+        assert "attribution" in stages
+        assert "pruning" in stages
+        assert "publishing" in stages
+        assert stages.index("attribution") < stages.index("pruning") < stages.index("publishing")
+        assert "output" in stages
+        assert "generation" in stages
+        assert stages[-1] == "ready"
+
+        # Real determinate attribution batch progress and 24-token generation progress
+        attr_counts = [
+            (item["done"], item["total"])
+            for item in seen
+            if item["stage"] == "attribution" and item["total"] is not None
+        ]
+        assert attr_counts and all(0 <= d <= t and t > 0 for d, t in attr_counts)
+        assert attr_counts[-1][0] == attr_counts[-1][1]
+
+        gen_counts = [
+            (item["done"], item["total"])
+            for item in seen
+            if item["stage"] == "generation" and item["total"] is not None
+        ]
+        assert (1, 24) in gen_counts and (24, 24) in gen_counts
+
+        # trace.status mirrors the same progress state
+        status = run.service.submit({"version": 1, "method": "trace.status", "params": {}}, None)[1]
+        assert status["progress"]["state"] == "ready"
+        assert status["inference"]["progress"]["state"] == "ready"
+
+        # Standalone feature example lookup reports progress on the examples panel
+        seen.clear()
+        feat_idx = next(i for i, n in enumerate(run.service.graph.nodes) if n["kind"] == "feature")
+        feat = run.service.graph.nodes[feat_idx]
+        run.service.publish_feature_examples(feat["layer"], feat["feature"], limit=4)
+        example_updates = [item for item in seen if item["stage"] == "examples"]
+        assert example_updates and "examples" in example_updates[0]["panels"]
+        assert seen[-1]["state"] == "ready"
+
+        # Errors populate both overall and panel error state
+        seen.clear()
+        run._set_progress("error", "Test failure")
+        err = json.loads(run.progress.value)
+        assert err["state"] == "error"
+        assert err["error"] == "Test failure"
+        assert err["panels"] and all(p["error"] == "Test failure" for p in err["panels"].values())
+    finally:
+        run.close()
+        P.detach()
+        srv = current_server()
+        if srv is not None:
+            srv.close()
