@@ -96,7 +96,13 @@ def group_text(manifest: dict, index: int) -> str:
     return name + ": " + "; ".join(f"L{n['layer']} F{n['feature']} P{n['position']}" for n in nodes)
 
 
-def build_instrument(session, *, dallas: bool = False, prompt: str | None = None) -> dict | None:
+def build_instrument(
+    session,
+    *,
+    dallas: bool = False,
+    prompt: str | None = None,
+    lock_layout: bool = True,
+) -> dict | None:
     """Create the three-panel Circuit Trace spec with live controls and read-only outputs."""
     m = session.mcp
     manifest = load_dallas_manifest() if dallas else None
@@ -119,7 +125,14 @@ def build_instrument(session, *, dallas: bool = False, prompt: str | None = None
         ("output", "Output Probabilities"),
     ):
         empty = "No feature is selected." if panel_id == "examples" else "The trace is not available."
-        m.body("panel.create", id=panel_id, primitive="text", title=panel_title, options={"text": empty})
+        m.body(
+            "panel.create",
+            id=panel_id,
+            primitive="text",
+            title=panel_title,
+            closable=False,
+            options={"text": empty},
+        )
 
     preset_choices = [
         {"value": idx, "label": label}
@@ -207,4 +220,6 @@ def build_instrument(session, *, dallas: bool = False, prompt: str | None = None
         root_id = "main"
 
     m.body("layout.set", layout={"root": root_id, "nodes": nodes})
+    if lock_layout:
+        m.body("layout.lock", locked=True)
     return manifest

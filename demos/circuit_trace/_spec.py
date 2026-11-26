@@ -42,6 +42,7 @@ def scene_programs(
     spec["program"].extend(programs)
     targets = {program["panel"] for program in programs}
     for panel in spec["panel"]:
+        panel["closable"] = False
         if panel["id"] in targets:
             panel["primitive"] = "scene"
             panel["options"] = {"axes": False, "labels": True, "scale_bar": False}
