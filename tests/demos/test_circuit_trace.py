@@ -39,6 +39,55 @@ def test_spec_toml_and_published_manifest():
     assert text.startswith("capital:") and "L15 F4494 P4" in text
 
 
+def test_show_mode_error_keeps_window_alive(monkeypatch):
+    run_mod = _load_demo_module("run")
+
+    events_seen: list[str] = []
+
+    class FakeApp:
+        def __init__(self):
+            self.alive = True
+            self.stopped = False
+
+        def poll(self):
+            return None if self.alive else 0
+
+    class FakeSession:
+        def __init__(self, show: bool):
+            self.args = type("Args", (), {"prompt": "ABCD", "model": "tiny-lm", "browser_capture": False})()
+            self.show = show
+            self.app = FakeApp()
+            self.mcp = None
+            self.started = True
+            self.run_id = "circuit-trace"
+
+        def show_error(self, msg: str):
+            events_seen.append(f"error:{msg}")
+
+        def keep_alive(self, _manifest):
+            events_seen.append(f"keep_alive:alive={self.app.alive}")
+            self.app.alive = False
+
+    monkeypatch.setattr(run_mod, "build_instrument", lambda *_a, **_kw: (_ for _ in ()).throw(run_mod.Failure("boom")))
+    fake = FakeSession(show=True)
+    summary = run_mod.run_standard(fake)
+    assert summary["error"] == "boom"
+    assert events_seen == ["error:boom", "keep_alive:alive=True"]
+
+    stopped_procs: list[object] = []
+    monkeypatch.setattr(run_mod, "stop", lambda proc: stopped_procs.append(proc))
+    s = run_mod.Session.__new__(run_mod.Session)
+    s.mcp = None
+    s.app = FakeApp()
+    s.app_log = None
+    s.started = False
+    s.close(stop_app=False)
+    assert stopped_procs == []
+    assert s.app is not None
+    s.close(stop_app=True)
+    assert len(stopped_procs) == 1
+
+
 @pytest.mark.skipif(sys.platform != "darwin" or not torch.backends.mps.is_available(), reason="requires macOS Metal")
 def test_circuit_trace_tiny_lm_headless_mcp(tmp_path: Path):
     app_exe = ROOT / "cmake-build-release" / "caliper"

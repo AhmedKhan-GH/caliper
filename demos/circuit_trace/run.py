@@ -107,6 +107,7 @@ class Session:
         self.run_id = "circuit-trace"
         self.app = self.mcp = self.events = None
         self.started = False
+        self.startup_error: str | None = None
         self.examples_installed = False
         self.applet_saved = False
         self.selected_node = -1
@@ -198,9 +199,11 @@ class Session:
 
             self.events.until("hosted inference readiness", ready, timeout=300.0)
             self.load_seconds = round(time.perf_counter() - t0, 4)
-        except BaseException:
-            self.close()
-            raise
+        except BaseException as exc:
+            if not show or isinstance(exc, KeyboardInterrupt):
+                self.close()
+                raise
+            self.startup_error = str(exc)
 
     def set_param(self, name: str, value) -> dict:
         self.mcp.body("run.set_param", run=self.run_id, name=name, value=value)
@@ -352,22 +355,66 @@ class Session:
             graph[key] = None
         return graph
 
+    def show_error(self, message: str) -> None:
+        text = str(message).strip() or "Circuit Trace encountered an error."
+        print(f"error: {text}", file=sys.stderr, flush=True)
+        if self.mcp is None or self.app is None or self.app.poll() is not None:
+            return
+        clipped = text[:1000]
+        try:
+            spec_info = self.mcp.body("spec.get")
+            if not spec_info.get("open"):
+                self.mcp.body("spec.new", id="circuit-trace-error", title="Circuit Trace Error")
+                self.mcp.body("panel.create", id="error", primitive="text", title="Error", options={"text": clipped})
+                self.mcp.body("layout.set", layout={"root": "error", "nodes": []})
+                return
+            spec_json = spec_info.get("json") or {}
+            states = {s.get("id") for s in (spec_json.get("state") or []) if isinstance(s, dict)}
+            if "error_status" not in states:
+                self.mcp.body("state.create", id="error_status", type="text", default=clipped)
+            else:
+                self.mcp.body("state.set", id="error_status", value=clipped)
+            controls = {c.get("id") for c in (spec_json.get("control") or []) if isinstance(c, dict)}
+            if "clamp_status" in controls:
+                self.mcp.body(
+                    "control.patch",
+                    id="clamp_status",
+                    patch={
+                        "title": "Error",
+                        "options": {"format": "{status:s}", "fields": {"status": {"state": "error_status"}}},
+                    },
+                )
+        except Exception:
+            pass
+
     def keep_alive(self, manifest: dict | None) -> None:
         while self.app is not None and self.app.poll() is None:
-            self.events.wait(0.5)
+            try:
+                self.events.wait(0.5)
+            except Exception as exc:
+                if self.app.poll() is not None:
+                    break
+                self.show_error(str(exc))
+                time.sleep(0.5)
+                continue
             queued, self.events.pending = self.events.pending, []
             for ev in queued:
-                if manifest and ev.get("kind") == "control" and ev.get("control") == "published_group":
-                    self.mcp.body("state.set", id="published_members", value=group_text(manifest, int(ev["value"])))
-                elif ev.get("kind") == "pick" and ev.get("panel") == "graph":
-                    fields = ev.get("fields") or {}
-                    idx = fields.get("index", ev.get("index"))
-                    if fields.get("kind") == 1 and isinstance(idx, int) and idx >= 0:
-                        self.select_feature_node(idx)
+                try:
+                    if manifest and ev.get("kind") == "control" and ev.get("control") == "published_group":
+                        self.mcp.body("state.set", id="published_members", value=group_text(manifest, int(ev["value"])))
+                    elif ev.get("kind") == "pick" and ev.get("panel") == "graph":
+                        fields = ev.get("fields") or {}
+                        idx = fields.get("index", ev.get("index"))
+                        if fields.get("kind") == 1 and isinstance(idx, int) and idx >= 0:
+                            self.select_feature_node(idx)
+                except Exception as exc:
+                    if self.app.poll() is not None:
+                        break
+                    self.show_error(str(exc))
 
-    def close(self) -> None:
+    def close(self, *, stop_app: bool = True) -> None:
         errors: list[str] = []
-        if self.mcp is not None and self.app is not None and self.app.poll() is None and self.started:
+        if stop_app and self.mcp is not None and self.app is not None and self.app.poll() is None and self.started:
             attempt(
                 errors,
                 "run stop",
@@ -380,13 +427,13 @@ class Session:
                     ),
                 ),
             )
-        if self.mcp is not None:
+        if self.mcp is not None and (stop_app or self.app is None or self.app.poll() is not None):
             attempt(errors, "MCP close", self.mcp.close)
             self.mcp = None
-        if self.app is not None:
+        if stop_app and self.app is not None:
             attempt(errors, "app stop", lambda: stop(self.app))
             self.app = None
-        if hasattr(self, "app_log") and self.app_log is not None:
+        if (stop_app or self.app is None or self.app.poll() is not None) and hasattr(self, "app_log") and self.app_log is not None:
             attempt(errors, "app log close", self.app_log.close)
 
 
@@ -568,33 +615,49 @@ def run_dallas_acceptance(session: Session, reference_path: Path | None) -> dict
             "cell24_app": str(cell24_png) if cell24_png else None,
             "cell24_browser": str(cell24_browser_png) if cell24_browser_png else None,
         },
+        "program_draws": {
+            p["id"]: p["draw"] for p in session.mcp.body("program.status")["programs"] if p.get("draw")
+        },
         "reference_comparison": comparison_checks,
     }
 
 
 def run_standard(session: Session) -> dict:
     is_dallas = session.args.prompt == DALLAS_PROMPT and session.args.model != "tiny-lm"
-    manifest = build_instrument(session, dallas=is_dallas)
-    t0 = time.perf_counter()
-    trace_reply = session.events.complete("trace.run", prompt=session.args.prompt)
-    trace_wall = round(time.perf_counter() - t0, 4)
-    graph = session.read_full_graph()
-    install_programs(session, examples=False)
-    feat_node = next((n["index"] for n in graph["nodes"] if n["kind"] == "feature"), -1)
-    if feat_node >= 0:
-        selected_info = session.select_feature_node(feat_node)
-    else:
-        selected_info = None
-        session.finalize_applet()
-    before_png = session.capture_native("before")
-    before_browser = session.capture_browser("before-browser") if session.args.browser_capture else None
-    if feat_node >= 0:
-        session.set_param("clamp", 0.0)
-        session.run_action("apply_clamp")
-    comp_step = session.events.complete("trace.status")["inference"]["comparison"]["completed_step"]
-    session.run_action("generate")
-    validation = session.events.complete("trace.validate")
-    after_png = session.capture_native("after", min_steps={"probabilities": int(comp_step)})
+    manifest = None
+    try:
+        manifest = build_instrument(session, dallas=is_dallas)
+        t0 = time.perf_counter()
+        trace_reply = session.events.complete("trace.run", prompt=session.args.prompt)
+        trace_wall = round(time.perf_counter() - t0, 4)
+        graph = session.read_full_graph()
+        install_programs(session, examples=False)
+        feat_node = next((n["index"] for n in graph["nodes"] if n["kind"] == "feature"), -1)
+        if feat_node >= 0:
+            selected_info = session.select_feature_node(feat_node)
+        else:
+            selected_info = None
+            session.finalize_applet()
+        before_png = session.capture_native("before")
+        before_browser = session.capture_browser("before-browser") if session.args.browser_capture else None
+        if feat_node >= 0:
+            session.set_param("clamp", 0.0)
+            session.run_action("apply_clamp")
+        comp_step = session.events.complete("trace.status")["inference"]["comparison"]["completed_step"]
+        session.run_action("generate")
+        validation = session.events.complete("trace.validate")
+        after_png = session.capture_native("after", min_steps={"probabilities": int(comp_step)})
+    except Exception as exc:
+        if not session.show:
+            raise
+        session.show_error(str(exc))
+        session.keep_alive(manifest)
+        return {
+            "mode": "standard",
+            "model": str(session.args.model),
+            "prompt": session.args.prompt,
+            "error": str(exc),
+        }
     if session.show:
         session.keep_alive(manifest)
     return {
@@ -615,6 +678,11 @@ def run_standard(session: Session) -> dict:
             "before_browser": str(before_browser) if before_browser else None,
             "after": str(after_png),
         },
+        "program_draws": (
+            {p["id"]: p["draw"] for p in session.mcp.body("program.status")["programs"] if p.get("draw")}
+            if session.mcp is not None
+            else {}
+        ),
     }
 
 
@@ -640,12 +708,27 @@ def main(argv=None) -> int:
 
     session = Session(args, out, show=args.show)
     try:
-        summary = run_dallas_acceptance(session, args.reference) if args.acceptance else run_standard(session)
+        if session.startup_error is not None:
+            session.show_error(session.startup_error)
+            session.keep_alive(None)
+            summary = {"mode": "show", "model": str(args.model), "prompt": args.prompt, "error": session.startup_error}
+        elif args.acceptance:
+            summary = run_dallas_acceptance(session, args.reference)
+            if args.show:
+                session.keep_alive(load_dallas_manifest())
+        else:
+            summary = run_standard(session)
+    except Exception as exc:
+        if not args.show:
+            raise
+        session.show_error(str(exc))
+        session.keep_alive(load_dallas_manifest() if args.acceptance else None)
+        summary = {"mode": "dallas_acceptance" if args.acceptance else "standard", "error": str(exc)}
     finally:
-        session.close()
+        session.close(stop_app=not args.show)
     summary["peak_process_bytes"] = peak_memory_bytes(out)
     save_json(out / "result.json", summary)
-    return 0
+    return 1 if "error" in summary else 0
 
 
 if __name__ == "__main__":
