@@ -21,7 +21,7 @@ from ._intervene import (InterventionError, _DictionarySnapshot, _model_state,
 from ._memory import autorelease_scope
 from ._output import bounded_text, forward_logits, prompt_inputs
 from ._points import _architecture, capture
-from ._published_identity import _PublishedModelSnapshot, forward_hooks, published_memory
+from ._published_identity import _PublishedHookSnapshot, _PublishedModelSnapshot, forward_hooks, published_memory
 
 PROTOCOL = 'published_dallas_v1'
 _LIVE_ATTENTION = ContextVar('caliper_published_live_attention', default=frozenset())
@@ -158,6 +158,7 @@ class PublishedCases:
         self.directory = None
         self._identity = None
         self._model_snapshot = None
+        self._hook_snapshot = None
         self._handles = []
         self._forward_scopes = []
 
@@ -182,6 +183,11 @@ class PublishedCases:
         return snapshot is not None and snapshot.matches(
             self.interventions.executor, self.model, self.tokenizer, self.guard,
             full_identity=self._model_identity)
+
+    def _check_hooks(self):
+        if self._hook_snapshot is None:
+            raise ValueError('published preparation has no hook identity')
+        self._hook_snapshot.check()
 
     def _write_json(self, name, value):
         target = self.directory / name
@@ -213,6 +219,7 @@ class PublishedCases:
 
     def _prepare(self):
         if self.preparation is not None:
+            self._check_hooks()
             return deepcopy(self.preparation)
         service, started = self.interventions, time.perf_counter()
         executor = service.executor
@@ -235,6 +242,7 @@ class PublishedCases:
         with service._ctl.lock, service._operation('preparation'):
             revision = service._ctl._iv_revision
             with service._ctl._outside_lock(), executor.dictionary_admission(), service.suspend(), torch.no_grad():
+                self._hook_snapshot = _PublishedHookSnapshot(self)
                 identity = self._model_identity()
                 self._model_snapshot = _PublishedModelSnapshot.create(executor, identity, self.guard)
                 tokens, values, saved_patterns = {}, {}, {}
@@ -275,9 +283,11 @@ class PublishedCases:
                             baseline = logits.detach().clone()
                             saved_patterns = {name: captured[name].detach().clone() for name in patterns}
                         captured.clear()
+                        self._check_hooks()
                 if self._model_identity() != identity or not self._model_matches():
                     raise ValueError('published source model changed during preparation')
                 self._model_snapshot.bind_public_identity(self)
+                self._check_hooks()
             service._check_revision(revision)
         binding = {'protocol': PROTOCOL, 'source_revision': SOURCE_REVISION, 'producer': 'caliper',
                    'model_content_hash': identity[4], 'model_settings': dict(identity[5]),
@@ -297,6 +307,7 @@ class PublishedCases:
         self._handles.append(self.model.register_forward_pre_hook(self._enter_forward, with_kwargs=True))
         self._handles.append(self.model.register_forward_hook(self._exit_forward, always_call=True))
         self._model_snapshot.register_public_identity()
+        self._check_hooks()
         return deepcopy(binding)
 
     def _enter_forward(self, module, args, kwargs):
@@ -359,6 +370,7 @@ class PublishedCases:
                 self._model_snapshot.release()
                 self._model_snapshot = None
             self._identity = self.preparation = None
+            self._hook_snapshot = None
 
     def case(self, cell):
         """Return exact specifications and Caliper source values for one case."""
@@ -410,6 +422,7 @@ class PublishedCases:
         evidence = []
         try:
             specs, members = self.case(cell)
+            self._check_hooks()
             def evaluate():
                 executor = self.interventions.executor
                 if (executor.dictionary_id != self.preparation['dictionary_identity']
@@ -424,6 +437,7 @@ class PublishedCases:
                 self._reserve(self.model.config.vocab_size * 64)
                 from ._replication_native import observe_features, write_native
                 observations = {}
+                self._check_hooks()
                 hooks = forward_hooks(self.model)
                 with (observe_features(self.model, executor.dictionary, GROUPS['Say Victoria'],
                                        input_shape=inputs['input_ids'].shape, guard=self.guard,
@@ -432,6 +446,7 @@ class PublishedCases:
                         logits = forward_logits(self.model, inputs, guard=self.guard)[0, -1]
                 if not self._model_matches() or forward_hooks(self.model) != hooks:
                     raise ValueError('published model changed during the case forward')
+                self._check_hooks()
                 pair = torch.stack((self.baseline_logits, logits))
                 probabilities = pair.softmax(-1)
                 top_probs, top_ids = probabilities.topk(5, dim=-1)
@@ -476,11 +491,22 @@ class PublishedCases:
                 self._write_json(metadata.name, result)
                 result['metadata_file'] = str(metadata.relative_to(self.output_directory))
                 return result, pair
+            def prepare_output(evaluated):
+                self._check_hooks()
+                publication = prepare(evaluated[1])
+                self._check_hooks()
+                return publication
+
+            def check_commit():
+                if check is not None:
+                    check()
+                self._check_hooks()
+
             from ._publish import _publication_scope
             with _publication_scope(self.model), autorelease_scope(next(self.model.parameters()).device):
                 result, _ = self.interventions.replace_atomic(
-                    specs, evaluate, prepare=None if prepare is None else lambda evaluated: prepare(evaluated[1]),
-                    check=check)
+                    specs, evaluate, prepare=None if prepare is None else prepare_output,
+                    check=check_commit)
             result['action_seconds'] = time.perf_counter() - started
             # Only this committed result makes a candidate export authoritative.
             self.last_result = result

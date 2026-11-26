@@ -23,6 +23,7 @@ def matches(snapshot, service, guard=None):
 
 
 def test_preparation_preserves_full_hash_and_actions_scan_every_byte(published, monkeypatch):
+    from caliper.interp import _replication_actions as actions
     model, _, _, service, runtime = published
     original = service.executor._identity()
     assert runtime.preparation['model_content_hash'] == original[4]
@@ -41,12 +42,13 @@ def test_preparation_preserves_full_hash_and_actions_scan_every_byte(published, 
     monkeypatch.setattr(_intervene, '_content_identity', hashed)
     monkeypatch.setattr(_intervene, '_cpu_byte_equal', compared)
     monkeypatch.setattr(_intervene, '_SNAPSHOT_COMPARE_BYTES', 1024)
-    handle = model.register_forward_hook(lambda *args: forwards.append(1))
-    try:
-        for _ in range(2):
-            runtime.run(26)
-    finally:
-        handle.remove()
+    forward = actions.forward_logits
+    def counted(*args, **kwargs):
+        forwards.append(1)
+        return forward(*args, **kwargs)
+    monkeypatch.setattr(actions, 'forward_logits', counted)
+    for _ in range(2):
+        runtime.run(26)
     assert forwards == [1, 1]
     assert calls == []
     assert sum(sizes) == 4 * runtime._model_snapshot.nbytes

@@ -192,7 +192,8 @@ def test_missing_live_coordinate_aborts_candidate_and_cleans_scope(original_case
     runtime.run(26)
     prior = service.state_dict(), deepcopy(runtime.last_result), set(runtime.directory.iterdir())
 
-    monkeypatch.setattr(_intervene.Intervention, 'read', lambda *args, **kwargs: None)
+    # The read hook stays valid, but its point runs after the feature write.
+    monkeypatch.setattr(_intervene, '_reference_read_point', lambda current, layer: current.lm_head)
     with pytest.raises(_intervene.InterventionError, match='shapes differ'):
         runtime.run(26)
     assert service.state_dict() == prior[0] and runtime.last_result == prior[1]

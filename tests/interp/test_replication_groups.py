@@ -262,60 +262,67 @@ def test_published_values_come_from_independent_caliper_prompts(published):
     assert runtime.preparation['freeze_norms'] is False
 
 
-def test_published_actions_export_all_probabilities_and_repeat_real_forward(published):
+def test_published_actions_export_all_probabilities_and_repeat_real_forward(published, monkeypatch):
     import json
     import numpy as np
+    from caliper.interp import _replication_actions as actions
     from caliper.interp._output import forward_logits
     model, tokenizer, _, service, runtime = published
     calls = []
-    handle = model.register_forward_hook(lambda *args: calls.append(1))
-    try:
-        first = runtime.run(26)
-        second = runtime.run(26)
-        assert calls == [1, 1]
-        assert first['evidence']['file'] != second['evidence']['file']
-        assert first['argmax_token_ids'] == second['argmax_token_ids']
-        archive = runtime.output_directory / second['evidence']['file']
-        with np.load(archive, allow_pickle=False) as arrays:
-            probabilities = arrays['probabilities']
-            logits = arrays['logits']
-        assert probabilities.shape == (2, model.config.vocab_size)
-        assert second['argmax_token_ids'] == probabilities.argmax(-1).tolist()
-        assert len(json.dumps(runtime.status('AB', service.specifications()))) < 32768
-        assert 'probabilities' not in second
-        saved = service.state_dict()
-        direct = forward_logits(model, tokenizer('AB'))[0, -1]
-        torch.testing.assert_close(direct.float(), torch.from_numpy(logits[1]), rtol=0, atol=0)
-        service.load_state_dict(saved, restore_active=True)
-        with service.temporary_state(saved):
-            replay = forward_logits(model, tokenizer('AB'))[0, -1]
-        torch.testing.assert_close(replay, direct, rtol=0, atol=0)
-        runtime.run(10)
-        assert not service.specifications()
-    finally:
-        handle.remove()
+    def counted(*args, **kwargs):
+        calls.append(1)
+        return forward_logits(*args, **kwargs)
+    monkeypatch.setattr(actions, 'forward_logits', counted)
+    first = runtime.run(26)
+    second = runtime.run(26)
+    assert calls == [1, 1]
+    assert first['evidence']['file'] != second['evidence']['file']
+    assert first['argmax_token_ids'] == second['argmax_token_ids']
+    archive = runtime.output_directory / second['evidence']['file']
+    with np.load(archive, allow_pickle=False) as arrays:
+        probabilities = arrays['probabilities']
+        logits = arrays['logits']
+    assert probabilities.shape == (2, model.config.vocab_size)
+    assert second['argmax_token_ids'] == probabilities.argmax(-1).tolist()
+    assert len(json.dumps(runtime.status('AB', service.specifications()))) < 32768
+    assert 'probabilities' not in second
+    saved = service.state_dict()
+    direct = forward_logits(model, tokenizer('AB'))[0, -1]
+    torch.testing.assert_close(direct.float(), torch.from_numpy(logits[1]), rtol=0, atol=0)
+    service.load_state_dict(saved, restore_active=True)
+    with service.temporary_state(saved):
+        replay = forward_logits(model, tokenizer('AB'))[0, -1]
+    torch.testing.assert_close(replay, direct, rtol=0, atol=0)
+    runtime.run(10)
+    assert not service.specifications()
 
 
 def test_published_dictionary_mutation_in_persistent_pre_hook_refuses(published):
     from caliper.interp._replication_actions import GROUPS
     model, _, ctl, service, runtime = published
-    first = runtime.run(26)
-    saved, records = service.state_dict(), dict(ctl._ivs)
-    files = set(runtime.directory.iterdir())
     layer, feature, position = GROUPS['Texas'][0]
     assert runtime.values['dallas'][(layer, feature, position)] > 0
     decoder = service.dictionary.layers[layer].W_dec
     version = decoder._version
     calls = []
+    armed = False
 
     def mutate(_model, _args):
+        if not armed:
+            return
         decoder.data[feature, 0] += .1
         calls.append(1)
         assert decoder._version == version
         assert runtime._model_matches()
 
+    runtime.close()
     handle = model.register_forward_pre_hook(mutate)
     try:
+        runtime.prepare()
+        first = runtime.run(26)
+        saved, records = service.state_dict(), dict(ctl._ivs)
+        files = set(runtime.directory.iterdir())
+        armed = True
         with pytest.raises(InterventionError, match='dictionary content changed'):
             runtime.run(26)
         assert calls == [1]
@@ -526,6 +533,7 @@ def test_prepared_candidate_refusal_preserves_public_success(replicated_hosted, 
     import threading
     from caliper import _programs
     from caliper.interp import _publish
+    from caliper.interp import _replication_actions as actions
     run, _ = replicated_hosted
     run.apply_published_case(18)
     records = dict(run.controls._ivs)
@@ -537,7 +545,11 @@ def test_prepared_candidate_refusal_preserves_public_success(replicated_hosted, 
               for name, tensor in _publish._TENSORS.items()}
     original = run.output.prepare_logits
     forwards, candidates = [], []
-    handle = run.model.register_forward_hook(lambda *args: forwards.append(1))
+    forward = actions.forward_logits
+    def counted(*args, **kwargs):
+        forwards.append(1)
+        return forward(*args, **kwargs)
+    monkeypatch.setattr(actions, 'forward_logits', counted)
 
     def prepare(*args, **kwargs):
         publication, result = original(*args, **kwargs)
@@ -570,11 +582,8 @@ def test_prepared_candidate_refusal_preserves_public_success(replicated_hosted, 
         return publication, result
 
     monkeypatch.setattr(run.output, 'prepare_logits', prepare)
-    try:
-        with pytest.raises((InterventionError, ValueError, RuntimeError)):
-            run.apply_published_case(26)
-    finally:
-        handle.remove()
+    with pytest.raises((InterventionError, ValueError, RuntimeError)):
+        run.apply_published_case(26)
     assert forwards == [1] and len(candidates) == 1
     assert all(run.controls._ivs[key] is record for key, record in records.items())
     if phase != 'revision':

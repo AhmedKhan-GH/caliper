@@ -86,16 +86,142 @@ def _structure(model, state):
     return tensors, modules
 
 
-def forward_hooks(model):
-    """Bind hook order and dispatch flags across one fresh action forward."""
+def forward_hooks(model, *, exclude=(), references=None):
+    """Bind hook order and dispatch flags, except for admitted owned handles."""
     from torch.nn.modules import module as global_hooks
     fields = ('_forward_pre_hooks', '_forward_pre_hooks_with_kwargs', '_forward_hooks',
               '_forward_hooks_with_kwargs', '_forward_hooks_always_called')
+    omitted = {(id(registry), handle.id) for handle in exclude
+               for ref in (handle.hooks_dict_ref, *handle.extra_dict_ref)
+               if (registry := ref()) is not None}
     def entries(owner, names):
-        return tuple((field, tuple((key, _callable_identity(value))
-                                  for key, value in getattr(owner, field, {}).items())) for field in names)
+        result = []
+        for field in names:
+            registry, values = getattr(owner, field, {}), []
+            for key, value in registry.items():
+                if (id(registry), key) in omitted:
+                    continue
+                values.append((key, _callable_identity(value)))
+                if references is not None:
+                    function = getattr(value, '__func__', value)
+                    references.extend((value, function, getattr(function, '__code__', None)))
+            result.append((field, tuple(values)))
+        return tuple(result)
     return (entries(global_hooks, tuple('_global' + field for field in fields)),
             tuple((name, id(module), entries(module, fields)) for name, module in model.named_modules()))
+
+
+class _PublishedHookSnapshot:
+    """Bind user registrations and admit explicit Caliper hook lifecycles.
+
+    A user hook must retain its registration, callback, code, order, and flags.
+    A None result does not prove that a callback cannot change a later output.
+    """
+
+    def __init__(self, owner):
+        from .. import _ablate, _programs
+        from ._points import Capture
+        self.owner = weakref.ref(owner)
+        self.model = owner.model
+        self.executor = owner.interventions.executor
+        # Keep the admitted implementations and their code objects, not their names.
+        self.methods = {}
+        for cls, names in (
+                (type(owner), ('_enter_forward', '_exit_forward')),
+                (identity.Intervention, ('pre', 'post', 'read', 'enter_read', 'clear_read')),
+                (identity._PositionedFeatures, ('post',)),
+                (_ablate.Ablation, ('_forward_hook',)), (Capture, ('_start',))):
+            for name in names:
+                function = getattr(cls, name)
+                self.methods[function] = function.__code__
+        self.closures = {}
+        for function, name, variable, kwargs in (
+                (Capture._output, 'hook', 'self', False),
+                (Capture._pre, 'hook', 'self', True),
+                (Capture._enter_locked, 'pattern', 'self', False),
+                (_ablate.Ablation._pre_hook, 'hook', 'self', False),
+                (_ablate.ablate, 'hook', 'a', True)):
+            code, = (code for code in function.__code__.co_consts
+                     if isinstance(code, type(function.__code__)) and code.co_name == name)
+            self.closures[code] = variable, kwargs
+        shape_codes = {code.co_name: code for code in _ablate.record_shapes.__code__.co_consts
+                       if isinstance(code, type(_ablate.record_shapes.__code__))}
+        self.shape_remove_code = shape_codes['remove']
+        shape_hook, = (code for code in shape_codes['make'].co_consts
+                       if isinstance(code, type(self.shape_remove_code)) and code.co_name == 'hook')
+        self.closures[shape_hook] = 'store', False
+        self.program_code, = (code for code in _programs._resolve.__code__.co_consts
+                              if isinstance(code, type(_programs._resolve.__code__))
+                              and code.co_name == '<lambda>')
+        self.references = []
+        self.original = self._current(references=self.references)
+
+    def _owned_handles(self):
+        from .. import _ablate, _programs
+        from . import _points
+        owner = self.owner()
+        if owner is None or owner.model is not self.model or owner.interventions.executor is not self.executor:
+            return
+        for handle in owner._handles:
+            yield handle, owner
+        for hook in list(self.executor._hooks):
+            if type(hook) is identity._PositionedMember:
+                hook = hook.group
+            if type(hook) in (identity.Intervention, identity._PositionedFeatures) and hook.service is self.executor:
+                for handle in hook.handles:
+                    yield handle, hook
+            elif type(hook) is _ablate.Ablation and hook._model() is self.model and hook._handle is not None:
+                yield hook._handle, hook
+        for capture in list(_points._ACTIVE.get(self.model, {}).values()):
+            if type(capture) is _points.Capture and not capture._closed:
+                for handle in capture._handles:
+                    yield handle, capture
+        # Controls removes its shape observers at the first ordinary boundary.
+        shapes_off = owner.interventions._shapes_off
+        if getattr(shapes_off, '__code__', None) is self.shape_remove_code:
+            cells = dict(zip(shapes_off.__code__.co_freevars, shapes_off.__closure__))
+            for handle in cells['handles'].cell_contents:
+                yield handle, _ablate._shapes.get(self.model)
+        if _programs._STATE['model'] is self.model:
+            for name, handle in list(_programs._ACT_HOOKS.items()):
+                yield handle, (name, _programs._WATCH_EPOCH)
+
+    def _permitted(self, handle, owner):
+        registry = handle.hooks_dict_ref()
+        if registry is None or handle.id not in registry:
+            return False
+        callback = registry[handle.id]
+        function = getattr(callback, '__func__', None)
+        code = getattr(callback, '__code__', None)
+        if function in self.methods and getattr(callback, '__self__', None) is owner:
+            if code is not self.methods[function]:
+                return False
+            kwargs = function.__name__ in ('pre', 'post', 'read', '_enter_forward')
+            always = function.__name__ in ('clear_read', '_exit_forward')
+        elif code in self.closures:
+            variable, kwargs = self.closures[code]
+            cells = dict(zip(code.co_freevars, callback.__closure__ or ()))
+            if variable not in cells or cells[variable].cell_contents is not owner:
+                return False
+            always = False
+        elif code is self.program_code and callback.__defaults__ == owner:
+            kwargs = always = False
+        else:
+            return False
+        # Flags are part of the admitted dispatch contract, including owned hooks.
+        extras = tuple(ref() for ref in handle.extra_dict_ref)
+        return (bool(extras and handle.id in extras[0]) == kwargs
+                and bool(len(extras) > 1 and handle.id in extras[1]) == always)
+
+    def _current(self, *, references=None):
+        handles = [handle for handle, owner in self._owned_handles() if self._permitted(handle, owner)]
+        return forward_hooks(self.model, exclude=handles, references=references)
+
+    def check(self):
+        owner = self.owner()
+        if (owner is None or owner.model is not self.model
+                or owner.interventions.executor is not self.executor or self._current() != self.original):
+            raise ValueError('published preparation hooks changed; close and prepare again')
 
 
 class _PublishedModelSnapshot(identity._DictionarySnapshot):
