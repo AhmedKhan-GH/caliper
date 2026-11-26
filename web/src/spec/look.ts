@@ -32,6 +32,8 @@ export const COL = {
   secondary: tok('secondary'),
   faint: tok('faint'),
   accent: tok('bronze'),
+  errorText: '#e6785a',
+  statusError: '#ff664d',
   flatPoint: `rgb(${FLAT_POINT[0]},${FLAT_POINT[1]},${FLAT_POINT[2]})`,
 } as const;
 

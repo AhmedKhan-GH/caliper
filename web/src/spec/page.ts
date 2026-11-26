@@ -22,12 +22,12 @@
 // reads (controls.ts).
 
 import { computeLayout, effectiveLayout, findControl, findPanel, metricsForTextScale, panelTitle, type SpecLayout, type TabChoice } from './layout.js';
-import { drawControl, type ControlData } from './controls.js';
+import { drawControl, formatProgressStatus, progressElapsedSeconds, type ControlData } from './controls.js';
 import { ProgramViews, type ProgramPick } from './programs.js';
 import { COL, ColorKey } from './look.js';
-import { drawPanel, drawState, drawTabs, type PanelView } from './draw.js';
+import { drawPanel, drawProgressOverlay, drawState, drawTabs, type PanelProgress, type PanelView } from './draw.js';
 import { preparePanel, type PreparedPanel } from './prepare.js';
-import type { PanelDataResult, Spec } from './types.js';
+import type { PanelDataResult, ProgressPanelState, RunProgress, Spec } from './types.js';
 
 export interface CommandEnvelope { ok: boolean; result?: any; error?: { code: string; message: string; where: string } }
 
@@ -51,6 +51,8 @@ export async function command(base: URL, token: string, name: string, args: Reco
 
 export interface PageParts {
   title: HTMLElement; area: HTMLElement; canvas: HTMLCanvasElement; status: HTMLElement; list: HTMLElement;
+  /** Optional top canvas over WebGPU mounts for panel progress overlays. */
+  overlay?: HTMLCanvasElement;
   /** The line under the bar that says why no live data shows (a dashboard the app does not have open). */
   banner?: HTMLElement;
 }
@@ -72,7 +74,10 @@ export interface SpecPageState {
   applet: string;
   title: string;
   panels: { id: string; title: string; primitive: string; drawn: boolean; state: string | null; info: string;
+            progress: PanelProgress | null;
             rect: { x: number; y: number; w: number; h: number } }[];
+  /** Hosted run progress, when reported by the app. */
+  progress: RunProgress | null;
   /** The control leaves shown, with the state each shows. */
   controls: { id: string; kind: string; title: string; value: unknown; text: string; enabled: boolean; why: string;
               rect: { x: number; y: number; w: number; h: number } }[];
@@ -99,7 +104,11 @@ export class SpecPage {
   private whole: { label: string; detail: string } | null = null;
   private requests = 0;
   private timer = 0;
+  private animId = 0;
   private notOpen = false;
+  private runProgress: RunProgress | null = null;
+  private readonly lastPanelProgress = new Map<string, PanelProgress>();
+  private readonly startedAtMs = performance.now();
   readonly programs: ProgramViews;
 
   constructor(private readonly parts: PageParts, private readonly base: URL, private readonly token: string,
@@ -111,20 +120,31 @@ export class SpecPage {
     parts.canvas.addEventListener('wheel', (e) => this.onWheel(e), { passive: false });
   }
 
+  private isRunProgressActive(): boolean {
+    const st = this.runProgress?.state ?? '';
+    return !!st && st !== 'ready' && st !== 'idle' && st !== 'error';
+  }
+
   start(): void {
     if (!this.applet) {
       void this.listApplets();
       return;
     }
+    this.draw();
     const loop = async () => {
       await this.refresh();
-      this.timer = window.setTimeout(loop, this.period);
+      const delay = this.isRunProgressActive() ? Math.min(this.period, 250) : this.period;
+      this.timer = window.setTimeout(loop, delay);
     };
     void loop();
   }
 
   stop(): void {
     window.clearTimeout(this.timer);
+    if (this.animId) {
+      cancelAnimationFrame(this.animId);
+      this.animId = 0;
+    }
   }
 
   /** Without an applet in the address, the page lists the workspace's saved spec applets as links. */
@@ -184,6 +204,11 @@ export class SpecPage {
       return;
     }
     this.whole = null;
+    if (env.result.progress && typeof env.result.progress === 'object') {
+      this.runProgress = env.result.progress as RunProgress;
+    } else if (env.result.open_in_app === false) {
+      this.runProgress = null;
+    }
     // A saved dashboard that the app does not have open gets no live data: the page says so, and asks
     // for every panel again when that changes.
     const notOpen = env.result.open_in_app === false;
@@ -239,6 +264,11 @@ export class SpecPage {
         if (env.ok && !env.result.unchanged && env.result.data) {
           e.control = env.result.data as ControlData;
           e.version = env.result.version;
+          if (e.control.progress && typeof e.control.progress === 'object') {
+            this.runProgress = e.control.progress;
+          } else if ((e.control.bind === 'param:output.status' || e.control.id === 'trace_status') && e.control.progress === null) {
+            this.runProgress = null;
+          }
         } else if (!env.ok) {
           e.control = null;
           e.version = '';
@@ -276,8 +306,68 @@ export class SpecPage {
     });
   }
 
+  private isPlaceholderPanel(p: PreparedPanel | null): boolean {
+    if (!p || p.state) return true;
+    if (p.primitive === 'text' && p.text && !p.text.hasValue) {
+      const t = p.text.text;
+      return !t || t === 'The trace is not available.' || t === 'No feature is selected.';
+    }
+    return false;
+  }
+
+  private panelProgressFromRun(obj: ProgressPanelState | RunProgress, elapsedS: number | null, translucent: boolean): PanelProgress | null {
+    const state = obj.state || '';
+    if (!state || state === 'ready' || state === 'idle') return null;
+    const isErr = state === 'error';
+    return {
+      active: true,
+      error: isErr,
+      stage: obj.stage || state,
+      label: obj.label || (isErr ? 'Error' : state),
+      detail: isErr ? (obj.error ?? undefined) : undefined,
+      done: typeof obj.done === 'number' ? obj.done : null,
+      total: typeof obj.total === 'number' ? obj.total : null,
+      elapsedS,
+      translucent,
+    };
+  }
+
+  private resolvePanelProgress(panelId: string, primitive: string, e: PanelEntry, nowMs: number): PanelProgress | null {
+    if (this.notOpen) return null;
+    const rp = this.runProgress;
+    const runState = rp?.state ?? '';
+    const runActive = !!runState && runState !== 'ready' && runState !== 'idle';
+    const elapsedS = progressElapsedSeconds(rp);
+    const hasScenePrograms = primitive === 'scene' && this.programs.has(panelId);
+    const sceneWaiting = hasScenePrograms && !this.programs.hasDrawnFrame(panelId);
+    const emptyOrPlaceholder = this.isPlaceholderPanel(e.prepared) || sceneWaiting;
+
+    if (rp?.panels && rp.panels[panelId]) {
+      const p = this.panelProgressFromRun(rp.panels[panelId], elapsedS, !emptyOrPlaceholder);
+      if (p) return p;
+    } else if (rp && runActive && (emptyOrPlaceholder || runState === 'starting' || runState === 'loading')) {
+      const p = this.panelProgressFromRun(rp, elapsedS, !emptyOrPlaceholder);
+      if (p) return p;
+    }
+    if (hasScenePrograms) {
+      const bp = this.programs.progressOf(panelId, nowMs);
+      if (bp) return bp;
+    }
+    if (!e.prepared && e.busy) {
+      return {
+        active: true,
+        error: false,
+        stage: 'loading',
+        label: 'Loading panel data',
+        elapsedS: Math.max(0, (nowMs - this.startedAtMs) / 1000),
+      };
+    }
+    return null;
+  }
+
   private draw(): void {
-    const { canvas, area, status } = this.parts;
+    const { canvas, overlay, area, status } = this.parts;
+    const nowMs = performance.now();
     const w = Math.max(1, Math.floor(area.clientWidth)), h = Math.max(1, Math.floor(area.clientHeight));
     const dpr = window.devicePixelRatio || 1;
     if (canvas.width !== Math.round(w * dpr) || canvas.height !== Math.round(h * dpr)) {
@@ -288,6 +378,20 @@ export class SpecPage {
     }
     const ctx = canvas.getContext('2d')!;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    let octx: CanvasRenderingContext2D | null = null;
+    if (overlay) {
+      if (overlay.width !== Math.round(w * dpr) || overlay.height !== Math.round(h * dpr)) {
+        overlay.width = Math.round(w * dpr);
+        overlay.height = Math.round(h * dpr);
+        overlay.style.width = `${w}px`;
+        overlay.style.height = `${h}px`;
+      }
+      octx = overlay.getContext('2d');
+      if (octx) {
+        octx.setTransform(dpr, 0, 0, dpr, 0, 0);
+        octx.clearRect(0, 0, w, h);
+      }
+    }
     // The rules between the panels: the area in the rule colour, which the
     // panels leave showing in the gaps of the layout.
     ctx.fillStyle = COL.rule;
@@ -296,12 +400,25 @@ export class SpecPage {
     const root = spec ? effectiveLayout(spec) : null;
     const before = this.layout.panels.map((p) => p.id).join(' ');
     this.layout = spec && root ? computeLayout(root, spec, { x: 0, y: 0, w, h }, metricsForTextScale(1), this.tabs) : { panels: [], tabs: [] };
+    this.lastPanelProgress.clear();
+    let needsAnim = this.isRunProgressActive();
     if (!spec || !root) {
       this.programs.hideAll(new Set());
       ctx.fillStyle = COL.ground;
       ctx.fillRect(0, 0, w, h);
-      const st = this.whole ?? (spec ? { label: 'No panels', detail: spec.applet.id } : { label: this.status === 'offline' ? 'Offline' : 'Connecting', detail: this.applet });
-      drawState(ctx, st, { x: 0, y: 0, w, h });
+      if (!this.whole && !spec && this.status === 'connecting') {
+        drawProgressOverlay(ctx, {
+          active: true,
+          error: false,
+          stage: 'connecting',
+          label: 'Connecting to Caliper',
+          elapsedS: Math.max(0, (nowMs - this.startedAtMs) / 1000),
+        }, { x: 0, y: 0, w, h }, nowMs);
+        needsAnim = true;
+      } else {
+        const st = this.whole ?? (spec ? { label: 'No panels', detail: spec.applet.id } : { label: this.status === 'offline' ? 'Offline' : 'Connecting', detail: this.applet });
+        drawState(ctx, st, { x: 0, y: 0, w, h });
+      }
     } else {
       this.tabHits = [];
       for (const t of this.layout.tabs) {
@@ -316,16 +433,30 @@ export class SpecPage {
         const e = this.entry(lp.id);
         if (lp.control) {
           const c = findControl(spec, lp.id)!;
-          drawControl(ctx, e.control, c.title ?? c.id, c.kind, lp.rect);
+          drawControl(ctx, e.control, c.title ?? c.id, c.kind, lp.rect, this.runProgress);
           continue;
         }
         const panel = findPanel(spec, lp.id);
         if (!panel) continue;
-        const frame = drawPanel(ctx, e.prepared, panelTitle(spec, panel), lp.rect, !lp.tab, this.key!, e.view);
+        const prog = this.resolvePanelProgress(panel.id, panel.primitive, e, nowMs);
+        if (prog) {
+          this.lastPanelProgress.set(panel.id, prog);
+          if (!prog.error) needsAnim = true;
+        }
+        const frame = drawPanel(ctx, e.prepared, panelTitle(spec, panel), lp.rect, !lp.tab, this.key!, e.view, prog, nowMs);
         if (panel.primitive === 'scene' && this.programs.has(panel.id)) {
           const st = this.notOpen ? NOT_OPEN_STATE : this.programs.stateOf(panel.id);
-          if (st) drawState(ctx, st, frame.content);
-          this.programs.place(panel.id, st ? null : frame.content);
+          if (st) {
+            drawState(ctx, st, frame.content);
+            this.programs.place(panel.id, null);
+          } else {
+            this.programs.place(panel.id, frame.content);
+            if (prog) {
+              drawProgressOverlay(octx ?? ctx, prog, frame.content, nowMs);
+            }
+          }
+        } else if (panel.primitive === 'scene' && prog) {
+          drawProgressOverlay(octx ?? ctx, prog, frame.content, nowMs);
         }
       }
       this.programs.hideAll(new Set(this.layout.panels.map((p) => p.id)));
@@ -337,11 +468,18 @@ export class SpecPage {
         }
     }
     const nPanels = spec?.panel?.length ?? 0, nSources = spec?.source?.length ?? 0;
+    const liveStatus = this.notOpen ? '' : formatProgressStatus(this.runProgress);
     const items = [this.status, ...(spec ? [`applet ${spec.applet.id}`, `${nPanels} panel${nPanels === 1 ? '' : 's'}`,
-      `${nSources} source${nSources === 1 ? '' : 's'}`] : [])];
+      `${nSources} source${nSources === 1 ? '' : 's'}`] : []), ...(liveStatus ? [liveStatus] : [])];
     const text = items.join('  ·  ');
     if (status.textContent !== text) status.textContent = text;
     status.dataset.state = this.status;
+    if (needsAnim && !this.animId) {
+      this.animId = requestAnimationFrame(() => {
+        this.animId = 0;
+        this.draw();
+      });
+    }
   }
 
   private onClick(e: MouseEvent): void {
@@ -410,8 +548,10 @@ export class SpecPage {
         const over = panel?.primitive === 'scene' && this.programs.has(lp.id)
           ? (this.notOpen ? NOT_OPEN_STATE : this.programs.stateOf(lp.id)) : null;
         return { id: lp.id, title: p?.title ?? (spec && panel ? panelTitle(spec, panel) : lp.id), primitive: panel?.primitive ?? '',
-          drawn: !!p && !p.state && !over, state: over?.label ?? p?.state?.label ?? null, info: p?.info ?? '', rect: { ...lp.rect } };
+          drawn: !!p && !p.state && !over, state: over?.label ?? p?.state?.label ?? null, info: p?.info ?? '',
+          progress: this.lastPanelProgress.get(lp.id) ?? null, rect: { ...lp.rect } };
       }),
+      progress: this.runProgress,
       tabs: this.layout.tabs.map((t) => ({ path: t.path, labels: [...t.labels], active: t.active })),
       programs: this.programs.debug(),
       localState: { ...this.programs.localState },

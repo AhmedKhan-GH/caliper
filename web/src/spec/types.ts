@@ -80,6 +80,27 @@ export interface TextData { value: Cell }
 /** A scene panel: its live scene's name, and the instances of pieces it draws (programs.ts, ViewerProgram). */
 export interface SceneData { scene: string | null; programs?: import('./programs.js').ViewerProgram[] }
 
+export interface ProgressPanelState {
+  state: string;
+  stage: string;
+  label: string;
+  done: number | null;
+  total: number | null;
+  error: string | null;
+}
+
+export interface RunProgress {
+  state: string;
+  stage: string;
+  label: string;
+  done: number | null;
+  total: number | null;
+  started_at: number | null;
+  elapsed_s: number;
+  error: string | null;
+  panels?: Record<string, ProgressPanelState>;
+}
+
 export interface PanelDataResult {
   panel: string;
   primitive: string;

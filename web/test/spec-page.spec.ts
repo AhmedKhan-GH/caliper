@@ -243,3 +243,79 @@ test('a refused token draws nothing of the applet', async ({ page }) => {
   await expect.poll(async () => (await pageState(page)).state, { timeout: 15_000 }).toBe('Access refused');
   expect((await pageState(page)).panels).toEqual([]);
 });
+
+test('a waiting panel renders its progress overlay, live status and error state', async ({ page }) => {
+  const errors = await noErrors(page);
+  const spec = {
+    caliper_spec: 1,
+    applet: { id: 'prog', title: 'Circuit Trace' },
+    panel: [
+      { id: 'graph', primitive: 'text', title: 'Attribution Graph', options: { text: 'The trace is not available.' } },
+    ],
+    control: [
+      { id: 'trace_status', kind: 'readout', title: 'Status', bind: 'param:output.status',
+        options: { format: '{status:s}', fields: { status: { control: 'trace_status' } } } },
+    ],
+    layout: { split: 'vertical', children: ['trace_status', 'graph'] },
+  };
+  const progActive = {
+    state: 'tracing',
+    stage: 'attribution',
+    label: 'Attribution batches (10/20)',
+    done: 10,
+    total: 20,
+    started_at: Date.now() / 1000 - 3.5,
+    elapsed_s: 3.5,
+    error: null,
+    panels: {
+      graph: { state: 'tracing', stage: 'attribution', label: 'Attribution batches (10/20)', done: 10, total: 20, error: null },
+    },
+  };
+  const data: Record<string, Json> = {
+    graph: ready('graph', 'text', { value: null }),
+    trace_status: {
+      panel: 'trace_status', primitive: 'control', version: 'v1', unchanged: false, error: null, state: null, bounds: [],
+      data: { id: 'trace_status', kind: 'readout', title: 'Status', bind: 'param:output.status', value: null,
+              text: 'Attribution batches (10/20)  ·  3.5s', enabled: false, why: '', progress: progActive },
+    },
+  };
+  const mock = app({ prog: spec }, { prog: data });
+  await mockApp(page, mock);
+  await page.setViewportSize({ width: 960, height: 600 });
+  await openSpec(page, 'prog');
+  await expect.poll(async () => ((await pageState(page)).panels[0] as any)?.progress?.label ?? null, { timeout: 15_000 })
+    .toBe('Attribution batches (10/20)');
+  // Bronze determinate progress bar pixels appear inside the waiting panel.
+  const bronze = await page.evaluate(() => {
+    const c = document.getElementById('canvas') as HTMLCanvasElement;
+    const d = c.getContext('2d')!.getImageData(0, 0, c.width, c.height).data;
+    let n = 0;
+    for (let i = 0; i < d.length; i += 4) {
+      if (Math.abs(d[i] - 0xb3) <= 4 && Math.abs(d[i + 1] - 0x8b) <= 4 && Math.abs(d[i + 2] - 0x59) <= 4) n++;
+    }
+    return n;
+  });
+  expect(bronze).toBeGreaterThan(150);
+
+  // Transition to error state: panel shows error overlay instead of empty content.
+  const progError = {
+    state: 'error', stage: 'error', label: 'Error', done: null, total: null, started_at: null, elapsed_s: 4.1,
+    error: 'Trace ran out of memory',
+    panels: { graph: { state: 'error', stage: 'error', label: 'Error', done: null, total: null, error: 'Trace ran out of memory' } },
+  };
+  mock.data.prog.trace_status = {
+    ...mock.data.prog.trace_status, version: 'v2',
+    data: { ...mock.data.prog.trace_status.data, text: 'Trace ran out of memory', progress: progError },
+  };
+  await expect.poll(async () => ((await pageState(page)).panels[0] as any)?.progress?.error ?? false, { timeout: 15_000 }).toBe(true);
+  expect(((await pageState(page)).panels[0] as any)?.progress?.detail).toBe('Trace ran out of memory');
+
+  // Transition to ready: progress overlay clears.
+  mock.data.prog.trace_status = {
+    ...mock.data.prog.trace_status, version: 'v3',
+    data: { ...mock.data.prog.trace_status.data, text: 'ready',
+            progress: { state: 'ready', stage: 'ready', label: 'Ready', done: null, total: null, started_at: null, elapsed_s: 0, error: null, panels: {} } },
+  };
+  await expect.poll(async () => ((await pageState(page)).panels[0] as any)?.progress ?? null, { timeout: 15_000 }).toBeNull();
+  expect(errors).toEqual([]);
+});

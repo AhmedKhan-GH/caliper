@@ -22,6 +22,7 @@
 // their new values (PROGRAM op params). The app does not see it.
 
 import type { Rect } from './layout.js';
+import type { PanelProgress } from './draw.js';
 import type { Spec, SpecPanel } from './types.js';
 
 export interface ViewerResource {
@@ -51,7 +52,10 @@ interface Handle {
   setStarting(scene: Record<string, unknown>): boolean;
   destroy(): void;
 }
-interface Loader { mountCaliperViews(container: HTMLElement, options: Record<string, unknown>): Promise<Handle> }
+interface Loader {
+  mountCaliperViews(container: HTMLElement, options: Record<string, unknown>): Promise<Handle>;
+  preloadCaliperViews?(assetBase?: string, assetQuery?: string): Promise<unknown>;
+}
 
 /** A pick of a program's item (live_views_scene.cpp, program_pick_detail). */
 export interface ProgramPick { program: string; item: number; step: number; fields: Record<string, number>; index: number[] }
@@ -86,8 +90,14 @@ function startingOf(panel: SpecPanel): Record<string, unknown> {
 class PanelMount {
   readonly box: HTMLDivElement;
   handle: Handle | null = null;
+  ready = false;
   failed = '';
   starting: Promise<void> | null = null;
+  stage = 'idle';
+  stageLabel = '';
+  stageDone: number | null = null;
+  stageTotal: number | null = null;
+  startedAtMs = 0;
   readonly fed = new Map<string, string>();       // program id -> pin hash it was set with
   readonly params = new Map<string, string>();    // program id -> params JSON last sent
   readonly versions = new Map<string, string>();  // program/resource -> step and length last sent
@@ -162,9 +172,30 @@ export class ProgramViews {
   }
 
   private async start(m: PanelMount, panel: SpecPanel): Promise<void> {
+    m.startedAtMs = performance.now();
+    m.stage = 'script';
+    m.stageLabel = 'Loading renderer script';
+    m.stageDone = 1;
+    m.stageTotal = 3;
+    this.onChange();
     try {
       if (!('gpu' in navigator)) throw new Error('This browser has no WebGPU.');
       const loader = await this.load();
+      const assetBase = new URL('/v0/spec/', this.base).href;
+      const assetQuery = `?token=${encodeURIComponent(this.token)}`;
+      m.stage = 'wasm';
+      m.stageLabel = 'Loading WebAssembly module';
+      m.stageDone = 2;
+      m.stageTotal = 3;
+      this.onChange();
+      if (typeof loader.preloadCaliperViews === 'function') {
+        await loader.preloadCaliperViews(assetBase, assetQuery);
+      }
+      m.stage = 'webgpu';
+      m.stageLabel = 'Initializing WebGPU';
+      m.stageDone = 3;
+      m.stageTotal = 3;
+      this.onChange();
       const o = (panel.options ?? {}) as Record<string, unknown>;
       // The panel's scene options as the app's spec runtime reads them: up (+z when absent), labels, scale bar
       // and the starting camera.
@@ -175,17 +206,24 @@ export class ProgramViews {
       m.camera = JSON.stringify(startingOf(panel));
       m.handle = await loader.mountCaliperViews(m.box, {
         view: panel.id, kind: 'scene', header: false, feed: 'page', scene,
-        assetBase: new URL('/v0/spec/', this.base).href,
-        assetQuery: `?token=${encodeURIComponent(this.token)}`,
+        assetBase,
+        assetQuery,
         onEvent: (e: { view: string; type: string; detail: unknown }) => this.onEvent(panel.id, e.type, e.detail),
       });
       // The module starts its WebGPU device after the mount returns: it takes programs once ready.
       void m.handle.ready.then(() => {
+        m.ready = true;
+        m.stage = 'first_frame';
+        m.stageLabel = 'Waiting for first frame';
+        m.stageDone = null;
+        m.stageTotal = null;
         this.feed(m);
         this.onChange();
       });
     } catch (e) {
       m.failed = e instanceof Error ? e.message : String(e);
+      m.stage = 'error';
+      m.stageLabel = 'Renderer error';
     } finally {
       m.starting = null;
       this.onChange();
@@ -288,6 +326,60 @@ export class ProgramViews {
 
   has(panelId: string): boolean {
     return (this.mounts.get(panelId)?.programs.length ?? 0) > 0;
+  }
+
+  private moduleProgramsOf(m: PanelMount): ModuleProgram[] {
+    const raw = m.handle?.stats.programs as unknown;
+    try {
+      return typeof raw === 'string' ? JSON.parse(raw) as ModuleProgram[] : Array.isArray(raw) ? raw as ModuleProgram[] : [];
+    } catch {
+      return [];
+    }
+  }
+
+  hasDrawnFrame(panelId: string): boolean {
+    const m = this.mounts.get(panelId);
+    if (!m || !m.ready || !m.programs.length) return false;
+    return this.moduleProgramsOf(m).some((p) => (p.frames ?? 0) >= 1);
+  }
+
+  /** Browser-side loading / shader compile / first-frame progress for a scene panel, or null once drawn. */
+  progressOf(panelId: string, nowMs: number): PanelProgress | null {
+    const m = this.mounts.get(panelId);
+    if (!m || !m.programs.length) return null;
+    if (this.stateOf(panelId)) return null;
+    const elapsedS = m.startedAtMs > 0 ? Math.max(0, (nowMs - m.startedAtMs) / 1000) : null;
+    if (m.starting || !m.handle || !m.ready) {
+      return {
+        active: true,
+        error: false,
+        stage: m.stage || 'script',
+        label: m.stageLabel || 'Loading renderer',
+        done: m.stageDone,
+        total: m.stageTotal,
+        elapsedS,
+      };
+    }
+    const mod = this.moduleProgramsOf(m);
+    if (mod.some((p) => (p.frames ?? 0) >= 1)) return null;
+    const refused = mod.find((p) => p.state === 'refused');
+    if (refused && mod.every((p) => p.state === 'refused')) {
+      return {
+        active: true,
+        error: true,
+        stage: 'error',
+        label: 'Program refused',
+        detail: refused.message || refused.code,
+      };
+    }
+    const checking = mod.some((p) => p.state === 'checking');
+    return {
+      active: true,
+      error: false,
+      stage: checking ? 'compiling' : 'first_frame',
+      label: checking ? 'Compiling shaders' : 'Waiting for first frame',
+      elapsedS,
+    };
   }
 
   /** A panel's state for the page to show over its content, or null while it draws. */
