@@ -388,8 +388,8 @@ def _resolve(off: Offer, req: dict, kind: str, retain: int = SERIES_RETAIN_MIN) 
     if tile is not None:
         out["tile"] = tile
     _layout(src, kind, out)                      # the payload must fit the hard limits
-    if "max_extent" in rbudget:                  # and one frame (caliper/_wire.py)
-        from ._wire import payload_frame_error
+    if "max_extent" in rbudget:                  # and one frame (caliper/_wire_dataview.py)
+        from ._wire_dataview import payload_frame_error
         err = payload_frame_error(kind, rbudget["max_extent"], lambda m: _layout(
             src, kind, dict(out, budget=dict(rbudget, max_extent=m)))["extent"])
         if err is not None:
