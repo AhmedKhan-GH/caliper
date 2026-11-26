@@ -1543,7 +1543,8 @@ __all__ += ["step", "pause", "param", "action", "items", "controls", "Param", "A
             "ItemSpace"]
 from . import _controls                                        # noqa: E402
 from . import _programs                                        # noqa: E402
-from ._controls import Action, ItemSpace, Param                # noqa: E402
+from ._controls_selection import ItemSpace                    # noqa: E402
+from ._controls_spec import Action, Param                       # noqa: E402
 _CTL = _controls.CONTROLS
 
 

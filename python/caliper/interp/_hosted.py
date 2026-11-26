@@ -11,7 +11,7 @@ from pathlib import Path
 import threading
 import time
 
-from .._controls import RUN_PAUSING, RUN_STEPPING, intervention_key
+from .._controls_spec import RUN_PAUSING, RUN_STEPPING, intervention_key
 from .._intervention_protocol import internal_forward, specification
 from ._graph import LARGE_NODE_CAP
 from ._hosted_controls import _HostedControlsMixin

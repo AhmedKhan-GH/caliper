@@ -4,7 +4,7 @@ from __future__ import annotations
 from copy import deepcopy
 import math
 
-from .._controls import intervention_key
+from .._controls_spec import intervention_key
 from .._intervention_protocol import internal_forward
 from ._output import bounded_text
 from ._prompt import prompt_inputs
