@@ -183,13 +183,17 @@ class HostedService(InterpretationService):
         self.owner = owner
         self.boundary_running = False
         self.boundary_thread = None
-        tracer = Tracer(
-            owner.model,
-            owner.tokenizer,
-            owner.dictionary,
-            backend=owner.backend,
-            index=owner.index,
-            guard=owner.guard,
+        tracer = (
+            Tracer(
+                owner.model,
+                owner.tokenizer,
+                owner.dictionary,
+                backend=owner.backend,
+                index=owner.index,
+                guard=owner.guard,
+            )
+            if owner.backend is not None
+            else None
         )
         super().__init__(
             model=owner.model,
@@ -206,6 +210,24 @@ class HostedService(InterpretationService):
         self.owner = owner
         self.progress_callback = owner._on_service_progress
 
+    def attach_loaded_resources(self) -> None:
+        with self.lock:
+            self.model = self.owner.model
+            self.tokenizer = self.owner.tokenizer
+            self.dictionary = self.owner.dictionary
+            self.index = self.owner.index
+            self.memory = self.owner.guard
+            self.tracer = Tracer(
+                self.owner.model,
+                self.owner.tokenizer,
+                self.owner.dictionary,
+                backend=self.owner.backend,
+                index=self.owner.index,
+                guard=self.owner.guard,
+                controls=getattr(self, "controls", None),
+            )
+            self._bind_resources()
+
     def _bind_controls(self, controls):
         if self.tracer is not None:
             self.tracer.controls = controls
@@ -217,6 +239,13 @@ class HostedService(InterpretationService):
                 raise ValueError("intervention exceeds the checkpoint metadata limits")
 
     def submit(self, metadata, reply, *, acknowledge=None):
+        from .. import _interpret_protocol as protocol
+
+        if protocol.request(metadata) and metadata["method"] != "trace.status":
+            with self.owner._inference_lock:
+                ready = self.owner._inference_ready
+            if not ready:
+                raise Refused("interpret.busy", "Model resources are still loading.")
         status, result = super().submit(metadata, reply, acknowledge=acknowledge)
         if metadata["method"] == "trace.status":
             inference = self.owner.inference_status()
@@ -410,6 +439,7 @@ class HostedInference:
         self.backend = self.index = self.guard = None
         self.model = self.tokenizer = self.dictionary = None
         self.fixture_display = None
+        self._early_programs_enabled = False
 
         if resources is not None:
             self._bind_loaded_resources(*resources)
@@ -634,7 +664,15 @@ class HostedInference:
         try:
             self.status = add_param("output.status", "Loading model weights" if self.backend is None else "ready")
             self.progress = add_param("output.progress", self._progress_json())
+            # Register the interpretation service and enable watch capabilities before
+            # serving so the initial HELLO/WELCOME announces interpret, programs,
+            # resources, and interventions even while model weights are loading.
+            self.service = register_service(HostedService(self), controls=self.controls)
             if self.backend is None:
+                from .. import _net_programs
+
+                _net_programs.enable()
+                self._early_programs_enabled = True
                 if self.managed is not None:
                     self.managed.write_link(caliper.serve().url)
                 self._progress_started_at = time.time()
@@ -654,11 +692,16 @@ class HostedInference:
                     self._set_progress("error", f"Model load failed: {exc}")
                     raise
                 self._bind_loaded_resources(*loaded)
+                self.service.attach_loaded_resources()
             else:
                 self.backend.progress_callback = self._on_backend_progress
 
-            self.service = register_service(HostedService(self), controls=self.controls)
             self.handle = caliper.watch(self.model, activations=False)
+            if self._early_programs_enabled:
+                from .. import _net_programs
+
+                _net_programs.disable()
+                self._early_programs_enabled = False
             self.interventions = self.controls.intervention_service
             self.interventions.configure(
                 dictionary=self.dictionary,
@@ -1655,6 +1698,11 @@ class HostedInference:
         if self.handle is not None:
             self.handle.remove()
             self.handle = None
+        if self._early_programs_enabled:
+            from .. import _net_programs
+
+            _net_programs.disable()
+            self._early_programs_enabled = False
         if self.index is not None:
             self.index.close()
         if self.managed is not None and self.managed.inference is self:

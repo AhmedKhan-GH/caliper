@@ -335,12 +335,17 @@ def test_staged_progress_covers_load_trace_generation_examples_and_errors(tmp_pa
     assert "output.progress" in READ_ONLY_PARAMS
 
     seen: list[dict] = []
+    caps_during_load: list[list[str]] = []
     orig_publish = ctl._publish
 
     def record_publish(*args, **kwargs):
+        from caliper import _net_controls
         param = ctl.params.get("output.progress")
         if param is not None and isinstance(param.value, str) and param.value:
-            seen.append(json.loads(param.value))
+            item = json.loads(param.value)
+            seen.append(item)
+            if item.get("state") == "loading":
+                caps_during_load.append(_net_controls.capabilities(True))
         return orig_publish(*args, **kwargs)
 
     monkeypatch.setattr(ctl, "_publish", record_publish)
@@ -348,6 +353,14 @@ def test_staged_progress_covers_load_trace_generation_examples_and_errors(tmp_pa
     run = HostedInference("tiny-lm", dict_dir, "ABCD", defer_load=True)
     run.start()
     try:
+        # Watch and interpretation capabilities must already be announced during deferred load
+        # so the initial stream handshake supports programs, resources, and trace.status.
+        assert caps_during_load
+        for caps in caps_during_load:
+            assert "programs" in caps
+            assert "interventions" in caps
+            assert "interpretation" in caps
+
         stages = [item["stage"] for item in seen]
         assert "weights" in stages
         assert "transcoders" in stages
