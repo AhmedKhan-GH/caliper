@@ -1,4 +1,4 @@
-"""CPU regressions for hosted latency without weaker content or memory checks."""
+"""CPU regressions for hosted content checks and memory admission."""
 from types import SimpleNamespace
 
 import pytest
@@ -8,7 +8,14 @@ from caliper.interp._hosted import _RunGuard
 from caliper.interp._intervene import _content_identity
 from caliper.interp._memory import CleanStop, MemoryGuard
 from caliper.interp import _dictionary
+from tests.interp.dictionary_check_fixture import dictionary_checks
 from .test_hosted import hosted_run
+
+
+@pytest.fixture(autouse=True)
+def local_transport(monkeypatch):
+    # These checks use the control route in the process.
+    monkeypatch.setattr("caliper.serve", lambda: SimpleNamespace(url="in-process"))
 
 
 def guarded_memory():
@@ -117,7 +124,7 @@ def test_new_clamp_checks_bytes_at_admission_and_installation(hosted_run, monkey
     assert run._owned_clamp is owned
 
 
-def test_clamp_diagnostics_retain_completion_and_do_not_validate_on_status(hosted_run):
+def test_clamp_status_retains_completion_without_validation(hosted_run, dictionary_checks):
     from caliper import _wire
     from .test_hosted import _trace_at_boundary
     run, route = hosted_run
@@ -128,23 +135,23 @@ def test_clamp_diagnostics_retain_completion_and_do_not_validate_on_status(hoste
     assert route.on_control(None, _wire.Control(1, "set", name="clamp", value=0.).to_meta())["status"] == "ok"
     assert route.on_control(None, _wire.Control(2, "run", name="apply_clamp").to_meta())["status"] == "queued"
     run.boundary()
+    checks = dictionary_checks(run.interventions.executor)
     after = run.inference_status()
     identity = after["dictionary_validation"]
     assert identity["mode"] == "snapshot"
     assert identity["snapshot_bytes"] == sum(t.numel() * t.element_size() for t in run.dictionary.state_dict().values())
-    assert identity["checks"] - before["dictionary_validation"]["checks"] == 3
-    assert identity["seconds"] > before["dictionary_validation"]["seconds"]
     comparison = after["comparison"]
     assert comparison["compute_publish_seconds"] > 0
     assert comparison["completed_step"] == run.controls.n > before["comparison"]["completed_step"]
     assert comparison["interventions_hash"] == after["interventions_hash"]
     assert comparison["prompt_hash"] == after["prompt_hash"]
     assert run.inference_status() == after
-    identity["checks"] = -1
-    assert run.inference_status()["dictionary_validation"]["checks"] >= 3
+    identity["snapshot_bytes"] = -1
+    assert run.inference_status()["dictionary_validation"]["snapshot_bytes"] > 0
+    assert dictionary_checks(run.interventions.executor) == checks
 
 
-def test_cross_layer_action_replaces_hook_and_publishes_comparison_with_two_scans(hosted_run):
+def test_cross_layer_action_replaces_hook_and_publishes_comparison_with_two_scans(dictionary_checks, hosted_run):
     from caliper import _wire
     from .test_hosted_controls import _feature_rows, _queue_action
 
@@ -155,7 +162,7 @@ def test_cross_layer_action_replaces_hook_and_publishes_comparison_with_two_scan
     run.boundary()
     old = run._owned_record()
     row = next(row for row in rows if run.service.graph.nodes[row]["layer"] != run.selection["layer"])
-    before = run.inference_status()["dictionary_validation"]["checks"]
+    before = dictionary_checks(run.interventions.executor)
     reply = route.on_control(None, _wire.Control(1, "set", name="selected_node", value=row).to_meta())
     assert reply["status"] == "ok"
     _queue_action(route, "apply_clamp", 2)
@@ -166,4 +173,4 @@ def test_cross_layer_action_replaces_hook_and_publishes_comparison_with_two_scan
     status = run.inference_status()
     assert status["comparison"]["completed_step"] == run.controls.n
     assert status["comparison"]["interventions_hash"] == status["interventions_hash"]
-    assert status["dictionary_validation"]["checks"] - before == 2
+    assert dictionary_checks(run.interventions.executor) - before == 2

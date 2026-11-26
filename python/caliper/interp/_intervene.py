@@ -11,8 +11,6 @@ import hashlib
 import json
 import math
 import sys
-import threading
-import time
 import traceback
 import weakref
 
@@ -694,9 +692,6 @@ class InterventionService:
         self.dictionary_id = None
         self._default_dictionary_id = False
         self._dictionary_snapshot = None
-        self._identity_lock = threading.Lock()
-        self._identity_checks = 0
-        self._identity_seconds = 0.
         self.tokenizer = None
         self.resource_guard = None
         self._cache = OrderedDict()
@@ -807,25 +802,16 @@ class InterventionService:
                 self.dictionary, self.dictionary_id, self.resource_guard)
 
     def _dictionary_matches(self):
-        started = time.perf_counter()
-        try:
-            if self._dictionary_snapshot is not None:
-                return self._dictionary_snapshot.matches(self.dictionary, self.dictionary_id, self.resource_guard)
-            return _dictionary_identifier(self.dictionary, self.resource_guard) == self.dictionary_id
-        finally:
-            seconds = time.perf_counter() - started
-            with self._identity_lock:
-                self._identity_checks += 1
-                self._identity_seconds += seconds
+        if self._dictionary_snapshot is not None:
+            return self._dictionary_snapshot.matches(self.dictionary, self.dictionary_id, self.resource_guard)
+        return _dictionary_identifier(self.dictionary, self.resource_guard) == self.dictionary_id
 
     def _dictionary_status(self):
-        """Return cumulative validation costs, separate from request completion."""
+        """Return the validation method and snapshot allocation."""
         snapshot = self._dictionary_snapshot
         mode = "snapshot" if snapshot is not None else "hash" if self._default_dictionary_id else "caller"
         size = sum(t.numel() * t.element_size() for t in snapshot.state.values()) if snapshot is not None else 0
-        with self._identity_lock:
-            return {"mode": mode, "snapshot_bytes": size,
-                    "checks": self._identity_checks, "seconds": self._identity_seconds}
+        return {"mode": mode, "snapshot_bytes": size}
 
     def close(self):
         for hook in list(self._hooks):

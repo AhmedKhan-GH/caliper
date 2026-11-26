@@ -1,13 +1,10 @@
-"""CPU checks for idle hosted checkpoints and later active work."""
+"""CPU checks for idle control delivery and boundary recovery."""
 from types import SimpleNamespace
 
 import pytest
 
-import caliper
 from caliper import _controls, _programs as P, _wire
-from caliper.interp import _hosted
-from caliper.interp._service import InterpretationService
-from .test_hosted_cadence import action_run
+from .hosted_publication_fixture import publication_run
 
 
 def idle_timeouts(case, monkeypatch, *, count=3):
@@ -23,7 +20,6 @@ def idle_timeouts(case, monkeypatch, *, count=3):
             assert not P.inference_pending()
             left -= 1
             timeouts.append(controls.n)
-            case.clock.now += kwargs["timeout"]
             return False
         left = count
         return original(predicate, **kwargs)
@@ -32,48 +28,9 @@ def idle_timeouts(case, monkeypatch, *, count=3):
     return timeouts
 
 
-@pytest.mark.parametrize("routine", ["checkpoint", "service"])
-def test_idle_checkpoints_do_not_enter_later_pass_cost(action_run, monkeypatch, routine):
-    case = action_run
-    case.clock.waves = 4
-    controls = case.run.controls
-    checkpoint = controls.checkpoint
-    calls = []
-
-    def routine_checkpoint():
-        calls.append(controls.n)
-        if routine == "checkpoint":
-            case.clock.now += .004
-        checkpoint()
-
-    if routine == "service":
-        service = _hosted.HostedService.__new__(_hosted.HostedService)
-        InterpretationService.__init__(service)
-        service.owner = case.run
-        service.boundary_running, service.boundary_thread = False, None
-        controls.interpretation_service = case.run.service = service
-
-        def routine_work():
-            case.clock.now += .002
-
-        monkeypatch.setattr(case.run, "update_controls", routine_work)
-        monkeypatch.setattr(case.run, "update_output", routine_work)
-    monkeypatch.setattr(controls, "checkpoint", routine_checkpoint)
-    timeouts = idle_timeouts(case, monkeypatch)
-    case.drive()
-    assert len(timeouts) == 12
-    assert len(calls) == controls.n + len(timeouts)
-    assert case.shown == list(range(4))
-    assert len(P._CAD.cost) == 3
-    assert P._CAD.step_s() == pytest.approx(.0046)
-    assert P._CAD.cost_s() == pytest.approx(.00002)
-    assert P._CAD.n == P.N_MIN
-    assert P._CAD.inference_s == pytest.approx(case.clock.now - 12. - 12 * .004)
-
-
 @pytest.mark.parametrize("arrival", ["checkpoint", "callback"])
-def test_action_queued_after_empty_timeout_reaches_next_publication(action_run, monkeypatch, arrival):
-    case = action_run
+def test_action_queued_after_empty_timeout_reaches_next_publication(publication_run, monkeypatch, arrival):
+    case = publication_run
     controls = case.run.controls
     original = controls.checkpoint
     handled, replies = [], []
@@ -81,7 +38,6 @@ def test_action_queued_after_empty_timeout_reaches_next_publication(action_run, 
         may_control=lambda conn: True, reply=lambda conn, meta: replies.append(meta)))
 
     def callback():
-        case.clock.now += .7
         handled.append(controls.n)
 
     controls.action("late", callback)
@@ -123,12 +79,11 @@ def test_action_queued_after_empty_timeout_reaches_next_publication(action_run, 
     assert not controls.queue
     assert case.shown[-1] == 7 and len(case.shown) >= 8
     assert not P.inference_pending()
-    assert getattr(P._INFERENCE, "clock", None) is None
 
 
 @pytest.mark.parametrize("failure", [RuntimeError, KeyboardInterrupt])
-def test_idle_checkpoint_exception_restores_later_boundary(action_run, monkeypatch, failure):
-    case = action_run
+def test_idle_checkpoint_exception_restores_later_boundary(publication_run, monkeypatch, failure):
+    case = publication_run
     controls = case.run.controls
     original = controls.checkpoint
     messages = []
@@ -139,7 +94,6 @@ def test_idle_checkpoint_exception_restores_later_boundary(action_run, monkeypat
         nonlocal injected
         if not injected and not controls.queue and not P.inference_pending():
             injected = True
-            case.clock.now += .004
             raise failure("idle checkpoint failure")
         original()
 
@@ -153,40 +107,33 @@ def test_idle_checkpoint_exception_restores_later_boundary(action_run, monkeypat
         assert messages == ["RuntimeError: idle checkpoint failure"]
         assert case.shown == list(range(8))
     assert injected and timeouts
-    assert getattr(P._INFERENCE, "clock", None) is None
-    before = P._CAD.inference_s
+    before = controls.n
     case.run.boundary()
-    assert P._CAD.inference_s - before == pytest.approx(.0006)
+    assert controls.n == before + 1
 
 
-def test_idle_checkpoint_retains_snapshot_and_reentrant_step_cost(action_run, monkeypatch):
-    from caliper._net_ring import NetRing
+def test_idle_clean_stop_retains_failure_and_single_checkpoint(publication_run, monkeypatch):
+    from caliper.interp._memory import CleanStop
 
-    case = action_run
-    controls = case.run.controls
-    original = controls.checkpoint
-    ring = NetRing(engine=object())
-    P.views(ring)
-    injected = False
-    charged = []
+    case = publication_run
+    P._PROGS.clear()
+    P._set_active()
+    failure = CleanStop("idle resource stop")
+    stopped, saved = [], []
+    case.run.guard = SimpleNamespace(failure=failure)
+    case.run.service.stop = lambda exc, step: stopped.append((exc, step))
+    case.run.model = object()
+    case.run._stop_checkpointed = False
 
-    def checkpoint():
-        nonlocal injected
-        if not injected and not controls.queue and not P.inference_pending():
-            injected = True
-            before = P._CAD.inference_s
-            case.clock.now += .004
-            ring.open_pass(controls.n + 1)
-            case.clock.now += .003
-            ring.gate_cost += .003
-            ring.gate_taken += 1
-            # A callback can enter a real step after the idle decision.
-            caliper.step()
-            charged.append(P._CAD.inference_s - before)
-        original()
+    def checkpoint(*args):
+        saved.append(case.run.controls.n)
 
-    monkeypatch.setattr(controls, "checkpoint", checkpoint)
-    idle_timeouts(case, monkeypatch, count=1)
-    case.drive()
-    assert injected and charged == [pytest.approx(.0036)]
-    assert case.shown == list(range(8))
+    case.run.managed = SimpleNamespace(checkpoint=checkpoint)
+    monkeypatch.setattr(case.run.controls.cond, "wait_for", lambda *args, **kwargs: False)
+    with pytest.raises(CleanStop) as caught:
+        case.run.run()
+    assert caught.value is failure and case.run._failure is failure
+    assert stopped == [(failure, 0)] and saved == [0]
+    with pytest.raises(CleanStop) as caught_again:
+        case.run.boundary()
+    assert caught_again.value is failure and saved == [0]

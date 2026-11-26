@@ -1,6 +1,5 @@
 """CPU checks for event-driven hosted resource admission."""
 from collections import deque
-from contextlib import nullcontext
 from types import SimpleNamespace
 import threading
 
@@ -67,8 +66,7 @@ def capacity_run(monkeypatch):
     native = NativeQueue()
     producer = SimpleNamespace(nio=native, links=set(), by_conn={},
                                attached_changed=lambda delta: None)
-    server = SimpleNamespace(nio=native, producer=producer, closed=False,
-                             ring=SimpleNamespace(sender_cost=nullcontext))
+    server = SimpleNamespace(nio=native, producer=producer, closed=False)
     port = ControlsPort(server, True, native=True)
     producer.controls = port
     program = P._Program("delivery", {}, "", None, "")
@@ -186,7 +184,6 @@ def drive_capacity_event(case, monkeypatch, *, action=False):
         case.run.run()
     assert posted(case) == [(1, b"resource")]
     assert not P._OUTBOX and not P.inference_pending()
-    assert getattr(P._INFERENCE, "clock", None) is None
     return clock
 
 

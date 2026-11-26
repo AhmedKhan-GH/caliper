@@ -7,6 +7,7 @@ import torch
 
 from caliper._controls import Controls, intervention_key
 from caliper.interp._intervene import InterventionError
+from tests.interp.dictionary_check_fixture import dictionary_checks
 from tests.interp.fixture import make_fixture
 from tests.interp.test_intervene import dictionary_for
 
@@ -176,14 +177,14 @@ def test_atomic_failure_retains_exact_prior_records(grouped, monkeypatch, phase)
     torch.testing.assert_close(model(ids).logits, output, rtol=0, atol=0)
 
 
-def test_atomic_group_shares_admission_and_final_dictionary_checks(grouped, monkeypatch):
+def test_atomic_group_shares_admission_and_final_dictionary_checks(dictionary_checks, grouped, monkeypatch):
     model, tokenizer, ctl, service = grouped
     executor = service.executor
     executor._prepare_dictionary_identity()
-    before = executor._dictionary_status()['checks']
+    before = dictionary_checks(executor)
     specs = [clamp(1, 1), clamp(2, 1), clamp(3, 1), clamp(4, 1, layer=1)]
     service.replace_atomic(specs, lambda: model(**tokenizer('AB')))
-    assert executor._dictionary_status()['checks'] == before + 2
+    assert dictionary_checks(executor) == before + 2
     saved = service.state_dict()
     executor.dictionary.layers[0].W_dec.data[0, 0] += 1
     with pytest.raises(InterventionError, match='content changed'):

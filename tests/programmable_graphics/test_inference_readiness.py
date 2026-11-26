@@ -306,51 +306,6 @@ def test_resource_delivery_retry_retains_pending_work(producer, monkeypatch, del
     assert P._PROGS["readiness"].skipped == 1
 
 
-@pytest.mark.parametrize("every", [1, 21])
-def test_hosted_clock_keeps_budget_stop_and_declared_period(producer, monkeypatch, every):
-    clock = SimpleNamespace(now=0.)
-
-    def advance(seconds):
-        clock.now += seconds
-
-    monkeypatch.setattr(P, "_clock", lambda: clock.now)
-    def scheduler():
-        advance(1.)                               # controlled base for the ten-second ceiling
-        return None
-
-    monkeypatch.setattr(P, "_marks", scheduler)
-    show = caliper.show
-
-    def costly_publication(*args, **kwargs):
-        advance(.8)
-        return show(*args, **kwargs)
-
-    monkeypatch.setattr(caliper, "show", costly_publication)
-    install_program(every=every)
-    producer.model.main(torch.ones(1))
-    program = P._PROGS["activation"]
-    # Finite clock events reach the real ten-second ceiling without elapsed waits.
-    for number in range(1, 131):
-        advance(.55)
-        with P.inference_boundary():
-            P.at_step(number)
-        if program.state == "stopped":
-            break
-    assert producer.runtime.runs[0] == P.WARMUP_STEPS + 1
-    assert P._CAD.step_s() == pytest.approx(1.)
-    assert P._CAD.cost_s() == pytest.approx(.8)
-    assert P._CAD.over >= P.OVER_UPDATES
-    assert program.every_min == every
-    if every == 1:
-        assert program.state == "stopped"
-        assert program.error["code"] == "program.over_budget"
-        assert not P.inference_pending()
-    else:
-        assert program.state == "running"
-        steps = producer.runtime.runs
-        assert all(b - a >= every for a, b in zip(steps, steps[1:]))
-
-
 @pytest.mark.parametrize("action", ["remove", "detach", "replacement", "refusal", "stop"])
 def test_activation_evidence_ends_with_its_program_or_watch(producer, monkeypatch, action):
     install_program()
@@ -393,3 +348,65 @@ def test_activation_evidence_ends_with_its_program_or_watch(producer, monkeypatc
         assert not P.inference_pending()
         replacement.main(torch.ones(1))
         assert P.inference_pending()
+
+
+def test_hosted_readiness_follows_service_registration(producer, monkeypatch):
+    from caliper import _controls
+    from caliper.interp._service import InterpretationService, register_service, unregister_service
+
+    controls = _controls.Controls()
+    monkeypatch.setattr(_controls, "CONTROLS", controls)
+    service = InterpretationService(model=producer.model)
+    service.owner = object()
+    register_service(service, controls=controls)
+    try:
+        install_piece()
+        publish("trace.node_f", torch.tensor([7.]))
+        warmup(producer)
+        producer.step(9)
+        assert producer.runtime.runs == [9]
+        for number in range(10, 16):
+            producer.step(number)
+        assert producer.runtime.runs == [9]
+        publish("trace.node_f", torch.tensor([8.]))
+        producer.step(16)
+        producer.step(17)
+        assert producer.runtime.runs == [9, 17]
+    finally:
+        unregister_service(service, controls=controls)
+    assert controls.interpretation_service is None
+    # Ordinary steps can repeat a pass without a new producer version.
+    for number in range(18, 21):
+        producer.step(number)
+    assert producer.runtime.runs == [9, 17, 20]
+
+
+def test_new_watch_starts_without_closed_hosted_budget_history(producer, monkeypatch):
+    from caliper import _controls
+    from caliper.interp import _hosted
+    from caliper.interp._service import InterpretationService, register_service, unregister_service
+
+    controls = _controls.Controls()
+    monkeypatch.setattr(_controls, "CONTROLS", controls)
+    monkeypatch.setattr(caliper, "_CTL", controls)
+    service = InterpretationService(model=producer.model)
+    service.owner = object()
+    register_service(service, controls=controls)
+    run = _hosted.HostedInference.__new__(_hosted.HostedInference)
+    run.controls, run.guard, run.managed, run._failure = controls, None, None, None
+    install_program()
+    run.boundary()
+    P._CAD.base.append(1.)
+    P._CAD.cost.append(100.)
+    P._CAD.n, P._CAD.want, P._CAD.ceiling, P._CAD.over = 10, 100, 10, P.OVER_UPDATES
+    unregister_service(service, controls=controls)
+    P.detach()
+    assert not P.ACTIVE and not P._PROGS
+    P.attach(producer.model, None, WatchHandle())
+    assert install_program()["state"] == "waiting"
+    assert not P._CAD.base and not P._CAD.cost and not P._CAD.over_budget(1)
+    producer.model.main(torch.ones(1))
+    warmup(producer)
+    producer.step(9)
+    assert producer.runtime.runs == [9]
+    assert P._PROGS["activation"].state == "running"

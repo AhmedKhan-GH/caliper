@@ -9,6 +9,7 @@ from caliper.interp import _publish
 from caliper.interp._intervene import InterventionError
 from caliper.interp._memory import CleanStop
 from caliper.interp._published_identity import forward_hooks
+from tests.interp.dictionary_check_fixture import dictionary_checks
 from tests.interp.test_replication_groups import clamp, grouped, published
 
 
@@ -112,7 +113,7 @@ def change_dictionary(executor, change):
 @pytest.mark.parametrize('mode', ['hash', 'snapshot'])
 @pytest.mark.parametrize('phase', ['before', 'forward', 'prepare', 'check'])
 @pytest.mark.parametrize('change', ['content', 'metadata', 'topk'])
-def test_dictionary_change_refuses_before_commit(transaction, mode, phase, change):
+def test_dictionary_change_refuses_before_commit(dictionary_checks, transaction, mode, phase, change):
     case = transaction
     executor = case.executor
     assert executor._dictionary_status()['mode'] == mode
@@ -132,7 +133,7 @@ def test_dictionary_change_refuses_before_commit(transaction, mode, phase, chang
 
     case.observer.callback = forward
     saved = saved_state(case)
-    before = executor._dictionary_status()['checks']
+    before = dictionary_checks(executor)
 
     def prepare(logits):
         if phase == 'prepare':
@@ -149,7 +150,7 @@ def test_dictionary_change_refuses_before_commit(transaction, mode, phase, chang
             case.run(prepare=prepare, check=mutate if phase == 'check' else None)
         assert error.value.code == 'intervene.unknown_dictionary'
         assert calls == [phase]
-        assert executor._dictionary_status()['checks'] == before + (1 if phase == 'before' else 2)
+        assert dictionary_checks(executor) == before + (1 if phase == 'before' else 2)
         assert not executor._dictionary_admitted()
         assert_preserved(case, saved)
         # Refusal preserves external edits and the next admission still rejects them.
@@ -218,29 +219,29 @@ def test_final_scan_resource_refusal_preserves_prior_state(transaction, monkeypa
 
 @pytest.mark.parametrize('change', ['content', 'metadata'])
 @pytest.mark.parametrize('publication', [False, True])
-def test_explicit_identifier_retains_caller_ownership(grouped, change, publication):
+def test_explicit_identifier_retains_caller_ownership(dictionary_checks, grouped, change, publication):
     model, tokenizer, _, service = grouped
     service.configure(dictionary=service.dictionary, tokenizer=tokenizer, dictionary_id='caller-owned')
-    before = service.executor._dictionary_status()['checks']
+    before = dictionary_checks(service.executor)
     prepare = (lambda logits: _publish._prepare_many({})) if publication else None
     service.replace_atomic([clamp(1, 1)], lambda: model(**tokenizer('AB')).logits, prepare=prepare,
                            check=lambda: change_dictionary(service.executor, change))
     assert service.executor.dictionary_id == 'caller-owned'
-    assert service.executor._dictionary_status()['checks'] == before
+    assert dictionary_checks(service.executor) == before
     assert len(service.specifications()) == 1
 
 
 @pytest.mark.parametrize('change', [None, 'content', 'metadata'])
-def test_nested_admission_keeps_final_commit_check(grouped, change):
+def test_nested_admission_keeps_final_commit_check(dictionary_checks, grouped, change):
     model, tokenizer, controls, service = grouped
     executor = service.executor
     executor._prepare_dictionary_identity()
-    before = executor._dictionary_status()['checks']
+    before = dictionary_checks(executor)
     with executor.dictionary_admission():
         with executor.dictionary_admission():
-            assert executor._dictionary_status()['checks'] == before + 1
+            assert dictionary_checks(executor) == before + 1
             service.replace_atomic([clamp(1, 1)], lambda: model(**tokenizer('AB')))
-            assert executor._dictionary_status()['checks'] == before + 2
+            assert dictionary_checks(executor) == before + 2
             state, records = service.state_dict(), dict(controls._ivs)
             if change is not None:
                 with pytest.raises(InterventionError, match='dictionary content changed'):
@@ -248,7 +249,7 @@ def test_nested_admission_keeps_final_commit_check(grouped, change):
                                            check=lambda: change_dictionary(executor, change))
                 assert service.state_dict() == state
                 assert all(controls._ivs[key] is record for key, record in records.items())
-                assert executor._dictionary_status()['checks'] == before + 3
+                assert dictionary_checks(executor) == before + 3
             assert executor._dictionary_admitted()
         assert executor._dictionary_admitted()
     assert not executor._dictionary_admitted()

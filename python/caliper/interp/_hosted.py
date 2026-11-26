@@ -1093,10 +1093,8 @@ class HostedInference:
             self.checkpoint_prompt = prompt
             self._update_selection()
             if clamp_changed:
-                from .._controls import _cadence_excluded
-                with _cadence_excluded():
-                    if not self._set_clamp():
-                        self.status.set("The selected feature clamp did not commit. Retry the edit.")
+                if not self._set_clamp():
+                    self.status.set("The selected feature clamp did not commit. Retry the edit.")
         finally:
             self._sync_clamp_control(preserve_edit=clamp_changed)
 
@@ -1283,29 +1281,25 @@ class HostedInference:
         key = self._input_state()
         changed = self._output_key != key
         if changed or force:
-            from .._controls import _cadence_excluded
-            with _cadence_excluded():
-                with self.controls.lock:
-                    # A later request must not reuse a comparison that already began.
-                    action_id = self.controls.actions["apply_clamp"].run_id
-                started = time.perf_counter()
-                comparison = self.output.compare(key[0])
-                seconds = time.perf_counter() - started
-                if self._input_state() != key:
-                    raise ValueError("inference state changed during the output comparison")
-                with self._inference_lock:
-                    self._comparison = dict(self._input_hashes(key), argmax_token_ids=comparison["argmax_token_ids"],
-                                            baseline_top_text=comparison["baseline_top_text"],
-                                            baseline_top_probability=comparison["baseline_top_probability"],
-                                            completed_step=self.controls.n, compute_publish_seconds=seconds)
-                self._output_key = deepcopy(key)
-                self._output_action_id = action_id
-                self.status.set("ready")
+            with self.controls.lock:
+                # A later request must not reuse a comparison that already began.
+                action_id = self.controls.actions["apply_clamp"].run_id
+            started = time.perf_counter()
+            comparison = self.output.compare(key[0])
+            seconds = time.perf_counter() - started
+            if self._input_state() != key:
+                raise ValueError("inference state changed during the output comparison")
+            with self._inference_lock:
+                self._comparison = dict(self._input_hashes(key), argmax_token_ids=comparison["argmax_token_ids"],
+                                        baseline_top_text=comparison["baseline_top_text"],
+                                        baseline_top_probability=comparison["baseline_top_probability"],
+                                        completed_step=self.controls.n, compute_publish_seconds=seconds)
+            self._output_key = deepcopy(key)
+            self._output_action_id = action_id
+            self.status.set("ready")
         if self.retrace.value and (changed or not self._retrace):
             if (self.traced_prompt, self.traced_specifications) != key:
-                from .._controls import _cadence_excluded
-                with _cadence_excluded():
-                    response = self.service._retrace({"prompt": key[0]}, self.controls.n)
+                response = self.service._retrace({"prompt": key[0]}, self.controls.n)
                 if response is not None and response[0] == "error":
                     self.status.set(response[2]["message"])
         self._retrace = self.retrace.value
@@ -1408,8 +1402,7 @@ class HostedInference:
 
     def boundary(self):
         import caliper
-        from .. import _programs
-        with self._stop_boundary(), _programs.inference_boundary():
+        with self._stop_boundary():
             self.controls.busy = True
             caliper.step()
             if self.guard is not None:
@@ -1417,9 +1410,7 @@ class HostedInference:
             if self.managed is not None:
                 if self.managed.stopping:
                     self.managed.exit()
-                # Routine persistence follows its wall-clock policy, outside pass time.
-                with _programs.inference_excluded():
-                    self.managed._keep(self.model, None)
+                self.managed._keep(self.model, None)
 
     def run(self):
         from .. import _programs
@@ -1433,39 +1424,32 @@ class HostedInference:
                           for iv in self.controls._ivs.values())
                 return bool(self.controls._npending or self.controls.queue or self.service.pending or due
                             or self.controls.state in (RUN_PAUSING, RUN_STEPPING))
-            with _programs.inference_boundary(measured=False):
-                with _programs.inference_poll() as poll:
-                    with self.controls.cond:
-                        publication_event = self.controls.publication_event
-                    # Inspect program state outside Controls.lock to preserve lock order.
-                    blocked = _programs.inference_blocked()
-                    publication = _programs.inference_pending() and not blocked
-                    with self.controls.cond:
-                        if not publication:
-                            with _programs.inference_excluded():
-                                self.controls.cond.wait_for(
-                                    lambda: pending() or self.controls.publication_event != publication_event,
-                                    timeout=1.)
-                        work = pending()
-                    # Events before or during the wait require a fresh capacity check.
-                    if not publication:
-                        blocked = _programs.inference_blocked()
-                        publication = _programs.inference_pending() and not blocked
+            with self.controls.cond:
+                publication_event = self.controls.publication_event
+            # Inspect program state outside Controls.lock to preserve lock order.
+            blocked = _programs.inference_blocked()
+            publication = _programs.inference_pending() and not blocked
+            with self.controls.cond:
+                if not publication:
+                    self.controls.cond.wait_for(
+                        lambda: pending() or self.controls.publication_event != publication_event,
+                        timeout=1.)
+                work = pending()
+            # Events before or during the wait require a fresh capacity check.
+            if not publication:
+                blocked = _programs.inference_blocked()
+                publication = _programs.inference_pending() and not blocked
+            try:
+                with self._stop_boundary():
                     if work or publication:
-                        poll.accept()
-                try:
-                    if work or publication:
-                        with _programs._inference_interval(True), self._stop_boundary():
-                            self.boundary()
+                        self.boundary()
                     else:
-                        # Idle maintenance advances no step. Snapshot and sender work,
-                        # plus any reentrant publication checkpoint, retain their costs.
-                        with self._stop_boundary():
-                            self.controls.checkpoint()
-                except CleanStop:
-                    raise
-                except Exception as exc:
-                    self.status.set(bounded_text(f"{type(exc).__name__}: {exc}"))
+                        # Reports and intervention expiry need no new prompt step or forward.
+                        self.controls.checkpoint()
+            except CleanStop:
+                raise
+            except Exception as exc:
+                self.status.set(bounded_text(f"{type(exc).__name__}: {exc}"))
 
     def close(self):
         if self.replication is not None:

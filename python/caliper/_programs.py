@@ -71,7 +71,6 @@ import threading
 import time
 import warnings
 from collections import deque
-from contextlib import contextmanager
 
 from . import _controls
 
@@ -129,8 +128,6 @@ _STATE = {"rt": None, "mod": None, "model": None, "optimizer": None, "marks": No
           "pass_budget": True, "floor": 0, "view_s": deque(maxlen=VIEW_SAMPLES)}
 _VIEWS = {"ring": None}  # the network route's ring while it has snapshots to take
 _clock = time.perf_counter
-_INFERENCE = threading.local()
-_INFERENCE_ACTIVE = set()  # live outer scopes, including ones before the first checkpoint
 _WARNED: set = set()
 
 
@@ -173,13 +170,6 @@ class _Cadence:
     ``N_MIN`` and the ceiling. N moves up as soon as it is below that value, by at most a factor
     ``GROW``, and down only when it is more than ``CHANGE`` above it, by at most a factor
     ``SHRINK``. Thus N rests between the wanted value and ``1 + CHANGE`` times it.
-
-    Hosted inference supplies synthetic steps between discrete actions. Its marks use
-    accumulated useful boundary time plus snapshot work outside measured intervals.
-    This time covers synchronization, passes, and publication, with sender CPU removed.
-    The sender account charges that CPU once, including work outside measured intervals.
-    Explicit exclusions keep idle gaps and model actions out of pass overhead. The same
-    feedback limits apply to this smaller time budget. Training retains queue completion times.
     """
 
     def __init__(self):
@@ -196,18 +186,10 @@ class _Cadence:
         self.target = SHARE         # the share the passes keep to: VIEWS_SHARE while views attach
         self.ceiling = EVERY_MAX
         self.over = 0               # updates in a row that wanted more than the ceiling
-        self.admission_left = 0     # measured cycles left in a replacement trial
-        self.admission_used = False # another trial needs evidence of an affordable workload
         self.last_pass = None       # the step of the last pass
         self.prev_pass = None       # the pass before it, for unpass()
         self.view_cost: dict = {}   # pass step -> the training thread's time in its view calls
         self.extra = 0.0            # the training thread's time in the parts sent since the last cycle
-        self.inference = False     # the clock mode of the current measurement cycle
-        self.inference_s = 0.0      # accumulated useful hosted time
-        self.inference_gate = None # one snapshot gate and its accounted cost
-        self.inference_sender = None # one ring and its last sender counter
-        self.inference_account = None # cumulative CPU with only active sender records
-        self.inference_accounted = 0.0
 
     def restart(self) -> None:
         """Forget the marks and passes of the current cycle, but keep ``b``, ``D``, N and the step
@@ -217,14 +199,6 @@ class _Cadence:
         self.passes = set()
         self.k = None
         self.view_cost = {}
-
-    def admit(self) -> None:
-        """Allow one bounded trial after all programs stop, with budget history intact."""
-        if not self.admission_used and self.over_budget(1):
-            # The first cycle can still contain the last stopped pass. The remaining
-            # cycles replace the cost window at the existing cadence and share ceiling.
-            self.admission_left = COST_SAMPLES + 1
-            self.admission_used = True
 
     def step_s(self):
         """The base step time ``b`` in seconds, or None before the first stretch."""
@@ -327,30 +301,16 @@ class _Cadence:
             n = max(want, math.floor(n / SHRINK))
         self.n = n
         self.over = self.over + 1 if self.want > self.ceiling and n >= self.ceiling else 0
-        if self.admission_left:
-            self.admission_left -= 1
-        if not self.admission_left and self.want <= self.ceiling:
-            self.admission_used = False
 
     def over_budget(self, every_min: int) -> bool:
         """Whether the programs cannot run inside the share on this run: the wanted N stayed above
         the ceiling for ``OVER_UPDATES`` updates, and the declared ``every_min`` does not keep the
         passes rare enough either."""
-        return (not self.admission_left and self.over >= OVER_UPDATES and self.want is not None
+        return (self.over >= OVER_UPDATES and self.want is not None
                 and self.want > max(self.ceiling, every_min))
 
 
 _CAD = _Cadence()
-
-
-def _reset_cadence() -> None:
-    """Restart cycle marks without erasing a live hosted clock or its cost history."""
-    if _CAD.inference or _INFERENCE_ACTIVE:
-        # Subscription and install calls can arrive on another thread. The live
-        # clocks and sender records still refer to this account and its totals.
-        _CAD.restart()
-    else:
-        _CAD.reset()
 
 
 class _Import:
@@ -776,13 +736,6 @@ def _set_active() -> None:
     _prune_act_hooks()
 
 
-def _admit_program(p: _Program) -> None:
-    """Give a replacement workload a bounded trial while a viewer retains exhausted history."""
-    states = ("waiting", "compiled", "running")
-    if p.state in states and not any(q is not p and q.state in states for q in _PROGS.values()):
-        _CAD.admit()
-
-
 def _prune_act_hooks() -> None:
     """Remove the forward hook of each module whose output no program that may still run reads.
 
@@ -885,7 +838,7 @@ def install(program_id: str, declaration: dict, wgsl: str, *, scene: str | None 
         if _ABANDONED:
             _reap()
         if not ACTIVE:
-            _reset_cadence()
+            _CAD.reset()
             _STATE.update(dense=True, drained=0, short=0, long=0, switches=0)
             if _STATE["marks"]:
                 _STATE["marks"].clear()
@@ -899,7 +852,6 @@ def install(program_id: str, declaration: dict, wgsl: str, *, scene: str | None 
         except _Refused as r:
             p.state = "refused"
             p.error = r.error
-        _admit_program(p)
         _set_active()
         item = p.item()
     _notify([item])
@@ -1088,159 +1040,18 @@ _STOP_TEXT = {
 }
 
 
-class _InferenceClock:
-    """Accumulate measured intervals and credit snapshots outside those intervals."""
-
-    def __init__(self):
-        self.measured = False
-        self.poll = None
-        with _LOCK:
-            _inference_sender(_VIEWS["ring"])
-            self.sender = _CAD.inference_accounted
-            self.started = _clock()
-            _INFERENCE_ACTIVE.add(self)
-
-    def flush(self):
-        with _LOCK:
-            _inference_sender(_VIEWS["ring"])
-            sender = _CAD.inference_accounted
-            now = _clock()
-            elapsed = max(0.0, now - self.started - (sender - self.sender))
-            self.sender = sender
-            self.started = now
-            snapshots = 0.0
-            separate = not self.measured or self.poll is not None
-            ring = _VIEWS["ring"]
-            prior = _CAD.inference_gate
-            if prior is not None and (prior[0][0] is not ring or not ring.gate_open):
-                # A subscription thread can replace the ring during an exclusion.
-                old = prior[0][0]
-                if separate and old.gate_t == prior[0][2]:
-                    snapshots += max(0.0, _inference_gate_cost(old) - prior[1])
-            if ring is not None and ring.gate_open:
-                # The gate identity survives a step renumber and detects a cost reset.
-                key = (ring, ring.gate_step, ring.gate_t)
-                cost = _inference_gate_cost(ring)
-                before = prior[1] if prior is not None and prior[0] == key else 0.0
-                if cost < before:
-                    before = 0.0
-                if separate:
-                    snapshots += max(0.0, cost - before)
-                _CAD.inference_gate = (key, cost)
-            else:
-                _CAD.inference_gate = None
-            _CAD.inference_s += snapshots
-            if self.measured:
-                if self.poll is None:
-                    _CAD.inference_s += elapsed
-                else:
-                    # Snapshot work is mandatory even when this poll finds no work.
-                    self.poll.seconds += max(0.0, elapsed - snapshots)
-            return _CAD.inference_s
-
-
-@contextmanager
-def inference_boundary(*, measured=True):
-    """Measure useful hosted work on this thread, with explicit action and wait exclusions.
-
-    Nested boundaries share one clock. An enclosing exclusion remains in force.
-    Runtime timestamps, action timers, and budget history retain their values.
-    An idle loop starts excluded and explicitly admits useful intervals.
-    """
-    previous = getattr(_INFERENCE, "clock", None)
-    if previous is not None:
-        yield
-        return
-    clock = _InferenceClock()
-    _INFERENCE.clock = clock
-    try:
-        clock.flush()                           # snapshots before this scope
-        clock.measured = measured
-        yield
-    finally:
-        try:
-            clock.flush()
-        finally:
-            _INFERENCE.clock = None
-            with _LOCK:
-                _INFERENCE_ACTIVE.discard(clock)
-
-
-@contextmanager
-def _inference_interval(measured):
-    clock = getattr(_INFERENCE, "clock", None)
-    if clock is None:
-        yield
-        return
-    clock.flush()
-    previous, clock.measured = clock.measured, measured
-    prior_poll = clock.poll
-    if measured:
-        # Explicit publication intervals retain their cost inside an undecided poll.
-        clock.poll = None
-    try:
-        yield
-    finally:
-        try:
-            clock.flush()
-        finally:
-            clock.measured = previous
-            clock.poll = prior_poll
-
-
-def inference_excluded():
-    """Exclude an action or wait while retaining its snapshot charges."""
-    return _inference_interval(False)
-
-
-class _InferencePoll:
-    """Ordinary readiness work awaits a decision to admit a hosted step."""
-
-    def __init__(self):
-        self.seconds = 0.0
-        self.accepted = False
-
-    def accept(self):
-        self.accepted = True
-
-
-@contextmanager
-def inference_poll():
-    """Retain ordinary poll time only when it admits work; always retain publication."""
-    poll = _InferencePoll()
-    clock = getattr(_INFERENCE, "clock", None)
-    if clock is None:
-        yield poll
-        return
-    clock.flush()
-    previous = clock.measured, clock.poll
-    clock.measured, clock.poll = True, poll
-    try:
-        yield poll
-    finally:
-        with _LOCK:
-            try:
-                clock.flush()
-            finally:
-                clock.measured, clock.poll = previous
-            if poll.accepted:
-                if clock.poll is not None:
-                    clock.poll.seconds += poll.seconds
-                else:
-                    _CAD.inference_s += poll.seconds
-
-
 def at_step(step: int) -> None:
-    """Run due programs and publish their outputs at the script's checkpoint.
+    """Run the programs that are due at ``step`` and publish their outputs.
 
-    Ordinary training retains the framework queue completion clock. Hosted calls
-    measure publication work even when a callback calls this checkpoint again.
+    ``caliper.step()`` calls it on the training thread after the framework's work of the step is
+    queued, before ``optimizer.step()``. Without an installed program it returns at once and touches
+    no device. With one, it puts the step's mark on torch's queue and reads the marks that completed,
+    without a wait; only a step with a pass waits.
     """
     if not ACTIVE:
         return
     try:
-        with _inference_interval(True):
-            _at_step(int(step))
+        _at_step(int(step))
     except Exception as e:  # a program never stops the training loop
         _warn_once(("step",), f"caliper: the GPU programs failed at step {step}: {e!r}")
 
@@ -1371,13 +1182,11 @@ def _mark(marks, step: int, now: float, is_pass: bool) -> list:
         if _STATE["drained"] >= DRAINED_STEPS and _STATE["short"] >= SHORT_WAITS:
             _STATE["dense"] = False
             _STATE["switches"] += 1
-            if not _CAD.inference:                 # hosted marks already use publication time
-                _CAD.restart()
+            _CAD.restart()
     elif (step % SPARSE == 0 and marks.pending() > 0) or _STATE["long"] >= SHORT_WAITS:
         _STATE["dense"], _STATE["drained"] = True, 0
         _STATE["switches"] += 1
-        if not _CAD.inference:
-            _CAD.restart()
+        _CAD.restart()
         done = []
     if _STATE["dense"] or is_pass or step % SPARSE == 0 or _CAD.due(step + 1):
         marks.record(step, now)                  # also gives torch's queued work to the GPU
@@ -1390,27 +1199,15 @@ def _every_ok(p: _Program, step: int) -> bool:
 
 
 def _at_step(step: int) -> None:
-    # Chunk sends have one explicit cost owner, regardless of their cycle position.
-    with inference_excluded():
-        _pump()
+    _pump()
     changed = []
     published = []
     with _LOCK:
-        clock = getattr(_INFERENCE, "clock", None)
-        inference = clock is not None
-        if _CAD.inference != inference:
-            if _CAD.inference:
-                _inference_sender(None)
-            _CAD.restart()                          # a clock change, with budget history intact
-            _CAD.inference = inference
-            if not inference:
-                _CAD.inference_sender = None
-            if _STATE["pass"] is not None:
-                _CAD.passes.add(_STATE["pass"])
+        # Hosted readiness follows the registered service, without a separate clock.
+        inference = getattr(_controls.CONTROLS.interpretation_service, "owner", None) is not None
         if _ABANDONED:
             _reap()
         now = _clock()
-        cadence_now = clock.flush() if inference else now
         marks = _marks()
         ring = _VIEWS["ring"]
         last = _STATE["step"]
@@ -1517,27 +1314,21 @@ def _at_step(step: int) -> None:
     _publish_pass(published)
     with _LOCK:
         taken = 0
-        if inference:
-            _inference_sender(_VIEWS["ring"])
         if ring is not None and ring is _VIEWS["ring"] and (is_pass or ring.gate_open):
-            if inference:
-                clock.flush()
             taken = ring.close_pass(step, _clock())
             if taken:
                 # The sender thread's time since the last pass, which published that pass's
                 # snapshots, belongs to that pass: it takes the GIL from the training thread.
                 pub = ring.publish_s
                 last = _STATE.get("pub_pass")
-                if not inference and last is not None and last[0] in _CAD.view_cost:
+                if last is not None and last[0] in _CAD.view_cost:
                     _CAD.view_cost[last[0]] += max(0.0, pub - last[1])
                 _STATE["pub_pass"] = (step, pub)
                 _STATE["view_s"].append(ring.gate_cost)
                 if is_pass:
-                    _CAD.view_cost[step] = _inference_gate_cost(ring) if inference else ring.gate_cost
+                    _CAD.view_cost[step] = ring.gate_cost
         if is_pass and not ran and not taken:        # nothing was due after all
             _CAD.unpass(step)
-        if inference:
-            clock.flush()
         ring = _VIEWS["ring"]
         _STATE["pass"] = None
         nxt = step + 1
@@ -1562,8 +1353,8 @@ def _at_step(step: int) -> None:
             _STATE["floor"] += 1
             ring.cadence = _views_status(ring, True)
             ring.open_pass(nxt)
-        if inference or not _STATE["dense"]:         # hosted work or a loop that waits by itself
-            done = [(step, cadence_now, cadence_now)]
+        if not _STATE["dense"]:                      # the loop waits by itself: the clock times it
+            done = [(step, now, now)]
         for k, _lo, hi in done:
             _CAD.completed(k, hi)
         progs = [p.every_min for p in _PROGS.values() if p.state in ("waiting", "compiled", "running")]
@@ -1611,75 +1402,16 @@ def _views_status(ring, floor: bool) -> dict:
             "share": None if share is None else round(share, 4), "budget": _CAD.target, "limit": limit}
 
 
-def _inference_gate_cost(ring):
-    return max(0.0, ring.gate_cost - getattr(ring, "gate_sender_s", 0.0))
-
-
-def _sender_stamp():
-    """Pair a cost boundary with live CPU, without a cadence or queue lock."""
-    account = _CAD.inference_account
-    if account is not None and (_CAD.inference or _INFERENCE_ACTIVE):
-        return account, account.sample()
-    return None
-
-
-def _sender_elapsed(stamp):
-    return max(0.0, stamp[0].sample() - stamp[1]) if stamp is not None else 0.0
-
-
-def _sender_untracked(ring):
-    counter = getattr(ring, "sender_untracked", None)
-    return counter() if counter is not None else ring.publish_s
-
-
-def _inference_sender(ring):
-    """Credit sender work once, independent of snapshot and cadence sample retention.
-
-    The caller owns _LOCK. A replacement first credits the old ring, then uses
-    the new ring's current counter as its baseline. Active pumps retain their
-    account after detachment. Live samples settle delayed counters without a history.
-    """
-    prior = _CAD.inference_sender
-    account = _CAD.inference_account
-    if account is None:
-        from ._net_ring import _SenderAccount
-        account = _CAD.inference_account = _SenderAccount()
-    if prior is not None:
-        old, before = prior
-        published = _sender_untracked(old)
-        _CAD.extra += max(0.0, published - before)
-        if old is ring:
-            # Use the same sample for the charge and baseline if the sender advances.
-            _CAD.inference_sender = (ring, published)
-        else:
-            meter = getattr(old, "_sender", None)
-            if meter is not None:
-                meter.watch(None)
-    if prior is None or prior[0] is not ring:
-        _CAD.inference_sender = (ring, _sender_untracked(ring)) if ring is not None else None
-        meter = getattr(ring, "_sender", None)
-        if meter is not None:
-            meter.watch(account)
-    total = account.sample()
-    _CAD.extra += max(0.0, total - _CAD.inference_accounted)
-    _CAD.inference_accounted = total
-
-
 def views(ring) -> None:
     """The network route's ring has snapshots or series values to take (``ring``), or none
     (``None``): from then on the shared cadence gates its snapshots at the checkpoint. Called on
     the thread that changed a subscription."""
     with _LOCK:
-        clock = getattr(_INFERENCE, "clock", None)
-        if clock is not None:
-            clock.flush()
-        if _CAD.inference or _INFERENCE_ACTIVE:
-            _inference_sender(ring)
         old = _VIEWS["ring"]
         if old is not None and old is not ring:
             old.release_gate()
         if ring is not None and old is None and not ACTIVE:
-            _reset_cadence()
+            _CAD.reset()
             _STATE.update(dense=True, drained=0, short=0, long=0, switches=0, floor=0)
             _STATE["pass"] = None
             if _STATE["marks"]:
@@ -1694,11 +1426,6 @@ def views_closed(ring) -> None:
     with _LOCK:
         if _VIEWS["ring"] is not ring:
             return
-        clock = getattr(_INFERENCE, "clock", None)
-        if clock is not None:
-            clock.flush()
-        if _CAD.inference or _INFERENCE_ACTIVE:
-            _inference_sender(None)
         ring.release_gate()
         _VIEWS["ring"] = None
         _set_active()
@@ -2000,7 +1727,7 @@ def install_piece(program_id: str, *, piece: dict, manifest: dict, bind: dict | 
         if _ABANDONED:
             _reap()
         if not ACTIVE:
-            _reset_cadence()
+            _CAD.reset()
             _STATE.update(dense=True, drained=0, short=0, long=0, switches=0)
             if _STATE["marks"]:
                 _STATE["marks"].clear()
@@ -2026,8 +1753,6 @@ def install_piece(program_id: str, *, piece: dict, manifest: dict, bind: dict | 
         except _Refused as r:
             p.state = "refused"
             p.error = r.error
-        if has_derive:
-            _admit_program(p)
         _set_active()
         item = p.item()
         if p.state != "refused":
@@ -2313,7 +2038,6 @@ def _pump() -> None:
     outbox whose viewer or program is gone. The time counts toward the overhead of the passes."""
     if not _OUTBOX:
         return
-    sender = _sender_stamp()
     t0 = _clock()
     with _OUTBOX_LOCK:
         try:
@@ -2330,8 +2054,7 @@ def _pump() -> None:
         except Exception as e:  # the publish path never stops the step
             _OUTBOX.clear()
             _warn_once(("pump",), f"caliper: sending the parts of a resource failed: {e!r}")
-    with _LOCK:
-        _CAD.extra += max(0.0, _clock() - t0 - _sender_elapsed(sender))
+    _CAD.extra += _clock() - t0
 
 
 def _controls_ports() -> list:

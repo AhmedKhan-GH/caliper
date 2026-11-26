@@ -10,6 +10,7 @@ from caliper import _controls
 from caliper.interp._intervene import InterventionError
 from caliper.interp._output import bounded_text
 from caliper.interp._publish import _resolve
+from tests.interp.dictionary_check_fixture import dictionary_checks
 from .concurrency_isolation import isolated_test
 from .fixture import TinyLM, TinyTokenizer
 from .test_controls_concurrency import other_thread
@@ -189,22 +190,22 @@ def test_completed_reconfiguration_refuses_mixed_resources(hosted_run, resource,
 
 
 @pytest.mark.parametrize("caller_id", [False, True])
-def test_same_resources_allow_reconfiguration_without_extra_validation(hosted_run, caller_id):
+def test_same_resources_allow_reconfiguration_without_extra_validation(dictionary_checks, hosted_run, caller_id):
     run, _ = hosted_run
     select_feature(run)
     service = run.interventions
     identifier = "hosted-fixture" if caller_id else None
     service.configure(dictionary=run.dictionary, tokenizer=run.tokenizer, dictionary_id=identifier)
-    before = service.executor._dictionary_status()["checks"]
+    before = dictionary_checks(service.executor)
     run.apply_clamp()
-    assert service.executor._dictionary_status()["checks"] - before == (0 if caller_id else 2)
+    assert dictionary_checks(service.executor) - before == (0 if caller_id else 2)
     owned = run._owned_record()
     hook = owned.hook
-    before = service.executor._dictionary_status()["checks"]
+    before = dictionary_checks(service.executor)
     run.apply_clamp()
-    assert service.executor._dictionary_status()["checks"] - before == (0 if caller_id else 1)
+    assert dictionary_checks(service.executor) - before == (0 if caller_id else 1)
     assert run._owned_record() is owned and owned.hook is hook and not hook.removed
-    before = service.executor._dictionary_status()["checks"]
+    before = dictionary_checks(service.executor)
     calls = []
     observer = run.model.register_forward_pre_hook(lambda *args: calls.append(1))
     try:
@@ -214,7 +215,7 @@ def test_same_resources_allow_reconfiguration_without_extra_validation(hosted_ru
         assert calls == [1] * 25
     finally:
         observer.remove()
-    assert service.executor._dictionary_status()["checks"] == before
+    assert dictionary_checks(service.executor) == before
     assert run._generation["counts"] == [24, 24]
     assert all(len(row) == 24 for row in run._generation["token_ids"])
     assert service._readers == 0

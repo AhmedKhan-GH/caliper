@@ -1134,9 +1134,6 @@ class _Listener:
         await ws.close()
 
     async def _reader(self, ws, link: Link) -> None:
-        await self.s.ring.sender_task(self._read_frames(ws, link))
-
-    async def _read_frames(self, ws, link: Link) -> None:
         from websockets.exceptions import ConnectionClosed
         idle = _wire.PING_INTERVAL_MS / 1000
         limit = _wire.IDLE_TIMEOUT_MS / 1000
@@ -1146,8 +1143,7 @@ class _Listener:
         while True:
             wait = (last + (limit if pinged else idle)) - time.monotonic()
             try:
-                # wait_for starts a separate task. Its resumed CPU has the same owner.
-                msg = await asyncio.wait_for(self.s.ring.sender_task(ws.recv()), max(wait, 0.0))
+                msg = await asyncio.wait_for(ws.recv(), max(wait, 0.0))
             except asyncio.TimeoutError:
                 if pinged:
                     raise _Fatal(_wire.CLOSE_IDLE_TIMEOUT, "idle") from None
@@ -1165,9 +1161,6 @@ class _Listener:
                 raise _Fatal(CLOSE_OVERFLOW, "control queue full")
 
     async def _writer(self, ws, link: Link) -> None:
-        await self.s.ring.sender_task(self._write_frames(ws, link))
-
-    async def _write_frames(self, ws, link: Link) -> None:
         mono = time.monotonic
         while True:
             frame, wait = link.next_frame(mono())
@@ -1315,13 +1308,14 @@ class NetServer:
     async def _pump(self) -> None:
         p = self.producer
         while True:
-            with self.ring.sender_cost():
-                try:
-                    busy = p.pump_once()
-                except Exception:
-                    self.counters["pump_errors"] += 1
-                    _log.debug("pump failed", exc_info=True)
-                    busy = False
+            t0 = time.thread_time()
+            try:
+                busy = p.pump_once()
+            except Exception:
+                self.counters["pump_errors"] += 1
+                _log.debug("pump failed", exc_info=True)
+                busy = False
+            self.ring.publish_s += time.thread_time() - t0   # the sender's share of the cadence
             if busy or any(st.watched and st.q for st in list(self.ring.series.values())):
                 await asyncio.sleep(POLL_S)
                 continue

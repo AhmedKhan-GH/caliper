@@ -291,10 +291,6 @@ class ControlsPort:
         A CONTROLS that announces a pause, and any newer one, waits until no
         connection has data left to send (see the module docstring), except
         in the ``final`` flush of the server's close, which sends it at once."""
-        with self.server.ring.sender_cost():
-            self._flush(final)
-
-    def _flush(self, final: bool) -> None:
         with self._lock:
             self._scheduled = False
             controls, self._controls = self._controls, None

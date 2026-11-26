@@ -227,7 +227,6 @@ def _after(w) -> None:
 
 def _dispatch(kind, name, rate, make, a, b, c, d, e):
     """Offer one snapshot to every attached route (the module lock held)."""
-    sender = _programs._sender_stamp()
     now = time.perf_counter()
     taken = False
     sync = None
@@ -245,9 +244,6 @@ def _dispatch(kind, name, rate, make, a, b, c, d, e):
                 if plan is None:                 # a data view source without a tensor yet
                     break
             take_call = getattr(ring, "take_call", None)   # the serve() route also wants the call
-            cost_start = getattr(ring, "snapshot_start", None)
-            if cost_start is not None:
-                cost_start(now, sender)
             if (take_call(name, plan, now, (a, b, c, d, e)) if take_call is not None
                     else ring.take(name, plan, now)):
                 taken = True
@@ -840,7 +836,6 @@ def _dv_dispatch(entry, source, tensor=None):
     the session draw the view's default data view, so only its source; a
     server needs the sources its subscriptions select (``ring.wants``). The
     tensor of a registered source is fetched only when a route needs it."""
-    sender = _programs._sender_stamp()
     now = time.perf_counter()
     taken = False
     sync = None
@@ -871,9 +866,6 @@ def _dv_dispatch(entry, source, tensor=None):
             else:
                 if net is None:
                     net = plan if plan is not None else _dataview.net_plan(call)
-                cost_start = getattr(ring, "snapshot_start", None)
-                if cost_start is not None:
-                    cost_start(now, sender)
                 ok = take_call(name, net, now, None)
             if ok:
                 taken = True
