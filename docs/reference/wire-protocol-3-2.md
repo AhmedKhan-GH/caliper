@@ -416,7 +416,7 @@ PROGRAM_STATE carries no section. The script sends one after each PROGRAM, with 
 | `step_ms` | number, optional | The base step time in milliseconds |
 | `programs` | array of objects | At most 16 status items with unique ids, in the order of installation |
 
-A status item has the keys of the status item of `program.status` without `host`: `id`, `kind` (`geometry` or `pixels`) and `state` (`waiting`, `review`, `compiled`, `running`, `refused` or `stopped`) are necessary. `every` and `every_min` (1 to 10,000), `last_pass_ms`, `last_cost_ms`, `step_ms`, `overhead_share` and `passes_per_s` (numbers of at least 0), `last_step`, `runs`, `memory_bytes` and `memory_limit_bytes` (integers from 0 to 2^53 − 1), `error` (`{code, message, line, column}`) and `sha256` (empty or 64 hex digits) are optional and null when unknown. A script that cannot load the producer runtime answers with a refused item of code `program.unavailable`.
+A status item has the keys of the status item of `program.status` without `host`: `id`, `kind` (`geometry`, `pixels`, `tensor`, `operator` or `piece`) and `state` (`waiting`, `review`, `compiled`, `running`, `refused` or `stopped`) are necessary. `every` and `every_min` (1 to 10,000), `last_pass_ms`, `last_cost_ms`, `step_ms`, `overhead_share` and `passes_per_s` (numbers of at least 0), `last_step`, `runs`, `memory_bytes` and `memory_limit_bytes` (integers from 0 to 2^53 − 1), `error` (`{code, message, line, column}`), `warning` (`{code, message, line, column}`) and `sha256` (empty or 64 hex digits) are optional and null when unknown. A script that cannot load the producer runtime answers with a refused item of code `program.unavailable`.
 
 A server refuses a PROGRAM with a non-fatal ERROR that names it in `in_reply_to` and `request_id`:
 
@@ -474,7 +474,7 @@ A PROGRAM `set` that holds the key `piece` installs an instance of a piece. It h
 
 | Key | Type | Meaning |
 |---|---|---|
-| `piece` | object | The pin: `name` (`[a-z][a-z0-9_]*`, 1 to 32 bytes), `version` (1 to 1,000,000) and `hash` (`sha256:` and 64 lowercase hex digits) |
+| `piece` | object | The pin: `name` (`[a-z][a-z0-9_]*`, 1 to 32 bytes), `version` (1 to 1,000,000), `hash` (`sha256:` and 64 lowercase hex digits), and optional `from` (`library`, `workspace` or `inline`) |
 | `manifest` | object | The piece's manifest, which the receiver checks before it runs a half |
 | `bind` | object, optional | At most 8 inputs, each a WGSL name with `live:<tensor>` (a name of 1 to 255 bytes) or `program:<id>/<resource>` |
 | `params` | object, optional | 1 to 16 parameter values, as in the op `params` |
