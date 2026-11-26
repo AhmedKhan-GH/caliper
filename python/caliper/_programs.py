@@ -14,8 +14,11 @@ their completion times it measures the base step time ``b`` over the second half
 between two passes and the overhead ``D`` that a pass adds to the first half, and it runs the
 programs every
 ``N = ceil(D / (0.04 * b))`` steps, moved by bounded factors, at least ``N_MIN`` and at most the
-steps of ``CEILING_S`` seconds. When even that ceiling costs more than the share, every program
-stops with ``program.over_budget`` and training goes on. It gives each geometry output to the
+steps of ``CEILING_S`` seconds. In training runs, when even that ceiling costs more than the share,
+programs other than built-in library pieces carry a recoverable ``program.over_budget`` warning
+while they keep running; built-in library pieces get no hard stop or budget warning, and
+interpretability runs skip the training-overhead cadence and time only program work. A real hang
+still stops every program with ``program.timeout``. It gives each geometry output to the
 publish path of ``caliper.scene`` and each pixels output to ``caliper.show`` as the live view
 ``program.<id>``. A tensor output, the f32 array ``out`` that the program writes, goes to
 ``caliper.show`` as the same live view, in the declared shape, and :func:`set_params` gives new
@@ -93,7 +96,7 @@ COST_SAMPLES = 8        # cycles in the trimmed mean of the overhead D
 CHANGE = 0.25           # N moves down only when it is more than this share above the wanted value
 GROW, SHRINK = 2.0, 1.5 # the largest factors of one change of N, up and down
 CEILING_S = 10.0        # N is at most the steps of this many seconds of training
-OVER_UPDATES = 3        # updates over budget at the ceiling before the programs stop
+OVER_UPDATES = 3        # updates over budget at the ceiling before the warning fires
 DRAINED_STEPS = 16      # steps in a row with torch's queue empty before the marks become sparse
 SPARSE = 8              # the steps between two marks while the loop waits for the GPU by itself
 SHORT_WAITS = 2         # passes in a row whose first sync point found torch's queue empty
@@ -125,7 +128,7 @@ _ACT_HOOKS: dict = {}   # module name -> the forward hook's handle
 _ABANDONED: list = []   # runtimes given up after a timeout, kept until the GPU ends their last pass
 _STATE = {"rt": None, "mod": None, "model": None, "optimizer": None, "marks": None, "step": None,
           "dense": True, "drained": 0, "short": 0, "long": 0, "switches": 0, "pass": None,
-          "pass_budget": True, "floor": 0, "view_s": deque(maxlen=VIEW_SAMPLES)}
+          "pass_budget": True, "floor": 0, "view_s": deque(maxlen=VIEW_SAMPLES), "interp": False}
 _VIEWS = {"ring": None}  # the network route's ring while it has snapshots to take
 _clock = time.perf_counter
 _WARNED: set = set()
@@ -200,6 +203,27 @@ class _Cadence:
         self.k = None
         self.view_cost = {}
 
+    def reset_mode(self) -> None:
+        """Clear cadence measurements when switching between training and interpretability runs,
+        keeping ``last_pass`` and ``prev_pass``."""
+        self.done = {}
+        self.passes = set()
+        self.k = None
+        self.base.clear()
+        self.cost.clear()
+        self.n = None
+        self.want = None
+        self.target = SHARE
+        self.ceiling = EVERY_MAX
+        self.over = 0
+        self.view_cost = {}
+        self.extra = 0.0
+
+    def record_pass_cost(self, cost_s: float) -> None:
+        """Record direct program-pass wall time for an interpretability run without touching
+        training-step timing or cadence throttling."""
+        self.cost.append(max(0.0, float(cost_s)))
+
     def step_s(self):
         """The base step time ``b`` in seconds, or None before the first stretch."""
         return _median(self.base) if self.base else None
@@ -231,7 +255,7 @@ class _Cadence:
 
     def unpass(self, step: int) -> None:
         """The pass of ``step`` took nothing: it counts as a step without a pass."""
-        if step in self.passes and self.last_pass == step:
+        if self.last_pass == step:
             self.passes.discard(step)
             self.last_pass = self.prev_pass
 
@@ -323,7 +347,7 @@ class _Import:
 
 class _Program:
     __slots__ = ("id", "decl", "wgsl", "sha256", "scene", "kind", "inputs", "output", "every_min",
-                 "time_ms", "memory_mb", "handle", "state", "error", "runs", "last_step",
+                 "time_ms", "memory_mb", "handle", "state", "error", "warning", "runs", "last_step",
                  "last_pass_ms", "memory_bytes", "warm", "every", "t0", "bound", "pass_times",
                  "params", "builtin", "shape", "piece", "manifest", "bind", "panel", "segments",
                  "common", "draw", "types", "resources", "passes", "param_types", "written",
@@ -350,6 +374,7 @@ class _Program:
         self.handle = None
         self.state = "waiting"
         self.error = None
+        self.warning = None
         self.runs = 0
         self.last_step = None
         self.input_version = -1
@@ -400,6 +425,7 @@ class _Program:
             "passes_per_s": self.passes_per_s(),
             "last_step": self.last_step, "runs": self.runs, "memory_bytes": self.memory_bytes,
             "memory_limit_bytes": self.memory_mb << 20, "error": self.error,
+            "warning": self.warning,
             "sha256": self.sha256,
         }
 
@@ -837,7 +863,8 @@ def install(program_id: str, declaration: dict, wgsl: str, *, scene: str | None 
             _reap()
         if not ACTIVE:
             _CAD.reset()                             # the measurement starts again from this install
-            _STATE.update(dense=True, drained=0, short=0, long=0, switches=0)
+            _STATE.update(dense=True, drained=0, short=0, long=0, switches=0,
+                          interp=_is_interpretability_run())
             if _STATE["marks"]:
                 _STATE["marks"].clear()
         p = _Program(str(program_id), dict(declaration or {}), str(wgsl), scene, str(sha256 or ""))
@@ -1003,6 +1030,7 @@ def _stop_all(code: str, message: str) -> list:
         if p.state in ("waiting", "compiled", "running"):
             p.state = "stopped"
             p.error = {"code": code, "message": message, "line": None, "column": None}
+            p.warning = None
             changed.append(p)
         p.handle = None
         p.bound = {}
@@ -1038,12 +1066,23 @@ _STOP_TEXT = {
 }
 
 
-def at_step(step: int) -> None:
+def _is_interpretability_run() -> bool:
+    """Whether the current run is an interpretability run rather than a training loop."""
+    svc = _controls.CONTROLS.interpretation_service
+    return svc is not None and (getattr(svc, "owner", None) is not None or _STATE["optimizer"] is None)
+
+
+def _is_builtin_library_piece(p: _Program) -> bool:
+    """Whether ``p`` is an instance of a built-in library piece."""
+    return p.kind == "piece" and isinstance(p.piece, dict) and p.piece.get("from") == "library"
+
+
+def at_step(step: int, *, control_work: bool = False) -> None:
     """Run the programs that are due at ``step`` and publish their outputs."""
     if not ACTIVE:
         return
     try:
-        _at_step(int(step))
+        _at_step(int(step), control_work=control_work)
     except Exception as e:  # a program never stops the training loop
         _warn_once(("step",), f"caliper: the GPU programs failed at step {step}: {e!r}")
 
@@ -1153,16 +1192,24 @@ def _every_ok(p: _Program, step: int) -> bool:
     return p.last_step is None or step < p.last_step or step - p.last_step >= p.every_min
 
 
-def _at_step(step: int) -> None:
+def _at_step(step: int, *, control_work: bool = False) -> None:
     _pump()
     changed = []
     published = []
     with _LOCK:
+        interp = _is_interpretability_run()
         inference = getattr(_controls.CONTROLS.interpretation_service, "owner", None) is not None
+        if _STATE["interp"] != interp:
+            _STATE["interp"] = interp
+            _CAD.reset_mode()
+            if _STATE["marks"]:
+                _STATE["marks"].clear()
+            if interp:
+                changed.extend(_clear_over_budget_warnings())
         if _ABANDONED:
             _reap()
         now = _clock()
-        marks = _marks()
+        marks = None if interp else _marks()
         ring = _VIEWS["ring"]
         last = _STATE["step"]
         _STATE["step"] = step
@@ -1176,6 +1223,12 @@ def _at_step(step: int) -> None:
             _CAD.repass(_STATE["pass"], step)
             _STATE["pass"] = step
         is_pass = _STATE["pass"] == step             # decided at the checkpoint before
+        if control_work and not interp:
+            # Pauses, actions and interpretation requests inside c.step() are not program work:
+            # drop the open cadence cycle so their wall time is not attributed to pass cost D.
+            _CAD.restart()
+            if marks is not None:
+                marks.clear()
         _CAD.target = VIEWS_SHARE if ring is not None else SHARE
         budget = _STATE.get("pass_budget", True)
         live = [p for p in _PROGS.values() if p.state in ("waiting", "compiled", "running")]
@@ -1187,12 +1240,13 @@ def _at_step(step: int) -> None:
             if p.warm > 0:
                 p.warm -= 1
         work = ring.gate_cost if ring is not None and is_pass and ring.gate_open else 0.0
-        done = _mark(marks, step, now, is_pass)
-        if work > 0.0:
+        done = [] if interp else _mark(marks, step, now, is_pass)
+        if work > 0.0 and done:
             done = [(k, lo, max(lo, hi - work)) for k, lo, hi in done]
         if ring is not None:
             ring.step_tick(step, now)
         ran = []
+        prog_t0 = None
         if due:
             if marks is not None:                    # sync point 1: torch's work is complete
                 done += marks.wait(step, _clock)
@@ -1201,6 +1255,8 @@ def _at_step(step: int) -> None:
                 _STATE["long"] = 0 if empty else _STATE["long"] + 1
             else:
                 _torch_adapter().framework_done()
+            if interp:
+                prog_t0 = _clock()
             try:
                 for p in due:
                     before = p.state
@@ -1209,7 +1265,7 @@ def _at_step(step: int) -> None:
                     except _Waiting:
                         continue
                     except _Refused as r:
-                        p.state, p.error = "refused", r.error
+                        p.state, p.error, p.warning = "refused", r.error, None
                         changed.append(p)
                         continue
                     if before != p.state:
@@ -1235,13 +1291,14 @@ def _at_step(step: int) -> None:
                     p.state = "stopped"
                     p.error = {"code": code, "message": _STOP_TEXT.get(code, code), "line": None,
                                "column": None}
+                    p.warning = None
                     changed.append(p)
                 else:
                     skipped = p.skipped
                     try:
                         outs = _outputs(rt, p)
                     except _Refused as r:            # versions that no viewer's queue takes
-                        p.state, p.error = "stopped", r.error
+                        p.state, p.error, p.warning = "stopped", r.error, None
                         rt.remove(p.handle)
                         p.handle = None
                         p.bound = {}
@@ -1262,7 +1319,7 @@ def _at_step(step: int) -> None:
         taken = 0
         if ring is not None and ring is _VIEWS["ring"] and (is_pass or ring.gate_open):
             taken = ring.close_pass(step, _clock())
-            if taken:
+            if taken and not interp:
                 pub = ring.publish_s
                 last = _STATE.get("pub_pass")
                 if last is not None and last[0] in _CAD.view_cost:
@@ -1271,7 +1328,11 @@ def _at_step(step: int) -> None:
                 _STATE["view_s"].append(ring.gate_cost)
                 if is_pass:
                     _CAD.view_cost[step] = ring.gate_cost
-        if is_pass and not ran and not taken:        # nothing was due after all
+        if interp and (ran or taken):
+            prog_s = (max(0.0, _clock() - prog_t0) if prog_t0 is not None else 0.0) + work + _CAD.extra
+            _CAD.extra = 0.0
+            _CAD.record_pass_cost(prog_s)
+        if is_pass and budget and not ran and not taken:        # nothing was due after all
             _CAD.unpass(step)
         ring = _VIEWS["ring"]
         _STATE["pass"] = None
@@ -1297,13 +1358,14 @@ def _at_step(step: int) -> None:
             _STATE["floor"] += 1
             ring.cadence = _views_status(ring, True)
             ring.open_pass(nxt)
-        if not _STATE["dense"]:                      # the loop waits by itself: the clock times it
-            done = [(step, now, now)]
-        for k, _lo, hi in done:
-            _CAD.completed(k, hi)
-        progs = [p.every_min for p in _PROGS.values() if p.state in ("waiting", "compiled", "running")]
-        if progs and _CAD.over_budget(min(progs)):
-            changed.extend(_stop_over_budget())
+        if not interp:
+            if not _STATE["dense"]:                  # the loop waits by itself: the clock times it
+                done = [(step, now, now)]
+            for k, _lo, hi in done:
+                _CAD.completed(k, hi)
+            changed.extend(_update_over_budget())
+        else:
+            changed.extend(_clear_over_budget_warnings())
         _set_active()
         items = [p.item() for p in dict.fromkeys(changed)]
     _notify(items)
@@ -1356,7 +1418,8 @@ def views(ring) -> None:
             old.release_gate()
         if ring is not None and old is None and not ACTIVE:
             _CAD.reset()                             # the measurement starts again
-            _STATE.update(dense=True, drained=0, short=0, long=0, switches=0, floor=0)
+            _STATE.update(dense=True, drained=0, short=0, long=0, switches=0, floor=0,
+                          interp=_is_interpretability_run())
             _STATE["pass"] = None
             if _STATE["marks"]:
                 _STATE["marks"].clear()
@@ -1390,26 +1453,48 @@ def views_stats() -> dict:
         return out
 
 
-def _stop_over_budget() -> list:
-    """Every program stops with ``program.over_budget``: a pass even at the ceiling of N costs more
-    than the share of the training time. The runtime stays open, and training goes on."""
-    b, d = _CAD.step_s(), _CAD.cost_s()
-    message = (f"A pass adds {d * 1e3:.2f} ms to a step of {b * 1e3:.3f} ms, thus the programs need "
-               f"at least {_CAD.want} steps between passes to stay under {SHARE:.0%} of the training "
-               f"time, more than the ceiling of {_CAD.ceiling} steps ({_CAD.ceiling * b:.3g} s) on "
-               "this run. The programs stopped, and training goes on.")
+def _clear_over_budget_warnings() -> list:
+    """Clear active ``program.over_budget`` warnings on running programs."""
     changed = []
-    rt = _STATE["rt"]
     for p in _PROGS.values():
-        if p.state in ("waiting", "compiled", "running"):
-            p.state = "stopped"
-            p.error = {"code": "program.over_budget", "message": message, "line": None, "column": None}
-            if rt is not None and p.handle is not None:
-                rt.remove(p.handle)
-            p.handle = None
-            p.bound = {}
+        if p.warning is not None and p.warning.get("code") == "program.over_budget":
+            p.warning = None
             changed.append(p)
-    _release_unused()
+    return changed
+
+
+def _update_over_budget() -> list:
+    """Set or clear recoverable ``program.over_budget`` warnings in a training run.
+
+    Built-in library pieces get no hard stop and no budget warning. Agent-written pieces and
+    other programs carry a warning while keeping running; a hard stop happens only on a real
+    hang (``program.timeout``).
+    """
+    warnable = [p for p in _PROGS.values()
+                if p.state in ("waiting", "compiled", "running") and not _is_builtin_library_piece(p)]
+    if not warnable or not _CAD.over_budget(min(p.every_min for p in warnable)):
+        return _clear_over_budget_warnings()
+    b, d = _CAD.step_s(), _CAD.cost_s()
+    if b is None or d is None or b <= 0:
+        return _clear_over_budget_warnings()
+    message = (f"A pass adds {d * 1e3:.2f} ms to a step of {b * 1e3:.3f} ms, thus the programs need "
+               f"at least {_CAD.want} steps between passes to stay under {_CAD.target:.0%} of the "
+               f"training time, more than the ceiling of {_CAD.ceiling} steps ({_CAD.ceiling * b:.3g} s) "
+               "on this run. The programs keep running.")
+    warning = {"code": "program.over_budget", "message": message, "line": None, "column": None}
+    changed = []
+    for p in _PROGS.values():
+        if p.state not in ("waiting", "compiled", "running"):
+            continue
+        if _is_builtin_library_piece(p):
+            if p.warning is not None and p.warning.get("code") == "program.over_budget":
+                p.warning = None
+                changed.append(p)
+            continue
+        was_warned = p.warning is not None and p.warning.get("code") == "program.over_budget"
+        p.warning = dict(warning)
+        if not was_warned:
+            changed.append(p)
     return changed
 
 
@@ -1672,7 +1757,8 @@ def install_piece(program_id: str, *, piece: dict, manifest: dict, bind: dict | 
             _reap()
         if not ACTIVE:
             _CAD.reset()
-            _STATE.update(dense=True, drained=0, short=0, long=0, switches=0)
+            _STATE.update(dense=True, drained=0, short=0, long=0, switches=0,
+                          interp=_is_interpretability_run())
             if _STATE["marks"]:
                 _STATE["marks"].clear()
         p = _Program(str(program_id), {}, str(derive or ""), None, "")

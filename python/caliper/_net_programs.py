@@ -97,6 +97,7 @@ def _refused(program_id: str, kind: str, code: str, message: str, sha256: str = 
             "last_step": None, "runs": 0, "memory_bytes": 0, "memory_limit_bytes": 0,
             "error": {"code": code, "message": message[:_wire.TEXT_MAX], "line": 0,
                       "column": 0},
+            "warning": None,
             "sha256": sha256}
 
 
@@ -260,7 +261,7 @@ class ProgramsPort:
         self.controls.post(link, _wire.encode_frame(_wire.MsgType.PROGRAM_STATE, meta),
                            _wire.CAP_PROGRAMS)
         self.counters["states_out"] += 1
-        self._last_sent = [(x["id"], x["state"]) for x in items]
+        self._last_sent = [(x["id"], x["state"], (x.get("warning") or {}).get("code")) for x in items]
 
     def _tick(self) -> None:
         """At most ``PROGRAM_STATE_RATE_HZ`` times a second: an unrequested PROGRAM_STATE on a
@@ -278,8 +279,8 @@ class ProgramsPort:
             return
         self._alone_since = None
         meta, items = self._state(None)
-        states = [(x["id"], x["state"]) for x in items]
-        if states != self._last_sent or any(s == "running" for _, s in states):
+        states = [(x["id"], x["state"], (x.get("warning") or {}).get("code")) for x in items]
+        if states != self._last_sent or any(s == "running" for _, s, _ in states):
             self.controls.post(None, _wire.encode_frame(_wire.MsgType.PROGRAM_STATE, meta),
                                _wire.CAP_PROGRAMS)
             self.counters["states_out"] += 1

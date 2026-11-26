@@ -3266,7 +3266,8 @@ _STATUS_KEYS = (("every", _int_in(1, PROGRAM_EVERY_MAX)), ("every_min", _int_in(
                 ("last_pass_ms", _nonneg), ("last_cost_ms", _nonneg), ("step_ms", _nonneg),
                 ("overhead_share", _nonneg), ("passes_per_s", _nonneg),
                 ("last_step", _safe_uint), ("runs", _safe_uint), ("memory_bytes", _safe_uint),
-                ("memory_limit_bytes", _safe_uint), ("error", _program_error))
+                ("memory_limit_bytes", _safe_uint), ("error", _program_error),
+                ("warning", _program_error))
 
 
 def _status_item(v) -> bool:
@@ -3361,14 +3362,16 @@ _PIECE_TAIL = _PIECE_HEAD | _DIGITS | {"_"}
 
 def _piece_pin(v) -> bool:
     """The pin of a piece: ``name`` ([a-z][a-z0-9_]*, at most 32 bytes), ``version`` (1 to
-    1,000,000) and ``hash`` ("sha256:" and 64 lowercase hex digits)."""
+    1,000,000), ``hash`` ("sha256:" and 64 lowercase hex digits) and optional ``from``
+    (``library``, ``workspace`` or ``inline``)."""
     if not _obj(v):
         return False
-    name, h = v.get("name"), v.get("hash")
+    name, h, fr = v.get("name"), v.get("hash"), v.get("from")
     return (isinstance(name, str) and 0 < len(name) <= PIECE_NAME_MAX and name.isascii()
             and name[0] in _PIECE_HEAD and all(c in _PIECE_TAIL for c in name)
             and _int_in(1, PIECE_VERSION_MAX)(v.get("version"))
-            and isinstance(h, str) and h.startswith("sha256:") and _sha256_hex(h[len("sha256:"):]))
+            and isinstance(h, str) and h.startswith("sha256:") and _sha256_hex(h[len("sha256:"):])
+            and (fr is None or fr in ("library", "workspace", "inline")))
 
 
 def _library_pin(v) -> bool:
