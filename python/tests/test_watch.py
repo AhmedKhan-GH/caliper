@@ -57,7 +57,9 @@ def test_watch_registers_produces_and_removes(device):
         assert h.modules == ["conv1", "fc1", "fc2"]
         assert set(h.views) == {"conv1.act", "fc1.act", "fc2.act",
                                 "conv1.weight.grad", "fc1.weight.grad", "fc2.weight.grad"}
-        assert _hook_count(net) == 3 and len(h) == 6
+        # 3 activation forward hooks + 3 intervention shape hooks; 3 activation + 3 grad
+        # + inference capabilities + programs + interventions handles.
+        assert _hook_count(net) == 6 and len(h) == 9
         _step(net, device)
         conv = caliper.view_info("conv1.act")              # (4,6,16,16) -> item 0 mosaic 3x2
         assert (conv["width"], conv["height"]) == (48, 32) and conv["updates"] == 1

@@ -17,6 +17,46 @@ def mps_available() -> bool:
 
 requires_mps = pytest.mark.skipif(not mps_available(), reason="no MPS device")
 
+# Suites and cases that need hardware or services absent on a GPU-less hosted runner.
+# Applying these markers here keeps python/tests selectable as a whole in CI without
+# silently dropping newly added suites.
+_GPU_SUITES = frozenset({
+    # Offscreen Metal canvas and SharedBuffer (MTLCreateSystemDefaultDevice) suites.
+    "test_image_rgba.py",
+    "test_kinds_offscreen.py",
+    "test_ramp_reference.py",
+    "test_show_cpu.py",
+    "test_show_mps.py",
+    "test_window_transport.py",
+    # Hidden-app scene suites that require a Metal renderer in the caliper binary.
+    "test_scene_app.py",
+    "test_scene_events.py",
+    "test_scene_pieces_app.py",
+})
+_GPU_CASES = frozenset({
+    ("test_watch.py", "test_watch_registers_produces_and_removes"),
+    ("test_watch.py", "test_watch_include_and_every"),
+    ("test_watch.py", "test_watch_is_free_when_nothing_is_attached"),
+})
+_WINDOW_SUITES = frozenset({"test_window_real.py"})
+_NOTEBOOK_SUITES = frozenset({"test_live_training_notebook.py"})
+_NOTEBOOK_CASES = frozenset({("test_widget.py", "test_widget_draws_in_jupyterlab")})
+_TIMING_CASES = frozenset({("test_controls.py", "test_a_flood_of_values_from_several_threads")})
+
+
+def pytest_collection_modifyitems(items):
+    for item in items:
+        filename = item.path.name
+        base_name = getattr(item, "originalname", None) or item.name.split("[", 1)[0]
+        if filename in _GPU_SUITES or (filename, base_name) in _GPU_CASES:
+            item.add_marker(pytest.mark.gpu)
+        if filename in _WINDOW_SUITES:
+            item.add_marker(pytest.mark.window)
+        if filename in _NOTEBOOK_SUITES or (filename, base_name) in _NOTEBOOK_CASES:
+            item.add_marker(pytest.mark.notebook)
+        if (filename, base_name) in _TIMING_CASES:
+            item.add_marker(pytest.mark.timing)
+
 
 @pytest.fixture(scope="module")
 def offscreen256():

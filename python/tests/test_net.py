@@ -1397,6 +1397,8 @@ def test_views_share_one_tick(server, device):
                 while time.perf_counter() < end or (ring.counters["ticks"] - k0 < 10
                                                     and time.perf_counter() < cap):
                     step()
+                if ring.tick is not None:
+                    step()                                   # finish a tick that opened mid-step on the last iteration
             finally:
                 if device == "mps":
                     R._torch().mps.Event = real

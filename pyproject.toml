@@ -18,6 +18,8 @@ torch = ["torch"]
 test = [
     "pytest",
     "jsonschema",
+    "anywidget",
+    "pyyaml",
     "torch>=2.15.0",
     "safetensors",
     "psutil",
@@ -81,4 +83,7 @@ testpaths = ["python/tests", "tests/demos", "tests/interp"]
 markers = [
     "local_model: requires a downloaded model and never runs in CI",
     "gpu: requires an explicit accelerator test run",
+    "window: requires a macOS window server and Metal GPU",
+    "notebook: requires JupyterLab, ipykernel, Playwright Chromium, and WebGPU",
+    "timing: wall-clock timing or stress check sensitive to hosted-runner contention",
 ]
