@@ -353,8 +353,8 @@ class _Program:
                  "last_pass_ms", "memory_bytes", "warm", "every", "t0", "bound", "pass_times",
                  "params", "builtin", "shape", "piece", "manifest", "bind", "panel", "segments",
                  "common", "draw", "types", "resources", "passes", "param_types", "written",
-                 "sent_static", "static_frames", "relayed", "skipped", "behind", "output_retry",
-                 "input_version", "params_dirty", "act_dirty")
+                 "sent_static", "static_frames", "static_relayed", "relayed", "skipped", "behind",
+                 "output_retry", "input_version", "params_dirty", "act_dirty")
 
     def __init__(self, pid, decl, wgsl, scene, sha256):
         self.id = pid
@@ -399,6 +399,7 @@ class _Program:
         self.written = set()    # the resources that a pass names in `writes`
         self.sent_static = False
         self.static_frames = {}  # resource id -> the RESOURCE frame of a static resource
+        self.static_relayed = _LinkSet()  # viewers with an admitted static snapshot
         self.relayed = _LinkSet()  # the viewers that got the draw half
         self.skipped = 0        # passes whose RESOURCE frames a viewer behind did not get
         self.behind = _LinkSet()  # the viewers whose last pass of it was skipped
@@ -2001,6 +2002,7 @@ def _compile_piece(p: _Program) -> None:
     p.sent_static = False                            # new resources: the static ones go again
     _drop_outbox(p)                                  # and no part of an earlier install
     p.static_frames = {}
+    p.static_relayed = _LinkSet()
     st = rt.status(h)
     p.memory_bytes = int(st.get("memory_bytes") or 0)
     if p.state != "running":
@@ -2094,8 +2096,9 @@ _OUTBOX_LOCK = threading.Lock()
 def _all_busy(p: _Program) -> bool:
     """Whether some viewer would get the pass of ``p`` and every such viewer waits for the chunks of
     an earlier pass."""
-    links = [ln for ctl in _controls_ports() for ln in _resource_links(ctl) if ln in p.relayed]
-    return bool(links) and all(id(ln) in _OUTBOX for ln in links)
+    links = [ln for ctl in _controls_ports() for ln in _resource_links(ctl)]
+    with _OUTBOX_LOCK:
+        return bool(links) and all(id(ln) in _OUTBOX for ln in links)
 
 
 def _offer(p: _Program, ctl, ln, frames: list) -> bool:
@@ -2203,9 +2206,14 @@ def _relay_to(p: _Program, ctl, links) -> None:
         if statics:
             if not _offer(p, ctl, ln, [frame, *statics]):
                 continue
+            p.static_relayed.add(ln)
         else:
             ctl.post(ln, frame, _wire.CAP_RESOURCES)
         p.relayed.add(ln)
+        if any(r["publish"] and r["id"] in p.written for r in p.resources):
+            # A viewer can attach after the resource snapshot. Its draw half does
+            # not prove delivery of the written resources from that pass.
+            p.behind.add(ln)
 
 
 def _relay(p: _Program) -> None:
@@ -2231,6 +2239,9 @@ def _send_resources(p: _Program, frames: list) -> None:
     """Give the RESOURCE frames of a pass to the viewers: first the draw half to each viewer that
     attached since, then the frames to every viewer that announced ``resources``.
 
+    Static snapshots stay cached until each viewer admits them. A later pass retries
+    a rejected static snapshot with its written resources.
+
     A viewer that falls behind loses passes: the first chunk of a pass goes to a viewer only while it
     waits for no earlier pass and the control frames queued for it, the frames posted for it and not
     queued yet (of this program and of the programs before it in the pass), and the chunk stay within
@@ -2240,6 +2251,12 @@ def _send_resources(p: _Program, frames: list) -> None:
     fit in one pass reach it in turn (:func:`_publish_pass`). The later chunks of a larger pass go at
     the next steps (:func:`_pump`), and the viewer takes no other pass until they went."""
     try:
+        statics = [f for fs in p.static_frames.values() for f in fs]
+        static_ids = {id(f) for f in statics}
+        frame_ids = {id(f) for f in frames}
+        written = [f for f in frames if id(f) not in static_ids]
+        retry = [*frames, *(f for f in statics if id(f) not in frame_ids)]
+        needs_written = any(r["publish"] and r["id"] in p.written for r in p.resources)
         for ctl in _controls_ports():
             links = _resource_links(ctl)
             if not links:
@@ -2248,12 +2265,17 @@ def _send_resources(p: _Program, frames: list) -> None:
             for ln in links:
                 if ln not in p.relayed:
                     continue                         # its draw half first, at a later pass
-                if not frames:
+                if needs_written and not written:
+                    continue                         # the all-busy path made no written snapshot
+                pending = written if ln in p.static_relayed else retry
+                if not pending:
                     continue
-                if not _offer(p, ctl, ln, frames):
+                if not _offer(p, ctl, ln, pending):
                     p.skipped += 1
                     p.behind.add(ln)
                     continue
+                if statics:
+                    p.static_relayed.add(ln)
                 p.behind.discard(ln)
     except Exception as e:  # the publish path never stops the step
         _warn_once(("publish", p.id), f"caliper: sending the resources of {p.id} failed: {e!r}")
