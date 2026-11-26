@@ -551,6 +551,9 @@ def _resolve(name: str):
 
 
 def _keep_act(mname, out, epoch) -> None:
+    from ._intervention_protocol import is_internal_forward
+    if is_internal_forward():
+        return
     if isinstance(out, (tuple, list)):
         out = next((x for x in out if hasattr(x, "detach")), None)
     if out is not None:

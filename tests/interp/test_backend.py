@@ -148,3 +148,68 @@ def test_load_backend_tiny_lm_and_default_device():
     backend = load_backend("tiny-lm")
     assert backend.model_id == "tiny-lm"
     assert backend.tokenize("A").shape == (1, 2)
+
+
+def test_selected_feature_subset_activations_and_str_window_token_ids(monkeypatch):
+    from collections import UserDict
+    from types import SimpleNamespace
+    from caliper import _ablate
+    from caliper.interp import Graph
+
+    backend = make_tiny_backend(device="cpu", dtype=torch.float32)
+
+    # 1. Graph.from_circuit_tracer indexes activation_values by selected_features
+    active_features = torch.tensor([[0, 1, 2], [0, 1, 5], [1, 1, 7]], dtype=torch.long)
+    activation_values = torch.tensor([1.25, 9.5, 4.75], dtype=torch.float32)
+    selected_features = torch.tensor([2, 0], dtype=torch.long)
+    # 2 selected features + 2*2 error nodes + 2 embed tokens + 1 logit = 9 nodes
+    adj = torch.zeros((9, 9), dtype=torch.float32)
+    adj[8, 0] = 0.6
+    adj[8, 1] = 0.3
+    ct_graph = SimpleNamespace(
+        adjacency_matrix=adj,
+        input_tokens=torch.tensor([1, 2], dtype=torch.long),
+        cfg=SimpleNamespace(n_layers=2),
+        logit_targets=[SimpleNamespace(vocab_idx=3, token_str="C")],
+        logit_probabilities=torch.tensor([0.9], dtype=torch.float32),
+        active_features=active_features,
+        selected_features=selected_features,
+        activation_values=activation_values,
+        vocab_size=16,
+    )
+    pruned = SimpleNamespace(
+        node_mask=torch.ones(9, dtype=torch.bool),
+        edge_mask=adj != 0,
+        cumulative_scores=torch.linspace(0.1, 0.9, 9),
+    )
+    g = Graph.from_circuit_tracer(
+        ct_graph,
+        pruned,
+        replacement_score=0.8,
+        completeness_score=0.9,
+        node_influence=torch.ones(9, dtype=torch.float32),
+        tokenizer=backend.tokenizer,
+    )
+    feat_nodes = [n for n in g.nodes if n["kind"] == "feature"]
+    assert [(n["layer"], n["feature"], n["activation"]) for n in feat_nodes] == [
+        (1, 7, 4.75),
+        (0, 2, 1.25),
+    ]
+
+    # 2. _pack_str_window maps token strings to vocab IDs (not window positions)
+    win = backend._pack_str_window(0, "np-0", ["A", "B", "<unmapped-xyz>"], [0.1, 2.0, 0.0], 1, backend.tokenizer)
+    center = win["center"]
+    expected_a = backend.tokenizer.encode("A", add_special_tokens=False)[0]
+    expected_b = backend.tokenizer.encode("B", add_special_tokens=False)[0]
+    assert win["token_ids"][center - 1 : center + 2] == [expected_a, expected_b, None]
+    assert win["positions"][center - 1 : center + 2] == [0, 1, 2]
+
+    # 3. _tokenize_prompt accepts UserDict (HF BatchEncoding) & _tl_semantic_map gates mlp_in
+    assert "layers.0.mlp_in" not in _ablate._tl_semantic_map(backend.model)
+    plain = torch.nn.Linear(4, 4)
+    tok_fn = lambda _p, return_tensors="pt": UserDict(
+        input_ids=torch.tensor([[3, 4]]), attention_mask=torch.tensor([[1, 1]])
+    )
+    tok_out = _ablate._tokenize_prompt(plain, tok_fn, "AB")
+    assert torch.equal(tok_out["input_ids"], torch.tensor([[3, 4]]))
+    assert "attention_mask" in tok_out

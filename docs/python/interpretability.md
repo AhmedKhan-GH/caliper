@@ -13,7 +13,7 @@ Install the `interp` extra from the repository root to pin compatible library ve
 pip install -e ".[interp]"
 ```
 
-The `interp` extra installs exact tested versions:
+The `interp` extra installs compatible tested versions:
 
 - `torch>=2.15.0` and `transformers>=5.24.0,<5.25.0`
 - `transformer-lens==3.9.0`
@@ -25,9 +25,9 @@ On Apple Silicon, `caliper.interp` sets `TRANSFORMERLENS_ALLOW_MPS=1` and select
 
 ## Model Probes
 
-`caliper.interp.points(model)` lists module, attention-head, and semantic probe points on a PyTorch or `HookedTransformer` model.
-Decoder blocks expose `resid_pre`, `mlp_in`, `mlp_out`, and `attn_pattern` alongside module and `blocks.L.attn#H` head points.
-`caliper.interp.capture(model, points)` records activations on the model device without a CPU copy and removes its hooks on exit.
+`intervene.points` (`caliper._ablate.points(model)`) lists module, attention-head, and semantic probe points on a PyTorch or `HookedTransformer` model.
+Decoder blocks expose `resid_pre`, `attn_out`, `mlp_out`, and `attn_pattern` (plus `mlp_in` when `cfg.use_hook_mlp_in` is true) alongside module and `blocks.L.attn#H` head points.
+Any watched module also exposes its latest forward activation to derive programs as `live:<module>.act` without a CPU copy.
 
 `caliper.interp.publish(name, tensor)` exposes a named tensor to derive programs.
 For example, `publish("trace.counts", counts)` updates the catalog source `live:trace.counts`.
@@ -66,10 +66,10 @@ For offline tests without model downloads, pass `model_ref="tiny-lm"` to constru
 When online and `neuronpedia_id` is present on `SAE.cfg.metadata`, `LiveFeatureIndex` queries `get_neuronpedia_feature`.
 When offline or using unindexed transcoders, it scans recent and reference prompts with a bounded min-heap and zeros BOS positions.
 
-For large local corpora, `tools/interp/build_index.py` builds a memory-mapped disk index read by `FeatureIndex`:
+For large local corpora, `tools/interp/build_index.py` builds a memory-mapped disk index in `<dictionary>/index` for `FeatureIndex`:
 
 ```sh
-python -m tools.interp.build_index --model google/gemma-2-2b --dictionary "$SCOPE_DIR" --output "$INDEX_DIR"
+python -m tools.interp.build_index --model google/gemma-2-2b --dictionary "$SCOPE_DIR" --text-jsonl "$CORPUS_JSONL"
 ```
 
 `feature.show` returns the heuristic feature label, activation count, maximum, and promoted tokens.

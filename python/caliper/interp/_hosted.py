@@ -754,6 +754,8 @@ class HostedInference:
                 tensors, comp = self.output.prepare_logits(paired)
                 _publish_many(tensors)
 
+            if self.prompt.value != dallas_prompt:
+                self.prompt.set(dallas_prompt)
             self._preset_tuples = tuples
             self._preset_cell = cell
             state = self._input_state()
@@ -824,7 +826,12 @@ class HostedInference:
             gen_id = self._generation["id"] + 1
         t0 = time.perf_counter()
         with internal_forward():
-            if self._preset_tuples is not None:
+            dallas_prompt = (
+                self._dallas_cache["manifest"]["prompts"]["dallas"]
+                if self._dallas_cache is not None
+                else None
+            )
+            if self._preset_tuples is not None and state[0] == dallas_prompt:
                 raw = self.backend.generate(state[0], self._preset_tuples, max_new_tokens=24, guard=self.guard)
                 result = {
                     "baseline": bounded_text(raw["baseline"]),

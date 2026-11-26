@@ -99,7 +99,7 @@ In a hosted inference run, bind `logit_bars@1` to the paired live comparison sou
 | `label_text` | `live:output.label_text` | `(10, 16)` |
 
 Row `0` holds clean baseline probabilities and row `1` holds steered probabilities across a shared union of top tokens.
-Standalone M7 traces without `Output` also publish baseline-only `live:trace.probs`, `live:trace.logit_tokens`, and `live:trace.logit_label_text`.
+Standalone traces without `Output` also publish baseline-only `live:trace.probs`, `live:trace.logit_tokens`, and `live:trace.logit_label_text`.
 
 ## Inference Runs
 

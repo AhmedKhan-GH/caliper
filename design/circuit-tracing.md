@@ -2,14 +2,14 @@
 
 ## Purpose
 
-M7 and M8 connect Caliper live instruments to `transformer-lens`, `circuit-tracer`, and `sae-lens`.
+Caliper connects live instruments to `transformer-lens`, `circuit-tracer`, and `sae-lens`.
 Python runs attribution, sparse dictionary encoding, feature steering, and activation patching on the model device.
 The native app and the browser viewer render attribution graphs, feature examples, and output probability bars.
 Each feature intervention tests the causal effect that the attribution graph predicts.
 
 ## Verified Base
 
-Branch `interp-tl` replaces custom M7 math and offline transcoder trainers with pinned upstream libraries.
+Caliper replaces custom attribution math and offline transcoder trainers with pinned upstream libraries.
 Caliper retains its GPU pieces, wire v3 codecs, MCP tools, hosted runs, and live controls.
 
 ### Model And Dictionary
@@ -26,8 +26,8 @@ The reference benchmark uses `google/gemma-2-2b` (`c5ebcd40`) with 26-layer 16k 
 
 ### Existing Interfaces
 
-`caliper.interp.points` lists module, head, and semantic probe points (`resid_pre`, `mlp_in`, `mlp_out`, and `attn_pattern`).
-`caliper.interp.capture` records probe tensors on the model device without a CPU copy.
+`intervene.points` lists module, head, and semantic probe points (`resid_pre`, `attn_out`, `mlp_in`, `mlp_out`, and `attn_pattern`).
+Watched modules expose forward activations on the model device as `live:<module>.act` without a CPU copy.
 `caliper.interp.publish` registers named tensors for derive programs under `live:` catalog sources.
 Watch removal clears published tensors and temporary hooks for that model.
 
@@ -127,7 +127,7 @@ Both baseline and intervened argmax token IDs remain in the ten bar slots even w
 
 Offline unit tests use a deterministic 2-layer `ReplacementModel` (`tiny-lm`) and a 2-layer `StandardSAE` fixture without network downloads.
 End-to-end acceptance runs `demos/circuit_trace/run.py` through `caliper-mcp` on `google/gemma-2-2b` (`Fact: the capital of the state containing Dallas is`).
-Caliper compares direct `circuit-tracer` outputs against `REFERENCE-RESULTS-12.json` on identical inputs:
+Caliper compares direct `circuit-tracer` outputs against the published tutorial reference outputs on identical inputs:
 
 - Baseline `' Austin'` (`22605`, probability `0.419921875`, logit `26.125`) and all seven published Dallas intervention top tokens (Cells 14, 16, 18, 20, 24, 26, and 29) match.
 - Six of seven intervention probabilities match bitwise, Cell 26 stays within one `bfloat16` ULP (`2^-10`) from Metal `index_add_` order, and Cell 29 has `Say Victoria == 0.0`.

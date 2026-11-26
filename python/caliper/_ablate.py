@@ -194,9 +194,12 @@ def _tl_semantic_map(model) -> dict[str, tuple[str, int, str]]:
     n_layers = getattr(cfg, "n_layers", None)
     if not isinstance(hook_dict, dict) or not isinstance(n_layers, int) or n_layers <= 0:
         return {}
+    use_mlp_in = bool(getattr(cfg, "use_hook_mlp_in", False))
     out: dict[str, tuple[str, int, str]] = {}
     for layer in range(n_layers):
         for short, suffix in _TL_PROBES:
+            if short == "mlp_in" and not use_mlp_in:
+                continue
             target = f"blocks.{layer}.{suffix}"
             if target in hook_dict:
                 out[f"layers.{layer}.{short}"] = (target, layer, short)
@@ -453,6 +456,7 @@ def record_shapes(model):
 
 
 def _tokenize_prompt(model, tokenizer, prompt: str):
+    from collections.abc import Mapping
     import torch
     if hasattr(model, "to_tokens") and tokenizer is getattr(model, "tokenizer", None):
         prepend = getattr(getattr(model, "cfg", None), "default_prepend_bos", True)
@@ -463,14 +467,14 @@ def _tokenize_prompt(model, tokenizer, prompt: str):
             raise ValueError(f"prompt token length {int(ids.shape[1])} must be in 1..{MAX_POSITIONS}")
         return {"input_ids": ids}
     encoded = tokenizer(prompt, return_tensors="pt")
-    ids = encoded["input_ids"] if isinstance(encoded, dict) else encoded
+    ids = encoded["input_ids"] if isinstance(encoded, Mapping) else encoded
     if not isinstance(ids, torch.Tensor):
         ids = torch.as_tensor(ids, dtype=torch.long)
     if ids.ndim == 1:
         ids = ids.unsqueeze(0)
     if ids.shape[0] != 1 or not 1 <= int(ids.shape[1]) <= MAX_POSITIONS:
         raise ValueError(f"prompt token length {int(ids.shape[1])} must be in 1..{MAX_POSITIONS}")
-    if isinstance(encoded, dict) and "attention_mask" in encoded:
+    if isinstance(encoded, Mapping) and "attention_mask" in encoded:
         return {"input_ids": ids, "attention_mask": encoded["attention_mask"]}
     return {"input_ids": ids}
 

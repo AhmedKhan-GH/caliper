@@ -106,8 +106,12 @@ class Graph:
         n_tokens = len(input_ids)
         n_layers = int(ct_graph.cfg.n_layers)
         n_logits = len(ct_graph.logit_targets)
-        selected_coords = ct_graph.active_features[ct_graph.selected_features].detach().cpu().tolist()
-        act_vals = ct_graph.activation_values.detach().cpu().float().tolist()
+        selected_idx = ct_graph.selected_features.detach().cpu()
+        selected_coords = ct_graph.active_features.detach().cpu()[selected_idx].tolist()
+        raw_acts = ct_graph.activation_values.detach().cpu().float()
+        if raw_acts.shape[0] == ct_graph.active_features.shape[0]:
+            raw_acts = raw_acts[selected_idx]
+        act_vals = raw_acts.tolist()
         n_features = len(selected_coords)
         full_nodes = int(adj.shape[0])
         infl = node_influence.detach().cpu().float()

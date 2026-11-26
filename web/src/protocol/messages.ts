@@ -341,7 +341,7 @@ export interface ControlMsg {
   count?: number;
   /** 3.2 draft, op 'intervene': exactly one of set, clear and clear_all. */
   intervene?: InterveneRequest;
-  /** M7, capability 'interpretation': a version 1 request. */
+  /** Capability 'interpretation': a version 1 request. */
   interpretation?: InterpretationRequest;
 }
 export interface ControlReplyMsg {
@@ -826,7 +826,7 @@ export const PROGRAM_STATES: readonly string[] = ['waiting', 'review', 'compiled
 export const PROGRAM_ARRAYS: readonly string[] = ['positions', 'colors', 'values', 'radii'];
 /** The states of an entry of CONTROLS "interventions" "active". */
 export const INTERVENTION_STATES: readonly string[] = ['pending', 'active', 'ended'];
-/** M8 specification limits (python/caliper/_intervention_protocol.py). */
+/** Intervention specification limits (python/caliper/_intervention_protocol.py). */
 export const INTERVENTION_LIMITS = { maxVector: 16384, maxPositions: 32, maxBytes: 262144 } as const;
 
 type InterventionTag<K extends string> = { kind: K; op?: K | null } | { op: K; kind?: K | null };

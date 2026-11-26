@@ -2,8 +2,10 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 import queue
+import signal
 import subprocess
 import threading
 import time
@@ -38,10 +40,25 @@ def wait_file(path: str | Path, *, process=None, timeout: float = 120.0) -> dict
         time.sleep(0.05)
 
 
-def stop(process) -> None:
+def stop(process, *, group: bool = False) -> None:
     """Terminate an owned child process cleanly."""
     if process is None or process.poll() is not None:
         return
+    if group and os.name != "nt":
+        try:
+            os.killpg(process.pid, signal.SIGINT)
+        except ProcessLookupError:
+            return
+        try:
+            process.wait(timeout=10)
+            return
+        except subprocess.TimeoutExpired:
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            process.wait(timeout=10)
+            return
     process.terminate()
     try:
         process.wait(timeout=10)

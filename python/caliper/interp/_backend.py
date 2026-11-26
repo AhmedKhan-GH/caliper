@@ -828,22 +828,26 @@ class Backend:
 
         np_id = self.dictionary.metadata.get("neuronpedia_id")
         if allow_online and np_id and os.environ.get("CALIPER_AGENT_OFFLINE") != "1":
-            from sae_lens.analysis.neuronpedia_integration import get_neuronpedia_feature
-            np_model, np_layer_ds = str(np_id).split("/", 1)
-            np_layer_s, np_ds = np_layer_ds.split("-", 1)
-            payload = get_neuronpedia_feature(
-                feature=feature, layer=int(np_layer_s), model=np_model, dataset=np_ds
-            )
-            rows = []
-            for rank, item in enumerate((payload.get("activations") or [])[:limit]):
-                toks = list(item.get("tokens") or [])
-                vals = [float(v) for v in (item.get("values") or [0.0] * len(toks))]
-                if not toks:
-                    continue
-                pos = int(max(range(len(vals)), key=vals.__getitem__))
-                rows.append(self._pack_str_window(rank, f"neuronpedia-{rank}", toks, vals, pos))
-            if rows:
-                return rows
+            try:
+                from sae_lens.analysis.neuronpedia_integration import get_neuronpedia_feature
+                np_model, np_layer_ds = str(np_id).split("/", 1)
+                np_layer_s, np_ds = np_layer_ds.split("-", 1)
+                payload = get_neuronpedia_feature(
+                    feature=feature, layer=int(np_layer_s), model=np_model, dataset=np_ds
+                )
+            except Exception:
+                payload = None
+            if isinstance(payload, dict):
+                rows = []
+                for rank, item in enumerate((payload.get("activations") or [])[:limit]):
+                    toks = list(item.get("tokens") or [])
+                    vals = [float(v) for v in (item.get("values") or [0.0] * len(toks))]
+                    if not toks:
+                        continue
+                    pos = int(max(range(len(vals)), key=vals.__getitem__))
+                    rows.append(self._pack_str_window(rank, f"neuronpedia-{rank}", toks, vals, pos, self.tokenizer))
+                if rows:
+                    return rows
 
         corpus = list(prompts) if prompts is not None else [*self.recent_prompts, *DEFAULT_CORPUS]
         seen: list[str] = []
@@ -907,13 +911,38 @@ class Backend:
         }
 
     @staticmethod
-    def _pack_str_window(rank: int, doc_id: str, toks: list[str], vals: list[float], position: int) -> dict:
+    def _str_token_id(tokenizer, tok: str) -> int | None:
+        if tokenizer is None or not isinstance(tok, str):
+            return None
+        encode = getattr(tokenizer, "encode", None)
+        if callable(encode):
+            try:
+                ids = encode(tok, add_special_tokens=False)
+                if isinstance(ids, list) and len(ids) == 1 and isinstance(ids[0], int) and ids[0] >= 0:
+                    return ids[0]
+            except Exception:
+                pass
+        conv = getattr(tokenizer, "convert_tokens_to_ids", None)
+        if callable(conv):
+            try:
+                tid = conv(tok)
+                unk = getattr(tokenizer, "unk_token_id", None)
+                unk_tok = getattr(tokenizer, "unk_token", None)
+                if isinstance(tid, int) and tid >= 0 and (tid != unk or tok == unk_tok):
+                    return tid
+            except Exception:
+                pass
+        return None
+
+    @classmethod
+    def _pack_str_window(cls, rank: int, doc_id: str, toks: list[str], vals: list[float], position: int,
+                         tokenizer=None) -> dict:
         begin, end = max(0, position - 16), min(len(toks), position + 17)
         left = 16 - (position - begin)
         sub_toks = toks[begin:end]
         sub_vals = vals[begin:end]
         id_slots: list[int | None] = [None] * WINDOW_TOKENS
-        id_slots[left:left + len(sub_toks)] = list(range(begin, end))
+        id_slots[left:left + len(sub_toks)] = [cls._str_token_id(tokenizer, tok) for tok in sub_toks]
         tok_slots: list[str | None] = [None] * WINDOW_TOKENS
         tok_slots[left:left + len(sub_toks)] = sub_toks
         act_slots: list[float | None] = [None] * WINDOW_TOKENS

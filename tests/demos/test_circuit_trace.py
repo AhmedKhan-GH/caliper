@@ -74,8 +74,8 @@ def test_show_mode_error_keeps_window_alive(monkeypatch):
     assert summary["error"] == "boom"
     assert events_seen == ["error:boom", "keep_alive:alive=True"]
 
-    stopped_procs: list[object] = []
-    monkeypatch.setattr(run_mod, "stop", lambda proc: stopped_procs.append(proc))
+    stopped_procs: list[tuple[object, dict]] = []
+    monkeypatch.setattr(run_mod, "stop", lambda proc, **kw: stopped_procs.append((proc, kw)))
     s = run_mod.Session.__new__(run_mod.Session)
     s.mcp = None
     s.app = FakeApp()
@@ -86,6 +86,7 @@ def test_show_mode_error_keeps_window_alive(monkeypatch):
     assert s.app is not None
     s.close(stop_app=True)
     assert len(stopped_procs) == 1
+    assert stopped_procs[0][1] == {"group": True}
 
 
 @pytest.mark.skipif(sys.platform != "darwin" or not torch.backends.mps.is_available(), reason="requires macOS Metal")

@@ -171,7 +171,13 @@ class Session:
 
         t0 = time.perf_counter()
         try:
-            self.app = subprocess.Popen(app_cmd, env=env, stdout=self.app_log, stderr=subprocess.STDOUT)
+            self.app = subprocess.Popen(
+                app_cmd,
+                env=env,
+                stdout=self.app_log,
+                stderr=subprocess.STDOUT,
+                start_new_session=(os.name != "nt"),
+            )
             self.api_info = wait_file(out / "data" / "api.json", process=self.app)
             self.mcp = MCP(mcp_exe, out / "data" / "api.json", out, env)
             self.events = Events(self.mcp)
@@ -431,7 +437,7 @@ class Session:
             attempt(errors, "MCP close", self.mcp.close)
             self.mcp = None
         if stop_app and self.app is not None:
-            attempt(errors, "app stop", lambda: stop(self.app))
+            attempt(errors, "app stop", lambda: stop(self.app, group=True))
             self.app = None
         if (stop_app or self.app is None or self.app.poll() is not None) and hasattr(self, "app_log") and self.app_log is not None:
             attempt(errors, "app log close", self.app_log.close)

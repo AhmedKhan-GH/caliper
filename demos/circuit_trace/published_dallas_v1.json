@@ -379,27 +379,5 @@
     "offload_provenance": "Unpublished for Dallas. Pinned API default.",
     "display_node_threshold": 0.53,
     "display_node_threshold_provenance": "Tutorial cell 4 URL. This does not replace generation pruning."
-  },
-  "comparison": {
-    "feature_node_jaccard_minimum": 0.9,
-    "edge_absolute_tolerance": 1e-06,
-    "edge_relative_tolerance": 0.001,
-    "edge_tolerance_rule": "abs(caliper-reference) <= 1e-6 + 1e-3*abs(reference), with absent union edges counted as zero",
-    "probability_absolute_tolerance": 0.001,
-    "probability_domain": "All vocabulary entries for baseline and each intervention",
-    "top_output_token_exact": true
-  },
-  "limitations": [
-    "The lowercase notebook and uppercase cited graph are distinct published inputs.",
-    "The notebook specifies bfloat16 but cited graph dtype is absent.",
-    "Model and transcoder commits and dependency versions are absent in published material. Existing pinned caches and environment remain fixed.",
-    "Batch size, update interval, and offload are API-default reconstruction choices, not verified original Dallas settings.",
-    "Stored SVG outputs contain rounded probabilities. They cannot define full-precision equivalence to the original experiment."
-  ],
-  "phases": [
-    "Run the lowercase executable tutorial and all seven interventions with actual pinned circuit-tracer.",
-    "Run its lowercase attribution with the published graph-generation/pruning settings and the declared API defaults.",
-    "Record the uppercase cited-graph prompt separately when comparison with its saved graph is needed. Never pool both prompts.",
-    "Use identical explicit settings and absolute reference clamp values through Caliper MCP."
-  ]
+  }
 }
