@@ -115,18 +115,17 @@ def test_completed_quality_thresholds(metric, value, status):
                                     "cross_entropy_delta": .5, "evaluated_tokens": 200_000}
 
 
-@pytest.mark.parametrize("active_layers", [None, [1, 2]])
-def test_zero_variance_cannot_pass_at_token_budget(active_layers):
-    stats = evaluation.QualityStats(3, 2, 2, active_layers=active_layers)
+def test_zero_variance_cannot_pass_at_token_budget():
+    stats = evaluation.QualityStats(3, 2, 2)
     stats.count, stats.ce_tokens = 200_000, 100_000
     stats.variance_sum[:] = torch.tensor([10, 0, 10])
     stats.error_sum[:] = torch.tensor([1, 0, 2])
     stats.hits.fill_(1)
     stats.original_ce = stats.replaced_ce = 100_000
     quality = stats.metrics()
-    assert quality["status"] == ("partial" if active_layers is None else "fallback_partial")
+    assert quality["status"] == "partial"
     assert quality["fvu"] is None
-    assert quality["per_layer_fvu"] == ([.1, None, .2] if active_layers is None else [None, None, .2])
+    assert quality["per_layer_fvu"] == [.1, None, .2]
     assert quality["dead_fraction"] == quality["cross_entropy_delta"] == 0
     assert quality["original_cross_entropy"] == quality["replaced_cross_entropy"] == 1
 

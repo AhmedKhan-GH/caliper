@@ -97,14 +97,6 @@ def test_gemma_quality_retains_dead_feature_and_cross_entropy_gates(dead, delta,
     assert stats.metrics()["status"] == status
 
 
-def test_gemma_quality_refuses_synthetic_upper_half_fallback():
-    from .test_upper_half import fallback_manifest, tiny_model
-    metadata = fallback_manifest(tiny_model())
-    metadata["model_id"] = GEMMA_ID
-    with pytest.raises(ValueError, match="Gemma quality requires every layer"):
-        evaluation.quality_stats(metadata)
-
-
 def imported_metadata(source_id=None):
     source = {"dataset_id": text_stream.DATASET_ID, "dataset_config": text_stream.DATASET_CONFIG,
               "dataset_revision": text_stream.DATASET_REVISION, "split": "train",

@@ -330,8 +330,6 @@ class ResearchStats:
                                   mean_dead <= self.thresholds["dead_fraction"] and
                                   all_delta <= self.thresholds["cross_entropy_delta"])
         status = ("passed" if passed else "failed") if complete else "partial"
-        if self.scope == "upper_half":
-            status = "fallback_" + status
         return {"protocol": PROTOCOL, "protocol_version": 1, "status": status,
                 "source_budget_complete": complete, "source_tokens": self.source_tokens,
                 "evaluated_tokens": self.source_tokens, "metric_observations": self.count,

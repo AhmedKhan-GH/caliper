@@ -15,7 +15,7 @@ from safetensors.torch import load_file
 
 from caliper.interp import capture, load_dictionary
 from caliper.interp._context import context_policy, prepare_contexts, source_segments
-from caliper.interp._dictionary import fallback_metadata, _canonical_device
+from caliper.interp._dictionary import _canonical_device
 from caliper.interp._memory import BudgetMemory
 from .checkpoint_state import _save_tensors, dictionary_fingerprint, write_json
 from .evaluation_binding import EvaluationBinding
@@ -59,8 +59,7 @@ def replace_all_mlps(model, dictionary, *, content_mask=None, chunk_tokens=64, m
     try:
         if len(dictionary.layers) != model.config.num_hidden_layers:
             raise ValueError("cross-entropy requires a replacement for every MLP")
-        fallback = fallback_metadata(dictionary.metadata)
-        active = fallback["active_layers"] if fallback else range(len(dictionary.layers))
+        active = range(len(dictionary.layers))
         if getattr(model.config, "model_type", None) == "gemma2":
             from caliper.interp._points import _architecture, _input
             probes = _architecture(model)
@@ -148,10 +147,10 @@ def cross_entropy_sum(model, hidden, input_ids, count, *, chunk_tokens=64, healt
 class QualityStats:
     """Merge stable per-batch variance statistics and feature activity counts."""
 
-    def __init__(self, layers, width, latents, *, active_layers=None, thresholds=None):
+    def __init__(self, layers, width, latents, *, thresholds=None):
         self.thresholds = dict(_QUALITY_THRESHOLDS if thresholds is None else thresholds)
-        self.scope = "all_layers" if active_layers is None else "upper_half"
-        self.active_layers = tuple(range(layers) if active_layers is None else active_layers)
+        self.scope = "all_layers"
+        self.active_layers = tuple(range(layers))
         self.count = 0
         self.mean = torch.zeros(layers, width, dtype=torch.float64)
         self.variance_sum = torch.zeros(layers, dtype=torch.float64)
@@ -205,30 +204,15 @@ class QualityStats:
                   and delta <= self.thresholds["cross_entropy_delta"])
         complete = self.count == self.thresholds["evaluated_tokens"] and mean_fvu is not None
         values["status"] = ("passed" if passed else "failed") if complete else "partial"
-        if self.scope == "upper_half":
-            values["status"] = "fallback_" + values["status"]
-            values.update(self.scope_fields())
-            for key, per_layer in (("per_layer_fvu", fvu), ("per_layer_dead_fraction", dead.tolist())):
-                values[key] = [None] * len(self.hits)
-                for index, value in zip(active, per_layer):
-                    values[key][index] = value
         return values
-
-    def scope_fields(self):
-        return {"scope": self.scope, "active_layers": list(self.active_layers),
-                "per_layer_status": ["active" if i in self.active_layers else "error_only"
-                                     for i in range(len(self.hits))]}
 
 
 def quality_stats(metadata):
-    fallback = fallback_metadata(metadata)
     thresholds = dict(_QUALITY_THRESHOLDS)
     if metadata.get("model_id") == GEMMA_ID:
-        if fallback:
-            raise ValueError("Gemma quality requires every layer")
         thresholds["fvu"] = 0.30
     return QualityStats(metadata["layers"], metadata["width"], metadata["latents"],
-                        active_layers=fallback["active_layers"] if fallback else None, thresholds=thresholds)
+                        thresholds=thresholds)
 
 
 @torch.no_grad()
@@ -578,8 +562,6 @@ def evaluate(model, dictionary, stream, folder, *, tokens=200_000, context=None,
         stats.content_segments = []
     if "import_source" in metadata:
         settings["evaluation_source"] = source_metadata
-    if stats.scope == "upper_half":
-        settings.update(scope=stats.scope, active_layers=list(stats.active_layers))
     pending, elapsed_before = None, 0.0
     if policy is not None:
         pending = {"ids": [], "documents": [], "positions": [], "exhausted": False}
@@ -650,7 +632,7 @@ def evaluate(model, dictionary, stream, folder, *, tokens=200_000, context=None,
     if stats.count >= 2 and stats.ce_tokens:
         quality = stats.metrics()
     else:
-        quality = {"status": "fallback_partial" if stats.scope == "upper_half" else "partial",
+        quality = {"status": "partial",
                    "evaluated_tokens": stats.count, "cross_entropy_tokens": stats.ce_tokens,
                    "fvu": None, "dead_fraction": None, "cross_entropy_delta": None,
                    "original_cross_entropy": None, "replaced_cross_entropy": None,
@@ -664,10 +646,7 @@ def evaluate(model, dictionary, stream, folder, *, tokens=200_000, context=None,
         quality.update(context_policy=policy, content_segmentation=_segmentation_record(stats.content_segments))
     if "import_source" in metadata:
         quality.update(evaluation_source=source_metadata, publisher_training_overlap="unknown")
-    if stats.scope == "upper_half":
-        quality.update(stats.scope_fields(), replaced_mlps=len(stats.active_layers))
-    else:
-        quality.update(all_mlps_replaced=len(dictionary.layers))
+    quality.update(all_mlps_replaced=len(dictionary.layers))
     if memory:
         quality["peak_memory_bytes"] = memory.peak
     if ready:
@@ -999,7 +978,7 @@ def main(argv=None):
     except CleanStop as error:
         print(json.dumps(clean_stop_record(error)), flush=True)
         return 2
-    return 0 if result["status"] in ("passed", "fallback_passed") else 2
+    return 0 if result["status"] == "passed" else 2
 
 
 if __name__ == "__main__":

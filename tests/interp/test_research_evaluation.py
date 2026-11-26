@@ -575,28 +575,6 @@ def test_head_chunks_and_hidden_states_release_before_next_pass(family):
             handle.remove()
 
 
-def test_tiny_upper_scope_keeps_isolated_and_all_active_fields(monkeypatch):
-    from .test_upper_half import fallback_manifest, tiny_model
-    model, dictionary = fixture("tiny")
-    fallback = fallback_manifest(tiny_model(2))["training"]["fallback"]
-    dictionary.metadata["training"].update(fallback=fallback, source_id=fallback["source_id"])
-    policy = protocol.research_policy(model, 4, tokenizer(model))
-    prepared = protocol.research_contexts([[4, 5, 6]], policy, device="cpu")
-    with torch.no_grad():
-        baseline, targets = independent_ce(model, prepared, policy["excluded_ids"])
-        with oracle(model, dictionary, [1], prepared.content_mask):
-            expected, _ = independent_ce(model, prepared, policy["excluded_ids"])
-    monkeypatch.setattr(dictionary.layers[0], "encode", lambda *a: pytest.fail("inactive dictionary ran"))
-    result = evaluation.evaluate_research_batch(model, dictionary, prepared, 3, chunk_tokens=2,
-                                                health=lambda: None, check_binding=lambda: None).metrics()
-    assert result["active_layers"] == [1] and result["status"] == "fallback_partial"
-    assert result["per_layer_cross_entropy"] == [None, pytest.approx(expected / targets, rel=1e-6)]
-    assert result["replaced_cross_entropy"] == pytest.approx(expected / targets, rel=1e-6)
-    assert result["cross_entropy_delta"] == pytest.approx((expected - baseline) / targets, abs=1e-6)
-    for key in ("per_layer_fvu", "per_layer_l0", "per_layer_dead_fraction", "per_layer_cross_entropy_delta"):
-        assert result[key][0] is None
-
-
 def test_research_supplied_guard_cannot_raise_family_ceiling(artifact, monkeypatch):
     folder, model, dictionary, _ = artifact
     memory = guard(40)
