@@ -37,6 +37,7 @@ class InterpretationService:
         self.running_thread = None
         self.closed = False
         self.failure = None
+        self.owner = None
         from ._memory import CleanStop
         self.stop_exception = CleanStop
         self._bind_resources()

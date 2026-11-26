@@ -327,7 +327,8 @@ class _Program:
                  "last_pass_ms", "memory_bytes", "warm", "every", "t0", "bound", "pass_times",
                  "params", "builtin", "shape", "piece", "manifest", "bind", "panel", "segments",
                  "common", "draw", "types", "resources", "passes", "param_types", "written",
-                 "sent_static", "static_frames", "relayed", "skipped", "behind", "output_retry")
+                 "sent_static", "static_frames", "static_relayed", "relayed", "skipped", "behind",
+                 "output_retry", "input_version", "params_dirty", "act_dirty")
 
     def __init__(self, pid, decl, wgsl, scene, sha256):
         self.id = pid
@@ -351,6 +352,9 @@ class _Program:
         self.error = None
         self.runs = 0
         self.last_step = None
+        self.input_version = -1
+        self.params_dirty = True
+        self.act_dirty = False
         self.last_pass_ms = None
         self.memory_bytes = 0
         self.warm = WARMUP_STEPS
@@ -369,6 +373,7 @@ class _Program:
         self.written = set()    # the resources that a pass names in `writes`
         self.sent_static = False
         self.static_frames = {}  # resource id -> the RESOURCE frame of a static resource
+        self.static_relayed = _LinkSet()
         self.relayed = _LinkSet()  # the viewers that got the draw half
         self.skipped = 0        # passes whose RESOURCE frames a viewer behind did not get
         self.behind = _LinkSet()  # the viewers whose last pass of it was skipped
@@ -495,6 +500,8 @@ def _drop_act_hooks() -> None:
         h.remove()
     _ACT_HOOKS.clear()
     _ACTS.clear()
+    for p in _PROGS.values():
+        p.act_dirty = False
 
 
 def _torch_adapter():
@@ -530,7 +537,7 @@ def _resolve(name: str):
             return None
         if mname not in _ACT_HOOKS:
             _ACT_HOOKS[mname] = mods[mname].register_forward_hook(
-                lambda _m, _i, out, mname=mname: _keep_act(mname, out))
+                lambda _m, _i, out, mname=mname, epoch=_WATCH_EPOCH: _keep_act(mname, out, epoch))
         t = _ACTS.get(mname)
         if t is None:
             raise _Waiting(name)
@@ -543,11 +550,19 @@ def _resolve(name: str):
     return t
 
 
-def _keep_act(mname, out) -> None:
+def _keep_act(mname, out, epoch) -> None:
     if isinstance(out, (tuple, list)):
         out = next((x for x in out if hasattr(x, "detach")), None)
     if out is not None:
-        _ACTS[mname] = out.detach()
+        with _LOCK:
+            if epoch != _WATCH_EPOCH or mname not in _ACT_HOOKS:
+                return
+            _ACTS[mname] = out.detach()
+            source = f"live:{mname}.act"
+            for p in _PROGS.values():
+                if p.state in ("waiting", "compiled", "running") and any(
+                        src == source for _, src in p.inputs):
+                    p.act_dirty = True
 
 
 def _storage_key(t):
@@ -712,7 +727,7 @@ def _compile(p: _Program) -> None:
 def _set_active() -> None:
     global ACTIVE
     ACTIVE = (any(p.state in ("waiting", "compiled", "running") for p in _PROGS.values())
-              or _VIEWS["ring"] is not None)
+              or _VIEWS["ring"] is not None or bool(_OUTBOX))
     _prune_act_hooks()
 
 
@@ -723,6 +738,9 @@ def _prune_act_hooks() -> None:
     when the last program that needs them stops for any reason: a removal, a refusal, a stop over
     time or over budget, a timeout or a lost device.
     """
+    for p in _PROGS.values():
+        if p.state not in ("waiting", "compiled", "running"):
+            p.act_dirty = False
     if not _ACT_HOOKS:
         return
     needed = {src[len("live:"):-len(".act")] for p in _PROGS.values()
@@ -875,6 +893,8 @@ def set_params(program_id: str, params: dict) -> None:
                 p.params = old
                 p.error = _refusal(e).error
                 item = p.item()
+        if p.params != old:
+            p.params_dirty = True
     if item is not None:
         _notify([item])
 
@@ -892,11 +912,12 @@ def _remove(program_id: str, *, clear_output=False):
             rt.remove(p.handle)
         p.handle = None
         p.bound = {}
+        p.act_dirty = False
         _release_unused()
-        _set_active()
         if not _PROGS:
             _drop_act_hooks()
         _retire_output(p, clear_output)
+        _set_active()
     return p
 
 
@@ -1015,19 +1036,71 @@ _STOP_TEXT = {
 
 
 def at_step(step: int) -> None:
-    """Run the programs that are due at ``step`` and publish their outputs.
-
-    ``caliper.step()`` calls it on the training thread after the framework's work of the step is
-    queued, before ``optimizer.step()``. Without an installed program it returns at once and touches
-    no device. With one, it puts the step's mark on torch's queue and reads the marks that completed,
-    without a wait; only a step with a pass waits.
-    """
+    """Run the programs that are due at ``step`` and publish their outputs."""
     if not ACTIVE:
         return
     try:
         _at_step(int(step))
     except Exception as e:  # a program never stops the training loop
         _warn_once(("step",), f"caliper: the GPU programs failed at step {step}: {e!r}")
+
+
+def inference_pending() -> bool:
+    """Keep hosted boundaries active until changed inputs reach a scheduled pass."""
+    with _LOCK:
+        links = [(ctl, ln) for ctl in _controls_ports() for ln in _resource_links(ctl)]
+        if any(_inference_work(p, links) for p in _PROGS.values()):
+            return True
+    with _OUTBOX_LOCK:
+        return bool(_OUTBOX)
+
+
+def _inference_work(p: _Program, links, *, ready=False) -> bool:
+    from .interp import _publish
+    if p.state not in ("waiting", "compiled", "running"):
+        return False
+    changed = p.output_retry or p.params_dirty or p.act_dirty or any(
+        _publish._VERSIONS.get(src[len("live:"):], -1) > p.input_version
+        for _, src in p.inputs)
+    delivery = [(ctl, ln) for ctl, ln in links
+                if p.kind == "piece" and (ln not in p.relayed or ln in p.behind)]
+    if not changed and not delivery:
+        return False
+    try:
+        inputs = [(var, src) for var, src in p.inputs if src] if p.kind == "piece" else p.inputs
+        _resolve_inputs(inputs)
+    except _Waiting:
+        return False
+    except _Refused:
+        return True
+    if ready and p.kind == "piece":
+        candidates = links if changed else delivery
+        if candidates and (any(r["publish"] for r in p.resources) or delivery):
+            with _OUTBOX_LOCK:
+                return any(id(ln) not in _OUTBOX and _backlog(ctl, ln) <= 0
+                           for ctl, ln in candidates)
+    return True
+
+
+def inference_blocked() -> bool:
+    """Whether all known publication work must wait for transport capacity."""
+    pending = False
+    ready = False
+    with _LOCK:
+        links = [(ctl, ln) for ctl in _controls_ports() for ln in _resource_links(ctl)]
+        for p in _PROGS.values():
+            if _inference_work(p, links):
+                pending = True
+                if _inference_work(p, links, ready=True):
+                    ready = True
+        with _OUTBOX_LOCK:
+            for ln, ctl, p, chunks in _OUTBOX.values():
+                pending = True
+                if getattr(ln, "closed", True) or not getattr(ln, "attached", False) or \
+                        _PROGS.get(p.id) is not p or p.handle is None or not chunks or \
+                        _backlog(ctl, ln) + chunks[0][0] <= RESOURCE_BACKLOG_BYTES:
+                    ready = True
+    return pending and not ready
 
 
 def _marks():
@@ -1082,6 +1155,7 @@ def _at_step(step: int) -> None:
     changed = []
     published = []
     with _LOCK:
+        inference = getattr(_controls.CONTROLS.interpretation_service, "owner", None) is not None
         if _ABANDONED:
             _reap()
         now = _clock()
@@ -1096,9 +1170,6 @@ def _at_step(step: int) -> None:
             if _STATE["pass"] is not None and _STATE["pass"] != step:
                 _STATE["pass"] = None
         elif _STATE["pass"] is not None and step > _STATE["pass"]:
-            # The checkpoint before made its next step a pass and opened the gate for it, but the
-            # script numbered that step higher (a loop that skips numbers, a resumed count): the
-            # pass is this step, whatever its number.
             _CAD.repass(_STATE["pass"], step)
             _STATE["pass"] = step
         is_pass = _STATE["pass"] == step             # decided at the checkpoint before
@@ -1106,12 +1177,12 @@ def _at_step(step: int) -> None:
         budget = _STATE.get("pass_budget", True)
         live = [p for p in _PROGS.values() if p.state in ("waiting", "compiled", "running")]
         due = [p for p in live if p.warm <= 0 and _every_ok(p, step)] if is_pass and budget else []
+        links = [(ctl, ln) for ctl in _controls_ports() for ln in _resource_links(ctl)] if inference else []
+        if inference:
+            due = [p for p in due if p.kind != "piece" or _inference_work(p, links, ready=True)]
         for p in live:
             if p.warm > 0:
                 p.warm -= 1
-        # The view calls of a pass step did their work before this checkpoint, thus this look comes
-        # later than the look of a step without a pass by that work: the marks it finds move back
-        # by it, so that every mark is seen as late as at a step without a pass.
         work = ring.gate_cost if ring is not None and is_pass and ring.gate_open else 0.0
         done = _mark(marks, step, now, is_pass)
         if work > 0.0:
@@ -1163,6 +1234,7 @@ def _at_step(step: int) -> None:
                                "column": None}
                     changed.append(p)
                 else:
+                    skipped = p.skipped
                     try:
                         outs = _outputs(rt, p)
                     except _Refused as r:            # versions that no viewer's queue takes
@@ -1177,16 +1249,17 @@ def _at_step(step: int) -> None:
                         p.state = "running"
                         changed.append(p)
                     published.append((p, outs))
-    # The outputs go out while the pass's gate is still open, so that their snapshots join the
-    # tick of the views' snapshots and its one event.
+                    from .interp import _publish
+                    if p.skipped == skipped:
+                        p.input_version = _publish._VERSION
+                        p.params_dirty = False
+                        p.act_dirty = False
     _publish_pass(published)
     with _LOCK:
         taken = 0
         if ring is not None and ring is _VIEWS["ring"] and (is_pass or ring.gate_open):
             taken = ring.close_pass(step, _clock())
             if taken:
-                # The sender thread's time since the last pass, which published that pass's
-                # snapshots, belongs to that pass: it takes the GIL from the training thread.
                 pub = ring.publish_s
                 last = _STATE.get("pub_pass")
                 if last is not None and last[0] in _CAD.view_cost:
@@ -1201,7 +1274,9 @@ def _at_step(step: int) -> None:
         _STATE["pass"] = None
         nxt = step + 1
         if _CAD.due(nxt):                            # the decision for the next step
-            if any(p.warm <= 0 and _every_ok(p, nxt) for p in live) or \
+            if any(p.warm <= 0 and _every_ok(p, nxt) and
+                   (not inference or p.kind != "piece" or _inference_work(p, links, ready=True))
+                   for p in live) or \
                     (ring is not None and ring.wants_pass(now)):
                 _CAD.passed(nxt)
                 _STATE["pass"] = nxt
@@ -1774,6 +1849,7 @@ def _compile_piece(p: _Program) -> None:
     p.sent_static = False                            # new resources: the static ones go again
     _drop_outbox(p)                                  # and no part of an earlier install
     p.static_frames = {}
+    p.static_relayed = _LinkSet()
     st = rt.status(h)
     p.memory_bytes = int(st.get("memory_bytes") or 0)
     if p.state != "running":
@@ -1867,8 +1943,9 @@ _OUTBOX_LOCK = threading.Lock()
 def _all_busy(p: _Program) -> bool:
     """Whether some viewer would get the pass of ``p`` and every such viewer waits for the chunks of
     an earlier pass."""
-    links = [ln for ctl in _controls_ports() for ln in _resource_links(ctl) if ln in p.relayed]
-    return bool(links) and all(id(ln) in _OUTBOX for ln in links)
+    links = [ln for ctl in _controls_ports() for ln in _resource_links(ctl)]
+    with _OUTBOX_LOCK:
+        return bool(links) and all(id(ln) in _OUTBOX for ln in links)
 
 
 def _offer(p: _Program, ctl, ln, frames: list) -> bool:
@@ -1961,9 +2038,7 @@ def _backlog(ctl, ln) -> int:
 
 
 def _relay_to(p: _Program, ctl, links) -> None:
-    """The draw half and static versions as one pass to each link that has not had them.
-    Admission includes the draw frame. Later static chunks remain in the outbox until the queue
-    has room, and a refused first chunk leaves the link eligible for a later pass."""
+    """The draw half and static versions as one pass to each link that has not had them."""
     from . import _wire
     frame = None
     statics = [f for fs in p.static_frames.values() for f in fs]
@@ -1975,9 +2050,12 @@ def _relay_to(p: _Program, ctl, links) -> None:
         if statics:
             if not _offer(p, ctl, ln, [frame, *statics]):
                 continue
+            p.static_relayed.add(ln)
         else:
             ctl.post(ln, frame, _wire.CAP_RESOURCES)
         p.relayed.add(ln)
+        if any(r["publish"] and r["id"] in p.written for r in p.resources):
+            p.behind.add(ln)
 
 
 def _relay(p: _Program) -> None:
@@ -2000,18 +2078,14 @@ def _relay_removal(p: _Program) -> None:
 
 
 def _send_resources(p: _Program, frames: list) -> None:
-    """Give the RESOURCE frames of a pass to the viewers: first the draw half to each viewer that
-    attached since, then the frames to every viewer that announced ``resources``.
-
-    A viewer that falls behind loses passes: the first chunk of a pass goes to a viewer only while it
-    waits for no earlier pass and the control frames queued for it, the frames posted for it and not
-    queued yet (of this program and of the programs before it in the pass), and the chunk stay within
-    ``RESOURCE_BACKLOG_BYTES``, so that its queue never overflows and closes the connection, and it
-    gets a later pass once it caught up (:func:`_offer`). A pass of at most PART_BYTES is one chunk,
-    thus a viewer with an empty queue gets every such pass of one program, and programs that do not
-    fit in one pass reach it in turn (:func:`_publish_pass`). The later chunks of a larger pass go at
-    the next steps (:func:`_pump`), and the viewer takes no other pass until they went."""
+    """Give the RESOURCE frames of a pass to the viewers."""
     try:
+        statics = [f for fs in p.static_frames.values() for f in fs]
+        static_ids = {id(f) for f in statics}
+        frame_ids = {id(f) for f in frames}
+        written = [f for f in frames if id(f) not in static_ids]
+        retry = [*frames, *(f for f in statics if id(f) not in frame_ids)]
+        needs_written = any(r["publish"] and r["id"] in p.written for r in p.resources)
         for ctl in _controls_ports():
             links = _resource_links(ctl)
             if not links:
@@ -2020,12 +2094,17 @@ def _send_resources(p: _Program, frames: list) -> None:
             for ln in links:
                 if ln not in p.relayed:
                     continue                         # its draw half first, at a later pass
-                if not frames:
+                if needs_written and not written:
                     continue
-                if not _offer(p, ctl, ln, frames):
+                pending = written if ln in p.static_relayed else retry
+                if not pending:
+                    continue
+                if not _offer(p, ctl, ln, pending):
                     p.skipped += 1
                     p.behind.add(ln)
                     continue
+                if statics:
+                    p.static_relayed.add(ln)
                 p.behind.discard(ln)
     except Exception as e:  # the publish path never stops the step
         _warn_once(("publish", p.id), f"caliper: sending the resources of {p.id} failed: {e!r}")

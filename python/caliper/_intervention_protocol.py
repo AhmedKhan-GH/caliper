@@ -1,4 +1,6 @@
 """Bounded intervention metadata shared by request and lifecycle validation."""
+from contextlib import contextmanager
+from contextvars import ContextVar
 import json
 import math
 
@@ -23,6 +25,31 @@ FIELDS = {"ablate": set(), "add": {"vector", "coefficient", "positions"},
           "scale": {"feature", "multiplier", "positions", "dictionary"},
           "clamp": {"feature", "value", "positions", "dictionary"},
           "patch": {"source_prompt", "source_position", "positions"}, "steer": set()}
+
+_INTERNAL_FORWARD = ContextVar("caliper_internal_forward", default=False)
+
+
+class InterventionError(ValueError):
+    """A request refusal with a stable wire error code."""
+
+    def __init__(self, message, code="intervene.bad_request", *, resource=None):
+        super().__init__(message)
+        self.code = code
+        self.resource = resource
+
+
+@contextmanager
+def internal_forward():
+    """Mark internal model passes so managed forward hooks do not count steps."""
+    token = _INTERNAL_FORWARD.set(True)
+    try:
+        yield
+    finally:
+        _INTERNAL_FORWARD.reset(token)
+
+
+def is_internal_forward() -> bool:
+    return _INTERNAL_FORWARD.get()
 
 
 def finite(value):

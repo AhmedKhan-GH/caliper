@@ -205,6 +205,7 @@ class KeptCheckpoints:
     def __init__(self, folder, clock=time.monotonic, limit=KEEP_MAX, share=KEEP_SHARE,
                  bytes_max=KEEP_BYTES):
         self.folder = folder
+        self.extension = ".pt"
         self.clock = clock
         self.limit = limit
         self.share = share
@@ -248,7 +249,7 @@ class KeptCheckpoints:
             raise OSError(f"{self.folder} is a link")
         os.makedirs(self.folder, mode=0o700, exist_ok=True)
         data = state()
-        path = os.path.join(self.folder, f"checkpoint-{step}.pt")
+        path = os.path.join(self.folder, f"checkpoint-{step}{self.extension}")
         _write(path, data)
         self.kept.append((step, path))
         self._spent += self.clock() - start
@@ -299,11 +300,14 @@ class ManagedRun:
         self.interventions = list(interventions or [])
         self.kept = KeptCheckpoints(os.path.join(run_dir, KEEP_DIR))
         self._first = None               # the hook that applies the interventions
+        self._restored_interventions = NONE
+        self._intervening = False
         self.values = dict(self.params)
         self.step = None
         self.stopping = False
         self._resumed = False
         self._pkg = None
+        self.inference = None           # built-in hosted inference metadata owner
 
     @classmethod
     def from_env(cls, env=None):
@@ -358,13 +362,24 @@ class ManagedRun:
             self._load(pkg, model, optimizer)
 
     def _load(self, pkg, model, optimizer) -> None:
+        if self.inference is not None:
+            from .interp._hosted import CHECKPOINT_BYTES, checkpoint_metadata
         with open(self.resume, "rb") as f:
-            data = f.read()
-        if optimizer is not None and not hasattr(optimizer, "load_state_dict"):
-            optimizer = None             # watch() refuses it after this
-        extra = TORCH.restore(data, model, optimizer)
-        if extra.get("format") != FORMAT:
-            raise ValueError(f"{self.resume} is not a checkpoint of a managed run")
+            data = f.read(CHECKPOINT_BYTES + 1) if self.inference is not None else f.read()
+        if self.inference is not None:
+            if len(data) > CHECKPOINT_BYTES:
+                raise ValueError("inference checkpoint exceeds the metadata limit")
+            extra = json.loads(data)
+            if not checkpoint_metadata(extra):
+                raise ValueError("inference checkpoint contains invalid metadata")
+            self.inference.load_checkpoint(extra, params=self.params)
+        else:
+            if optimizer is not None and not hasattr(optimizer, "load_state_dict"):
+                optimizer = None             # watch() refuses it after this
+            extra = TORCH.restore(data, model, optimizer)
+            if extra.get("format") != FORMAT:
+                raise ValueError(f"{self.resume} is not a checkpoint of a managed run")
+            self._restored_interventions = extra.get("interventions", NONE)
         step = int(extra.get("step") or 0)
         self.step = step
         ctl = pkg._CTL
@@ -401,8 +416,8 @@ class ManagedRun:
             # after the pre-hook of caliper._watch_run, which calls caliper.step() first
             handle._handles.append(optimizer.register_step_pre_hook(
                 lambda opt, args, kwargs: self._keep(model, optimizer)))
-        if self.interventions:
-            self._first = model.register_forward_pre_hook(lambda mod, args: self._intervene())
+        if self.interventions or self._restored_interventions is not NONE:
+            self._first = model.register_forward_pre_hook(self._intervene_on_forward)
             handle._handles.append(self._first)
         self.write_link(pkg.serve().url)
 
@@ -420,15 +435,27 @@ class ManagedRun:
         ctl = self._pkg._CTL
         with ctl.lock:
             params = {n: p.value for n, p in ctl.params.items()}
-        return TORCH.state(model, optimizer, {
-            "format": FORMAT, "version": VERSION, "run": self.id, "parent": self.parent,
-            "step": step, "params": params})
+            if self.inference is not None:
+                params["prompt"] = self.inference.checkpoint_prompt
+        extra = {"format": FORMAT, "version": VERSION, "run": self.id, "parent": self.parent,
+                 "step": step, "params": params}
+        if self.inference is not None:
+            from .interp._hosted import CHECKPOINT_FORMAT, checkpoint_metadata
+            extra.update(self.inference.state_dict(), format=CHECKPOINT_FORMAT)
+            if not checkpoint_metadata(extra):
+                raise ValueError("inference checkpoint exceeds the metadata limits")
+            return json.dumps(extra, ensure_ascii=False, allow_nan=False).encode("utf-8")
+        interventions = getattr(ctl, "intervention_service", None)
+        if interventions is not None and interventions.model is model:
+            extra["interventions"] = interventions.state_dict()
+        return TORCH.state(model, optimizer, extra)
 
     def checkpoint(self, model, optimizer) -> str:
         """The action ``caliper.checkpoint``: write the state and return the file's path."""
         step = self._pkg._CTL.n
         data = self._state(model, optimizer, step)
-        path = os.path.join(self.dir, f"checkpoint-{step}.pt")
+        extension = ".json" if self.inference is not None else ".pt"
+        path = os.path.join(self.dir, f"checkpoint-{step}{extension}")
         _write(path, data)
         return path
 
@@ -446,41 +473,54 @@ class ManagedRun:
             warnings.warn(f"caliper: run {self.id} keeps no more checkpoints: "
                           f"{type(e).__name__}: {e}", RuntimeWarning, stacklevel=2)
 
-    def _intervene(self) -> None:
-        """At the first forward pass: apply ``interventions`` before the first step, as
-        ``intervene.set`` would at a checkpoint, and take this hook off.
+    def _intervene_on_forward(self, module, inputs) -> None:
+        """Leave pending restore state intact during internal preparation forwards."""
+        from ._intervention_protocol import is_internal_forward
+        if not is_internal_forward():
+            self._intervene()
 
-        Raises:
-            RuntimeError: When the script takes no interventions, or one is refused; the fork
-                must not train without them.
-        """
-        first, self._first = self._first, None
-        if first is None:
+    def _intervene(self) -> None:
+        """Restore saved effects after resource binding and before the first script forward."""
+        from ._intervention_protocol import InterventionError, internal_forward
+        if self._first is None or self._intervening:
             return
-        first.remove()
-        ctl = self._pkg._CTL
+        self._intervening = True
+        try:
+            with internal_forward():
+                if self._restored_interventions is not NONE:
+                    service = self._pkg._CTL.intervention_service
+                    if service is None:
+                        raise RuntimeError("the fork has no intervention service for its saved state")
+                    try:
+                        service.load_state_dict(self._restored_interventions, restore_active=True)
+                    except InterventionError as error:
+                        raise RuntimeError(f"the fork's saved interventions cannot restore: {error}") from error
+                if self.interventions:
+                    self._apply_fork_overrides()
+            self._restored_interventions = NONE
+            first, self._first = self._first, None
+            first.remove()
+        finally:
+            self._intervening = False
+
+    def _apply_fork_overrides(self) -> None:
+        from ._intervention_protocol import InterventionError
+        service = self._pkg._CTL.intervention_service
         error = None
-        with ctl.lock:
-            if ctl._iv_model is None:
-                error = "the script watches no model with caliper.watch(model, optimizer)"
-            else:
-                for iv in self.interventions:
-                    refused = ctl._intervene({"set": iv})
-                    if refused is not None:
-                        error = f"{iv.get('point')!r}: {refused[1]}"
-                        break
-                if error is None:
-                    ctl._apply_interventions()
-                    failed = [iv for iv in ctl._ivs.values() if iv.error]
-                    if failed:
-                        error = f"{failed[0].point!r}: {failed[0].error}"
-            ctl._update_busy()
+        cause = None
+        if service is None:
+            error = "the script watches no model with caliper.watch(model, optimizer)"
+        else:
+            try:
+                service.apply_overrides(self.interventions)
+            except InterventionError as exc:
+                error = str(exc)
+                cause = exc
         if error is not None:
             print(f"caliper: run {self.id} cannot apply its interventions: {error}", flush=True)
-            raise RuntimeError(f"the fork's interventions cannot apply: {error}")
-        ctl._publish()
+            raise RuntimeError(f"the fork's interventions cannot apply: {error}") from cause
         print(f"caliper: run {self.id} applies "
-              + ", ".join(f"{iv.get('op')} {iv.get('point')}" for iv in self.interventions)
+              + ", ".join(f"{iv.get('kind', iv.get('op'))} {iv.get('point')}" for iv in self.interventions)
               + " from its first step", flush=True)
 
     def request_stop(self) -> str:
@@ -491,14 +531,7 @@ class ManagedRun:
         return f"stopping at step {ctl.n}"
 
     def exit(self) -> None:
-        """Send what is pending, close the stream server, then raise ``SystemExit(0)`` (the hook
-        of the checkpoint).
-
-        The close sends the final replies of the actions and the last run state, then BYE and
-        the close 1001 to each viewer, with a bounded wait (``NetServer.close``). It comes before
-        the ``SystemExit``, so that neither the script's own cleanup nor a thread that the
-        interpreter waits for at its exit delays it.
-        """
+        """Send what is pending, close the stream server, then raise ``SystemExit(0)``."""
         pkg = self._pkg
         try:
             pkg.flush(FLUSH_S)
@@ -515,6 +548,13 @@ class ManagedRun:
         raise SystemExit(0)
 
     def _forward(self, module, inputs, output) -> None:
+        from ._intervention_protocol import is_internal_forward
+        ctl = self._pkg._CTL
+        interpretation = ctl.interpretation_service
+        interventions = ctl.intervention_service
+        if (is_internal_forward() or (interpretation is not None and interpretation.running)
+                or (interventions is not None and interventions.executor.preparing_source)):
+            return
         self._pkg.step()
         if self.stopping:
             self.exit()

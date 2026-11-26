@@ -7,14 +7,18 @@ from dataclasses import dataclass
 import re
 
 _TENSORS = {}
+_VERSIONS = {}
+_VERSION = 0
 _LEASE = ContextVar("caliper_publication_lease", default=None)
 _NAME = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_.-]*\Z")
-# These documented inputs can await their first trace or example query.
+# These documented inputs can await their first trace, output, sweep, or example query.
 INTERPRETATION_TENSORS = frozenset({
     "trace.counts", "trace.node_i", "trace.node_f", "trace.edge_i", "trace.edge_f",
     "trace.label_text", "trace.probs", "trace.logit_tokens", "trace.logit_label_text",
     "examples.tokens", "examples.activations", "examples.example_ids",
     "examples.valid_tokens", "examples.label_text",
+    "output.probs", "output.tokens", "output.label_text",
+    "patch.grid", "patch.rows", "patch.cols",
 })
 
 
@@ -59,14 +63,7 @@ def _publication_scope(model=None):
 
 
 def publish(name, tensor):
-    """Bind ``name`` to tensor storage for read-only ``live:<name>`` imports.
-
-    Publication preserves the name, dtype, device, and storage. It detaches autograd.
-    A later call with the same name replaces the binding at the next producer pass.
-    The current watch owns the binding. Before a watch, the next watch owns it.
-    Watch removal or replacement clears bindings and releases producer imports.
-    This function returns ``None`` and does not load the native runtime.
-    """
+    """Bind ``name`` to tensor storage for read-only ``live:<name>`` imports."""
     _validate_name(name)
     _publish_many({name: tensor})
 
@@ -79,6 +76,7 @@ def _validate_name(name):
 
 def _publish_many(values):
     """Admit and replace a complete tensor group under the program lock."""
+    global _VERSION
     import torch
     from .. import _programs
 
@@ -97,6 +95,9 @@ def _publish_many(values):
             if model is not None and _model_name(model, name):
                 raise ValueError(f"publication {name!r} conflicts with a model tensor")
         _TENSORS.update(detached)
+        for name in detached:
+            _VERSION += 1
+            _VERSIONS[name] = _VERSION
 
 
 def _model_name(model, name):
@@ -113,3 +114,4 @@ def _resolve(name):
 
 def _clear():
     _TENSORS.clear()
+    _VERSIONS.clear()
