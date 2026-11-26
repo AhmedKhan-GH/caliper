@@ -32,6 +32,10 @@
   .wordmark { font: 12.3px/1 var(--text); letter-spacing: .14em; text-transform: uppercase; color: var(--parchment);
               padding-right: 12px; border-right: 1px solid var(--rule); line-height: 27px; }
   .title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--parchment); }
+  .bar-btn { margin-left: auto; flex: 0 0 auto; height: 20px; padding: 0 8px; border: 1px solid var(--rule);
+             background: var(--plate); color: var(--secondary); font: 11px/1 var(--text); cursor: pointer; }
+  .bar-btn:hover { color: var(--parchment); }
+  .bar-btn[aria-pressed="true"] { border-color: var(--bronze); color: var(--parchment); }
   main { position: relative; flex: 1 1 auto; min-height: 0; }
   canvas { position: absolute; inset: 0; display: block; }
   [hidden] { display: none !important; }
@@ -49,7 +53,7 @@
 </style>
 </head>
 <body>
-<header class="bar"><span class="wordmark">Caliper</span><span class="title" id="title"></span></header>
+<header class="bar"><span class="wordmark">Caliper</span><span class="title" id="title"></span><button class="bar-btn" id="lock" type="button" hidden>Lock Layout</button></header>
 <div class="banner" id="banner" role="note" hidden></div>
 <main id="area"><canvas id="canvas"></canvas><canvas id="overlay" style="pointer-events:none;z-index:10"></canvas><ul class="list" id="list" hidden></ul></main>
 <footer class="status" id="status" role="status" data-state="connecting">connecting</footer>

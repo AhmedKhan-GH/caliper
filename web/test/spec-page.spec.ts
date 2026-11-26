@@ -244,6 +244,73 @@ test('a refused token draws nothing of the applet', async ({ page }) => {
   expect((await pageState(page)).panels).toEqual([]);
 });
 
+test('non-closable panels and Lock Layout hide close controls and refuse close commands', async ({ page }) => {
+  const errors = await noErrors(page);
+  const spec = {
+    caliper_spec: 1,
+    applet: { id: 'locked-view', title: 'Locked View', layout_locked: false },
+    panel: [
+      { id: 'fixed', primitive: 'text', title: 'Fixed', closable: false, options: { text: 'Cannot close' } },
+      { id: 'temp', primitive: 'text', title: 'Temporary', options: { text: 'Can close' } },
+    ],
+    control: [
+      { id: 'gain', kind: 'slider', title: 'Gain', closable: false, bind: 'value', options: { min: 0, max: 1 } },
+    ],
+    layout: { split: 'vertical', children: [{ split: 'horizontal', children: ['fixed', 'temp'] }, 'gain'] },
+  };
+  const data = {
+    fixed: ready('fixed', 'text', { value: 'Cannot close' }),
+    temp: ready('temp', 'text', { value: 'Can close' }),
+    gain: ready('gain', 'control', { kind: 'slider', value: 0.5, text: '0.5', enabled: false, why: 'viewer is read-only' }),
+  };
+  await mockApp(page, app({ 'locked-view': spec }, { 'locked-view': data }));
+  await page.setViewportSize({ width: 1200, height: 700 });
+  await openSpec(page, 'locked-view');
+  let s = await settled(page, 2);
+
+  // Non-closable panel has no close button; closable panel has one and refuses/allows close properly.
+  expect(s.layoutLocked).toBe(false);
+  expect(s.panels.find((p) => p.id === 'fixed')?.closable).toBe(false);
+  expect(s.panels.find((p) => p.id === 'fixed')?.closeButton).toBeNull();
+  expect(s.panels.find((p) => p.id === 'temp')?.closable).toBe(true);
+  expect(s.panels.find((p) => p.id === 'temp')?.closeButton).not.toBeNull();
+  expect(s.controls?.find((c) => c.id === 'gain')?.closable).toBe(false);
+
+  const panelRefused = await page.evaluate(() => (window as any).caliperSpec.closePanel('fixed'));
+  expect(panelRefused.ok).toBe(false);
+  expect(panelRefused.error.code).toBe('panel.not_closable');
+  const controlRefused = await page.evaluate(() => (window as any).caliperSpec.closeControl('gain'));
+  expect(controlRefused.ok).toBe(false);
+  expect(controlRefused.error.code).toBe('control.not_closable');
+
+  // Lock Layout hides every close button, updates the status strip, and refuses close with layout.locked.
+  const lockBtn = page.locator('#lock');
+  await expect(lockBtn).toBeVisible();
+  await expect(lockBtn).toHaveAttribute('aria-pressed', 'false');
+  await lockBtn.click();
+  await expect(lockBtn).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.locator('#status')).toContainText('layout locked');
+  s = await pageState(page);
+  expect(s.layoutLocked).toBe(true);
+  expect(s.panels.find((p) => p.id === 'temp')?.closable).toBe(false);
+  expect(s.panels.find((p) => p.id === 'temp')?.closeButton).toBeNull();
+
+  const lockedRefusal = await page.evaluate(() => (window as any).caliperSpec.closePanel('temp'));
+  expect(lockedRefusal.ok).toBe(false);
+  expect(lockedRefusal.error.code).toBe('layout.locked');
+
+  // Unlocking restores the close button on `temp`, and clicking it closes `temp` while `fixed` stays.
+  await lockBtn.click();
+  await expect(lockBtn).toHaveAttribute('aria-pressed', 'false');
+  s = await pageState(page);
+  const btn = s.panels.find((p) => p.id === 'temp')!.closeButton!;
+  const box = await page.locator('#canvas').boundingBox();
+  await page.mouse.move(box!.x + btn.x + btn.w / 2, box!.y + btn.y + btn.h / 2);
+  await page.mouse.click(box!.x + btn.x + btn.w / 2, box!.y + btn.y + btn.h / 2);
+  await expect.poll(async () => (await pageState(page)).panels.map((p) => p.id)).toEqual(['fixed']);
+  expect(errors).toEqual([]);
+});
+
 test('a waiting panel renders its progress overlay, live status and error state', async ({ page }) => {
   const errors = await noErrors(page);
   const spec = {

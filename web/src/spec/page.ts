@@ -21,15 +21,35 @@
 // control changes the run or the app's values and the viewer origin only
 // reads (controls.ts).
 
-import { computeLayout, effectiveLayout, findControl, findPanel, metricsForTextScale, panelTitle, type SpecLayout, type TabChoice } from './layout.js';
+import { computeLayout, effectiveLayout, findControl, findPanel, leafId, metricsForTextScale, panelTitle, type Rect, type SpecLayout, type TabChoice } from './layout.js';
 import { drawControl, formatProgressStatus, progressElapsedSeconds, type ControlData } from './controls.js';
 import { ProgramViews, type ProgramPick } from './programs.js';
 import { COL, ColorKey } from './look.js';
-import { drawPanel, drawProgressOverlay, drawState, drawTabs, type PanelProgress, type PanelView } from './draw.js';
+import { drawCloseButton, drawPanel, drawProgressOverlay, drawState, drawTabs, type PanelProgress, type PanelView } from './draw.js';
 import { preparePanel, type PreparedPanel } from './prepare.js';
-import type { PanelDataResult, ProgressPanelState, RunProgress, Spec } from './types.js';
+import type { LayoutNode, PanelDataResult, ProgressPanelState, RunProgress, Spec } from './types.js';
 
 export interface CommandEnvelope { ok: boolean; result?: any; error?: { code: string; message: string; where: string } }
+export interface CloseResult { ok: boolean; error?: { code: string; message: string; where: string } }
+
+/** Removes leaves in `closed` from a layout tree, collapsing single-child splits and empty tabs. */
+function pruneClosed(node: LayoutNode | null, closed: Set<string>): LayoutNode | null {
+  if (!node || closed.size === 0) return node;
+  if (typeof node === 'string' || 'panel' in node) return closed.has(leafId(node)) ? null : node;
+  if ('tabs' in node) {
+    const kept = node.tabs.map((c) => pruneClosed(c, closed)).filter((c): c is LayoutNode => c !== null);
+    return kept.length ? { ...node, tabs: kept } : null;
+  }
+  const kept = node.children.map((c) => pruneClosed(c, closed)).filter((c): c is LayoutNode => c !== null);
+  if (!kept.length) return null;
+  if (kept.length === 1) return kept[0];
+  return {
+    ...node,
+    children: kept,
+    ...(kept.length !== 2 ? { ratio: undefined } : {}),
+    ...(node.shares && node.shares.length !== kept.length ? { shares: undefined } : {}),
+  };
+}
 
 /** POST /v0/commands/<name> from the viewer origin. */
 export async function command(base: URL, token: string, name: string, args: Record<string, unknown>): Promise<CommandEnvelope> {
@@ -55,6 +75,8 @@ export interface PageParts {
   overlay?: HTMLCanvasElement;
   /** The line under the bar that says why no live data shows (a dashboard the app does not have open). */
   banner?: HTMLElement;
+  /** The Lock Layout toggle in the page bar. */
+  lock?: HTMLButtonElement;
 }
 
 /** What the page says when the app does not have the dashboard open: no live source, value or kept step reaches it. */
@@ -73,14 +95,16 @@ export interface SpecPageState {
   banner: string;
   applet: string;
   title: string;
+  layoutLocked: boolean;
   panels: { id: string; title: string; primitive: string; drawn: boolean; state: string | null; info: string;
             progress: PanelProgress | null;
+            closable: boolean; closeButton: { x: number; y: number; w: number; h: number } | null;
             rect: { x: number; y: number; w: number; h: number } }[];
   /** Hosted run progress, when reported by the app. */
   progress: RunProgress | null;
   /** The control leaves shown, with the state each shows. */
   controls: { id: string; kind: string; title: string; value: unknown; text: string; enabled: boolean; why: string;
-              rect: { x: number; y: number; w: number; h: number } }[];
+              closable: boolean; rect: { x: number; y: number; w: number; h: number } }[];
   /** The series lines drawn, by panel: each line's name and colour. */
   lines: Record<string, { name: string; color: string }[]>;
   /** The scene panels' programs (programs.ts, ProgramViews.debug). */
@@ -100,6 +124,11 @@ export class SpecPage {
   private readonly panels = new Map<string, PanelEntry>();
   private readonly tabs: TabChoice = {};
   private tabHits: { path: string; index: number; rect: { x: number; y: number; w: number; h: number } }[] = [];
+  private closeHits: { id: string; rect: Rect }[] = [];
+  private readonly closed = new Set<string>();
+  private layoutLocked = false;
+  private hoverPanel = '';
+  private hoverClose = '';
   private status = 'connecting';
   private whole: { label: string; detail: string } | null = null;
   private requests = 0;
@@ -117,7 +146,61 @@ export class SpecPage {
     new ResizeObserver(() => this.redraw()).observe(parts.area);
     parts.canvas.addEventListener('click', (e) => this.onClick(e));
     parts.canvas.addEventListener('mousemove', (e) => this.onMove(e));
+    parts.canvas.addEventListener('mouseleave', () => this.onLeave());
     parts.canvas.addEventListener('wheel', (e) => this.onWheel(e), { passive: false });
+    parts.lock?.addEventListener('click', () => this.setLayoutLocked(!this.layoutLocked));
+  }
+
+  /** Locks or unlocks the whole layout in this viewer. */
+  setLayoutLocked(locked: boolean): void {
+    this.layoutLocked = Boolean(locked);
+    if (this.layoutLocked) this.hoverClose = '';
+    this.syncLockButton();
+    this.draw();
+  }
+
+  /** Closes a panel locally when it is closable and the layout is unlocked, or refuses with an error code. */
+  closePanel(id: string): CloseResult {
+    const panel = this.spec ? findPanel(this.spec, id) : undefined;
+    if (!panel || this.closed.has(id)) {
+      return { ok: false, error: { code: 'panel.not_found', message: `The spec has no panel ${id}.`, where: 'args.id' } };
+    }
+    if (this.layoutLocked) {
+      return { ok: false, error: { code: 'layout.locked', message: "The instrument's layout is locked; unlock Lock Layout first.", where: 'applet.layout_locked' } };
+    }
+    if (panel.closable === false) {
+      return { ok: false, error: { code: 'panel.not_closable', message: `The panel ${id} is not closable.`, where: 'args.id' } };
+    }
+    this.closed.add(id);
+    if (this.hoverPanel === id) this.hoverPanel = '';
+    if (this.hoverClose === id) this.hoverClose = '';
+    this.redraw();
+    return { ok: true };
+  }
+
+  /** Closes a control locally when it is closable and the layout is unlocked, or refuses with an error code. */
+  closeControl(id: string): CloseResult {
+    const control = this.spec ? findControl(this.spec, id) : undefined;
+    if (!control || this.closed.has(id)) {
+      return { ok: false, error: { code: 'control.not_found', message: `The spec has no control ${id}.`, where: 'args.id' } };
+    }
+    if (this.layoutLocked) {
+      return { ok: false, error: { code: 'layout.locked', message: "The instrument's layout is locked; unlock Lock Layout first.", where: 'applet.layout_locked' } };
+    }
+    if (control.closable === false) {
+      return { ok: false, error: { code: 'control.not_closable', message: `The control ${id} is not closable.`, where: 'args.id' } };
+    }
+    this.closed.add(id);
+    this.redraw();
+    return { ok: true };
+  }
+
+  private syncLockButton(): void {
+    const btn = this.parts.lock;
+    if (!btn) return;
+    btn.hidden = !this.spec;
+    btn.setAttribute('aria-pressed', this.layoutLocked ? 'true' : 'false');
+    btn.title = this.layoutLocked ? 'Layout is locked — click to unlock' : 'Lock layout and prevent closing components';
   }
 
   private isRunProgressActive(): boolean {
@@ -199,6 +282,9 @@ export class SpecPage {
       this.whole = { label, detail: code === 'applet.not_found' ? this.applet : code };
       this.spec = null;
       this.specText = '';
+      this.layoutLocked = false;
+      this.closed.clear();
+      this.syncLockButton();
       this.setStatus('connected');
       this.redraw();
       return;
@@ -224,6 +310,11 @@ export class SpecPage {
     if (env.result.text !== this.specText) {
       this.specText = env.result.text;
       this.spec = env.result.json as Spec;
+      this.layoutLocked = Boolean(this.spec.applet.layout_locked);
+      this.closed.clear();
+      this.hoverPanel = '';
+      this.hoverClose = '';
+      this.syncLockButton();
       this.key = new ColorKey(this.spec);
       this.programs.setSpec(this.spec);
       for (const id of [...this.panels.keys()]) if (!findPanel(this.spec, id) && !findControl(this.spec, id)) this.panels.delete(id);
@@ -397,9 +488,10 @@ export class SpecPage {
     ctx.fillStyle = COL.rule;
     ctx.fillRect(0, 0, w, h);
     const spec = this.spec;
-    const root = spec ? effectiveLayout(spec) : null;
+    const root = spec ? pruneClosed(effectiveLayout(spec), this.closed) : null;
     const before = this.layout.panels.map((p) => p.id).join(' ');
     this.layout = spec && root ? computeLayout(root, spec, { x: 0, y: 0, w, h }, metricsForTextScale(1), this.tabs) : { panels: [], tabs: [] };
+    this.closeHits = [];
     this.lastPanelProgress.clear();
     let needsAnim = this.isRunProgressActive();
     if (!spec || !root) {
@@ -458,6 +550,17 @@ export class SpecPage {
         } else if (panel.primitive === 'scene' && prog) {
           drawProgressOverlay(octx ?? ctx, prog, frame.content, nowMs);
         }
+        if (!this.layoutLocked && panel.closable !== false) {
+          const side = frame.header.h >= 1 ? frame.header.h : 22;
+          const rect: Rect = frame.header.h >= 1
+            ? { x: frame.header.x + frame.header.w - side, y: frame.header.y, w: side, h: side }
+            : { x: lp.rect.x + lp.rect.w - side, y: lp.rect.y, w: side, h: side };
+          this.closeHits.push({ id: lp.id, rect });
+          if (this.hoverPanel === lp.id || this.hoverClose === lp.id) {
+            const targetCtx = frame.header.h < 1 && octx ? octx : ctx;
+            drawCloseButton(targetCtx, rect, this.hoverClose === lp.id);
+          }
+        }
       }
       this.programs.hideAll(new Set(this.layout.panels.map((p) => p.id)));
       // A panel that a tab has just shown is fetched at once.
@@ -467,10 +570,12 @@ export class SpecPage {
           if (!e?.prepared && !e?.control) void this.fetchPanel(lp.id);
         }
     }
-    const nPanels = spec?.panel?.length ?? 0, nSources = spec?.source?.length ?? 0;
+    const nPanels = spec ? (spec.panel ?? []).filter((p) => !this.closed.has(p.id)).length : 0;
+    const nSources = spec?.source?.length ?? 0;
     const liveStatus = this.notOpen ? '' : formatProgressStatus(this.runProgress);
     const items = [this.status, ...(spec ? [`applet ${spec.applet.id}`, `${nPanels} panel${nPanels === 1 ? '' : 's'}`,
-      `${nSources} source${nSources === 1 ? '' : 's'}`] : []), ...(liveStatus ? [liveStatus] : [])];
+      `${nSources} source${nSources === 1 ? '' : 's'}`, ...(this.layoutLocked ? ['layout locked'] : [])] : []),
+      ...(liveStatus ? [liveStatus] : [])];
     const text = items.join('  ·  ');
     if (status.textContent !== text) status.textContent = text;
     status.dataset.state = this.status;
@@ -485,6 +590,12 @@ export class SpecPage {
   private onClick(e: MouseEvent): void {
     const r = this.parts.canvas.getBoundingClientRect();
     const x = e.clientX - r.left, y = e.clientY - r.top;
+    for (const h of this.closeHits) {
+      if (x >= h.rect.x && x < h.rect.x + h.rect.w && y >= h.rect.y && y < h.rect.y + h.rect.h) {
+        this.closePanel(h.id);
+        return;
+      }
+    }
     for (const h of this.tabHits) {
       if (x >= h.rect.x && x < h.rect.x + h.rect.w && y >= h.rect.y && y < h.rect.y + h.rect.h) {
         this.tabs[h.path] = h.index;
@@ -494,18 +605,45 @@ export class SpecPage {
     }
   }
 
-  /** A hover over a control that the viewer cannot change says why, as the app's tooltip does. */
+  private onLeave(): void {
+    if (!this.hoverPanel && !this.hoverClose) return;
+    this.hoverPanel = '';
+    this.hoverClose = '';
+    this.parts.canvas.style.cursor = '';
+    this.redraw();
+  }
+
+  /** Hover tracks a closable panel's × control and shows why a control is disabled. */
   private onMove(e: MouseEvent): void {
     const r = this.parts.canvas.getBoundingClientRect();
     const x = e.clientX - r.left, y = e.clientY - r.top;
     let tip = '';
+    let nextPanel = '';
+    let nextClose = '';
+    for (const h of this.closeHits) {
+      if (x >= h.rect.x && x < h.rect.x + h.rect.w && y >= h.rect.y && y < h.rect.y + h.rect.h) {
+        nextClose = h.id;
+        tip = 'Remove panel';
+        break;
+      }
+    }
     for (const lp of this.layout.panels) {
       const q = lp.rect;
-      if (!lp.control || x < q.x || x >= q.x + q.w || y < q.y || y >= q.y + q.h) continue;
-      const c = this.panels.get(lp.id)?.control;
-      if (c && !c.enabled) tip = c.why;
+      if (x < q.x || x >= q.x + q.w || y < q.y || y >= q.y + q.h) continue;
+      if (lp.control) {
+        const c = this.panels.get(lp.id)?.control;
+        if (!tip && c && !c.enabled) tip = c.why;
+      } else {
+        nextPanel = lp.id;
+      }
     }
+    this.parts.canvas.style.cursor = nextClose ? 'pointer' : '';
     if (this.parts.canvas.title !== tip) this.parts.canvas.title = tip;
+    if (nextPanel !== this.hoverPanel || nextClose !== this.hoverClose) {
+      this.hoverPanel = nextPanel;
+      this.hoverClose = nextClose;
+      this.redraw();
+    }
   }
 
   private onWheel(e: WheelEvent): void {
@@ -532,11 +670,12 @@ export class SpecPage {
       banner: this.parts.banner && !this.parts.banner.hidden ? this.parts.banner.textContent ?? '' : '',
       applet: this.applet,
       title: spec ? spec.applet.title ?? spec.applet.id : '',
+      layoutLocked: this.layoutLocked,
       controls: this.layout.panels.filter((lp) => lp.control).map((lp) => {
         const c = this.panels.get(lp.id)?.control ?? null;
         const sc = spec ? findControl(spec, lp.id) : undefined;
         return { id: lp.id, kind: sc?.kind ?? '', title: sc?.title ?? lp.id, value: c?.value ?? null, text: c?.text ?? '',
-          enabled: c?.enabled ?? false, why: c?.why ?? '', rect: { ...lp.rect } };
+          enabled: c?.enabled ?? false, why: c?.why ?? '', closable: !this.layoutLocked && sc?.closable !== false, rect: { ...lp.rect } };
       }),
       lines: Object.fromEntries(this.layout.panels.filter((lp) => this.panels.get(lp.id)?.prepared?.series).map((lp) => [lp.id,
         this.panels.get(lp.id)!.prepared!.series!.lines.map((l) => ({ name: l.name, color: this.key!.find(l.name) ?? '' }))])),
@@ -547,9 +686,11 @@ export class SpecPage {
         // A scene panel's programs may show a state over it: the dashboard not open, or no program views.
         const over = panel?.primitive === 'scene' && this.programs.has(lp.id)
           ? (this.notOpen ? NOT_OPEN_STATE : this.programs.stateOf(lp.id)) : null;
+        const hit = this.closeHits.find((h) => h.id === lp.id);
         return { id: lp.id, title: p?.title ?? (spec && panel ? panelTitle(spec, panel) : lp.id), primitive: panel?.primitive ?? '',
           drawn: !!p && !p.state && !over, state: over?.label ?? p?.state?.label ?? null, info: p?.info ?? '',
-          progress: this.lastPanelProgress.get(lp.id) ?? null, rect: { ...lp.rect } };
+          progress: this.lastPanelProgress.get(lp.id) ?? null,
+          closable: !this.layoutLocked && panel?.closable !== false, closeButton: hit ? { ...hit.rect } : null, rect: { ...lp.rect } };
       }),
       progress: this.runProgress,
       tabs: this.layout.tabs.map((t) => ({ path: t.path, labels: [...t.labels], active: t.active })),

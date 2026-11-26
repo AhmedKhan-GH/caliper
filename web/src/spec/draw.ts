@@ -202,6 +202,20 @@ export function drawPanel(ctx: CanvasRenderingContext2D, p: PreparedPanel | null
   return frame;
 }
 
+/** The × close control on a closable panel's title strip (or top-right corner for a tabbed panel). */
+export function drawCloseButton(ctx: CanvasRenderingContext2D, rect: Rect, hovered: boolean): void {
+  fill(ctx, rect.x, rect.y, rect.w, rect.h, hovered ? COL.plateHover : COL.plate);
+  const cx = rect.x + rect.w / 2, cy = rect.y + rect.h / 2, a = 4;
+  ctx.strokeStyle = hovered ? COL.accent : COL.secondary;
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  ctx.moveTo(cx - a, cy - a);
+  ctx.lineTo(cx + a, cy + a);
+  ctx.moveTo(cx - a, cy + a);
+  ctx.lineTo(cx + a, cy - a);
+  ctx.stroke();
+}
+
 // ---- series ----------------------------------------------------------------------
 
 function drawSeries(ctx: CanvasRenderingContext2D, p: PreparedPanel, c: Rect, key: ColorKey): void {

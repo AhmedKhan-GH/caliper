@@ -22,6 +22,7 @@ export interface SpecControl {
   id: string;
   kind: ControlKind;
   title?: string;
+  closable?: boolean;
   bind?: string;
   options?: Record<string, unknown>;
 }
@@ -40,13 +41,14 @@ export interface SpecPanel {
   id: string;
   primitive: Primitive;
   title?: string;
+  closable?: boolean;
   bind?: Record<string, string | string[]>;
   options?: SpecOptions;
 }
 
 export interface Spec {
   caliper_spec: number;
-  applet: { id: string; title?: string; description?: string };
+  applet: { id: string; title?: string; description?: string; layout_locked?: boolean };
   source?: SpecSource[];
   panel?: SpecPanel[];
   control?: SpecControl[];
