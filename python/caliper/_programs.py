@@ -194,6 +194,8 @@ class _Cadence:
         self.target = SHARE         # the share the passes keep to: VIEWS_SHARE while views attach
         self.ceiling = EVERY_MAX
         self.over = 0               # updates in a row that wanted more than the ceiling
+        self.admission_left = 0     # measured cycles left in a replacement trial
+        self.admission_used = False # another trial needs evidence of an affordable workload
         self.last_pass = None       # the step of the last pass
         self.prev_pass = None       # the pass before it, for unpass()
         self.view_cost: dict = {}   # pass step -> the training thread's time in its view calls
@@ -211,6 +213,14 @@ class _Cadence:
         self.passes = set()
         self.k = None
         self.view_cost = {}
+
+    def admit(self) -> None:
+        """Allow one bounded trial after all programs stop, with budget history intact."""
+        if not self.admission_used and self.over_budget(1):
+            # The first cycle can still contain the last stopped pass. The remaining
+            # cycles replace the cost window at the existing cadence and share ceiling.
+            self.admission_left = COST_SAMPLES + 1
+            self.admission_used = True
 
     def step_s(self):
         """The base step time ``b`` in seconds, or None before the first stretch."""
@@ -313,12 +323,16 @@ class _Cadence:
             n = max(want, math.floor(n / SHRINK))
         self.n = n
         self.over = self.over + 1 if self.want > self.ceiling and n >= self.ceiling else 0
+        if self.admission_left:
+            self.admission_left -= 1
+        if not self.admission_left and self.want <= self.ceiling:
+            self.admission_used = False
 
     def over_budget(self, every_min: int) -> bool:
         """Whether the programs cannot run inside the share on this run: the wanted N stayed above
         the ceiling for ``OVER_UPDATES`` updates, and the declared ``every_min`` does not keep the
         passes rare enough either."""
-        return (self.over >= OVER_UPDATES and self.want is not None
+        return (not self.admission_left and self.over >= OVER_UPDATES and self.want is not None
                 and self.want > max(self.ceiling, every_min))
 
 
@@ -746,6 +760,13 @@ def _set_active() -> None:
     _prune_act_hooks()
 
 
+def _admit_program(p: _Program) -> None:
+    """Give a replacement workload a bounded trial while a viewer retains exhausted history."""
+    states = ("waiting", "compiled", "running")
+    if p.state in states and not any(q is not p and q.state in states for q in _PROGS.values()):
+        _CAD.admit()
+
+
 def _prune_act_hooks() -> None:
     """Remove the forward hook of each module whose output no program that may still run reads.
 
@@ -862,6 +883,7 @@ def install(program_id: str, declaration: dict, wgsl: str, *, scene: str | None 
         except _Refused as r:
             p.state = "refused"
             p.error = r.error
+        _admit_program(p)
         _set_active()
         item = p.item()
     _notify([item])
@@ -1822,6 +1844,8 @@ def install_piece(program_id: str, *, piece: dict, manifest: dict, bind: dict | 
         except _Refused as r:
             p.state = "refused"
             p.error = r.error
+        if has_derive:
+            _admit_program(p)
         _set_active()
         item = p.item()
         if p.state != "refused":

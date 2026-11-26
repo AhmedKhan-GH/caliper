@@ -1438,7 +1438,10 @@ class HostedInference:
                             self.boundary()
                         else:
                             # Reports and intervention expiry need no new prompt step or forward.
-                            self.controls.checkpoint()
+                            # No step measures this routine work. Snapshots and any reentrant
+                            # publication checkpoint retain their own measured costs.
+                            with _programs.inference_excluded():
+                                self.controls.checkpoint()
                 except CleanStop:
                     raise
                 except Exception as exc:
