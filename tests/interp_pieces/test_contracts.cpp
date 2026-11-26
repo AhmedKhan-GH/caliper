@@ -24,7 +24,7 @@ TEST_CASE("graph passes piece.check with the frozen shapes and budgets") {
     CHECK(piece.draw->frame_ms.value_or(4) == 16);
     CHECK(piece.draw->memory_mb.value_or(64) == 64);
     if (cp::compiler_available()) {
-        REQUIRE(checked.at("passes").size() == 9);
+        REQUIRE(checked.at("passes").size() == 10);
         for (const auto& pass : checked.at("passes")) CHECK_MESSAGE(pass.at("ok").get<bool>(), pass.dump());
         CHECK(checked.at("messages").empty());
     } else {
@@ -52,7 +52,7 @@ TEST_CASE("graph passes piece.check with the frozen shapes and budgets") {
     for (const auto& resource : piece.resources) if (resource.id == "cells") {
         cp::ElementLayout layout;
         REQUIRE(cp::element_layout(resource.layout,&layout).ok());
-        CHECK(layout.stride == 40); // Exposure occupies the former tail padding.
+        CHECK(layout.stride == 40); // Incoming weight sum occupies the former tail padding.
     }
     CHECK(piece.params[0].max == 8191);
     for (const auto& pass : piece.derive->passes)

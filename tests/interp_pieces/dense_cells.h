@@ -225,7 +225,9 @@ TEST_CASE("Connected Cell Raster Coverage") {
         const auto edge=dense_cells::render(metal,edge_piece,edge_data,1355,400,"connected-edge",false);
         const auto [x,y]=small.samples.at(10).front();
         const auto p=4*((y+1)*1355+x);
-        CHECK(edge.color[p+2]>edge.color[p]+60);
+        // Node 10 has one incoming +1.0 edge (pctInput = +1.0), mapping to PRGn #00441b (0, 68, 27).
+        CHECK(edge.color[p+1]>edge.color[p]+50);
+        CHECK(edge.color[p+1]>edge.color[p+2]+30);
         CHECK(edge.samples.empty());
     }
 }

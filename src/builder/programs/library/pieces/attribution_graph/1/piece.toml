@@ -105,7 +105,7 @@ publish = true
 id = "cells"
 kind = "buffer"
 struct = "Cell"
-fields = ["center: vec2<f32>", "width: f32", "influence: f32", "key: u32", "height: f32", "rank: u32", "size: u32", "motion: f32", "edge_mass: f32"]
+fields = ["center: vec2<f32>", "width: f32", "influence: f32", "key: u32", "height: f32", "rank: u32", "size: u32", "motion: f32", "input_abs_sum: f32"]
 count = 8192
 counted = true
 publish = true
@@ -172,12 +172,22 @@ text = { anchors = "labels", position = "position", string = "string", priority 
 
 [[draw.passes]]
 kind = "render"
+vertex = "edge_bg_vs"
+fragment = "edge_fs"
+instances = "curves"
+vertices = 72
+blend = "alpha"
+depth = "none"
+pick = true
+
+[[draw.passes]]
+kind = "render"
 vertex = "edge_vs"
 fragment = "edge_fs"
 instances = "curves"
 vertices = 72
-blend = "additive"
-depth = "none"
+blend = "alpha"
+depth = "write"
 pick = true
 
 [[draw.passes]]

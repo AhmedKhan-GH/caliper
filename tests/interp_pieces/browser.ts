@@ -272,7 +272,7 @@ export function registerInterpPieceTests(test: typeof import('../../web/node_mod
         const mask = new Uint8Array(probe.width * probe.height);
         for (let i = 0; i < mask.length; ++i) {
           const r = pixels[4 * i], g = pixels[4 * i + 1], b = pixels[4 * i + 2];
-          if (g > r + 45 && g > b + 20 && g > 100) mask[i] = 1;
+          if (g > r + 45 && g > b + 20 && b > r + 60 && g > 100) mask[i] = 1;
         }
         const bounds = canvas.getBoundingClientRect(), found: { x: number; y: number; count: number }[] = [];
         for (let i = 0; i < mask.length; ++i) {

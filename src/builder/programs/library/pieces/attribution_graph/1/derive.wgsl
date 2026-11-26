@@ -111,33 +111,34 @@ fn order_influence(@builtin(global_invocation_id) id: vec3<u32>) {
 
 struct Relaxed {
     position: vec4<f32>,
-    edge_mass: f32,
+    input_abs_sum: f32,
 }
 fn relaxed(i: u32, use_b: bool) -> Relaxed {
     var own: vec4<f32>;
     if (use_b) { own = offset_b[i]; } else { own = offset_a[i]; }
     var total = 0.0;
     var count = 0.0;
-    var edge_mass = 0.0;
+    var input_abs_sum = 0.0;
     let n = node_count();
     for (var e = 0u; e < edge_count(); e++) {
         let s = edge_i[2u*e];
         let t = edge_i[2u*e+1u];
         if (s < 0 || t < 0 || s >= i32(n) || t >= i32(n)) { continue; }
+        // Published viewer (util-cg.js:288,295): sum |weight| over incoming links of target node i.
+        if (t == i32(i)) {
+            input_abs_sum += abs(finite_value(edge_f[2u*e]));
+        }
         var neighbor = -1;
         if (s == i32(i)) { neighbor = t; }
         if (t == i32(i)) { neighbor = s; }
         if (neighbor < 0) { continue; }
-        if (finite_value(edge_f[2u*e]) != 0.0) {
-            edge_mass += abs(clamp(finite_value(edge_f[2u*e+1u]), -1.0, 1.0));
-        }
         var x: f32;
         if (use_b) { x = offset_b[u32(neighbor)].x; } else { x = offset_a[u32(neighbor)].x; }
         total += x;
         count += 1.0;
     }
     if (count > 0.0) { own.x = clamp(mix(own.x, total/count, 0.5), own.y-0.15*own.z, own.y+0.15*own.z); }
-    return Relaxed(own, edge_mass);
+    return Relaxed(own, input_abs_sum);
 }
 @compute @workgroup_size(64)
 fn relax_one(@builtin(global_invocation_id) id: vec3<u32>) { if (id.x < node_count()) { offset_b[id.x] = relaxed(id.x, false).position; } }
@@ -152,7 +153,7 @@ fn relax_four(@builtin(global_invocation_id) id: vec3<u32>) {
     let result = relaxed(i, true);
     offset_a[i] = result.position;
     nodes[i].position = vec4<f32>(result.position.x, nodes[i].position.y, 0.0, result.position.w);
-    cells[i].edge_mass = result.edge_mass;
+    cells[i].input_abs_sum = result.input_abs_sum;
 }
 
 @compute @workgroup_size(64)
@@ -169,6 +170,8 @@ fn edge_curves(@builtin(global_invocation_id) id: vec3<u32>) {
     let b = nodes[u32(t)].position.xy;
     let mid = 0.5*(a.y+b.y);
     let weight = finite_value(edge_f[2u*i]);
-    let normalized = clamp(finite_value(edge_f[2u*i+1u]), -1.0, 1.0);
-    curves[i] = Curve(vec4<f32>(a, a.x, mid), vec4<f32>(b.x, mid, b), weight, normalized, u32(s), u32(t));
+    // Published viewer (util-cg.js:296): pctInput = weight / target.inputAbsSum.
+    let input_sum = cells[u32(t)].input_abs_sum;
+    let pct_input = select(0.0, clamp(weight / input_sum, -1.0, 1.0), input_sum > 0.0);
+    curves[i] = Curve(vec4<f32>(a, a.x, mid), vec4<f32>(b.x, mid, b), weight, pct_input, u32(s), u32(t));
 }
