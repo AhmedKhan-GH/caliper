@@ -49,6 +49,11 @@ TEST_CASE("graph passes piece.check with the frozen shapes and budgets") {
     CHECK(capacity("cells") == 8192);
     CHECK(capacity("offset_a") == 8192);
     CHECK(capacity("offset_b") == 8192);
+    for (const auto& resource : piece.resources) if (resource.id == "cells") {
+        cp::ElementLayout layout;
+        REQUIRE(cp::element_layout(resource.layout,&layout).ok());
+        CHECK(layout.stride == 40); // Exposure occupies the former tail padding.
+    }
     CHECK(piece.params[0].max == 8191);
     for (const auto& pass : piece.derive->passes)
         CHECK(pass.workgroups[0] * 64 == (pass.entry == "edge_curves" ? 262144 : 8192));

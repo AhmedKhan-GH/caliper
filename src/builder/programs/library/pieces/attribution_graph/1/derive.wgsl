@@ -37,7 +37,7 @@ fn assign_cells(@builtin(global_invocation_id) id: vec3<u32>) {
     let center = vec2<f32>(x, -0.82 + 1.64*f32(l+1)/f32(layer_count()+1u));
     let influence = finite_value(node_f[4u*i+1u]);
     cells[i] = Cell(center, width, influence, u32(l+1)*32u+u32(t),
-                    1.64/f32(layer_count()+1u), 0u, 0u, select(0.0,0.15,edge_count()>0u));
+                    1.64/f32(layer_count()+1u), 0u, 0u, select(0.0,0.15,edge_count()>0u), 0.0);
     nodes[i] = Node(vec4<f32>(center, 0.0, 0.0), i, k, l, t, node_i[4u*i+3u], influence);
 }
 
@@ -109,11 +109,16 @@ fn order_influence(@builtin(global_invocation_id) id: vec3<u32>) {
     copy_text(32u+i, u32(max(nodes[i].feature, 0)), prefix);
 }
 
-fn relaxed(i: u32, use_b: bool) -> vec4<f32> {
+struct Relaxed {
+    position: vec4<f32>,
+    edge_mass: f32,
+}
+fn relaxed(i: u32, use_b: bool) -> Relaxed {
     var own: vec4<f32>;
     if (use_b) { own = offset_b[i]; } else { own = offset_a[i]; }
     var total = 0.0;
     var count = 0.0;
+    var edge_mass = 0.0;
     let n = node_count();
     for (var e = 0u; e < edge_count(); e++) {
         let s = edge_i[2u*e];
@@ -123,27 +128,31 @@ fn relaxed(i: u32, use_b: bool) -> vec4<f32> {
         if (s == i32(i)) { neighbor = t; }
         if (t == i32(i)) { neighbor = s; }
         if (neighbor < 0) { continue; }
+        if (finite_value(edge_f[2u*e]) != 0.0) {
+            edge_mass += abs(clamp(finite_value(edge_f[2u*e+1u]), -1.0, 1.0));
+        }
         var x: f32;
         if (use_b) { x = offset_b[u32(neighbor)].x; } else { x = offset_a[u32(neighbor)].x; }
         total += x;
         count += 1.0;
     }
     if (count > 0.0) { own.x = clamp(mix(own.x, total/count, 0.5), own.y-0.15*own.z, own.y+0.15*own.z); }
-    return own;
+    return Relaxed(own, edge_mass);
 }
 @compute @workgroup_size(64)
-fn relax_one(@builtin(global_invocation_id) id: vec3<u32>) { if (id.x < node_count()) { offset_b[id.x] = relaxed(id.x, false); } }
+fn relax_one(@builtin(global_invocation_id) id: vec3<u32>) { if (id.x < node_count()) { offset_b[id.x] = relaxed(id.x, false).position; } }
 @compute @workgroup_size(64)
-fn relax_two(@builtin(global_invocation_id) id: vec3<u32>) { if (id.x < node_count()) { offset_a[id.x] = relaxed(id.x, true); } }
+fn relax_two(@builtin(global_invocation_id) id: vec3<u32>) { if (id.x < node_count()) { offset_a[id.x] = relaxed(id.x, true).position; } }
 @compute @workgroup_size(64)
-fn relax_three(@builtin(global_invocation_id) id: vec3<u32>) { if (id.x < node_count()) { offset_b[id.x] = relaxed(id.x, false); } }
+fn relax_three(@builtin(global_invocation_id) id: vec3<u32>) { if (id.x < node_count()) { offset_b[id.x] = relaxed(id.x, false).position; } }
 @compute @workgroup_size(64)
 fn relax_four(@builtin(global_invocation_id) id: vec3<u32>) {
     let i = id.x;
     if (i >= node_count()) { return; }
     let result = relaxed(i, true);
-    offset_a[i] = result;
-    nodes[i].position = vec4<f32>(result.x, nodes[i].position.y, 0.0, result.w);
+    offset_a[i] = result.position;
+    nodes[i].position = vec4<f32>(result.position.x, nodes[i].position.y, 0.0, result.position.w);
+    cells[i].edge_mass = result.edge_mass;
 }
 
 @compute @workgroup_size(64)

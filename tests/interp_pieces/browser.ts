@@ -49,7 +49,7 @@ function compare(size: number, app: Uint8Array, aIds: Uint32Array, web: Uint8Arr
 }
 
 export function registerInterpPieceTests(test: typeof import('../../web/node_modules/@playwright/test/index').test, expect: Expect) {
-  for (const variant of ['', 'density', 'density_narrow', 'narrow_cells', 'connected_cells']) test(
+  for (const variant of ['', 'density', 'density_narrow', 'narrow_cells', 'connected_cells', 'exposure', 'sparse_graph']) test(
     `interpretation pieces preserve native colors and picks in the browser${variant ? ` (${variant})` : ''}`, async ({ page }, info) => {
     test.skip(info.project.name === 'canvas2d', 'Piece draws require WebGPU.');
     const fixture = path.join(process.env.CALIPER_INTERP_PIECES_OUT ?? path.join(REPO, 'cmake-build-release/tests/interp_pieces/out'), variant);
@@ -67,10 +67,13 @@ export function registerInterpPieceTests(test: typeof import('../../web/node_mod
     const plan = JSON.parse(fs.readFileSync(path.join(fixture, 'plan.json'), 'utf8'));
     const picks = JSON.parse(fs.readFileSync(path.join(fixture, 'picks.json'), 'utf8'));
     const frames = fs.readFileSync(path.join(fixture, 'frames.bin')).toString('base64');
+    const density = variant !== '' && variant !== 'exposure' && variant !== 'sparse_graph';
     const rasterCount = variant === 'narrow_cells' ? 16 : variant === 'connected_cells' ? 93 : 512;
     expect(plan.programs.map((p: { id: string }) => p.id).sort()).toEqual(
-      variant ? ['graph_dense'] : ['examples_0', 'examples_1', 'graph', 'graph_selected', 'logits', 'recovery']);
-    if (variant) {
+      density ? ['graph_dense'] : variant === 'exposure' ? ['graph', 'graph_selected', 'graph_selected_weak'] :
+        variant === 'sparse_graph' ? ['graph', 'graph_selected'] :
+        ['examples_0', 'examples_1', 'graph', 'graph_selected', 'logits', 'recovery']);
+    if (density) {
       expect(plan.size).toBe(variant === 'density' || variant === 'connected_cells' ? 512 : 256);
       expect(picks.graph_dense).toHaveLength(rasterCount);
       expect(new Set(picks.graph_dense.map(([x, y]: number[]) => `${x},${y}`)).size).toBe(rasterCount);
@@ -133,7 +136,7 @@ export function registerInterpPieceTests(test: typeof import('../../web/node_mod
         expect.soft(comparison.interiorOver, `${pp.id}: ${comparison.first}`).toBe(0);
         expect.soft(comparison.edgeShare, pp.id).toBeLessThanOrEqual(0.01);
         expect.soft(comparison.idMismatch, pp.id).toBe(0);
-        if (variant) {
+        if (density) {
           const visible = new Map<number, number>();
           for (let p = 0; p < webIds.length; p += 2) {
             if (webIds[p] !== pp.pick_id) continue;

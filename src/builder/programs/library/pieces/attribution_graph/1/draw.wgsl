@@ -79,9 +79,20 @@ fn edge_vs(@builtin(instance_index) i: u32, @builtin(vertex_index) v: u32) -> Ed
                             vec2<f32>(1.0,-1.0)*out.position.w,out.position.zw);
     var color = vec3<f32>(0.15,0.55,0.95);
     if (c.weight < 0.0) { color = vec3<f32>(0.95,0.25,0.12); }
-    var alpha = 0.16+0.54*abs(c.normalized);
-    if (params.selected_node >= 0 && u32(params.selected_node) < counts.nodes &&
-        c.source_node != u32(params.selected_node) && c.target_node != u32(params.selected_node)) { alpha *= 0.12; }
+    // In the overview, each endpoint has an L1 budget of 0.70 for its incident edges.
+    // The maximum endpoint mass bounds both fans without a per-edge opacity floor.
+    // Unrelated fans can still overlap. This is not a bound on every pixel.
+    var mass = max(1.0,max(cells[c.source_node].edge_mass, cells[c.target_node].edge_mass));
+    var dim = 1.0;
+    if (params.selected_node >= 0 && u32(params.selected_node) < counts.nodes) {
+        let selected = u32(params.selected_node);
+        if (c.source_node == selected || c.target_node == selected) {
+            // The foreground fan uses its own budget, independent of neighbor degree.
+            let selected_mass = cells[selected].edge_mass;
+            mass = select(1.0,selected_mass,selected_mass>0.0);
+        } else { dim = 0.12; }
+    }
+    var alpha = 0.70*abs(c.normalized)/mass*dim;
     if (c.weight == 0.0) { alpha = 0.0; }
     out.color = vec4<f32>(color*alpha,alpha);
     out.segment = i*12u+segment+1u;

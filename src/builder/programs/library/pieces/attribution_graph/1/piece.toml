@@ -105,7 +105,7 @@ publish = true
 id = "cells"
 kind = "buffer"
 struct = "Cell"
-fields = ["center: vec2<f32>", "width: f32", "influence: f32", "key: u32", "height: f32", "rank: u32", "size: u32", "motion: f32"]
+fields = ["center: vec2<f32>", "width: f32", "influence: f32", "key: u32", "height: f32", "rank: u32", "size: u32", "motion: f32", "edge_mass: f32"]
 count = 8192
 counted = true
 publish = true
@@ -156,7 +156,7 @@ writes = ["offset_b"]
 [[derive.passes]]
 entry = "relax_four"
 workgroups = [128, 1, 1]
-writes = ["offset_a", "nodes"]
+writes = ["offset_a", "nodes", "cells"]
 
 [[derive.passes]]
 entry = "edge_curves"

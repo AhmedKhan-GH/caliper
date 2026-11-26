@@ -378,7 +378,9 @@ TEST_CASE("graph layout has disjoint cells, stable bytes, labels, and sixteen ce
         CHECK(labels[0].text=="label 0"); CHECK(labels[4].text=="label 36");
         CHECK(scalar<unsigned>(resource(data,"labels"),32,16,32)==0xffffffffu);
         auto& output=exporter();
+        Export sparse_output(size,"sparse_graph");
         output.add("graph_selected",piece,data,draw,params,picks);
+        sparse_output.add("graph_selected",piece,data,draw,params,picks);
         const auto selected=draw.color;
         const auto shown=draw.rt.shown_items();
         Json changed=Json::object(); changed.set("selected_node",5);
@@ -413,6 +415,8 @@ TEST_CASE("graph layout has disjoint cells, stable bytes, labels, and sixteen ce
             }
         }
         output.add("graph",piece,data,draw,Json::object(),picks);
+        sparse_output.add("graph",piece,data,draw,Json::object(),picks);
+        sparse_output.finish();
         output.finish();
     }
 }
@@ -1073,4 +1077,5 @@ TEST_CASE("panel layouts retain graph coverage and disjoint example and probabil
     }
 }
 #include "dense_cells.h"
+#include "exposure.h"
 CALIPER_GPU_TEST_MAIN()

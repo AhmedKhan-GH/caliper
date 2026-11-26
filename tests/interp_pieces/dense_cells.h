@@ -133,7 +133,10 @@ Image render(mr::Metal& metal, const cs::Piece& piece, const std::vector<Publish
         const auto out=exporter().out/"dense_cells";
         std::filesystem::create_directories(out);
         REQUIRE(stbi_write_png((out/(name+".png")).string().c_str(),width,height,4,image.color.data(),width*4));
+        write(out/(name+".rgba"),image.color.data(),image.color.size());
         write(out/(name+".ids"),image.ids.data(),image.ids.size());
+        for (const auto& r:data) if (r.id=="nodes" || r.id=="curves" || r.id=="cells")
+            write(out/(name+"-"+r.id+".bin"),r.bytes.data(),r.bytes.size());
         Document report={{"width",width},{"height",height},{"node_count",nodes.count},
             {"visible_ids",image.samples.size()},{"piece_hash",piece.hash}};
         for (const auto& [item,samples]:image.samples) report["samples"][std::to_string(item)]=samples;
@@ -283,6 +286,7 @@ TEST_CASE("Saved Graph Raster Coverage") {
             CHECK(scalar<float>(curves,i,24,48)==scalar<float>(nodes,t,0,48));
             CHECK(scalar<float>(curves,i,28,48)==scalar<float>(nodes,t,4,48));
             CHECK(scalar<float>(curves,i,32,48)==ef[2*i]);
+            CHECK(scalar<float>(curves,i,36,48)==ef[2*i+1]);
         }
         const auto image=dense_cells::render(metal,piece,data,1355,520,"saved-520",true,false);
         for (unsigned i=0; i<nodes.count; ++i) {
@@ -290,5 +294,6 @@ TEST_CASE("Saved Graph Raster Coverage") {
             const int y=int((1-scalar<float>(nodes,i,4,48))*520*0.5f);
             CHECK(mr::identity_of(image.ids,1355,x,y)==i+1);
         }
+        dense_cells::render(metal,piece,data,1355,520,"saved-selected-520",true,true);
     }
 }
