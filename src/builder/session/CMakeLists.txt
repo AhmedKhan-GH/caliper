@@ -34,6 +34,10 @@ add_library(caliper_builder_session STATIC
     run_commands.cpp
     runner_commands.cpp
     session.cpp
+    session_catalog.cpp
+    session_spec.cpp
+    session_preview.cpp
+    session_permissions.cpp
     spec_edit.cpp
     util.cpp
     instrument_commands.cpp
