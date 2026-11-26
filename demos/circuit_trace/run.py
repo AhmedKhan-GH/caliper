@@ -260,6 +260,18 @@ class Session:
                 prompt=args.prompt,
             )
             self.started = True
+            # Open the Circuit Trace layout and install its scene programs immediately so
+            # panels display live start-up and model-load progress while weights load.
+            try:
+                build_instrument(self, dallas=bool(args.acceptance), prompt=args.prompt)
+                self.instrument_built = True
+                install_programs(self, examples=True)
+                self.finalize_applet()
+            except Exception:
+                self.instrument_built = False
+                self.base_programs_installed = False
+                self.examples_installed = False
+                self.applet_saved = False
 
             def ready():
                 runs = self.mcp.body("run.list")["runs"]
@@ -451,7 +463,7 @@ class Session:
         inf = status.get("inference")
         if isinstance(inf, dict):
             inf_state = inf.get("state")
-            if inf_state in ("starting", "tracing"):
+            if inf_state in ("starting", "loading", "tracing", "running"):
                 return True
             if (
                 allow_startup_idle
@@ -467,13 +479,21 @@ class Session:
         err = (status.get("error") or {}).get("message")
         if err:
             return str(err)
+        for container in (status.get("progress"), (status.get("inference") or {}).get("progress")):
+            if isinstance(container, dict) and container.get("error"):
+                return str(container["error"])
         if self.mcp is not None and self.started:
             try:
                 state = self.mcp.body("run.state", run=self.run_id)
                 for p in state.get("params", []):
+                    if p.get("name") == "output.progress" and isinstance(p.get("value"), str) and p["value"]:
+                        prog = json.loads(p["value"])
+                        if isinstance(prog, dict) and prog.get("error"):
+                            return str(prog["error"])
+                for p in state.get("params", []):
                     if p.get("name") == "output.status":
                         val = str(p.get("value") or "").strip()
-                        if val and val not in ("ready", "tracing", "starting"):
+                        if val and val not in ("ready", "tracing", "starting", "loading", "running"):
                             return val
             except Exception:
                 pass
@@ -1111,9 +1131,13 @@ class Session:
 
 
 def run_dallas_acceptance(session: Session, reference_path: Path | None) -> dict:
-    manifest = build_instrument(session, dallas=True, prompt=DALLAS_PROMPT)
-    session.instrument_built = True
-    install_programs(session, examples=True)
+    if not getattr(session, "instrument_built", False):
+        manifest = build_instrument(session, dallas=True, prompt=DALLAS_PROMPT)
+        session.instrument_built = True
+    else:
+        manifest = load_dallas_manifest()
+    if not (getattr(session, "base_programs_installed", False) and getattr(session, "examples_installed", False)):
+        install_programs(session, examples=True)
     session.finalize_applet()
 
     session.set_progress("tracing")
@@ -1292,9 +1316,11 @@ def run_dallas_acceptance(session: Session, reference_path: Path | None) -> dict
 def run_standard(session: Session) -> dict:
     manifest = None
     try:
-        manifest = build_instrument(session, dallas=False, prompt=session.args.prompt)
-        session.instrument_built = True
-        install_programs(session, examples=True)
+        if not getattr(session, "instrument_built", False):
+            manifest = build_instrument(session, dallas=False, prompt=session.args.prompt)
+            session.instrument_built = True
+        if not (getattr(session, "base_programs_installed", False) and getattr(session, "examples_installed", False)):
+            install_programs(session, examples=True)
         session.finalize_applet()
         session.set_progress("tracing")
         t0 = time.perf_counter()
