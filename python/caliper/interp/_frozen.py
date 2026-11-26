@@ -15,6 +15,7 @@ from ._dictionary import _encoder_matches_dtype, _reference_coordinates, model_i
 from ._families import model_family
 from . import _qwen_family
 from ._points import _architecture, capture
+from ._output import internal_forward
 from ._memory import (MemoryGuard as ProcessMemoryGuard, BudgetMemory, CleanStop,
                       allocation_bytes, free_percent, autorelease_scope, family_memory_limit,
                       host_reserve_for_model)
@@ -867,7 +868,8 @@ class FrozenPath:
                 check("record admission")
                 self.guard.check("record admission")
                 kwargs = {"use_cache": False, "logits_to_keep": 1} if self.family.name != "caliper_tiny" else {}
-                self.logits = model(input_ids=input_ids, **kwargs).logits[:, -1].detach()
+                with internal_forward():
+                    self.logits = model(input_ids=input_ids, **kwargs).logits[:, -1].detach()
         self.guard.check("record complete")
         check("record complete")
         self.embedding = recorded["embedding"]

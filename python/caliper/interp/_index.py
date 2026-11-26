@@ -19,6 +19,7 @@ from ._dictionary import (_canonical_device, _encoder_matches_dtype, _memory_lim
 from ._memory import (BudgetMemory, CleanStop, MemoryGuard, allocation_bytes, family_memory_limit, host_reserve_for_model,
                       autorelease_scope as _device_scope)
 from ._points import capture
+from ._output import internal_forward
 from ._frozen import _trace_features
 from ._labels import bounded_label
 
@@ -326,11 +327,12 @@ class _TopTable:
 
 def _forward(model, input_ids, attention_mask):
     _reference_runtime(model)
-    if model.config.model_type in ("qwen3_5_text", "gemma2"):
-        # The decoder supplies MLP probes without a vocabulary-sized logit tensor.
-        result = model.model(input_ids=input_ids, attention_mask=attention_mask, use_cache=False)
-    else:
-        result = model(input_ids=input_ids, attention_mask=attention_mask, use_cache=False)
+    with internal_forward():
+        if model.config.model_type in ("qwen3_5_text", "gemma2"):
+            # The decoder supplies MLP probes without a vocabulary-sized logit tensor.
+            result = model.model(input_ids=input_ids, attention_mask=attention_mask, use_cache=False)
+        else:
+            result = model(input_ids=input_ids, attention_mask=attention_mask, use_cache=False)
     _reference_runtime(model)
     return result
 
