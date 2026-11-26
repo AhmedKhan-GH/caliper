@@ -325,6 +325,10 @@ add_library(caliper_net STATIC
     src/host/net/ws.cpp
     src/host/net/json.cpp
     src/host/net/wire.cpp
+    src/host/net/wire_controls.cpp
+    src/host/net/wire_scene.cpp
+    src/host/net/wire_timelines.cpp
+    src/host/net/wire_programs.cpp
     src/host/net/upgrade.cpp
     src/host/net/http_door.cpp
     src/host/net/hub.cpp

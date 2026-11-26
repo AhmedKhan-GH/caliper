@@ -160,6 +160,10 @@ set_property(SOURCE ${CALIPER_ROOT}/src/host/live/live_points.cpp APPEND PROPERT
 # ---- the wire protocol v3 codec (shared with the native NetSource) ---------------
 add_library(caliper_wire STATIC
     ${CALIPER_ROOT}/src/host/net/wire.cpp
+    ${CALIPER_ROOT}/src/host/net/wire_controls.cpp
+    ${CALIPER_ROOT}/src/host/net/wire_scene.cpp
+    ${CALIPER_ROOT}/src/host/net/wire_timelines.cpp
+    ${CALIPER_ROOT}/src/host/net/wire_programs.cpp
     ${CALIPER_ROOT}/src/host/net/json.cpp)
 target_include_directories(caliper_wire PUBLIC ${CALIPER_ROOT}/src/host ${CALIPER_ROOT}/include)
 
