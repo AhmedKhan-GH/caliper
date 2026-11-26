@@ -65,13 +65,20 @@ jobs:
       - uses: actions/cache@v5
         with:
           path: ~/Library/Caches/pip
-          key: pip-acceptance-macos-arm64-torch${{ env.ACCEPTANCE_TORCH_VERSION }}
+          key: pip-acceptance-macos-arm64-interp-torch${{ env.ACCEPTANCE_TORCH_VERSION }}
       - name: Make the instrument test Python
         run: |
           python3 -m venv "$RUNNER_TEMP/acceptance-py"
-          "$RUNNER_TEMP/acceptance-py/bin/pip" install "torch==$ACCEPTANCE_TORCH_VERSION" numpy Pillow websockets nanobind pytest safetensors psutil
+          "$RUNNER_TEMP/acceptance-py/bin/pip" install \
+            "torch==$ACCEPTANCE_TORCH_VERSION" \
+            transformers==5.24.0 \
+            transformer-lens==3.9.0 \
+            sae-lens==6.56.3 \
+            nnsight==0.8.4 \
+            "circuit-tracer @ git+https://github.com/decoderesearch/circuit-tracer.git@82996f144b3371ae858ea5713590d004c218f0c2" \
+            numpy Pillow websockets nanobind pytest safetensors psutil datasets jsonschema
           "$RUNNER_TEMP/acceptance-py/bin/python" scripts/build_netio.py
-          PYTHONPATH=python "$RUNNER_TEMP/acceptance-py/bin/python" -c "import torch, caliper, caliper._netio; print('Instrument test Python ready, torch', torch.__version__)"
+          PYTHONPATH=python "$RUNNER_TEMP/acceptance-py/bin/python" -c "import torch, circuit_tracer, transformer_lens, sae_lens, caliper, caliper._netio; print('Instrument test Python ready, torch', torch.__version__)"
       # The runtime WGSL compiler (tools/shaders/caliper-wgsl) is built from source in this job
       # (CALIPER_WGSL_FROM_SOURCE=ON below), so the programs of the GPU programs tests compile and run.
       # The hosted macOS image carries a Rust toolchain; nothing is installed or pinned here. Cargo's
@@ -315,6 +322,9 @@ jobs:
         env:
           CALIPER_AGENT_OFFLINE: '1'
           CALIPER_TEST_RUN: '1'
+          HF_HUB_OFFLINE: '1'
+          TRANSFORMERS_OFFLINE: '1'
+          TOKENIZERS_PARALLELISM: 'false'
           CALIPER_DATA_DIR: ${{ runner.temp }}/interpretation-sidecar/data
           TMPDIR: ${{ runner.temp }}/interpretation-sidecar/temp
           CALIPER_INTERPRET_HOST: ${{ github.workspace }}/cmake-build-release/caliper_interpret_command_host
