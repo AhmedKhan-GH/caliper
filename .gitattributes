@@ -1,0 +1,2 @@
+# Preserve the byte-pinned published source manifest on every platform.
+demos/circuit_trace/published_dallas_v1.json text eol=lf
