@@ -130,6 +130,7 @@ _STATE = {"rt": None, "mod": None, "model": None, "optimizer": None, "marks": No
 _VIEWS = {"ring": None}  # the network route's ring while it has snapshots to take
 _clock = time.perf_counter
 _INFERENCE = threading.local()
+_INFERENCE_ACTIVE = set()  # live outer scopes, including ones before the first checkpoint
 _WARNED: set = set()
 
 
@@ -175,7 +176,8 @@ class _Cadence:
 
     Hosted inference supplies synthetic steps between discrete actions. Its marks use
     accumulated useful boundary time plus snapshot work outside measured intervals.
-    This time covers synchronization, passes, and publication. Sender time remains an additional cost.
+    This time covers synchronization, passes, and publication, with sender CPU removed.
+    The sender account charges that CPU once, including work outside measured intervals.
     Explicit exclusions keep idle gaps and model actions out of pass overhead. The same
     feedback limits apply to this smaller time budget. Training retains queue completion times.
     """
@@ -204,6 +206,8 @@ class _Cadence:
         self.inference_s = 0.0      # accumulated useful hosted time
         self.inference_gate = None # one snapshot gate and its accounted cost
         self.inference_sender = None # one ring and its last sender counter
+        self.inference_account = None # cumulative CPU with only active sender records
+        self.inference_accounted = 0.0
 
     def restart(self) -> None:
         """Forget the marks and passes of the current cycle, but keep ``b``, ``D``, N and the step
@@ -1078,13 +1082,20 @@ class _InferenceClock:
 
     def __init__(self):
         self.measured = False
-        self.started = _clock()
+        with _LOCK:
+            _inference_sender(_VIEWS["ring"])
+            self.sender = _CAD.inference_accounted
+            self.started = _clock()
+            _INFERENCE_ACTIVE.add(self)
 
     def flush(self):
         with _LOCK:
+            _inference_sender(_VIEWS["ring"])
+            sender = _CAD.inference_accounted
             now = _clock()
             if self.measured:
-                _CAD.inference_s += max(0.0, now - self.started)
+                _CAD.inference_s += max(0.0, now - self.started - (sender - self.sender))
+            self.sender = sender
             self.started = now
             ring = _VIEWS["ring"]
             prior = _CAD.inference_gate
@@ -1092,11 +1103,11 @@ class _InferenceClock:
                 # A subscription thread can replace the ring during an exclusion.
                 old = prior[0][0]
                 if not self.measured and old.gate_t == prior[0][2]:
-                    _CAD.inference_s += max(0.0, old.gate_cost - prior[1])
+                    _CAD.inference_s += max(0.0, _inference_gate_cost(old) - prior[1])
             if ring is not None and ring.gate_open:
                 # The gate identity survives a step renumber and detects a cost reset.
                 key = (ring, ring.gate_step, ring.gate_t)
-                cost = ring.gate_cost
+                cost = _inference_gate_cost(ring)
                 before = prior[1] if prior is not None and prior[0] == key else 0.0
                 if cost < before:
                     before = 0.0
@@ -1130,6 +1141,8 @@ def inference_boundary():
             clock.flush()
         finally:
             _INFERENCE.clock = None
+            with _LOCK:
+                _INFERENCE_ACTIVE.discard(clock)
 
 
 @contextmanager
@@ -1264,7 +1277,8 @@ def _at_step(step: int) -> None:
                 _inference_sender(None)
             _CAD.restart()                          # a clock change, with budget history intact
             _CAD.inference = inference
-            _CAD.inference_sender = None
+            if not inference:
+                _CAD.inference_sender = None
             if _STATE["pass"] is not None:
                 _CAD.passes.add(_STATE["pass"])
         if _ABANDONED:
@@ -1390,7 +1404,7 @@ def _at_step(step: int) -> None:
                 _STATE["pub_pass"] = (step, pub)
                 _STATE["view_s"].append(ring.gate_cost)
                 if is_pass:
-                    _CAD.view_cost[step] = ring.gate_cost
+                    _CAD.view_cost[step] = _inference_gate_cost(ring) if inference else ring.gate_cost
         if is_pass and not ran and not taken:        # nothing was due after all
             _CAD.unpass(step)
         if inference:
@@ -1466,22 +1480,58 @@ def _views_status(ring, floor: bool) -> dict:
             "share": None if share is None else round(share, 4), "budget": _CAD.target, "limit": limit}
 
 
+def _inference_gate_cost(ring):
+    return max(0.0, ring.gate_cost - getattr(ring, "gate_sender_s", 0.0))
+
+
+def _sender_stamp():
+    """Pair a cost boundary with live CPU, without a cadence or queue lock."""
+    account = _CAD.inference_account
+    if account is not None and (_CAD.inference or _INFERENCE_ACTIVE):
+        return account, account.sample()
+    return None
+
+
+def _sender_elapsed(stamp):
+    return max(0.0, stamp[0].sample() - stamp[1]) if stamp is not None else 0.0
+
+
+def _sender_untracked(ring):
+    counter = getattr(ring, "sender_untracked", None)
+    return counter() if counter is not None else ring.publish_s
+
+
 def _inference_sender(ring):
     """Credit sender work once, independent of snapshot and cadence sample retention.
 
     The caller owns _LOCK. A replacement first credits the old ring, then uses
-    the new ring's current counter as its baseline.
+    the new ring's current counter as its baseline. Active pumps retain their
+    account after detachment. Live samples settle delayed counters without a history.
     """
     prior = _CAD.inference_sender
+    account = _CAD.inference_account
+    if account is None:
+        from ._net_ring import _SenderAccount
+        account = _CAD.inference_account = _SenderAccount()
     if prior is not None:
         old, before = prior
-        published = old.publish_s
+        published = _sender_untracked(old)
         _CAD.extra += max(0.0, published - before)
         if old is ring:
             # Use the same sample for the charge and baseline if the sender advances.
             _CAD.inference_sender = (ring, published)
-            return
-    _CAD.inference_sender = (ring, ring.publish_s) if ring is not None else None
+        else:
+            meter = getattr(old, "_sender", None)
+            if meter is not None:
+                meter.watch(None)
+    if prior is None or prior[0] is not ring:
+        _CAD.inference_sender = (ring, _sender_untracked(ring)) if ring is not None else None
+        meter = getattr(ring, "_sender", None)
+        if meter is not None:
+            meter.watch(account)
+    total = account.sample()
+    _CAD.extra += max(0.0, total - _CAD.inference_accounted)
+    _CAD.inference_accounted = total
 
 
 def views(ring) -> None:
@@ -1492,7 +1542,7 @@ def views(ring) -> None:
         clock = getattr(_INFERENCE, "clock", None)
         if clock is not None:
             clock.flush()
-        if _CAD.inference:
+        if _CAD.inference or _INFERENCE_ACTIVE:
             _inference_sender(ring)
         old = _VIEWS["ring"]
         if old is not None and old is not ring:
@@ -1516,7 +1566,7 @@ def views_closed(ring) -> None:
         clock = getattr(_INFERENCE, "clock", None)
         if clock is not None:
             clock.flush()
-        if _CAD.inference:
+        if _CAD.inference or _INFERENCE_ACTIVE:
             _inference_sender(None)
         ring.release_gate()
         _VIEWS["ring"] = None
@@ -2129,6 +2179,7 @@ def _pump() -> None:
     outbox whose viewer or program is gone. The time counts toward the overhead of the passes."""
     if not _OUTBOX:
         return
+    sender = _sender_stamp()
     t0 = _clock()
     with _OUTBOX_LOCK:
         try:
@@ -2145,7 +2196,7 @@ def _pump() -> None:
             _OUTBOX.clear()
             _warn_once(("pump",), f"caliper: sending the parts of a resource failed: {e!r}")
     with _LOCK:
-        _CAD.extra += _clock() - t0
+        _CAD.extra += max(0.0, _clock() - t0 - _sender_elapsed(sender))
 
 
 def _controls_ports() -> list:

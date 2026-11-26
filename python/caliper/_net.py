@@ -1276,14 +1276,13 @@ class NetServer:
     async def _pump(self) -> None:
         p = self.producer
         while True:
-            t0 = time.thread_time()
-            try:
-                busy = p.pump_once()
-            except Exception:
-                self.counters["pump_errors"] += 1
-                _log.debug("pump failed", exc_info=True)
-                busy = False
-            self.ring.publish_s += time.thread_time() - t0   # the sender's share of the cadence
+            with self.ring.sender_cost():
+                try:
+                    busy = p.pump_once()
+                except Exception:
+                    self.counters["pump_errors"] += 1
+                    _log.debug("pump failed", exc_info=True)
+                    busy = False
             if busy or any(st.watched and st.q for st in list(self.ring.series.values())):
                 await asyncio.sleep(POLL_S)
                 continue

@@ -60,14 +60,16 @@ from __future__ import annotations
 import collections
 import json
 import math
+import sys
 import threading
 import time
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import Any
 
 from . import _wire
 from ._net_dataview import Call, Reduced, make_engine
-from ._programs import FLOOR_S
+from ._programs import FLOOR_S, _sender_stamp, _sender_elapsed
 from ._ring import DEFAULT_RATE_HZ, KIND_SERIES, rate_interval
 
 OFFER_REFRESH_S = 1.0          # an unsubscribed view's offer is rechecked this often
@@ -83,6 +85,130 @@ PASS_SLACK = 0.9               # a view wants a pass at this share of its interv
 
 
 _TORCH = None
+
+# Metadata has its own lock. No queue or cadence lock is acquired under it.
+_COST_LOCK = threading.RLock()
+
+
+class _ThreadCPU:
+    """Read a live sender's CPU clock from either thread, at interval boundaries."""
+
+    def __init__(self, ident, native_id):
+        self.close = lambda: None
+        if hasattr(time, "pthread_getcpuclockid"):
+            clock = time.pthread_getcpuclockid(ident)
+            self.read = lambda: time.clock_gettime(clock)
+        elif sys.platform == "darwin":
+            import ctypes
+            lib = ctypes.CDLL(None)
+            lib.pthread_mach_thread_np.argtypes = [ctypes.c_void_p]
+            lib.pthread_mach_thread_np.restype = ctypes.c_uint
+            lib.thread_info.argtypes = [ctypes.c_uint, ctypes.c_int,
+                                        ctypes.POINTER(ctypes.c_int), ctypes.POINTER(ctypes.c_uint)]
+            lib.thread_info.restype = ctypes.c_int
+            thread = lib.pthread_mach_thread_np(ident)
+
+            def read():
+                # THREAD_BASIC_INFO contains user and system time, in microseconds.
+                info = (ctypes.c_int * 10)()
+                count = ctypes.c_uint(10)
+                if lib.thread_info(thread, 3, info, ctypes.byref(count)):
+                    raise RuntimeError("Cannot sample the live sender CPU clock.")
+                return info[0] + info[2] + (info[1] + info[3]) * 1e-6
+            self.read = read
+        elif sys.platform == "win32":
+            import ctypes
+            from ctypes import wintypes
+            lib = ctypes.WinDLL("kernel32", use_last_error=True)
+            lib.OpenThread.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+            lib.OpenThread.restype = wintypes.HANDLE
+            lib.GetThreadTimes.argtypes = [wintypes.HANDLE] + [ctypes.POINTER(wintypes.FILETIME)] * 4
+            lib.GetThreadTimes.restype = wintypes.BOOL
+            lib.CloseHandle.argtypes = [wintypes.HANDLE]
+            lib.CloseHandle.restype = wintypes.BOOL
+            handle = lib.OpenThread(0x0800, False, native_id)
+            if not handle:
+                raise ctypes.WinError(ctypes.get_last_error())
+            self.close = lambda: lib.CloseHandle(handle)
+
+            def read():
+                values = [wintypes.FILETIME() for _ in range(4)]
+                if not lib.GetThreadTimes(handle, *(ctypes.byref(v) for v in values)):
+                    raise ctypes.WinError(ctypes.get_last_error())
+                return sum((v.dwHighDateTime << 32) + v.dwLowDateTime for v in values[2:]) * 1e-7
+            self.read = read
+        else:
+            raise RuntimeError("The platform cannot sample another thread's CPU clock.")
+
+
+class _SenderAccount:
+    """Retain one scalar total and one record per active sender, with no pump history."""
+
+    def __init__(self):
+        self.total = 0.0
+        self.active = {}
+
+    def sample(self):
+        with _COST_LOCK:
+            return self.total + sum(sender.elapsed() for sender in self.active)
+
+
+class _SenderMeter:
+    """Settle completed CPU work and retain live work through a subscription change."""
+
+    def __init__(self):
+        self.account = self.current = self.reader = self.thread = None
+        self.start = self.last = self.published_s = 0.0
+
+    def elapsed(self):
+        self.last = max(self.last, self.reader.read() - self.start)
+        return self.last
+
+    def settle(self):
+        if self.current is not None:
+            self.current.total += self.elapsed()
+            del self.current.active[self]
+            self.current = None
+        if self.reader is not None:
+            self.reader.close()
+            self.reader = None
+
+    def watch(self, account, start=None):
+        with _COST_LOCK:
+            self.account = account
+            if account is not None and self.thread is not None and self.current is not account:
+                self.settle()
+                reader = _ThreadCPU(*self.thread)
+                try:
+                    sample = reader.read() if start is None else start
+                except BaseException:
+                    reader.close()
+                    raise
+                self.reader = reader
+                self.start, self.last = sample, 0.0
+                self.current = account
+                account.active[self] = None
+            # Detachment stops new pumps. The active pump retains its owner until completion.
+
+    @contextmanager
+    def measure(self, ring):
+        start = time.thread_time()
+        with _COST_LOCK:
+            self.thread = (threading.get_ident(), threading.get_native_id())
+            try:
+                self.watch(self.account, start)
+            except BaseException:
+                self.thread = None
+                raise
+        try:
+            yield
+        finally:
+            with _COST_LOCK:
+                cost = max(0.0, time.thread_time() - start)
+                ring.publish_s += cost
+                self.published_s += cost
+                self.settle()
+                self.thread = None
 
 
 def _torch():
@@ -252,6 +378,7 @@ class NetRing:
         self.gate_step: int | None = None       # the step of the open gate
         self.gate_taken = 0                     # snapshots and series chunks queued in it
         self.gate_cost = 0.0                    # the training thread's seconds in its view calls
+        self.gate_sender_s = 0.0                # CPU already owned by the hosted sender account
         self.gate_t = math.inf                  # perf_counter when the last gate opened
         self.pass_t = -math.inf                 # perf_counter of the last pass that took something
         self.passes = collections.deque(maxlen=PASS_RATE_SAMPLES + 1)   # (perf_counter, step)
@@ -259,8 +386,27 @@ class NetRing:
         self.registered = False                 # caliper._programs gates this ring
         self.float_wake_t = -math.inf           # the last wake for a float series value
         self.publish_s = 0.0                    # the sender thread's CPU seconds so far (it adds)
+        self._sender = _SenderMeter()
+        self._snapshot_start = None             # consumed by the next take_call under the module lock
         self.held_t = math.inf                  # when a view the passes leave out is overdue (_hold_t)
         self.held: ViewState | None = None      # the view whose call due() let through the gate
+
+    def sender_cost(self):
+        return self._sender.measure(self)
+
+    def sender_untracked(self):
+        """Retain counter-only costs from older producers without fabricated interval evidence."""
+        with _COST_LOCK:
+            return self.publish_s - self._sender.published_s
+
+    def snapshot_start(self, now, sender):
+        """Pair the dispatch wall start with its CPU sample before the module lock wait."""
+        self._snapshot_start = (now, sender)
+
+    def _snapshot_cost(self, now, sender):
+        cost = max(0.0, time.perf_counter() - now)
+        self.gate_cost += cost
+        self.gate_sender_s += min(cost, _sender_elapsed(sender))
 
     # -- the registry (training thread writes, network thread reads) -----------
     def _view(self, name: str, kind: int, now: float) -> ViewState:
@@ -420,6 +566,7 @@ class NetRing:
         self.gate_step = step
         self.gate_taken = 0
         self.gate_cost = 0.0
+        self.gate_sender_s = 0.0
         self.gate_t = time.perf_counter()
         self.next_due = 0.0
 
@@ -428,9 +575,10 @@ class NetRing:
         all of them), and the gate closes. Returns how many snapshots and series chunks the
         pass queued."""
         if self.tick is not None:
+            sender = _sender_stamp()
             t0 = time.perf_counter()
             self._close_tick()
-            self.gate_cost += time.perf_counter() - t0
+            self._snapshot_cost(t0, sender)
         taken = self.gate_taken
         self.gate_open = False
         self.gate_step = None
@@ -563,6 +711,8 @@ class NetRing:
     def take_call(self, name: str, plan, now: float, args) -> bool:
         """Reduce ``plan`` for every due group of view ``name`` and queue the
         copies to pinned memory. Returns True if a snapshot was queued."""
+        start, self._snapshot_start = self._snapshot_start, None
+        sender = start[1] if start is not None and start[0] == now else None
         call = Call(plan.kind, name, plan, args)
         v = self._register(call, now)
         v.seen = now
@@ -617,7 +767,7 @@ class NetRing:
         elif t is not None and self._complete(t, now):
             self._close_tick()
         if taken and self.gate_open:        # from the view call's start, its plan included
-            self.gate_cost += time.perf_counter() - now
+            self._snapshot_cost(now, sender)
         return bool(taken)
 
     def _stage(self, g: Group, v: ViewState, red: Reduced, stamp: int,
@@ -712,6 +862,7 @@ class NetRing:
             s.scalars = False
         s.refs.append(t)
         s.nref += n
+        sender = _sender_stamp()
         now = time.perf_counter()
         s.seen = now
         if s.watched:
@@ -724,7 +875,7 @@ class NetRing:
                 return True                  # the common step: until the next tick
             self._tick_series(s, now)
             if self.gate_open:
-                self.gate_cost += time.perf_counter() - now
+                self._snapshot_cost(now, sender)
         elif s.nref >= SERIES_CHUNK or now - s.flush_t >= SERIES_IDLE_FLUSH_S:
             self._flush_series(s, now)
         return s.watched
