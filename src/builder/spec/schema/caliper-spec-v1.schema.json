@@ -127,6 +127,7 @@
         "id": { "$ref": "#/$defs/id" },
         "title": { "$ref": "#/$defs/title" },
         "description": { "type": "string", "maxLength": 4096 },
+        "layout_locked": { "type": "boolean" },
         "x": { "$ref": "#/$defs/extension" }
       }
     },
@@ -264,6 +265,7 @@
         "id": { "$ref": "#/$defs/id" },
         "primitive": { "const": "series" },
         "title": { "$ref": "#/$defs/title" },
+        "closable": { "type": "boolean" },
         "bind": {
           "type": "object",
           "additionalProperties": false,
@@ -304,6 +306,7 @@
         "id": { "$ref": "#/$defs/id" },
         "primitive": { "const": "heatmap" },
         "title": { "$ref": "#/$defs/title" },
+        "closable": { "type": "boolean" },
         "bind": {
           "type": "object",
           "additionalProperties": false,
@@ -335,6 +338,7 @@
         "id": { "$ref": "#/$defs/id" },
         "primitive": { "const": "points" },
         "title": { "$ref": "#/$defs/title" },
+        "closable": { "type": "boolean" },
         "bind": {
           "type": "object",
           "additionalProperties": false,
@@ -377,6 +381,7 @@
         "id": { "$ref": "#/$defs/id" },
         "primitive": { "const": "histogram" },
         "title": { "$ref": "#/$defs/title" },
+        "closable": { "type": "boolean" },
         "bind": {
           "type": "object",
           "additionalProperties": false,
@@ -408,6 +413,7 @@
         "id": { "$ref": "#/$defs/id" },
         "primitive": { "const": "table" },
         "title": { "$ref": "#/$defs/title" },
+        "closable": { "type": "boolean" },
         "bind": {
           "type": "object",
           "additionalProperties": false,
@@ -441,6 +447,7 @@
         "id": { "$ref": "#/$defs/id" },
         "primitive": { "const": "image" },
         "title": { "$ref": "#/$defs/title" },
+        "closable": { "type": "boolean" },
         "bind": {
           "type": "object",
           "additionalProperties": false,
@@ -471,6 +478,7 @@
         "id": { "$ref": "#/$defs/id" },
         "primitive": { "const": "text" },
         "title": { "$ref": "#/$defs/title" },
+        "closable": { "type": "boolean" },
         "bind": {
           "type": "object",
           "additionalProperties": false,
@@ -504,6 +512,7 @@
         "id": { "$ref": "#/$defs/id" },
         "primitive": { "const": "scene" },
         "title": { "$ref": "#/$defs/title" },
+        "closable": { "type": "boolean" },
         "bind": {
           "type": "object",
           "additionalProperties": false,
@@ -586,6 +595,7 @@
         "id": { "$ref": "#/$defs/id" },
         "kind": { "enum": ["slider", "button", "range", "toggle", "picker", "text", "segmented", "readout", "transport"] },
         "title": { "$ref": "#/$defs/title" },
+        "closable": { "type": "boolean" },
         "bind": {
           "type": "string",
           "maxLength": 320,

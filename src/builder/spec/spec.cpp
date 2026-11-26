@@ -221,8 +221,9 @@ bool operator==(const Options& a, const Options& b) {
 }
 
 bool operator==(const Panel& a, const Panel& b) {
-    return a.id == b.id && a.primitive == b.primitive && a.title == b.title && a.bind == b.bind &&
-           a.options == b.options && a.entities == b.entities && a.annotations == b.annotations && a.x == b.x;
+    return a.id == b.id && a.primitive == b.primitive && a.title == b.title && a.closable == b.closable &&
+           a.bind == b.bind && a.options == b.options && a.entities == b.entities && a.annotations == b.annotations &&
+           a.x == b.x;
 }
 
 bool operator==(const LayoutNode& a, const LayoutNode& b) {
@@ -231,7 +232,8 @@ bool operator==(const LayoutNode& a, const LayoutNode& b) {
 }
 
 bool operator==(const Applet& a, const Applet& b) {
-    return a.id == b.id && a.title == b.title && a.description == b.description && a.x == b.x;
+    return a.id == b.id && a.title == b.title && a.description == b.description &&
+           a.layout_locked == b.layout_locked && a.x == b.x;
 }
 
 bool operator==(const Spec& a, const Spec& b) {
@@ -257,7 +259,8 @@ bool transform_needs_version_1(const Transform& t) {
 }
 
 bool panel_needs_version_1(const Panel& p) {
-    if (primitive_version(p.primitive) > 0 || !p.entities.empty() || !p.annotations.empty()) return true;
+    if (primitive_version(p.primitive) > 0 || p.closable.has_value() || !p.entities.empty() || !p.annotations.empty())
+        return true;
     for (const auto& slot : p.bind)
         if (slot.second.reference) return true;
     const Options& o = p.options;
@@ -271,8 +274,8 @@ bool panel_needs_version_1(const Panel& p) {
 }  // namespace
 
 std::int64_t required_version(const Spec& spec) {
-    if (!spec.controls.empty() || !spec.programs.empty() || !spec.provenance.empty() ||
-        !spec.states.empty() || !spec.pieces.empty())
+    if (spec.applet.layout_locked.has_value() || !spec.controls.empty() || !spec.programs.empty() ||
+        !spec.provenance.empty() || !spec.states.empty() || !spec.pieces.empty())
         return kInstrumentVersion;
     for (const Source& s : spec.sources) {
         if (s.history) return kInstrumentVersion;
