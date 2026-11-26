@@ -1863,6 +1863,8 @@ void DrawRuntime::frame_pending(double waited_ms) {
          pass);
 }
 
+bool DrawRuntime::late() const { return impl_->late; }
+
 void DrawRuntime::frame_refused(const std::string& why) {
     Impl& m = *impl_;
     if (m.status.state != DrawState::running && m.status.state != DrawState::compiled) return;

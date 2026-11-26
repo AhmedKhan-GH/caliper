@@ -398,6 +398,7 @@ private:
     void sync_shapes();
     void refresh_piece_notes();
     bool external_draws() const;
+    bool active_external_draws() const;
     bool program_pan_zoom() const;
     bool normalized_program_camera() const;
     bool program_camera_active_ = false;

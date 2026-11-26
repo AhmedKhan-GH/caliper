@@ -730,10 +730,13 @@ TEST_CASE("a late frame waits for its GPU time: a busy GPU keeps the program, ov
     give_arcs(rt, ex::arc_resources(), 1);
     REQUIRE(frame(h, rt).size() == 1);
     // A training run holds the GPU: the frame waits 1.5 s by the wall clock but took 2 ms on it.
+    CHECK_FALSE(rt.late());
     rt.frame_pending(1500.0);
+    CHECK(rt.late());
     CHECK(rt.status().state == cd::DrawState::running);
     CHECK(frame(h, rt).empty());   // nothing more is submitted while the frame is late
     rt.frame_done(2.0, 1600.0);
+    CHECK_FALSE(rt.late());
     CHECK(rt.status().state == cd::DrawState::running);
     CHECK(rt.status().frame_ms == doctest::Approx(2.0));
     // Late again and again under the same load: each frame is judged by its own GPU time.

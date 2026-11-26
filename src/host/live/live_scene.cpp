@@ -521,6 +521,18 @@ bool SceneView::external_draws() const {
     return false;
 }
 
+bool SceneView::active_external_draws() const {
+#if defined(CALIPER_HAVE_DRAW)
+    for (const auto& d : draws_) {
+        if (d->shape || d->marks || !d->runtime) continue;
+        const caliper_draw::DrawState st = d->runtime->status().state;
+        if ((st == caliper_draw::DrawState::compiled || st == caliper_draw::DrawState::running) && !d->runtime->late())
+            return true;
+    }
+#endif
+    return false;
+}
+
 bool SceneView::program_pan_zoom() const {
 #if defined(CALIPER_HAVE_DRAW)
     for (const auto& d : draws_)
@@ -848,8 +860,10 @@ void SceneView::poll_programs() {
             completed = true;
         }
         if (!d->pending.empty()) d->runtime->frame_pending(ms_since(d->pending.front().second));
+        const int prev_state = d->reported;
         report_state(slot_feed(*d), &d->reported, &d->reported_step, &d->reported_ms, &d->reported_warning,
                      *d->runtime);
+        if (d->reported != prev_state && d->runtime->status().state == caliper_draw::DrawState::stopped) changed();
     }
     refresh_piece_notes();
     // The programs of the panel together: over 16.7 ms a frame on 30 polls in a row warns on the
@@ -1384,7 +1398,7 @@ bool SceneView::render(uint32_t width, uint32_t height, float pixel_scale, uint3
     // The feed's programs draw in every frame: their time, their draw state and their resources
     // move. Scene pieces draw when the scene changes.
     reconcile_programs();
-    if (external_draws()) changed();
+    if (active_external_draws()) changed();
     // The piece selects the host camera even when the empty scene defaults to 3-D.
     const bool pan_zoom = program_pan_zoom();
     if (pan_zoom != program_camera_active_ || (pan_zoom && !std::holds_alternative<PanZoom>(camera_))) {

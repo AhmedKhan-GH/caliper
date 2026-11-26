@@ -262,6 +262,8 @@ public:
     // frame is late and no new frame submits until completion, and after 5 s the
     // program stops at once with program.draw_timeout.
     void frame_pending(double waited_ms);
+    // Whether a pending frame passed 1 s and blocks new submits until completion.
+    bool late() const;
     // The layer refused a submitted frame (Backend::last_error()): the program
     // stops with program.layer_refused; the panel's other programs go on.
     void frame_refused(const std::string& why);

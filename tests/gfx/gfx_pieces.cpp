@@ -577,6 +577,14 @@ TEST_CASE("gfx/Metal pieces: the scene view draws its programs after its scene, 
     MESSAGE("scene view: ", lit, " lit pixels, ", picked, " with an arc's ID, median GPU time ", s.frame_ms, " ms");
     CHECK(lit >= 2000);
     CHECK(picked >= 1000);
+    // While a pending frame is late (> 1 s), render() keeps the last drawn target instead of clearing it.
+    auto* mut_rt = const_cast<cd::DrawRuntime*>(rig.view->draw_runtimes()[0]);
+    mut_rt->frame_pending(1500.0);
+    CHECK(mut_rt->late());
+    REQUIRE_MESSAGE(rig.view->render(kSize, kSize, 2.0f, kBackground, &why), why);
+    std::vector<std::uint8_t> late_rgba;
+    REQUIRE_MESSAGE(rig.view->read_pixels(&late_rgba, &why), why);
+    CHECK(late_rgba == rgba);
     // A program that leaves the feed leaves the view, and the scene draws alone.
     feed.list.clear();
     ++feed.rev;
