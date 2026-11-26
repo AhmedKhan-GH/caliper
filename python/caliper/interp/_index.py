@@ -151,14 +151,15 @@ class _TopTable:
         self.close()
 
 
-def _encode_batch_layers(model, dictionary, ids: torch.Tensor) -> dict[int, torch.Tensor]:
+def _encode_batch_layers(model, dictionary, ids: torch.Tensor, layers=None) -> dict[int, torch.Tensor]:
     """Run ``model`` on ``ids`` ``(B, T)`` and return ``{layer: encoded_acts}``."""
     covered = getattr(dictionary, "covered_layers", tuple(range(dictionary.metadata["layers"])))
+    target_layers = covered if layers is None else tuple(layers)
     if dictionary.kind == "transcoder":
         in_hook = dictionary.raw.feature_input_hook
-        hook_map = {l: f"blocks.{l}.{in_hook}" for l in covered}
+        hook_map = {l: f"blocks.{l}.{in_hook}" for l in target_layers}
     else:
-        hook_map = {l: str(dictionary.raw[l].cfg.metadata.hook_name) for l in covered}
+        hook_map = {l: str(dictionary.raw[l].cfg.metadata.hook_name) for l in target_layers}
     _, cache = model.run_with_cache(ids, prepend_bos=False, names_filter=list(hook_map.values()))
     return {l: dictionary.encode(l, cache[h]) for l, h in hook_map.items()}
 
@@ -331,8 +332,50 @@ class _PromotedLabelsMixin:
         ]
 
 
+def _index_latents(metadata: dict):
+    """Return the latent count from ``index.json`` using ``latents`` or ``features``."""
+    latents = metadata.get("latents")
+    features = metadata.get("features")
+    if latents is not None and features is not None and latents != features:
+        raise ValueError("index metadata has conflicting latents and features counts")
+    return latents if latents is not None else features
+
+
+def resolve_index_dir(path: str | os.PathLike | None) -> Path | None:
+    """Resolve an on-disk ``FeatureIndex`` folder from an index or dictionary path.
+
+    Checks ``path`` itself, ``path / "index"``, and (when ``path`` exists on disk)
+    the sibling ``path.parent / "index"``. Returns the first directory containing
+    ``index.json``, or ``None`` if no index is found.
+    """
+    if path is None or not isinstance(path, (str, os.PathLike)):
+        return None
+    raw = os.fspath(path)
+    if not raw:
+        return None
+    root = Path(raw).expanduser()
+    if (root / "index.json").is_file():
+        return root
+    nested = root / "index"
+    if (nested / "index.json").is_file():
+        return nested
+    if root.exists():
+        abs_root = Path(os.path.abspath(root))
+        parent = abs_root.parent
+        if parent != abs_root:
+            sibling = parent / "index"
+            if (sibling / "index.json").is_file():
+                return sibling
+    return None
+
+
 class FeatureIndex(_PromotedLabelsMixin):
     """Memory-mapped on-disk feature example table and promoted-token summaries."""
+
+    @staticmethod
+    def resolve(path: str | os.PathLike | None) -> Path | None:
+        """Resolve an index folder from an index path or dictionary folder."""
+        return resolve_index_dir(path)
 
     def __init__(self, dictionary_path, *, model, tokenizer, dictionary, memory=None):
         self.root = Path(dictionary_path)
@@ -345,20 +388,31 @@ class FeatureIndex(_PromotedLabelsMixin):
         self._cache: OrderedDict = OrderedDict()
         self._summaries: OrderedDict = OrderedDict()
 
-        idx_dir = self.root / "index"
+        idx_dir = resolve_index_dir(self.root)
+        if idx_dir is None:
+            raise FileNotFoundError(f"feature index not found for {self.root}")
+        self.index_dir = idx_dir
         self.metadata = json.loads((idx_dir / "index.json").read_text(encoding="utf-8"))
-        if self.metadata.get("layers") != dictionary.metadata["layers"] or self.metadata.get("latents") != dictionary.metadata["latents"]:
+        index_layers = self.metadata.get("layers")
+        index_latents = _index_latents(self.metadata)
+        if index_layers != dictionary.metadata["layers"] or index_latents != dictionary.metadata["latents"]:
             raise ValueError("index dimensions differ from dictionary")
-        self.table = np.lib.format.open_memmap(idx_dir / "table.npy", mode="r")
-        self.counts = np.lib.format.open_memmap(idx_dir / "counts.npy", mode="r")
-        tok_bytes = (idx_dir / "tokens.bin").stat().st_size
-        self.tokens = (np.memmap(idx_dir / "tokens.bin", mode="r", dtype="<u4", shape=(tok_bytes // 4,))
-                       if tok_bytes else np.empty((0,), dtype="<u4"))
-        doc_bytes = (idx_dir / "documents.bin").stat().st_size
-        self.documents = (np.memmap(idx_dir / "documents.bin", mode="r", dtype=_DOCUMENT,
-                                    shape=(doc_bytes // _DOCUMENT.itemsize,))
-                          if doc_bytes else np.empty((0,), dtype=_DOCUMENT))
-        self._label_identity = ("caliper.feature-labels.v1", self.metadata["index_hash"])
+        try:
+            self.table = np.lib.format.open_memmap(idx_dir / "table.npy", mode="r")
+            self.counts = np.lib.format.open_memmap(idx_dir / "counts.npy", mode="r")
+            if self.table.shape[:2] != (index_layers, index_latents) or self.counts.shape != (index_layers, index_latents):
+                raise ValueError("index table dimensions differ from dictionary")
+            tok_bytes = (idx_dir / "tokens.bin").stat().st_size
+            self.tokens = (np.memmap(idx_dir / "tokens.bin", mode="r", dtype="<u4", shape=(tok_bytes // 4,))
+                           if tok_bytes else np.empty((0,), dtype="<u4"))
+            doc_bytes = (idx_dir / "documents.bin").stat().st_size
+            self.documents = (np.memmap(idx_dir / "documents.bin", mode="r", dtype=_DOCUMENT,
+                                        shape=(doc_bytes // _DOCUMENT.itemsize,))
+                              if doc_bytes else np.empty((0,), dtype=_DOCUMENT))
+            self._label_identity = ("caliper.feature-labels.v1", self.metadata["index_hash"])
+        except BaseException:
+            self.close()
+            raise
 
     @property
     def label_identity(self):
@@ -515,7 +569,7 @@ class FeatureIndex(_PromotedLabelsMixin):
                     valid = [i for i in row["token_ids"] if i is not None]
                     ids[r_idx, :len(valid)] = torch.tensor(valid, dtype=torch.long, device=device)
                 with _device_scope(device), torch.inference_mode():
-                    acts_map = _encode_batch_layers(self.model, self.dictionary, ids)
+                    acts_map = _encode_batch_layers(self.model, self.dictionary, ids, layers=(layer,))
                     vals = acts_map[layer][..., feature].float().cpu()
                     if not torch.isfinite(vals).all().item():
                         raise ValueError("index window activations must be finite")

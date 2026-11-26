@@ -213,3 +213,96 @@ def test_selected_feature_subset_activations_and_str_window_token_ids(monkeypatc
     tok_out = _ablate._tokenize_prompt(plain, tok_fn, "AB")
     assert torch.equal(tok_out["input_ids"], torch.tensor([[3, 4]]))
     assert "attention_mask" in tok_out
+
+
+def test_published_pruning_default_and_show_more_api():
+    from caliper.interp._graph import (
+        DEFAULT_EDGE_THRESHOLD,
+        DEFAULT_NODE_THRESHOLD,
+        LARGE_EDGE_CAP,
+        LARGE_NODE_CAP,
+        SHOW_MORE_EDGE_THRESHOLD,
+        SHOW_MORE_NODE_THRESHOLD,
+        Graph,
+        Tracer,
+        resolve_pruning_thresholds,
+    )
+    from circuit_tracer import attribute
+
+    assert resolve_pruning_thresholds() == (DEFAULT_NODE_THRESHOLD, DEFAULT_EDGE_THRESHOLD)
+    assert resolve_pruning_thresholds(show_more=True) == (
+        SHOW_MORE_NODE_THRESHOLD,
+        SHOW_MORE_EDGE_THRESHOLD,
+    )
+    assert resolve_pruning_thresholds(show_more=True, node_threshold=0.85) == (
+        0.85,
+        SHOW_MORE_EDGE_THRESHOLD,
+    )
+    with pytest.raises(ValueError, match="show_more"):
+        resolve_pruning_thresholds(show_more=1)  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match="node_threshold"):
+        resolve_pruning_thresholds(node_threshold=1.5)
+    with pytest.raises(ValueError, match="edge_threshold"):
+        resolve_pruning_thresholds(edge_threshold=float("nan"))
+
+    backend = make_tiny_backend(device="cpu", dtype=torch.float32)
+    prompt = "Light bends in a prism"
+
+    default_graph = backend.attribute_and_prune(
+        prompt, max_n_logits=4, max_feature_nodes=64, batch_size=8
+    )
+    more_graph = backend.attribute_and_prune(
+        prompt, max_n_logits=4, max_feature_nodes=64, batch_size=8, show_more=True
+    )
+    unpruned_graph = backend.attribute_and_prune(
+        prompt,
+        max_n_logits=4,
+        max_feature_nodes=64,
+        batch_size=8,
+        node_threshold=1.0,
+        edge_threshold=1.0,
+    )
+
+    assert default_graph.settings["node_threshold"] == DEFAULT_NODE_THRESHOLD == 0.7
+    assert default_graph.settings["edge_threshold"] == DEFAULT_EDGE_THRESHOLD == 0.9
+    assert default_graph.settings["show_more"] is False
+    assert default_graph.read()["settings"]["show_more"] is False
+
+    assert more_graph.settings["node_threshold"] == SHOW_MORE_NODE_THRESHOLD
+    assert more_graph.settings["edge_threshold"] == SHOW_MORE_EDGE_THRESHOLD
+    assert more_graph.settings["show_more"] is True
+
+    # Default published pruning drops nodes/edges; show_more reveals more while still pruning.
+    assert len(default_graph.nodes) < len(more_graph.nodes) < len(unpruned_graph.nodes)
+    assert len(default_graph.edges) < len(more_graph.edges) < len(unpruned_graph.edges)
+    assert len(more_graph.nodes) <= LARGE_NODE_CAP
+    assert len(more_graph.edges) <= LARGE_EDGE_CAP
+
+    # Tracer.trace routes show_more cleanly with distinct cache entries.
+    tracer = Tracer(backend.model, backend.tokenizer, backend=backend)
+    traced_default = tracer.trace(prompt, max_targets=64, max_n_logits=4, batch_size=8)
+    traced_more = tracer.trace(prompt, max_targets=64, max_n_logits=4, batch_size=8, show_more=True)
+    traced_cached = tracer.trace(prompt, max_targets=64, max_n_logits=4, batch_size=8)
+    assert traced_cached is traced_default
+    assert traced_more is not traced_default
+    assert traced_default.settings["show_more"] is False
+    assert traced_more.settings["show_more"] is True
+    assert len(traced_default.nodes) < len(traced_more.nodes)
+    assert len(traced_default.edges) < len(traced_more.edges)
+
+    # Graph.from_circuit_tracer applies published pruning directly when pruned is omitted.
+    ct_graph = attribute(
+        prompt,
+        backend.model,
+        max_n_logits=4,
+        desired_logit_prob=0.95,
+        batch_size=8,
+        max_feature_nodes=64,
+        verbose=False,
+    )
+    direct_default = Graph.from_circuit_tracer(ct_graph, tokenizer=backend.tokenizer)
+    direct_more = Graph.from_circuit_tracer(ct_graph, tokenizer=backend.tokenizer, show_more=True)
+    assert len(direct_default.nodes) == len(default_graph.nodes)
+    assert len(direct_default.edges) == len(default_graph.edges)
+    assert len(direct_more.nodes) == len(more_graph.nodes)
+    assert len(direct_more.edges) == len(more_graph.edges)

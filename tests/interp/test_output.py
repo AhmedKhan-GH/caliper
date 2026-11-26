@@ -47,3 +47,31 @@ def test_output_compare_and_generate_with_feature_and_tensor_interventions(monke
         assert abl_cmp["probabilities"][1] != abl_cmp["probabilities"][0]
     finally:
         ivs.remove()
+
+
+def test_output_generate_fresh_per_prompt_and_baseline_isolated_from_clamp(monkeypatch):
+    published = {}
+    monkeypatch.setattr(_publish, "_TENSORS", published)
+    backend = make_tiny_backend()
+    ctl = _controls.Controls()
+    ivs = ctl.interventions_on(backend.model)
+    ivs.configure(dictionary=backend.dictionary, tokenizer=backend.tokenizer, backend=backend)
+    out = Output(backend, ivs)
+    try:
+        clean_carrot = out.generate("carrot")
+        assert clean_carrot["baseline"] == clean_carrot["steered"]
+
+        _, dense = backend.activations("carrot")
+        feat = int(dense[0, 2].argmax().item())
+        ivs.set({"kind": "clamp", "point": "layers.0.mlp_out", "feature": feat, "positions": [2], "value": 8.0})
+        ctl.checkpoint()
+
+        clamped_carrot = out.generate("carrot")
+        assert clamped_carrot["baseline"] == clean_carrot["baseline"]
+        assert clamped_carrot["token_ids"][0] == clean_carrot["token_ids"][0]
+
+        lantern_gen = out.generate("lantern")
+        assert lantern_gen["token_ids"][0] != clean_carrot["token_ids"][0]
+        assert lantern_gen["baseline"] != clean_carrot["baseline"]
+    finally:
+        ivs.remove()

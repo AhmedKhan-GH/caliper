@@ -19,16 +19,69 @@ if str(HERE) not in sys.path:
     sys.path.insert(0, str(HERE))
 
 from _mcp import Events, Failure, MCP, attempt, stop, wait_file  # noqa: E402
-from _published_ui import build_instrument, group_text, load_dallas_manifest  # noqa: E402
+from _published_ui import (  # noqa: E402
+    DALLAS_PROMPT,
+    DEFAULT_PROMPT,
+    PROMPT_PRESETS,
+    build_instrument,
+    group_text,
+    load_dallas_manifest,
+    preset_index_for_prompt,
+    preset_prompt,
+    preset_prompt_by_name,
+    published_trace_options,
+)
 from _spec import scene_programs  # noqa: E402
 
-DALLAS_PROMPT = "Fact: the capital of the state containing Dallas is"
 FIXTURE_PROMPT = "ABCD"
 BF16_ULP = 2**-10
 
 
 def save_json(path: Path, value) -> None:
     path.write_text(json.dumps(value, indent=2, allow_nan=False) + "\n", encoding="utf-8")
+
+
+def resolve_startup_prompt(
+    model: str,
+    *,
+    prompt: str | None = None,
+    preset: str | None = None,
+    acceptance: bool = False,
+) -> str:
+    """Resolve startup prompt: non-city default, named preset, or Dallas acceptance."""
+    if prompt is not None and preset is not None:
+        raise ValueError("--prompt and --preset cannot be used together.")
+    if prompt is not None:
+        return prompt
+    if preset is not None:
+        return preset_prompt_by_name(preset)
+    if acceptance:
+        return DALLAS_PROMPT
+    if model == "tiny-lm":
+        return FIXTURE_PROMPT
+    return DEFAULT_PROMPT
+
+
+def resolve_feature_index(dictionary: str, explicit_index: str = "") -> Path | None:
+    """Locate an explicit FeatureIndex directory or auto-discover <dictionary>/index or sibling index."""
+    if explicit_index:
+        candidate = Path(explicit_index).expanduser()
+        return candidate.resolve() if candidate.exists() else candidate
+    if not dictionary:
+        return None
+    dict_path = Path(dictionary).expanduser()
+    if not dict_path.exists():
+        return None
+    dict_path = dict_path.resolve()
+    candidates = (
+        [dict_path, dict_path / "index", dict_path.parent / "index"]
+        if dict_path.is_dir()
+        else [dict_path.parent / "index"]
+    )
+    for candidate in candidates:
+        if (candidate / "index.json").is_file():
+            return candidate
+    return None
 
 
 def find_executable(env_var: str, relative: str) -> Path:
@@ -111,6 +164,12 @@ class Session:
         self.examples_installed = False
         self.applet_saved = False
         self.selected_node = -1
+        self.current_prompt = args.prompt
+        self.show_more = False
+        self.progress = "ready"
+        self.hosted_params: set[str] = set()
+        self.hosted_actions: set[str] = set()
+        self.feature_index = resolve_feature_index(str(args.dictionary), str(getattr(args, "index", "") or ""))
         out.mkdir(parents=True, exist_ok=True)
         for sub in ("data", "workspace", "user-applets", "temp"):
             (out / sub).mkdir(exist_ok=True)
@@ -131,6 +190,10 @@ class Session:
             TMPDIR=str(out / "temp"),
             PYTHONPYCACHEPREFIX=str(out / "pycache"),
         )
+        if self.feature_index is not None:
+            env["CALIPER_FEATURE_INDEX"] = str(self.feature_index)
+        else:
+            env.pop("CALIPER_FEATURE_INDEX", None)
         if args.model == "tiny-lm":
             env["CALIPER_FIXTURE_DISPLAY_MPS"] = "1"
         else:
@@ -186,7 +249,11 @@ class Session:
                 kind="inference",
                 id=self.run_id,
                 model=str(args.model),
-                dictionary=str(Path(args.dictionary).resolve()) if Path(str(args.dictionary)).exists() else str(args.dictionary),
+                dictionary=(
+                    str(Path(args.dictionary).resolve())
+                    if Path(str(args.dictionary)).exists()
+                    else str(args.dictionary)
+                ),
                 prompt=args.prompt,
             )
             self.started = True
@@ -203,7 +270,11 @@ class Session:
                 names = {p["name"] for p in state["params"]}
                 return state if state["attached"] and {"prompt", "selected_node", "clamp", "retrace"} <= names else False
 
-            self.events.until("hosted inference readiness", ready, timeout=300.0)
+            initial_state = self.events.until("hosted inference readiness", ready, timeout=300.0)
+            self.hosted_params = {p["name"] for p in initial_state.get("params", [])}
+            self.hosted_actions = {
+                a["name"] for a in (initial_state.get("actions") or []) if isinstance(a, dict) and "name" in a
+            }
             self.load_seconds = round(time.perf_counter() - t0, 4)
         except BaseException as exc:
             if not show or isinstance(exc, KeyboardInterrupt):
@@ -235,6 +306,33 @@ class Session:
             return False
 
         return self.events.until(f"action {name}", completed, timeout=180.0)
+
+    def set_progress(self, status: str) -> None:
+        """Update the status row progress readout (`tracing` -> `ready`)."""
+        self.progress = status
+        if self.mcp is None or "output.status" in self.hosted_params:
+            return
+        try:
+            spec_info = self.mcp.body("spec.get")
+            if not spec_info.get("open"):
+                return
+            spec_json = spec_info.get("json") or {}
+            states = {s.get("id") for s in (spec_json.get("state") or []) if isinstance(s, dict)}
+            if "trace_progress" not in states:
+                self.mcp.body("state.create", id="trace_progress", type="text", default="ready")
+                controls = {c.get("id") for c in (spec_json.get("control") or []) if isinstance(c, dict)}
+                if "trace_status" in controls:
+                    self.mcp.body(
+                        "control.patch",
+                        id="trace_status",
+                        patch={
+                            "title": "Status",
+                            "options": {"format": "{status:s}", "fields": {"status": {"state": "trace_progress"}}},
+                        },
+                    )
+            self.mcp.body("state.set", id="trace_progress", value=status)
+        except Exception:
+            pass
 
     def wait_programs_rendered(self, ids: tuple[str, ...], *, min_steps: dict[str, int] | None = None) -> dict:
         required = min_steps or {}
@@ -291,6 +389,88 @@ class Session:
         self.selected_node = node_index
         self.wait_programs_rendered(("attribution", "probabilities", "example_tokens"))
         return {"feature": feat, "examples": examples}
+
+    def preferred_feature_node(self, graph: dict) -> int:
+        """Return the hosted important feature node if valid, else the highest-influence feature node."""
+        features = [n for n in graph.get("nodes", []) if n.get("kind") == "feature"]
+        if not features:
+            return -1
+        by_idx = {int(n["index"]): n for n in features}
+        if self.mcp is not None and self.started:
+            try:
+                status = self.events.complete("trace.status")
+                hosted_sel = (status.get("inference") or {}).get("selected_node")
+                if isinstance(hosted_sel, int) and hosted_sel in by_idx:
+                    return hosted_sel
+            except Exception:
+                pass
+        best = max(
+            features,
+            key=lambda n: (
+                abs(float(n.get("influence", 0.0) or 0.0)),
+                abs(float(n.get("activation", 0.0) or 0.0)),
+                -int(n["index"]),
+            ),
+        )
+        return int(best["index"])
+
+    def refresh_selected_feature(self, graph: dict | None = None) -> tuple[int, dict | None]:
+        """Select a valid feature node for the active graph and refresh its examples."""
+        if graph is None:
+            graph = self.read_full_graph()
+        feat_node = self.preferred_feature_node(graph)
+        if feat_node >= 0:
+            return feat_node, self.select_feature_node(feat_node)
+        self.selected_node = -1
+        if self.mcp is not None:
+            self.mcp.body("state.set", id="selected_node", value=-1)
+        if self.examples_installed:
+            scene_programs(self, [], remove_examples=True)
+            self.examples_installed = False
+        return -1, None
+
+    def recompute_prompt(
+        self,
+        prompt: str,
+        *,
+        show_more: bool | None = None,
+        sync_prompt_param: bool = True,
+        apply_current_clamp: bool = False,
+    ) -> dict:
+        """Retrace with published pruning, recompute output bars, regenerate text, and refresh examples."""
+        expanded = self.show_more if show_more is None else bool(show_more)
+        self.set_progress("tracing")
+        try:
+            if sync_prompt_param:
+                self.set_param("prompt", prompt)
+            if "show_more" in self.hosted_params:
+                self.set_param("show_more", bool(expanded))
+            if self.mcp is not None:
+                self.mcp.body("state.set", id="prompt_preset", value=preset_index_for_prompt(prompt))
+            already_traced = not apply_current_clamp and self._traced_matches(prompt, expanded)
+            if already_traced:
+                graph = self.read_full_graph()
+                feat_node, selected_info = self.refresh_selected_feature(graph)
+            elif "run" in self.hosted_actions:
+                self.run_action("run")
+                graph = self.read_full_graph()
+                feat_node, selected_info = self.refresh_selected_feature(graph)
+            else:
+                self.events.complete("trace.run", prompt=prompt, **published_trace_options(show_more=expanded))
+                graph = self.read_full_graph()
+                feat_node, selected_info = self.refresh_selected_feature(graph)
+                if apply_current_clamp and feat_node >= 0:
+                    self.run_action("apply_clamp")
+                else:
+                    self.run_action("reset")
+                self.run_action("generate")
+            self.current_prompt = prompt
+            self.show_more = expanded
+            self.set_progress("ready")
+            return {"graph": graph, "selected_node": feat_node, "selected_info": selected_info}
+        except Exception:
+            self.set_progress("ready")
+            raise
 
     def capture_native(self, name: str, *, min_steps: dict[str, int] | None = None) -> Path:
         prog_ids = ("attribution", "probabilities", *(["example_tokens"] if self.examples_installed else []))
@@ -393,6 +573,189 @@ class Session:
         except Exception:
             pass
 
+    def _hosted_prompt_and_detail(self) -> tuple[str, bool]:
+        if self.mcp is None or not self.started:
+            return self.current_prompt, self.show_more
+        state = self.mcp.body("run.state", run=self.run_id)
+        by_name = {p["name"]: p for p in state.get("params", [])}
+        prompt_param = by_name.get("prompt")
+        prompt = (
+            str(prompt_param["value"])
+            if prompt_param and prompt_param.get("pending") is None and prompt_param.get("value") is not None
+            else self.current_prompt
+        )
+        detail_param = by_name.get("show_more")
+        show_more = (
+            bool(detail_param["value"])
+            if detail_param and detail_param.get("pending") is None and detail_param.get("value") is not None
+            else self.show_more
+        )
+        return prompt, show_more
+
+    def _traced_matches(self, prompt: str, show_more: bool) -> bool:
+        try:
+            status = self.events.complete("trace.status")
+        except Exception:
+            return False
+        inf = status.get("inference")
+        if isinstance(inf, dict) and "traced_prompt" in inf:
+            if inf.get("state") != "ready":
+                return False
+            if inf.get("traced_prompt") != prompt:
+                return False
+            traced_more = inf.get("traced_show_more")
+            if traced_more is None:
+                return bool(show_more) == bool(self.show_more)
+            return bool(traced_more) == bool(show_more)
+        traced_prompt = status.get("prompt") or (status.get("trace") or {}).get("prompt")
+        traced_more = status.get("show_more")
+        if traced_more is None and isinstance(status.get("trace"), dict):
+            traced_more = status["trace"].get("show_more")
+        if traced_prompt != prompt:
+            return False
+        if traced_more is None:
+            return bool(show_more) == bool(self.show_more)
+        return bool(traced_more) == bool(show_more)
+
+    def _wait_hosted_trace(self, prompt: str, show_more: bool) -> bool:
+        """Wait for HostedInference's automatic refresh to finish for `(prompt, show_more)`."""
+        def settled():
+            status = self.events.complete("trace.status")
+            inf = status.get("inference")
+            if not isinstance(inf, dict):
+                return False
+            state = inf.get("state")
+            if state == "error":
+                return "error"
+            if state != "ready":
+                return False
+            if inf.get("traced_prompt") == prompt and bool(inf.get("traced_show_more")) == bool(show_more):
+                return True
+            cur_prompt, cur_more = self._hosted_prompt_and_detail()
+            if (cur_prompt, cur_more) != (prompt, bool(show_more)):
+                return True
+            return False
+
+        outcome = self.events.until("hosted prompt refresh", settled, timeout=180.0)
+        return outcome is True
+
+    def handle_event(self, ev: dict, manifest: dict | None) -> None:
+        if self.mcp is None:
+            return
+        kind = ev.get("kind")
+        if manifest and kind == "control" and ev.get("control") == "published_group":
+            self.mcp.body("state.set", id="published_members", value=group_text(manifest, int(ev["value"])))
+            return
+        if kind == "control" and ev.get("control") == "preset":
+            target = preset_prompt(int(ev["value"]))
+            if target is not None and target != self.current_prompt:
+                if "run" in self.hosted_actions:
+                    self.set_param("prompt", target)
+                    if self._wait_hosted_trace(target, self.show_more):
+                        self.current_prompt = target
+                        self.mcp.body("state.set", id="prompt_preset", value=preset_index_for_prompt(target))
+                        self.refresh_selected_feature()
+                else:
+                    self.recompute_prompt(target, sync_prompt_param=True, apply_current_clamp=False)
+            return
+        if kind == "control" and ev.get("control") == "show_more":
+            expanded = bool(ev["value"])
+            if expanded != self.show_more:
+                if "show_more" in self.hosted_params and "run" in self.hosted_actions:
+                    if self._wait_hosted_trace(self.current_prompt, expanded):
+                        self.show_more = expanded
+                        self.refresh_selected_feature()
+                else:
+                    self.recompute_prompt(
+                        self.current_prompt,
+                        show_more=expanded,
+                        sync_prompt_param=False,
+                        apply_current_clamp=False,
+                    )
+            return
+        if (kind == "control" and ev.get("control") == "prompt") or (
+            kind == "run" and ev.get("change") == "param" and ev.get("name") == "prompt"
+        ):
+            new_prompt = str(ev.get("value") or "")
+            if new_prompt and new_prompt != self.current_prompt:
+                if "run" in self.hosted_actions:
+                    if self._wait_hosted_trace(new_prompt, self.show_more):
+                        self.current_prompt = new_prompt
+                        self.mcp.body("state.set", id="prompt_preset", value=preset_index_for_prompt(new_prompt))
+                        self.refresh_selected_feature()
+                elif self._traced_matches(new_prompt, self.show_more):
+                    self.current_prompt = new_prompt
+                    self.mcp.body("state.set", id="prompt_preset", value=preset_index_for_prompt(new_prompt))
+                    self.refresh_selected_feature()
+                else:
+                    self.recompute_prompt(new_prompt, sync_prompt_param=False, apply_current_clamp=False)
+            return
+        if kind == "run" and ev.get("change") == "param" and ev.get("name") == "show_more":
+            expanded = bool(ev.get("value"))
+            if expanded != self.show_more:
+                if "show_more" in self.hosted_params and "run" in self.hosted_actions:
+                    if self._wait_hosted_trace(self.current_prompt, expanded):
+                        self.show_more = expanded
+                        self.refresh_selected_feature()
+                elif self._traced_matches(self.current_prompt, expanded):
+                    self.show_more = expanded
+                    self.refresh_selected_feature()
+                else:
+                    self.recompute_prompt(
+                        self.current_prompt,
+                        show_more=expanded,
+                        sync_prompt_param=False,
+                        apply_current_clamp=False,
+                    )
+            return
+        if kind == "run" and ev.get("change") == "action" and ev.get("name") == "run":
+            prompt, show_more = self._hosted_prompt_and_detail()
+            if ev.get("status") == "ok":
+                self.current_prompt = prompt
+                self.show_more = show_more
+                self.mcp.body("state.set", id="prompt_preset", value=preset_index_for_prompt(prompt))
+                self.refresh_selected_feature()
+            elif "run" not in self.hosted_actions:
+                self.recompute_prompt(
+                    prompt,
+                    show_more=show_more,
+                    sync_prompt_param=False,
+                    apply_current_clamp=True,
+                )
+            else:
+                self.show_error(str(ev.get("text") or "Run action failed."))
+            return
+        if kind == "pick" and ev.get("panel") == "graph":
+            fields = ev.get("fields") or {}
+            idx = fields.get("index", ev.get("index"))
+            if fields.get("kind") == 1 and isinstance(idx, int) and idx >= 0:
+                self.select_feature_node(idx)
+
+    def sync_from_hosted_state(self) -> None:
+        """Detect prompt or show_more updates submitted directly through the host UI or agent."""
+        prompt, show_more = self._hosted_prompt_and_detail()
+        if prompt == self.current_prompt and show_more == self.show_more:
+            return
+        if "run" in self.hosted_actions:
+            if self._wait_hosted_trace(prompt, show_more):
+                self.current_prompt = prompt
+                self.show_more = show_more
+                self.mcp.body("state.set", id="prompt_preset", value=preset_index_for_prompt(prompt))
+                self.refresh_selected_feature()
+            return
+        if self._traced_matches(prompt, show_more):
+            self.current_prompt = prompt
+            self.show_more = show_more
+            self.mcp.body("state.set", id="prompt_preset", value=preset_index_for_prompt(prompt))
+            self.refresh_selected_feature()
+            return
+        self.recompute_prompt(
+            prompt,
+            show_more=show_more,
+            sync_prompt_param=False,
+            apply_current_clamp=False,
+        )
+
     def keep_alive(self, manifest: dict | None) -> None:
         while self.app is not None and self.app.poll() is None:
             try:
@@ -406,17 +769,17 @@ class Session:
             queued, self.events.pending = self.events.pending, []
             for ev in queued:
                 try:
-                    if manifest and ev.get("kind") == "control" and ev.get("control") == "published_group":
-                        self.mcp.body("state.set", id="published_members", value=group_text(manifest, int(ev["value"])))
-                    elif ev.get("kind") == "pick" and ev.get("panel") == "graph":
-                        fields = ev.get("fields") or {}
-                        idx = fields.get("index", ev.get("index"))
-                        if fields.get("kind") == 1 and isinstance(idx, int) and idx >= 0:
-                            self.select_feature_node(idx)
+                    self.handle_event(ev, manifest)
                 except Exception as exc:
                     if self.app.poll() is not None:
                         break
                     self.show_error(str(exc))
+            try:
+                self.sync_from_hosted_state()
+            except Exception as exc:
+                if self.app.poll() is not None:
+                    break
+                self.show_error(str(exc))
 
     def close(self, *, stop_app: bool = True) -> None:
         errors: list[str] = []
@@ -444,20 +807,14 @@ class Session:
 
 
 def run_dallas_acceptance(session: Session, reference_path: Path | None) -> dict:
-    manifest = build_instrument(session, dallas=True)
+    manifest = build_instrument(session, dallas=True, prompt=DALLAS_PROMPT)
 
+    session.set_progress("tracing")
     t0 = time.perf_counter()
     trace_reply = session.events.complete(
         "trace.run",
         prompt=DALLAS_PROMPT,
-        max_targets=5000,
-        max_nodes=8192,
-        max_edges=262144,
-        max_n_logits=10,
-        desired_logit_prob=0.95,
-        node_threshold=0.7,
-        edge_threshold=0.9,
-        update_interval=8,
+        **published_trace_options(show_more=False),
     )
     trace_wall = round(time.perf_counter() - t0, 4)
     graph = session.read_full_graph()
@@ -469,6 +826,7 @@ def run_dallas_acceptance(session: Session, reference_path: Path | None) -> dict
         next(n["index"] for n in graph["nodes"] if n["kind"] == "feature"),
     )
     selected_info = session.select_feature_node(feat_node)
+    session.set_progress("ready")
     baseline_png = session.capture_native("dallas-baseline-app")
     browser_baseline_png = session.capture_browser("dallas-baseline-browser") if session.args.browser_capture else None
 
@@ -629,30 +987,41 @@ def run_dallas_acceptance(session: Session, reference_path: Path | None) -> dict
 
 
 def run_standard(session: Session) -> dict:
-    is_dallas = session.args.prompt == DALLAS_PROMPT and session.args.model != "tiny-lm"
     manifest = None
     try:
-        manifest = build_instrument(session, dallas=is_dallas)
+        manifest = build_instrument(session, dallas=False, prompt=session.args.prompt)
+        session.set_progress("tracing")
         t0 = time.perf_counter()
-        trace_reply = session.events.complete("trace.run", prompt=session.args.prompt)
+        trace_reply = session.events.complete(
+            "trace.run",
+            prompt=session.args.prompt,
+            **published_trace_options(show_more=False),
+        )
         trace_wall = round(time.perf_counter() - t0, 4)
         graph = session.read_full_graph()
         install_programs(session, examples=False)
-        feat_node = next((n["index"] for n in graph["nodes"] if n["kind"] == "feature"), -1)
+        feat_node = session.preferred_feature_node(graph)
         if feat_node >= 0:
             selected_info = session.select_feature_node(feat_node)
         else:
             selected_info = None
             session.finalize_applet()
+        if "run" not in session.hosted_actions:
+            session.run_action("generate")
+        session.set_progress("ready")
         before_png = session.capture_native("before")
         before_browser = session.capture_browser("before-browser") if session.args.browser_capture else None
-        if feat_node >= 0:
-            session.set_param("clamp", 0.0)
-            session.run_action("apply_clamp")
-        comp_step = session.events.complete("trace.status")["inference"]["comparison"]["completed_step"]
-        session.run_action("generate")
-        validation = session.events.complete("trace.validate")
-        after_png = session.capture_native("after", min_steps={"probabilities": int(comp_step)})
+        if not session.show:
+            if feat_node >= 0:
+                session.set_param("clamp", 0.0)
+                session.run_action("apply_clamp")
+            comp_step = session.events.complete("trace.status")["inference"]["comparison"]["completed_step"]
+            session.run_action("generate")
+            validation = session.events.complete("trace.validate")
+            after_png = session.capture_native("after", min_steps={"probabilities": int(comp_step)})
+        else:
+            validation = {"count": 0, "correct_signs": 0}
+            after_png = before_png
     except Exception as exc:
         if not session.show:
             raise
@@ -696,7 +1065,14 @@ def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description="Circuit Trace MCP Instrument")
     parser.add_argument("--model", default="tiny-lm")
     parser.add_argument("--dictionary", default="")
+    parser.add_argument("--index", default="", help="Optional FeatureIndex directory for feature examples.")
     parser.add_argument("--prompt", default=None)
+    parser.add_argument(
+        "--preset",
+        choices=[key for key, _label, _text in PROMPT_PRESETS],
+        default=None,
+        help="Named prompt preset (default or dallas).",
+    )
     parser.add_argument("--output", required=True)
     parser.add_argument("--acceptance", action="store_true")
     parser.add_argument("--reference", type=Path, default=None)
@@ -705,8 +1081,15 @@ def main(argv=None) -> int:
     args = parser.parse_args(argv)
     if args.show and os.environ.get("CALIPER_TEST_NO_WINDOW") == "1":
         raise SystemExit("--show is forbidden when CALIPER_TEST_NO_WINDOW=1")
-    if args.prompt is None:
-        args.prompt = FIXTURE_PROMPT if args.model == "tiny-lm" else DALLAS_PROMPT
+    try:
+        args.prompt = resolve_startup_prompt(
+            args.model,
+            prompt=args.prompt,
+            preset=args.preset,
+            acceptance=args.acceptance,
+        )
+    except ValueError as exc:
+        parser.error(str(exc))
     out = Path(args.output).resolve()
     if args.model == "tiny-lm" and not args.dictionary:
         from caliper.interp._hosted import fixture_resources

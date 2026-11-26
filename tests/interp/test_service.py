@@ -190,3 +190,29 @@ def test_resource_stop_terminates_queue_and_cancels_actions():
         unregister_service(service, controls=controls)
         action.remove()
         route.detach()
+
+
+def test_service_forwards_show_more_and_publishes_feature_examples(actual, monkeypatch):
+    published = {}
+    monkeypatch.setattr("caliper.interp._publish._TENSORS", published)
+    seen = []
+    tracer = actual._resource("tracer")
+    orig_trace = tracer.trace
+
+    def spy_trace(prompt, *, show_more=False, **kwargs):
+        seen.append((prompt, show_more))
+        return orig_trace(prompt, **kwargs)
+
+    monkeypatch.setattr(tracer, "trace", spy_trace)
+    response = actual._retrace({"prompt": "carrot", "show_more": True}, 1)
+    assert response is not None and response[0] == "ok"
+    assert seen == [("carrot", True)]
+
+    layer, feature = 0, int(actual.index.counts[0].argmax())
+    rows = actual.publish_feature_examples(layer, feature, limit=8)
+    assert len(rows) <= 8
+    assert {"examples.tokens", "examples.activations", "examples.example_ids", "examples.valid_tokens", "examples.label_text"} <= set(published)
+    assert int((published["examples.example_ids"] >= 0).sum().item()) == len(rows)
+
+    actual.publish_empty_examples()
+    assert int((published["examples.example_ids"] >= 0).sum().item()) == 0

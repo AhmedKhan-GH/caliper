@@ -1,8 +1,14 @@
 """Tests for HostedInference controls, service handlers, checkpoints, and readiness."""
 import caliper
-from caliper import _controls, _programs as P
+from caliper import _controls, _programs as P, _wire
 from caliper.interp import _publish
-from caliper.interp._hosted import CHECKPOINT_FORMAT, HostedInference, fixture_resources
+from caliper.interp._hosted import (
+    CHECKPOINT_FORMAT,
+    DEFAULT_PROMPT,
+    READ_ONLY_PARAMS,
+    HostedInference,
+    fixture_resources,
+)
 from .test_token_labels import execute
 
 
@@ -96,6 +102,215 @@ def test_hosted_inference_lifecycle_clamp_generate_sweep_validate_and_checkpoint
         assert restored._owned_clamp == saved["owned_clamp"]
     finally:
         restored.close()
+        P.detach()
+        srv = current_server()
+        if srv is not None:
+            srv.close()
+
+
+def _isolated_hosted(tmp_path, monkeypatch, prompt="carrot"):
+    monkeypatch.setenv("CALIPER_SESSION", "0")
+    published = {}
+    monkeypatch.setattr(_publish, "_TENSORS", published)
+    ctl = _controls.Controls()
+    monkeypatch.setattr(_controls, "CONTROLS", ctl)
+    monkeypatch.setattr(caliper, "_CTL", ctl)
+    monkeypatch.setattr(P, "_PROGS", {})
+    monkeypatch.setattr(P, "_IMPORTS", {})
+    monkeypatch.setattr(P, "_LIVE", {})
+    dict_dir = fixture_resources(tmp_path / "tiny-fixture")
+    run = HostedInference("tiny-lm", dict_dir, prompt)
+    return run, ctl, published
+
+
+def test_prompt_change_retraces_regenerates_text_refreshes_examples_and_progress(tmp_path, monkeypatch):
+    from caliper._net import current_server
+
+    assert DEFAULT_PROMPT == "He saw a carrot and had to grab it, his hunger was like a starving"
+    run, ctl, published = _isolated_hosted(tmp_path, monkeypatch, prompt="carrot")
+    run.start()
+    try:
+        assert run.status.value == "ready"
+        assert run.traced_prompt == "carrot"
+        assert run.traced_show_more is False
+        assert run.selected.value >= 0 and run.selection is not None
+        assert run.baseline_text.value != "" and run.steered_text.value != ""
+        assert {"trace.counts", "output.probs", "examples.tokens"} <= set(published)
+
+        trace_calls = []
+        status_history = []
+        examples_calls = []
+        orig_trace = run.service.tracer.trace
+        orig_set_progress = run._set_progress
+        orig_publish_examples = run.service.publish_feature_examples
+
+        def spy_set_progress(state, message=None):
+            status_history.append(state)
+            return orig_set_progress(state, message)
+
+        def spy_publish_examples(layer, feature, *, limit=16):
+            examples_calls.append((layer, feature))
+            return orig_publish_examples(layer, feature, limit=limit)
+
+        def spy_trace(prompt, *, show_more=False, **kwargs):
+            trace_calls.append({
+                "prompt": prompt,
+                "show_more": show_more,
+                "status_during_trace": run.status.value,
+                "inference_state_during_trace": run.inference_status()["state"],
+            })
+            return orig_trace(prompt, **kwargs)
+
+        monkeypatch.setattr(run, "_set_progress", spy_set_progress)
+        monkeypatch.setattr(run.service, "publish_feature_examples", spy_publish_examples)
+        monkeypatch.setattr(run.service.tracer, "trace", spy_trace)
+
+        initial_baseline = run.baseline_text.value
+        initial_gen_hash = run.inference_status()["generation"]["prompt_hash"]
+        initial_cmp_hash = run.inference_status()["comparison"]["prompt_hash"]
+
+        # 1. Prompt change via Prompt field (Enter) retraces, recomputes bars, regenerates text, refreshes examples.
+        run.prompt.set("hunger")
+        run.boundary()
+
+        assert trace_calls[-1] == {
+            "prompt": "hunger",
+            "show_more": False,
+            "status_during_trace": "tracing",
+            "inference_state_during_trace": "tracing",
+        }
+        assert status_history[:2] == ["tracing", "ready"]
+        assert run.status.value == "ready"
+        assert run.traced_prompt == "hunger"
+        assert run.selected.value >= 0 and run.selection is not None
+        assert run.service.graph.nodes[run.selected.value]["kind"] == "feature"
+        assert examples_calls[-1] == (run.selection["layer"], run.selection["feature"])
+        hunger_status = run.inference_status()
+        assert hunger_status["comparison"]["prompt_hash"] != initial_cmp_hash
+        assert hunger_status["generation"]["prompt_hash"] == hunger_status["prompt_hash"]
+        assert hunger_status["generation"]["prompt_hash"] != initial_gen_hash
+        expected_hunger = run.output.generate("hunger")
+        assert run.baseline_text.value == expected_hunger["baseline"]
+        assert run.steered_text.value == expected_hunger["steered"]
+        assert run.baseline_text.value != initial_baseline
+
+        # 2. Out-of-range clamp position on a shorter prompt is safely cleared without crashing.
+        deep_feat_idx = max(
+            (i for i, n in enumerate(run.service.graph.nodes) if n["kind"] == "feature"),
+            key=lambda i: run.service.graph.nodes[i]["position"],
+        )
+        run.selected.set(deep_feat_idx)
+        run.clamp.set(2.0)
+        run.apply_clamp()
+        assert run._owned_clamp is not None
+
+        run.prompt.set("ox")
+        run.boundary()
+        assert run.status.value == "ready"
+        assert run.traced_prompt == "ox"
+        assert run._owned_clamp is None
+        assert run.clamp.value == 0.0
+        assert run.baseline_text.value == run.output.generate("ox")["baseline"]
+
+        # 3. Prompt change via agent trace.run command retraces, regenerates text, refreshes examples, emits progress.
+        status_history.clear()
+        trace_res = execute(run.service, "trace.run", {"prompt": "lantern"})
+        assert trace_res["state"] == "done"
+        assert trace_calls[-1]["prompt"] == "lantern"
+        assert trace_calls[-1]["show_more"] is False
+        assert trace_calls[-1]["status_during_trace"] == "tracing"
+        assert status_history == ["tracing", "ready"]
+        assert run.prompt.value == "lantern"
+        assert run.status.value == "ready"
+        expected_lantern = run.output.generate("lantern")
+        assert run.baseline_text.value == expected_lantern["baseline"]
+        assert run.steered_text.value == expected_lantern["steered"]
+        assert examples_calls[-1] == (run.selection["layer"], run.selection["feature"])
+
+        # 4. Toggling show_more retraces the current prompt with show_more=True.
+        status_history.clear()
+        run.show_more.set(True)
+        run.boundary()
+        assert trace_calls[-1]["prompt"] == "lantern"
+        assert trace_calls[-1]["show_more"] is True
+        assert status_history == ["tracing", "ready"]
+        assert run.traced_show_more is True
+
+        # 5. Run action recomputes graph, output bars, generated text, and examples for current prompt and clamp.
+        assert any(a.name == "run" for a in run.actions)
+        run.clamp.set(1.5)
+        run.apply_clamp()
+        calls_before_run = len(trace_calls)
+        status_history.clear()
+        run_msg = run.run_prompt()
+        assert "Traced" in run_msg
+        assert len(trace_calls) == calls_before_run + 1
+        assert trace_calls[-1] == {
+            "prompt": "lantern",
+            "show_more": True,
+            "status_during_trace": "tracing",
+            "inference_state_during_trace": "tracing",
+        }
+        assert status_history == ["tracing", "ready"]
+        assert run.status.value == "ready"
+        expected_steered = run.output.generate("lantern")
+        assert run.baseline_text.value == expected_steered["baseline"]
+        assert run.steered_text.value == expected_steered["steered"]
+        assert examples_calls[-1] == (run.selection["layer"], run.selection["feature"])
+    finally:
+        run.close()
+        P.detach()
+        srv = current_server()
+        if srv is not None:
+            srv.close()
+
+
+def test_output_rows_are_readonly(tmp_path, monkeypatch):
+    from caliper._net import current_server
+
+    assert {"output.baseline", "output.steered", "output.status", "clamp.status"} <= READ_ONLY_PARAMS
+    run, ctl, _published = _isolated_hosted(tmp_path, monkeypatch, prompt="carrot")
+    run.start()
+    try:
+        original_baseline = run.baseline_text.value
+        original_steered = run.steered_text.value
+        assert original_baseline != "" and original_steered != ""
+
+        class _Transport:
+            def __init__(self):
+                self.replies = []
+
+            def may_control(self, conn):
+                return True
+
+            def reply(self, conn, metadata):
+                self.replies.append(metadata)
+
+            def broadcast(self, *args, **kwargs):
+                pass
+
+            def controllers(self):
+                return 1
+
+        route = ctl.attach(_Transport())
+        try:
+            # Attempt wire edits to Baseline and Steered output rows.
+            route.on_control(None, _wire.Control(1, "set", name="output.baseline", value="typed baseline").to_meta())
+            route.on_control(None, _wire.Control(2, "set", name="output.steered", value="typed steered").to_meta())
+            run.boundary()
+            assert run.baseline_text.value == original_baseline
+            assert run.steered_text.value == original_steered
+
+            # Direct external edits are also reverted on the next boundary.
+            run.baseline_text.set("manual edit")
+            run.steered_text.set("manual steered edit")
+            run.boundary()
+            assert run.baseline_text.value == original_baseline
+            assert run.steered_text.value == original_steered
+        finally:
+            route.detach()
+    finally:
+        run.close()
         P.detach()
         srv = current_server()
         if srv is not None:

@@ -1,12 +1,14 @@
 """CPU tests for FeatureIndex, LiveFeatureIndex, _TopTable, and build_index."""
 from collections import Counter
+import json
+import shutil
 
 import numpy as np
 import pytest
 import torch
 
 from caliper.interp._backend import make_tiny_backend
-from caliper.interp._index import FeatureIndex, LiveFeatureIndex, _TopTable, build_index
+from caliper.interp._index import FeatureIndex, LiveFeatureIndex, _TopTable, build_index, resolve_index_dir
 from caliper.interp._memory import CleanStop
 from tools.interp import build_index as cli_build_index
 
@@ -131,3 +133,69 @@ def test_live_feature_index_and_cli_query(tmp_path, capsys):
     assert rc == 0
     out = capsys.readouterr().out.strip().splitlines()[-1]
     assert '"show"' in out and '"examples"' in out
+
+
+def test_features_manifest_key_and_index_resolution(tmp_path, monkeypatch):
+    backend = make_tiny_backend()
+    dict_dir = tmp_path / "dict"
+    dict_dir.mkdir()
+    documents = [
+        ("alpha", [2, 37, 38, 39, 37] * 8),
+        ("beta", [42, 43, 44, 45]),
+    ]
+    build_index(
+        dict_dir, documents, model=backend.model, tokenizer=backend.tokenizer,
+        dictionary=backend.dictionary, provenance={"partition": "compat-fixture"}, context_length=16,
+    )
+
+    nested_index = dict_dir / "index"
+    manifest_path = nested_index / "index.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    latent_count = manifest.pop("latents")
+    manifest["features"] = latent_count
+    manifest.pop("dictionary_id", None)
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    assert resolve_index_dir(nested_index) == nested_index
+    assert FeatureIndex.resolve(dict_dir) == nested_index
+    assert resolve_index_dir(None) is None
+    assert resolve_index_dir("") is None
+
+    with FeatureIndex(
+        nested_index, model=backend.model, tokenizer=backend.tokenizer, dictionary=backend.dictionary
+    ) as direct_index:
+        assert direct_index.index_dir == nested_index
+        feature = int(np.argmax(direct_index.counts[0]))
+        direct_info = direct_index.show(0, feature)
+        direct_rows = direct_index.examples(0, feature, limit=4)
+        direct_labels = direct_index.labels([(0, feature)])
+        assert direct_info["count"] > 0 and direct_info["maximum"] > 0.0
+        assert 1 <= len(direct_rows) <= 4
+        assert all(len(row["token_ids"]) == 33 for row in direct_rows)
+        assert direct_labels[(0, feature)] == direct_info["label"]
+
+    sibling_index = tmp_path / "index"
+    shutil.move(str(nested_index), str(sibling_index))
+    assert FeatureIndex.resolve(dict_dir) == sibling_index
+
+    # Nonexistent hub aliases must not match an unrelated ./index folder in cwd.
+    monkeypatch.chdir(tmp_path)
+    assert FeatureIndex.resolve("gemma") is None
+
+    with FeatureIndex(
+        dict_dir, model=backend.model, tokenizer=backend.tokenizer, dictionary=backend.dictionary
+    ) as sibling_loaded:
+        assert sibling_loaded.index_dir == sibling_index
+        assert sibling_loaded.show(0, feature) == direct_info
+        assert sibling_loaded.examples(0, feature, limit=4) == direct_rows
+
+    sibling_manifest = sibling_index / "index.json"
+    bad_manifest = dict(manifest, features=latent_count + 1)
+    sibling_manifest.write_text(json.dumps(bad_manifest), encoding="utf-8")
+    with pytest.raises(ValueError, match="dimensions differ"):
+        FeatureIndex(dict_dir, model=backend.model, tokenizer=backend.tokenizer, dictionary=backend.dictionary)
+
+    conflict_manifest = dict(manifest, latents=latent_count, features=latent_count + 1)
+    sibling_manifest.write_text(json.dumps(conflict_manifest), encoding="utf-8")
+    with pytest.raises(ValueError, match="conflicting"):
+        FeatureIndex(dict_dir, model=backend.model, tokenizer=backend.tokenizer, dictionary=backend.dictionary)

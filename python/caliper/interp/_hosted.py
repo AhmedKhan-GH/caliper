@@ -5,6 +5,7 @@ import argparse
 from contextlib import contextmanager
 from copy import deepcopy
 import hashlib
+from inspect import Parameter, signature
 import json
 import math
 import os
@@ -27,6 +28,21 @@ from ._service import InterpretationService, Refused, register_service, unregist
 CHECKPOINT_FORMAT = "caliper.inference"
 CHECKPOINT_BYTES = 4 * 1024 * 1024
 CHECKPOINT_VALUES = 262144
+DEFAULT_PROMPT = "He saw a carrot and had to grab it, his hunger was like a starving"
+READ_ONLY_PARAMS = frozenset({
+    "output.baseline",
+    "output.steered",
+    "output.status",
+    "clamp.status",
+})
+
+
+def _accepts_kwarg(fn, name: str) -> bool:
+    parameters = signature(fn).parameters
+    return any(p.kind == Parameter.VAR_KEYWORD for p in parameters.values()) or (
+        name in parameters
+        and parameters[name].kind in (Parameter.POSITIONAL_OR_KEYWORD, Parameter.KEYWORD_ONLY)
+    )
 
 
 def checkpoint_metadata(value) -> bool:
@@ -139,10 +155,11 @@ def load_resources(model_name: str, dictionary_path: str | Path, *, device=None,
         guard.check("hosted load start")
 
     backend = load_backend(model_name, dictionary_path, device=dev, guard=guard)
-    dict_dir = Path(str(dictionary_path))
-    if dict_dir.is_dir() and (dict_dir / "index" / "index.json").is_file():
+    env_index = os.environ.get("CALIPER_FEATURE_INDEX", "").strip()
+    resolved_index = Path(env_index).expanduser() if env_index else FeatureIndex.resolve(dictionary_path)
+    if resolved_index is not None:
         index = FeatureIndex(
-            dict_dir,
+            resolved_index,
             model=backend.model,
             tokenizer=backend.tokenizer,
             dictionary=backend.dictionary,
@@ -204,21 +221,39 @@ class HostedService(InterpretationService):
         self.owner.controls._terminate_actions(self.failure)
         return error
 
+    def _run_request(self, method, params, step):
+        status, result, error = super()._run_request(method, params, step)
+        if method == "trace.run" and status == "error" and not self.owner._in_refresh:
+            self.owner._set_progress("error", error["message"])
+        return status, result, error
+
     def _execute(self, method, params, step, *, complete=None):
         if method != "trace.run":
             return super()._execute(method, params, step, complete=complete)
 
         prompt_param = self.owner.prompt
+        show_more_param = self.owner.show_more
+        has_show_more = "show_more" in params
+        show_more = bool(params["show_more"]) if has_show_more else bool(show_more_param.value)
         with self.owner.controls.lock:
             prompt_version = prompt_param._version
+            show_more_version = show_more_param._version
             entry = prompt_param.entry()
             entry["value"] = params["prompt"]
             self.owner.controls._check_param_budget(prompt_param, entry)
         prompt_inputs(self.owner.backend, self.tokenizer, params["prompt"])
+
+        if not self.owner._in_refresh:
+            self.owner._set_progress("tracing")
+            if params["prompt"] != self.owner._last_prompt:
+                self.owner._reconcile_interventions_for_prompt(params["prompt"])
+
         traced_specs = self.owner.interventions.specifications()
+        exec_params = dict(params)
+        exec_params["show_more"] = show_more
 
         def on_complete(_result):
-            publish_prompt = False
+            publish_controls = False
             with self.owner.controls.lock:
                 if (self.owner.controls.params.get(prompt_param.name) is prompt_param
                         and prompt_param._version == prompt_version and prompt_param.pending is None):
@@ -226,17 +261,44 @@ class HostedService(InterpretationService):
                     prompt_param._version += 1
                     self.owner.checkpoint_prompt = params["prompt"]
                     self.owner.controls._update_busy()
-                    publish_prompt = True
+                    publish_controls = True
+                if (has_show_more
+                        and self.owner.controls.params.get(show_more_param.name) is show_more_param
+                        and show_more_param._version == show_more_version and show_more_param.pending is None):
+                    show_more_param._value = show_more
+                    show_more_param._version += 1
+                    self.owner.controls._update_busy()
+                    publish_controls = True
             self.owner.traced_prompt = params["prompt"]
             self.owner.traced_specifications = traced_specs
             self.owner.traced_state = deepcopy(traced_specs)
-            self.owner._reconcile_selection(self.graph)
-            if self.owner.fixture_display is not None:
+            self.owner.traced_show_more = show_more
+            self.owner._failed_trace_key = None
+            self.owner._reconcile_selection(self.graph, auto_select=True)
+            self.owner._refresh_examples()
+            if not self.owner._in_refresh:
+                if params["prompt"] != self.owner._last_prompt:
+                    self.owner._preset_tuples = None
+                    self.owner._preset_cell = None
+                if self.owner.prompt.value == params["prompt"]:
+                    self.owner._last_prompt = params["prompt"]
+                state = (params["prompt"], deepcopy(traced_specs))
+                with internal_forward():
+                    self.owner._compute_output(params["prompt"], state)
+                    self.owner._generate_for_state(state)
+                if self.owner.prompt.value == params["prompt"]:
+                    self.owner._output_key = deepcopy(self.owner._input_state())
+                if self.owner._preset_cell is None:
+                    self.owner._sync_clamp_status()
+                if self.owner.fixture_display is not None:
+                    self.owner.fixture_display.publish()
+                self.owner._set_progress("ready")
+            elif self.owner.fixture_display is not None:
                 self.owner.fixture_display.publish()
-            if publish_prompt:
+            if publish_controls:
                 self.owner.controls._publish()
 
-        return super()._execute(method, params, step, complete=on_complete)
+        return super()._execute(method, exec_params, step, complete=on_complete)
 
     def step(self, step=None):
         with self.lock:
@@ -250,14 +312,14 @@ class HostedService(InterpretationService):
                 try:
                     self.owner.update_controls()
                 except ValueError as exc:
-                    self.owner.status.set(bounded_text(str(exc)))
+                    self.owner._set_progress("error", str(exc))
                 count = super().step(step)
                 if self.owner.fixture_display is not None and count:
                     self.owner.fixture_display.publish()
                 try:
                     self.owner.update_output()
                 except ValueError as exc:
-                    self.owner.status.set(bounded_text(str(exc)))
+                    self.owner._set_progress("error", str(exc))
                 return count
         except self.stop_exception as exc:
             self.stop(exc, step)
@@ -286,7 +348,9 @@ class HostedService(InterpretationService):
 class HostedInference:
     """Own one ``Backend``, its live controls, and ``.json`` checkpoint metadata."""
 
-    def __init__(self, model_name: str, dictionary_path: str | Path, prompt: str, *, resources=None):
+    READ_ONLY_PARAMS = READ_ONLY_PARAMS
+
+    def __init__(self, model_name: str, dictionary_path: str | Path, prompt: str = DEFAULT_PROMPT, *, resources=None):
         self.model_name = str(model_name)
         dict_p = Path(str(dictionary_path))
         self.dictionary_path = str(dict_p.resolve()) if dict_p.exists() else str(dictionary_path)
@@ -305,12 +369,14 @@ class HostedInference:
         self.backend.record_prompt(prompt)
         self.initial_prompt = prompt
         self.checkpoint_prompt = prompt
+        self._last_prompt = prompt
         self.restored = None
         self.handle = self.service = self.managed = None
         self._failure = None
         self._stop_checkpointed = False
         self._inference_lock = threading.Lock()
         self._inference_ready = False
+        self._progress_state = "starting"
         self._comparison = None
         self._restore_generation(0)
         self.selection = None
@@ -320,10 +386,15 @@ class HostedInference:
         self.traced_prompt = None
         self.traced_specifications = None
         self.traced_state = None
+        self.traced_show_more = None
         self._output_key = None
         self._clamp_version = None
         self._selected_version = None
         self._retrace = False
+        self._in_refresh = False
+        self._failed_trace_key = None
+        self._readonly_values: dict[str, str] = {}
+        self._readonly_versions: dict[str, int] = {}
         self._preset_tuples = None
         self._preset_cell = None
         self._dallas_cache = None
@@ -423,15 +494,22 @@ class HostedInference:
                     "state": "starting",
                     "prompt_hash": None,
                     "interventions_hash": None,
+                    "traced_prompt": None,
+                    "traced_show_more": None,
+                    "selected_node": -1,
                     "comparison": None,
                     "generation": deepcopy(self._generation),
                 }
         state = self._input_state()
         hashes = self._input_hashes(state)
+        selected_node = int(self.selected.value) if hasattr(self, "selected") else -1
         with self._inference_lock:
             return {
                 **hashes,
-                "state": "ready",
+                "state": self._progress_state,
+                "traced_prompt": self.traced_prompt,
+                "traced_show_more": self.traced_show_more,
+                "selected_node": selected_node,
                 "comparison": deepcopy(self._comparison),
                 "generation": deepcopy(self._generation),
             }
@@ -479,21 +557,32 @@ class HostedInference:
             self.output = Output(self.backend, self.interventions, guard=self.guard)
 
             def add_param(name, value, **kwargs):
+                if name in self.READ_ONLY_PARAMS:
+                    if _accepts_kwarg(caliper.param, "read_only"):
+                        kwargs.setdefault("read_only", True)
+                    elif _accepts_kwarg(caliper.param, "readonly"):
+                        kwargs.setdefault("readonly", True)
                 p = caliper.param(name, value, **kwargs)
                 self.parameters.append(p)
+                if name in self.READ_ONLY_PARAMS:
+                    self._readonly_values[name] = bounded_text(str(value))
+                    self._readonly_versions[name] = p._version
                 return p
 
             self.prompt = add_param("prompt", self.initial_prompt)
             prompt_inputs(self.backend, self.tokenizer, self.prompt.value)
             self.checkpoint_prompt = self.prompt.value
+            self._last_prompt = self.prompt.value
             self.selected = add_param("selected_node", -1, min=-1, max=LARGE_NODE_CAP - 1)
             self.clamp = add_param("clamp", 0.0, min=-4.0, max=4.0)
             self.clamp_status = add_param("clamp.status", "No feature selected. No slider clamp.")
             self.retrace = add_param("retrace", False)
+            self.show_more = add_param("show_more", False)
             self.baseline_text = add_param("output.baseline", "")
             self.steered_text = add_param("output.steered", "")
             self.status = add_param("output.status", "ready")
             self.actions = [
+                caliper.action("run", self.run_prompt),
                 caliper.action("generate", self.generate),
                 caliper.action("reset", self.reset),
                 caliper.action("apply_clamp", self.apply_clamp),
@@ -515,11 +604,40 @@ class HostedInference:
             self._selected_version = self.selected._version
             with self._inference_lock:
                 self._inference_ready = True
+                self._progress_state = "ready"
             self.boundary()
             return self
         except BaseException:
             self.close()
             raise
+
+    def _set_readonly_param(self, param, value: str) -> None:
+        text = bounded_text(value)
+        self._readonly_values[param.name] = text
+        if param.value != text:
+            param.set(text)
+        self._readonly_versions[param.name] = param._version
+
+    def _enforce_readonly_outputs(self) -> bool:
+        reverted = False
+        for param in (self.baseline_text, self.steered_text, self.status, self.clamp_status):
+            expected = self._readonly_values.get(param.name)
+            if expected is None:
+                continue
+            if param.value != expected:
+                param.set(expected)
+                reverted = True
+            self._readonly_versions[param.name] = param._version
+        if reverted:
+            self.controls._publish()
+        return reverted
+
+    def _set_progress(self, state: str, message: str | None = None) -> None:
+        text = state if message is None else message
+        self._set_readonly_param(self.status, text)
+        with self._inference_lock:
+            self._progress_state = state
+        self.controls._publish()
 
     def _apply_interventions(self) -> None:
         with self.controls.lock:
@@ -529,7 +647,126 @@ class HostedInference:
         if changed:
             self.controls._publish()
 
-    def _reconcile_selection(self, graph) -> None:
+    def _reconcile_interventions_for_prompt(self, prompt: str) -> bool:
+        """Keep active interventions coherent with the new prompt's token count."""
+        ids = prompt_inputs(self.backend, self.tokenizer, prompt)["input_ids"]
+        seq_len = int(ids.shape[1])
+        changed = False
+        reset_clamp_param = False
+
+        with self.controls.lock:
+            owned = self._owned_record()
+            for iv in list(self.controls._ivs.values()):
+                if iv.clear or iv.state == "ended":
+                    continue
+                spec = iv.applied_spec if iv.applied_spec is not None else iv.spec
+                if not isinstance(spec, dict):
+                    continue
+                positions = spec.get("positions")
+                if positions is None:
+                    continue
+                valid_positions = [p for p in positions if isinstance(p, int) and 0 <= p < seq_len]
+                if len(valid_positions) == len(positions):
+                    continue
+                is_owned = owned is not None and iv is owned
+                if not valid_positions:
+                    if is_owned:
+                        self._discard_owned_clamp()
+                        reset_clamp_param = True
+                    else:
+                        iv.clear = True
+                        self.controls._iv_revision += 1
+                        self.controls._iv_due = True
+                        self.controls.counters["interventions_in"] += 1
+                        self.controls._update_busy()
+                        self.controls.cond.notify_all()
+                    changed = True
+                else:
+                    updated = deepcopy(spec)
+                    updated["positions"] = valid_positions
+                    try:
+                        validated = self.interventions.executor.validate(updated)
+                    except ValueError:
+                        validated = None
+                    if validated is None:
+                        if is_owned:
+                            self._discard_owned_clamp()
+                            reset_clamp_param = True
+                        else:
+                            iv.clear = True
+                            self.controls._iv_revision += 1
+                            self.controls._iv_due = True
+                            self.controls.counters["interventions_in"] += 1
+                    else:
+                        old_key = intervention_key(iv.spec)
+                        new_key = intervention_key(validated)
+                        if new_key != old_key:
+                            if is_owned:
+                                self._discard_owned_clamp()
+                            else:
+                                iv.clear = True
+                                self.controls._iv_revision += 1
+                                self.controls._iv_due = True
+                                self.controls.counters["interventions_in"] += 1
+                        refused = self.controls._intervene({"set": validated})
+                        if refused is None and is_owned:
+                            record = self.controls._ivs.get(new_key)
+                            if record is not None:
+                                self._owned_clamp = record.spec
+                        elif refused is not None:
+                            if is_owned:
+                                self._discard_owned_clamp()
+                                reset_clamp_param = True
+                            else:
+                                iv.clear = True
+                                self.controls._iv_revision += 1
+                                self.controls._iv_due = True
+                                self.controls.counters["interventions_in"] += 1
+                    self.controls._update_busy()
+                    self.controls.cond.notify_all()
+                    changed = True
+
+        if changed:
+            self._apply_interventions()
+        if reset_clamp_param:
+            self.clamp.set(0.0)
+            self._clamp_version = self.clamp._version
+        if self.selection is not None and self.selection["position"] >= seq_len:
+            self.selection = None
+        if hasattr(self.interventions, "invalidate_source_cache"):
+            self.interventions.invalidate_source_cache()
+        elif hasattr(getattr(self.interventions, "executor", None), "invalidate_cache"):
+            self.interventions.executor.invalidate_cache()
+        return changed
+
+    @staticmethod
+    def _pick_important_feature(graph) -> int:
+        if graph is None:
+            return -1
+        features = [(i, n) for i, n in enumerate(graph.nodes) if n.get("kind") == "feature"]
+        if not features:
+            return -1
+
+        def score(item):
+            idx, node = item
+            influence = node.get("influence")
+            if influence is None:
+                influence = node.get("score")
+            if influence is None:
+                influence = node.get("importance")
+            inf_val = (
+                abs(float(influence))
+                if isinstance(influence, (int, float)) and math.isfinite(influence)
+                else 0.0
+            )
+            act = node.get("activation", 0.0)
+            act_val = abs(float(act)) if isinstance(act, (int, float)) and math.isfinite(act) else 0.0
+            return (inf_val, act_val, -idx)
+
+        best_idx, _ = max(features, key=score)
+        return best_idx
+
+    def _reconcile_selection(self, graph, *, auto_select: bool = True) -> None:
         row = -1
         if graph is not None and self.selection is not None:
             row = next(
@@ -537,22 +774,41 @@ class HostedInference:
                  if n["kind"] == "feature" and all(n[k] == v for k, v in self.selection.items())),
                 -1,
             )
+        if row == -1 and auto_select and graph is not None:
+            row = self._pick_important_feature(graph)
         if row == -1:
             self.selection = None
+        else:
+            record = graph.nodes[row]
+            self.selection = {k: record[k] for k in ("layer", "feature", "position")}
         if self.selected.value != row:
             self.selected.set(row)
         self._selected_version = self.selected._version
         self._selection_graph = graph
 
+    def _refresh_examples(self) -> list:
+        if self.service is None:
+            return []
+        if self.selection is None or self.index is None:
+            self.service.publish_empty_examples()
+            return []
+        return self.service.publish_feature_examples(
+            self.selection["layer"],
+            self.selection["feature"],
+            limit=16,
+        )
+
     def _update_selection(self) -> None:
         graph = self.service.graph
         if graph is not self._selection_graph:
             self._reconcile_selection(graph)
+            self._refresh_examples()
         if self.selected._version != self._selected_version:
             node = self.selected.value
             self.selection = None
             self._selected_version = self.selected._version
             if node == -1:
+                self._refresh_examples()
                 return
             if graph is None or node >= len(graph.nodes):
                 raise ValueError("selected_node requires a completed trace")
@@ -560,13 +816,18 @@ class HostedInference:
             if record["kind"] != "feature":
                 raise ValueError("selected_node must identify a feature")
             self.selection = {k: record[k] for k in ("layer", "feature", "position")}
+            self._refresh_examples()
 
     def update_controls(self) -> None:
+        self._enforce_readonly_outputs()
         clamp_changed = self.clamp._version != self._clamp_version
         self._clamp_version = self.clamp._version
         try:
             prompt = self.prompt.value
             prompt_inputs(self.backend, self.tokenizer, prompt)
+            if prompt != self._last_prompt:
+                self._reconcile_interventions_for_prompt(prompt)
+                self._last_prompt = prompt
             self.checkpoint_prompt = prompt
             self._update_selection()
             if clamp_changed:
@@ -640,8 +901,7 @@ class HostedInference:
                 s = owned.applied_spec
                 live = f"Live slider clamp: {s['point']}, feature {s['feature']}, position {s['positions'][0]}, value {s['value']:g}."
         msg = bounded_text(f"{selected} Clamp input: {self.clamp.value:g} times maximum. {live}")
-        if self.clamp_status.value != msg:
-            self.clamp_status.set(msg)
+        self._set_readonly_param(self.clamp_status, msg)
 
     def apply_clamp(self) -> str:
         self._check_stop()
@@ -700,129 +960,142 @@ class HostedInference:
 
         self._check_stop()
         with internal_forward():
-            with self.controls.lock:
-                self._discard_owned_clamp()
-            self._apply_interventions()
-            cache = self._ensure_dallas_cache()
-            manifest = cache["manifest"]
-            case = next(c for c in manifest["interventions"] if int(c["cell"]) == cell)
-            tuples = []
-            for op in case["operations"]:
-                src_acts = cache["acts"][op["activation_prompt"]]
-                factor = op["factor"]
-                for node in manifest["groups"][op["group"]]:
-                    orig_val = src_acts[node["layer"], node["position"], node["feature"]]
-                    tuples.append((node["layer"], node["position"], node["feature"], factor * orig_val))
+            self._set_progress("tracing")
+            try:
+                with self.controls.lock:
+                    self._discard_owned_clamp()
+                self._apply_interventions()
+                cache = self._ensure_dallas_cache()
+                manifest = cache["manifest"]
+                case = next(c for c in manifest["interventions"] if int(c["cell"]) == cell)
+                tuples = []
+                for op in case["operations"]:
+                    src_acts = cache["acts"][op["activation_prompt"]]
+                    factor = op["factor"]
+                    for node in manifest["groups"][op["group"]]:
+                        orig_val = src_acts[node["layer"], node["position"], node["feature"]]
+                        tuples.append((node["layer"], node["position"], node["feature"], factor * orig_val))
 
-            dallas_prompt = manifest["prompts"]["dallas"]
-            t0 = time.perf_counter()
-            iv_logits, iv_acts = self.backend.intervene_logits(
-                dallas_prompt,
-                tuples,
-                freeze_attention=True,
-                return_activations=(cell == 29),
-                guard=self.guard,
-            )
-            elapsed = time.perf_counter() - t0
+                dallas_prompt = manifest["prompts"]["dallas"]
+                if self.prompt.value != dallas_prompt:
+                    self.prompt.set(dallas_prompt)
+                self.checkpoint_prompt = dallas_prompt
+                self._last_prompt = dallas_prompt
+                if self.traced_prompt != dallas_prompt:
+                    self._in_refresh = True
+                    try:
+                        response = self.service._retrace(
+                            {"prompt": dallas_prompt, "show_more": bool(self.show_more.value)},
+                            self.controls.n,
+                        )
+                        if response is not None and response[0] == "error":
+                            raise ValueError(response[2]["message"])
+                    finally:
+                        self._in_refresh = False
 
-            with autorelease_scope(self.backend.device):
-                base_last = cache["dallas_logits"].squeeze(0)[-1]
-                iv_last = iv_logits.squeeze(0)[-1]
-                base_probs = base_last.softmax(-1)
-                iv_probs = iv_last.softmax(-1)
-                base_p, base_i = base_probs.topk(1)
-                obs_p, obs_i = iv_probs.topk(1)
-                base_id = int(base_i[0].item())
-                obs_id = int(obs_i[0].item())
-                base_top = {
-                    "id": base_id,
-                    "text": _decode_raw_token(self.tokenizer, base_id),
-                    "probability": float(base_p[0].item()),
-                    "logit": float(base_last[base_id].item()),
-                }
-                steered_top = {
-                    "id": obs_id,
-                    "text": _decode_raw_token(self.tokenizer, obs_id),
-                    "probability": float(obs_p[0].item()),
-                    "logit": float(iv_last[obs_id].item()),
-                }
-                say_vic = float(iv_acts[21, 10, 2236].item()) if cell == 29 and iv_acts is not None else None
-                paired = torch.stack((base_last, iv_last), dim=0)
-            del iv_logits, iv_acts
+                t0 = time.perf_counter()
+                iv_logits, iv_acts = self.backend.intervene_logits(
+                    dallas_prompt,
+                    tuples,
+                    freeze_attention=True,
+                    return_activations=(cell == 29),
+                    guard=self.guard,
+                )
+                elapsed = time.perf_counter() - t0
 
-            with _publication_scope(self.model):
-                tensors, comp = self.output.prepare_logits(paired)
-                _publish_many(tensors)
+                with autorelease_scope(self.backend.device):
+                    base_last = cache["dallas_logits"].squeeze(0)[-1]
+                    iv_last = iv_logits.squeeze(0)[-1]
+                    base_probs = base_last.softmax(-1)
+                    iv_probs = iv_last.softmax(-1)
+                    base_p, base_i = base_probs.topk(1)
+                    obs_p, obs_i = iv_probs.topk(1)
+                    base_id = int(base_i[0].item())
+                    obs_id = int(obs_i[0].item())
+                    base_top = {
+                        "id": base_id,
+                        "text": _decode_raw_token(self.tokenizer, base_id),
+                        "probability": float(base_p[0].item()),
+                        "logit": float(base_last[base_id].item()),
+                    }
+                    steered_top = {
+                        "id": obs_id,
+                        "text": _decode_raw_token(self.tokenizer, obs_id),
+                        "probability": float(obs_p[0].item()),
+                        "logit": float(iv_last[obs_id].item()),
+                    }
+                    say_vic = float(iv_acts[21, 10, 2236].item()) if cell == 29 and iv_acts is not None else None
+                    paired = torch.stack((base_last, iv_last), dim=0)
+                del iv_logits, iv_acts
 
-            if self.prompt.value != dallas_prompt:
-                self.prompt.set(dallas_prompt)
-            self._preset_tuples = tuples
-            self._preset_cell = cell
-            state = self._input_state()
-            with self._inference_lock:
-                self._comparison = {
-                    **self._input_hashes(state),
-                    "argmax_token_ids": [base_id, obs_id],
-                    "baseline_top_text": base_top["text"],
-                    "baseline_top_probability": base_top["probability"],
-                    "baseline_top": base_top,
-                    "steered_top": steered_top,
-                    "cell": cell,
-                    "label": case["label"],
-                    "say_victoria_activation": say_vic,
-                    "dallas_cache_seconds": cache["cache_seconds"],
-                    "completed_step": self.controls.n,
-                    "compute_publish_seconds": elapsed,
-                }
-            self._output_key = deepcopy(state)
-            summary = (
-                f"Cell {cell} ({case['label']}): {base_top['text']!r} ({base_top['probability']:.4f}) -> "
-                f"{steered_top['text']!r} ({steered_top['probability']:.4f})"
-            )
-            self.clamp_status.set(bounded_text(summary))
-            self.status.set("ready")
-            return summary
+                with _publication_scope(self.model):
+                    tensors, comp = self.output.prepare_logits(paired)
+                    _publish_many(tensors)
 
-    def update_output(self, *, force: bool = False) -> None:
-        key = self._input_state()
-        changed = self._output_key != key
-        if changed:
-            self._preset_tuples = None
-            self._preset_cell = None
-        if changed or force:
-            started = time.perf_counter()
-            comparison = self.output.compare(key[0])
-            seconds = time.perf_counter() - started
-            if self.fixture_display is not None:
-                self.fixture_display.publish()
-            with self._inference_lock:
-                self._comparison = {
-                    **self._input_hashes(key),
-                    "argmax_token_ids": comparison["argmax_token_ids"],
-                    "baseline_top_text": comparison["baseline_top_text"],
-                    "baseline_top_probability": comparison["baseline_top_probability"],
-                    "completed_step": self.controls.n,
-                    "compute_publish_seconds": seconds,
-                }
-            self._output_key = deepcopy(key)
-            self.status.set("ready")
-        if self.retrace.value and (changed or not self._retrace):
-            if (self.traced_prompt, self.traced_specifications) != key:
-                response = self.service._retrace({"prompt": key[0]}, self.controls.n)
-                if response is not None and response[0] == "error":
-                    self.status.set(response[2]["message"])
-                elif self.fixture_display is not None:
-                    self.fixture_display.publish()
-        self._retrace = self.retrace.value
-        if self._preset_cell is None:
-            self._sync_clamp_status()
-        if self.guard is not None:
-            self.guard.check("inference boundary", force=False)
+                self._preset_tuples = tuples
+                self._preset_cell = cell
+                state = self._input_state()
+                self._generate_for_state(state, force=True)
+                with self._inference_lock:
+                    self._comparison = {
+                        **self._input_hashes(state),
+                        "argmax_token_ids": [base_id, obs_id],
+                        "baseline_top_text": base_top["text"],
+                        "baseline_top_probability": base_top["probability"],
+                        "baseline_top": base_top,
+                        "steered_top": steered_top,
+                        "cell": cell,
+                        "label": case["label"],
+                        "say_victoria_activation": say_vic,
+                        "dallas_cache_seconds": cache["cache_seconds"],
+                        "completed_step": self.controls.n,
+                        "compute_publish_seconds": elapsed,
+                    }
+                self._output_key = deepcopy(state)
+                summary = (
+                    f"Cell {cell} ({case['label']}): {base_top['text']!r} ({base_top['probability']:.4f}) -> "
+                    f"{steered_top['text']!r} ({steered_top['probability']:.4f})"
+                )
+                self._set_readonly_param(self.clamp_status, summary)
+                self._set_progress("ready")
+                return summary
+            except CleanStop:
+                raise
+            except Exception as exc:
+                self._set_progress("error", str(exc))
+                raise
 
-    def generate(self) -> str:
-        self._check_stop()
-        state = self._input_state()
+    def _compute_output(self, prompt: str, state: tuple[str, list[dict]]) -> dict:
+        started = time.perf_counter()
+        comparison = self.output.compare(prompt)
+        seconds = time.perf_counter() - started
         with self._inference_lock:
+            self._comparison = {
+                **self._input_hashes(state),
+                "argmax_token_ids": comparison["argmax_token_ids"],
+                "baseline_top_text": comparison["baseline_top_text"],
+                "baseline_top_probability": comparison["baseline_top_probability"],
+                "completed_step": self.controls.n,
+                "compute_publish_seconds": seconds,
+            }
+        return comparison
+
+    def _generate_for_state(self, state: tuple[str, list[dict]], *, force: bool = False) -> dict:
+        prompt, _specs = state
+        hashes = self._input_hashes(state)
+        with self._inference_lock:
+            if (
+                not force
+                and self._preset_tuples is None
+                and self._generation["prompt_hash"] == hashes["prompt_hash"]
+                and self._generation["interventions_hash"] == hashes["interventions_hash"]
+                and self.baseline_text.value != ""
+            ):
+                return {
+                    "baseline": self.baseline_text.value,
+                    "steered": self.steered_text.value,
+                    "token_ids": deepcopy(self._generation["token_ids"]),
+                }
             gen_id = self._generation["id"] + 1
         t0 = time.perf_counter()
         with internal_forward():
@@ -831,20 +1104,22 @@ class HostedInference:
                 if self._dallas_cache is not None
                 else None
             )
-            if self._preset_tuples is not None and state[0] == dallas_prompt:
-                raw = self.backend.generate(state[0], self._preset_tuples, max_new_tokens=24, guard=self.guard)
+            if self._preset_tuples is not None and prompt == dallas_prompt:
+                with self.interventions.suspend():
+                    raw = self.backend.generate(prompt, self._preset_tuples, max_new_tokens=24, guard=self.guard)
+                row0, row1 = raw["token_ids"]
                 result = {
-                    "baseline": bounded_text(raw["baseline"]),
-                    "steered": bounded_text(raw["steered"]),
-                    "token_ids": raw["token_ids"],
+                    "baseline": bounded_text(raw["baseline"] if "baseline" in raw else self.tokenizer.decode(row0)),
+                    "steered": bounded_text(raw["steered"] if "steered" in raw else self.tokenizer.decode(row1)),
+                    "token_ids": [row0, row1],
                 }
             else:
-                result = self.output.generate(state[0])
+                result = self.output.generate(prompt)
         gen_seconds = time.perf_counter() - t0
         ids = result["token_ids"]
         texts = [result["baseline"], result["steered"]]
-        self.baseline_text.set(texts[0])
-        self.steered_text.set(texts[1])
+        self._set_readonly_param(self.baseline_text, texts[0])
+        self._set_readonly_param(self.steered_text, texts[1])
         completion = {
             **self._input_hashes(state),
             "id": gen_id,
@@ -856,6 +1131,135 @@ class HostedInference:
         }
         with self._inference_lock:
             self._generation = completion
+        return result
+
+    def _refresh(
+        self,
+        *,
+        prompt: str,
+        specs: list[dict],
+        show_more: bool,
+        do_trace: bool,
+        do_output: bool,
+        do_generate: bool,
+        force_generate: bool = False,
+        raise_on_trace_error: bool = False,
+    ) -> bool:
+        key = (prompt, specs)
+        self._in_refresh = True
+        try:
+            if do_trace:
+                self._set_progress("tracing")
+                response = self.service._retrace({"prompt": prompt, "show_more": show_more}, self.controls.n)
+                if response is None:
+                    return False
+                if response[0] == "error":
+                    msg = response[2]["message"]
+                    self._failed_trace_key = (prompt, deepcopy(specs), show_more)
+                    self._set_progress("error", msg)
+                    if raise_on_trace_error:
+                        raise ValueError(msg)
+                    return False
+                self._failed_trace_key = None
+            if do_output:
+                self._compute_output(prompt, key)
+                self._output_key = deepcopy(key)
+            if do_generate:
+                self._generate_for_state(key, force=force_generate)
+            if self.fixture_display is not None:
+                self.fixture_display.publish()
+            if self._preset_cell is None:
+                self._sync_clamp_status()
+            self._set_progress("ready")
+            return True
+        except CleanStop:
+            raise
+        except Exception as exc:
+            self._set_progress("error", str(exc))
+            raise
+        finally:
+            self._in_refresh = False
+
+    def update_output(self, *, force: bool = False) -> None:
+        key = self._input_state()
+        prompt, specs = key
+        prompt_inputs(self.backend, self.tokenizer, prompt)
+        show_more = bool(self.show_more.value)
+        initial = self._output_key is None
+        prev_prompt = self._output_key[0] if self._output_key is not None else None
+        changed = self._output_key != key
+        prompt_changed = (not initial) and (prompt != prev_prompt)
+        show_more_changed = (self.traced_show_more is not None) and (show_more != self.traced_show_more)
+        if changed:
+            self._preset_tuples = None
+            self._preset_cell = None
+
+        if not force and self._failed_trace_key == (prompt, specs, show_more):
+            if self.guard is not None:
+                self.guard.check("inference boundary", force=False)
+            return
+
+        need_trace = False
+        if initial and self.restored is None:
+            need_trace = True
+        elif prompt_changed and (self.traced_prompt != prompt or self.traced_show_more != show_more):
+            need_trace = True
+        elif show_more_changed:
+            need_trace = True
+        elif self.retrace.value and (changed or not self._retrace):
+            if (self.traced_prompt, self.traced_specifications, self.traced_show_more) != (prompt, specs, show_more):
+                need_trace = True
+
+        need_output = changed or force
+        need_generate = changed or force or (self._generation["prompt_hash"] is None)
+        self._retrace = self.retrace.value
+
+        if need_trace or need_output or need_generate:
+            self._refresh(
+                prompt=prompt,
+                specs=specs,
+                show_more=show_more,
+                do_trace=need_trace,
+                do_output=need_output,
+                do_generate=need_generate,
+            )
+        else:
+            if self._preset_cell is None:
+                self._sync_clamp_status()
+            if self._progress_state == "error":
+                self._set_progress("ready")
+        if self.guard is not None:
+            self.guard.check("inference boundary", force=False)
+
+    def run_prompt(self) -> str:
+        """Recompute graph trace, output bars, generated text, and examples for the current prompt and clamp."""
+        self._check_stop()
+        with internal_forward():
+            self._preset_tuples = None
+            self._preset_cell = None
+            self.update_controls()
+            key = self._input_state()
+            prompt, specs = key
+            prompt_inputs(self.backend, self.tokenizer, prompt)
+            show_more = bool(self.show_more.value)
+            ok = self._refresh(
+                prompt=prompt,
+                specs=specs,
+                show_more=show_more,
+                do_trace=True,
+                do_output=True,
+                do_generate=True,
+                force_generate=True,
+                raise_on_trace_error=True,
+            )
+            if not ok:
+                return "A trace is already pending."
+        return "Traced prompt, updated outputs, regenerated text, and refreshed examples."
+
+    def generate(self) -> str:
+        self._check_stop()
+        self._generate_for_state(self._input_state(), force=True)
+        self.controls._publish()
         return "Generated 24 tokens for each output."
 
     def reset(self) -> str:
@@ -872,7 +1276,7 @@ class HostedInference:
                 try:
                     prompt_inputs(self.backend, self.tokenizer, self.prompt.value)
                 except ValueError:
-                    self.status.set("The clamp is reset. Correct the prompt to update the output.")
+                    self._set_progress("error", "The clamp is reset. Correct the prompt to update the output.")
                 else:
                     self.update_output(force=True)
             finally:
@@ -969,7 +1373,7 @@ class HostedInference:
             except CleanStop:
                 raise
             except Exception as exc:
-                self.status.set(bounded_text(f"{type(exc).__name__}: {exc}"))
+                self._set_progress("error", f"{type(exc).__name__}: {exc}")
 
     def close(self) -> None:
         if self.service is not None:
@@ -992,7 +1396,7 @@ def main(argv=None) -> None:
     parser = argparse.ArgumentParser(description="Local Inference Run")
     parser.add_argument("--model")
     parser.add_argument("--dictionary")
-    parser.add_argument("--prompt")
+    parser.add_argument("--prompt", default=None)
     parser.add_argument("--fixture-dir")
     args = parser.parse_args(argv)
     if args.fixture_dir:
@@ -1000,9 +1404,10 @@ def main(argv=None) -> None:
             parser.error("fixture creation takes no run arguments")
         fixture_resources(args.fixture_dir)
         return
-    if not all((args.model, args.dictionary, args.prompt)):
-        parser.error("model, dictionary, and prompt are required")
-    run = HostedInference(args.model, args.dictionary, args.prompt)
+    if not all((args.model, args.dictionary)):
+        parser.error("model and dictionary are required")
+    prompt = args.prompt if args.prompt is not None else DEFAULT_PROMPT
+    run = HostedInference(args.model, args.dictionary, prompt)
     try:
         run.start()
         print(f"caliper: inference ready at step {run.controls.n}", flush=True)

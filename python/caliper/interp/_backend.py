@@ -16,7 +16,16 @@ import torch
 from .._ablate import suspend
 from .._interpret_protocol import MAX_STRING, text as _valid_text
 from .._intervention_protocol import InterventionError, internal_forward
-from ._graph import Graph, LARGE_EDGE_CAP, LARGE_NODE_CAP
+from ._graph import (
+    DEFAULT_EDGE_THRESHOLD,
+    DEFAULT_NODE_THRESHOLD,
+    Graph,
+    LARGE_EDGE_CAP,
+    LARGE_NODE_CAP,
+    SHOW_MORE_EDGE_THRESHOLD,
+    SHOW_MORE_NODE_THRESHOLD,
+    resolve_pruning_thresholds,
+)
 from ._labels import token_label
 from ._memory import autorelease_scope, mps_batch_pool_scope
 
@@ -973,8 +982,9 @@ class Backend:
         max_feature_nodes: int | None = 5000,
         batch_size: int | None = None,
         update_interval: int = 8,
-        node_threshold: float = 0.8,
-        edge_threshold: float = 0.98,
+        node_threshold: float | None = None,
+        edge_threshold: float | None = None,
+        show_more: bool = False,
         max_nodes: int = LARGE_NODE_CAP,
         max_edges: int = LARGE_EDGE_CAP,
         trace_id: str = "trace-1",
@@ -987,16 +997,32 @@ class Backend:
         from circuit_tracer import attribute
         from circuit_tracer.graph import compute_graph_scores, compute_node_influence, prune_graph
 
+        eff_node_threshold, eff_edge_threshold = resolve_pruning_thresholds(
+            show_more=show_more,
+            node_threshold=node_threshold,
+            edge_threshold=edge_threshold,
+        )
         ids = self.tokenize(prompt)
         self.record_prompt(prompt)
         active_guard = guard if guard is not None else self.guard
         eff_batch = int(batch_size) if batch_size is not None else (256 if self.device.type == "mps" else 512)
+        settings = {
+            "max_n_logits": max_n_logits,
+            "desired_logit_prob": float(desired_logit_prob),
+            "max_feature_nodes": max_feature_nodes,
+            "batch_size": eff_batch,
+            "update_interval": update_interval,
+            "node_threshold": eff_node_threshold,
+            "edge_threshold": eff_edge_threshold,
+            "show_more": bool(show_more),
+        }
 
         if max_feature_nodes == 0:
             # Degenerate zero-feature trace: keep only tokens, errors, and salient logits.
             return self._logit_only_graph(
                 ids, max_n_logits=max_n_logits, desired_logit_prob=desired_logit_prob,
-                max_nodes=max_nodes, max_edges=max_edges, trace_id=trace_id, guard=active_guard,
+                max_nodes=max_nodes, max_edges=max_edges, trace_id=trace_id,
+                settings=settings, guard=active_guard,
             )
 
         with internal_forward(), autorelease_scope(self.device), mps_batch_pool_scope(self.device):
@@ -1019,9 +1045,14 @@ class Backend:
         ct_graph.to("cpu")
         ct_graph.input_tokens = ct_graph.input_tokens.cpu()
         ct_graph.activation_values = ct_graph.activation_values.cpu()
+        ct_graph.selected_features = ct_graph.selected_features.cpu()
         mps_cleanup(self.device)
 
-        pruned = prune_graph(ct_graph, node_threshold=node_threshold, edge_threshold=edge_threshold)
+        pruned = prune_graph(
+            ct_graph,
+            node_threshold=eff_node_threshold,
+            edge_threshold=eff_edge_threshold,
+        )
         rep_score, comp_score = compute_graph_scores(ct_graph)
         n_logits = len(ct_graph.logit_targets)
         logit_weights = torch.zeros(ct_graph.adjacency_matrix.shape[0], dtype=torch.float32)
@@ -1044,15 +1075,6 @@ class Backend:
             if kept_pairs:
                 feature_labels = index.labels(kept_pairs)
 
-        settings = {
-            "max_n_logits": max_n_logits,
-            "desired_logit_prob": float(desired_logit_prob),
-            "max_feature_nodes": max_feature_nodes,
-            "batch_size": eff_batch,
-            "update_interval": update_interval,
-            "node_threshold": float(node_threshold),
-            "edge_threshold": float(edge_threshold),
-        }
         return Graph.from_circuit_tracer(
             ct_graph,
             pruned,
@@ -1070,7 +1092,8 @@ class Backend:
         )
 
     def _logit_only_graph(self, ids: torch.Tensor, *, max_n_logits: int, desired_logit_prob: float,
-                          max_nodes: int, max_edges: int, trace_id: str, guard=None) -> Graph:
+                          max_nodes: int, max_edges: int, trace_id: str, settings: dict | None = None,
+                          guard=None) -> Graph:
         logits = self.forward_logits(ids, guard=guard)[0, -1].float().cpu()
         probs = logits.softmax(-1)
         order = torch.argsort(probs, descending=True, stable=True)[:max_n_logits]
@@ -1123,6 +1146,7 @@ class Backend:
             trace_id=trace_id,
             device=self.device,
             logits=logit_nodes,
+            settings=settings,
             memory=guard,
         )
 

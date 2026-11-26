@@ -2,11 +2,20 @@
 from collections import deque
 from contextlib import nullcontext
 from copy import deepcopy
+from inspect import Parameter, signature
 import threading
 import time
 
 from .. import _interpret_protocol as protocol
 from ._labels import pack_labels
+
+
+def _accepts_kwarg(fn, name: str) -> bool:
+    parameters = signature(fn).parameters
+    return any(p.kind == Parameter.VAR_KEYWORD for p in parameters.values()) or (
+        name in parameters
+        and parameters[name].kind in (Parameter.POSITIONAL_OR_KEYWORD, Parameter.KEYWORD_ONLY)
+    )
 
 
 class Refused(ValueError):
@@ -209,7 +218,10 @@ class InterpretationService:
             tracer = self._resource("tracer")
             index = self._resource("index") if self.index is not None or self.factories["index"] is not None else None
             tracer.bind_index(index)
-            graph = tracer.trace(**params)
+            trace_params = dict(params)
+            if "show_more" in trace_params and not _accepts_kwarg(tracer.trace, "show_more"):
+                trace_params.pop("show_more")
+            graph = tracer.trace(**trace_params)
             summary = graph.read(node_limit=0, edge_limit=0)
             result = {
                 "state": "done",
@@ -356,6 +368,19 @@ class InterpretationService:
                 reply("error", None, {"code": "interpret.closed", "message": "The interpretation service closed."})
             except Exception:
                 pass
+
+    def publish_feature_examples(self, layer: int, feature: int, *, limit: int = 16) -> list:
+        """Query baseline examples for ``(layer, feature)`` and publish display tensors."""
+        with self._baseline():
+            self._resource("dictionary")
+            index = self._resource("index")
+            rows = index.examples(layer, feature, limit=limit)
+        self._publish_examples(rows)
+        return rows
+
+    def publish_empty_examples(self) -> None:
+        """Publish empty example tensors when no feature is selected."""
+        self._publish_examples([])
 
     def _publish_examples(self, rows):
         from ._publish import _publication_scope

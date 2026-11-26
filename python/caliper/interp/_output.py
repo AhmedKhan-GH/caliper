@@ -78,9 +78,9 @@ class Output:
             elif self.backend.is_replacement_model and self._pure_feature_specs(specs):
                 with self.interventions.suspend():
                     base_last = self.backend.forward_logits(ids, guard=self.guard)[0, -1]
-                steered_last = self.backend.intervene_logits(
-                    ids[0], specs, freeze_attention=True, guard=self.guard
-                )[0][0, -1]
+                    steered_last = self.backend.intervene_logits(
+                        ids[0], specs, freeze_attention=True, guard=self.guard
+                    )[0][0, -1]
                 logits = torch.stack((base_last, steered_last), dim=0)
             else:
                 paired = ids.repeat(2, 1)
@@ -141,7 +141,8 @@ class Output:
                 raise ValueError("generation requires patch positions within the clean source or a fixed source_position")
 
         if not specs or (self.backend.is_replacement_model and self._pure_feature_specs(specs)):
-            gen = self.backend.generate(prompt, specs, max_new_tokens=24, guard=self.guard)
+            with self.interventions.suspend():
+                gen = self.backend.generate(prompt, specs, max_new_tokens=24, guard=self.guard)
             row0, row1 = gen["token_ids"]
             return {
                 "baseline": bounded_text(self.tokenizer.decode(row0)),

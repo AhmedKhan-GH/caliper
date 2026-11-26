@@ -53,7 +53,7 @@ from caliper.interp import Tracer, load_backend
 
 backend = load_backend("google/gemma-2-2b", "gemma")
 tracer = Tracer(backend.model, backend.tokenizer, backend.dictionary, backend=backend)
-graph = tracer.trace("Fact: the capital of the state containing Dallas is", node_threshold=0.7, edge_threshold=0.9)
+graph = tracer.trace("He saw a carrot and had to grab it, his hunger was like a starving")
 ```
 
 `backend.dictionary` is a `DictionaryView` with uniform `metadata`, `encode(layer, x)`, and lazy `decoder_vectors(layer, ids)`.
@@ -62,25 +62,73 @@ For offline tests without model downloads, pass `model_ref="tiny-lm"` to constru
 
 ## Example Index
 
-`LiveFeatureIndex(backend)` resolves feature summaries and top activating 33-token windows without requiring an offline index build.
-When online and `neuronpedia_id` is present on `SAE.cfg.metadata`, `LiveFeatureIndex` queries `get_neuronpedia_feature`.
-When offline or using unindexed transcoders, it scans recent and reference prompts with a bounded min-heap and zeros BOS positions.
+`FeatureIndex` loads corpus examples and promoted tokens from a memory-mapped index on disk.
+When no disk index exists, `LiveFeatureIndex(backend)` resolves feature summaries and top 33-token windows in memory.
+When a session has network access and `SAE.cfg.metadata` defines `neuronpedia_id`, `LiveFeatureIndex` queries `get_neuronpedia_feature`.
+When a session runs offline or uses unindexed transcoders, `LiveFeatureIndex` scans prompt text with a bounded min-heap.
+That scan zeros BOS positions.
 
-For large local corpora, `tools/interp/build_index.py` builds a memory-mapped disk index in `<dictionary>/index` for `FeatureIndex`:
+`feature.show` returns the heuristic label, activation count, maximum value, and promoted tokens for a feature.
+`feature.examples` returns up to 16 ranked 33-token windows and publishes the central 25 slots to `token_strip@1`.
+
+### Index Attachment
+
+`FeatureIndex` reads corpus examples from an index folder on disk.
+`FeatureIndex` and `FeatureIndex.resolve(path)` check three locations in order and select the first directory with `index.json`:
+
+1. The index directory directly, such as `<path>/index`.
+2. A nested folder inside the dictionary at `<dictionary>/index`.
+3. A sibling folder next to the dictionary at `<dictionary>/../index`.
+
+Path resolution checks only local paths for sibling folders.
+The sibling check runs only when `<dictionary>` exists on disk.
+As a result, hub aliases such as `"gemma"` do not match an unrelated `index` folder in the current directory.
+An explicit index path always takes priority over nested and sibling folders.
+
+Pass either the dictionary folder or the index folder to `FeatureIndex`:
+
+```python
+from caliper.interp import FeatureIndex, load_backend
+
+backend = load_backend("google/gemma-2-2b", "/path/to/dictionary")
+index_dir = FeatureIndex.resolve("/path/to/dictionary")
+if index_dir is not None:
+    index = FeatureIndex(
+        index_dir,
+        model=backend.model,
+        tokenizer=backend.tokenizer,
+        dictionary=backend.dictionary,
+    )
+```
+
+Run `tools/interp/build_index.py` to build a new index inside `<dictionary>/index` from a JSONL corpus:
 
 ```sh
 python -m tools.interp.build_index --model google/gemma-2-2b --dictionary "$SCOPE_DIR" --text-jsonl "$CORPUS_JSONL"
 ```
 
-`feature.show` returns the heuristic feature label, activation count, maximum, and promoted tokens.
-`feature.examples` returns up to 16 ranked 33-token windows and publishes the central 25 slots to `token_strip@1`.
+### Index Layout
+
+Each index folder holds `index.json` and four binary files.
+`FeatureIndex` maps the binary files in read-only mode and checks the layer and latent counts against `dictionary.metadata`.
+In `index.json`, the latent count uses either `"latents"` or `"features"`.
+When `"latents"` is absent, `FeatureIndex` reads `"features"` to support 2-million-token Gemma indexes.
+If both keys appear with different values, `FeatureIndex` raises `ValueError`.
+
+| File | Format | Contents |
+|---|---|---|
+| `index.json` | JSON | `layers`, `latents` or `features`, `index_hash`, and corpus metadata |
+| `table.npy` | NumPy `(layers, latents, 16)` | Ranked `activation` (`<f8`) and token `offset` (`<i8`) pairs |
+| `counts.npy` | NumPy `(layers, latents)` | Positive activation count (`<u8`) per feature |
+| `tokens.bin` | Raw `<u4` stream | Concatenated token IDs |
+| `documents.bin` | Fixed 145-byte records | UTF-8 `id` (`S128`), `start` (`<i8`), `length` (`<i8`), and `truncated` flag |
 
 ## Attribution Graphs
 
 `Tracer(model, tokenizer, dictionary, backend=backend).trace(prompt)` runs `circuit_tracer.attribute`, transfers the graph to CPU, runs `prune_graph`, and publishes graph tensors.
-Prompts accept up to 32 model tokens, including BOS, and refuse longer inputs without truncation.
-Default settings select up to 10 logit targets (`desired_logit_prob=0.95`), up to `5,000` feature targets, `node_threshold=0.8`, and `edge_threshold=0.98`.
-For the published Gemma 2 2B Dallas graph, set `node_threshold=0.7` and `edge_threshold=0.9`.
+Prompts accept up to 32 model tokens with BOS and refuse longer inputs without truncation.
+Default settings select up to 10 logit targets (`desired_logit_prob=0.95`), up to `5,000` feature targets, `node_threshold=0.7`, and `edge_threshold=0.9`.
+Pass `show_more=True` to relax pruning to `node_threshold=0.85` and `edge_threshold=0.96`.
 
 After a standalone `tracer.trace(prompt)` call, invoke `caliper.step()` once so derive programs process the published tensors.
 In a hosted inference run, `trace.run` executes and publishes automatically at the next run boundary.

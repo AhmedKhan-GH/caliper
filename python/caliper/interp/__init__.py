@@ -4,6 +4,7 @@ __all__ = [
     "publish",
     "Graph",
     "Tracer",
+    "FeatureIndex",
     "LiveFeatureIndex",
     "patch_sweep",
     "load_backend",
@@ -22,9 +23,9 @@ def __getattr__(name):
     if name in ("Graph", "Tracer"):
         from ._graph import Graph, Tracer
         return {"Graph": Graph, "Tracer": Tracer}[name]
-    if name == "LiveFeatureIndex":
-        from ._index import LiveFeatureIndex
-        return LiveFeatureIndex
+    if name in ("FeatureIndex", "LiveFeatureIndex"):
+        from ._index import FeatureIndex, LiveFeatureIndex
+        return {"FeatureIndex": FeatureIndex, "LiveFeatureIndex": LiveFeatureIndex}[name]
     if name == "patch_sweep":
         from ._sweep import patch_sweep
         return patch_sweep

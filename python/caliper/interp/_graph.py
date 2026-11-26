@@ -17,11 +17,49 @@ LARGE_EDGE_CAP = 262144
 TOKEN_CAP = 32
 KINDS = {"token": 0, "feature": 1, "error": 2, "logit": 3}
 
+DEFAULT_NODE_THRESHOLD = 0.7
+DEFAULT_EDGE_THRESHOLD = 0.9
+SHOW_MORE_NODE_THRESHOLD = 0.85
+SHOW_MORE_EDGE_THRESHOLD = 0.96
+
 
 def bounded_integer(value, name, low, high):
     if type(value) is not int or not low <= value <= high:
         raise ValueError(f"{name} must be an integer from {low} to {high}")
     return value
+
+
+def _validated_threshold(value, name: str) -> float:
+    if isinstance(value, (bool, str)):
+        raise ValueError(f"{name} must be a finite number from 0.0 to 1.0")
+    try:
+        out = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{name} must be a finite number from 0.0 to 1.0") from exc
+    if not math.isfinite(out) or not 0.0 <= out <= 1.0:
+        raise ValueError(f"{name} must be a finite number from 0.0 to 1.0")
+    return out
+
+
+def resolve_pruning_thresholds(
+    *,
+    show_more: bool = False,
+    node_threshold: float | None = None,
+    edge_threshold: float | None = None,
+) -> tuple[float, float]:
+    """Return validated ``(node_threshold, edge_threshold)`` for ``prune_graph``.
+
+    Uses published profile thresholds (``0.7`` node, ``0.9`` edge) by
+    default and relaxes them when ``show_more=True`` (``0.85`` node, ``0.96``
+    edge) unless explicit thresholds are provided.
+    """
+    if type(show_more) is not bool:
+        raise ValueError("show_more must be a boolean")
+    default_node = SHOW_MORE_NODE_THRESHOLD if show_more else DEFAULT_NODE_THRESHOLD
+    default_edge = SHOW_MORE_EDGE_THRESHOLD if show_more else DEFAULT_EDGE_THRESHOLD
+    eff_node = default_node if node_threshold is None else _validated_threshold(node_threshold, "node_threshold")
+    eff_edge = default_edge if edge_threshold is None else _validated_threshold(edge_threshold, "edge_threshold")
+    return eff_node, eff_edge
 
 
 @dataclass
@@ -84,23 +122,69 @@ class Graph:
     def from_circuit_tracer(
         cls,
         ct_graph,
-        pruned,
+        pruned=None,
         *,
-        replacement_score: float,
-        completeness_score: float,
-        node_influence: torch.Tensor,
+        replacement_score: float | None = None,
+        completeness_score: float | None = None,
+        node_influence: torch.Tensor | None = None,
         tokenizer=None,
         device="cpu",
         trace_id: str = "trace-1",
         max_nodes: int = LARGE_NODE_CAP,
         max_edges: int = LARGE_EDGE_CAP,
+        node_threshold: float | None = None,
+        edge_threshold: float | None = None,
+        show_more: bool = False,
         feature_labels: dict[tuple[int, int], str] | None = None,
         settings: dict | None = None,
         memory=None,
     ) -> "Graph":
-        """Convert a CPU-resident ``circuit_tracer.Graph`` and ``PruneResult`` into a Caliper ``Graph``."""
+        """Convert a CPU-resident ``circuit_tracer.Graph`` (pruning if needed) into a Caliper ``Graph``."""
         bounded_integer(max_nodes, "max_nodes", 1, LARGE_NODE_CAP)
         bounded_integer(max_edges, "max_edges", 0, LARGE_EDGE_CAP)
+        eff_node_threshold, eff_edge_threshold = resolve_pruning_thresholds(
+            show_more=show_more,
+            node_threshold=node_threshold,
+            edge_threshold=edge_threshold,
+        )
+        if pruned is None:
+            from circuit_tracer.graph import compute_graph_scores, compute_node_influence, prune_graph
+
+            pruned = prune_graph(
+                ct_graph,
+                node_threshold=eff_node_threshold,
+                edge_threshold=eff_edge_threshold,
+            )
+            if replacement_score is None or completeness_score is None:
+                rep_s, comp_s = compute_graph_scores(ct_graph)
+                if replacement_score is None:
+                    replacement_score = rep_s
+                if completeness_score is None:
+                    completeness_score = comp_s
+            if node_influence is None:
+                n_logits_ct = len(ct_graph.logit_targets)
+                logit_weights = torch.zeros(
+                    ct_graph.adjacency_matrix.shape[0],
+                    device=ct_graph.adjacency_matrix.device,
+                    dtype=torch.float32,
+                )
+                if n_logits_ct > 0:
+                    logit_weights[-n_logits_ct:] = ct_graph.logit_probabilities.to(
+                        device=logit_weights.device, dtype=torch.float32
+                    )
+                node_influence = compute_node_influence(ct_graph.adjacency_matrix, logit_weights)
+            merged_settings = {
+                "node_threshold": eff_node_threshold,
+                "edge_threshold": eff_edge_threshold,
+                "show_more": bool(show_more),
+            }
+            if settings is not None:
+                merged_settings.update(settings)
+            settings = merged_settings
+        elif replacement_score is None or completeness_score is None or node_influence is None:
+            raise ValueError(
+                "replacement_score, completeness_score, and node_influence are required when pruned is provided"
+            )
         adj = ct_graph.adjacency_matrix.detach().cpu().float()
         input_ids = ct_graph.input_tokens.detach().cpu().tolist()
         n_tokens = len(input_ids)
@@ -419,14 +503,20 @@ class Tracer:
         max_edges: int = LARGE_EDGE_CAP,
         max_n_logits: int = 10,
         desired_logit_prob: float = 0.95,
-        node_threshold: float = 0.8,
-        edge_threshold: float = 0.98,
+        node_threshold: float | None = None,
+        edge_threshold: float | None = None,
+        show_more: bool = False,
         batch_size: int | None = None,
         update_interval: int = 8,
     ) -> Graph:
         from ._feature_labels import label_graph_nodes
         from ._publish import _publication_scope
 
+        eff_node_threshold, eff_edge_threshold = resolve_pruning_thresholds(
+            show_more=show_more,
+            node_threshold=node_threshold,
+            edge_threshold=edge_threshold,
+        )
         with _publication_scope(self.model):
             sig = self._active_signature()
             label_id = getattr(self.index, "label_identity", None) if self.index is not None else None
@@ -438,8 +528,9 @@ class Tracer:
                 max_edges,
                 max_n_logits,
                 float(desired_logit_prob),
-                float(node_threshold),
-                float(edge_threshold),
+                eff_node_threshold,
+                eff_edge_threshold,
+                bool(show_more),
                 batch_size,
                 update_interval,
                 label_id,
@@ -460,8 +551,9 @@ class Tracer:
                 max_edges=max_edges,
                 max_n_logits=max_n_logits,
                 desired_logit_prob=desired_logit_prob,
-                node_threshold=node_threshold,
-                edge_threshold=edge_threshold,
+                node_threshold=eff_node_threshold,
+                edge_threshold=eff_edge_threshold,
+                show_more=bool(show_more),
                 batch_size=batch_size,
                 update_interval=update_interval,
                 trace_id=trace_id,
