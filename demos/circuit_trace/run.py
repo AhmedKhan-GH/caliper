@@ -1428,7 +1428,7 @@ def main(argv=None) -> int:
         parser.error(str(exc))
     out = Path(args.output).resolve()
     if args.model == "tiny-lm" and not args.dictionary:
-        from caliper.interp._hosted import fixture_resources
+        from caliper.interp._hosted_resources import fixture_resources
         args.dictionary = str(fixture_resources(out / "fixture-dict"))
 
     session = Session(args, out, show=args.show)

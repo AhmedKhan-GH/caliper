@@ -363,7 +363,7 @@ class ManagedRun:
 
     def _load(self, pkg, model, optimizer) -> None:
         if self.inference is not None:
-            from .interp._hosted import CHECKPOINT_BYTES, checkpoint_metadata
+            from .interp._hosted_resources import CHECKPOINT_BYTES, checkpoint_metadata
         with open(self.resume, "rb") as f:
             data = f.read(CHECKPOINT_BYTES + 1) if self.inference is not None else f.read()
         if self.inference is not None:
@@ -440,7 +440,7 @@ class ManagedRun:
         extra = {"format": FORMAT, "version": VERSION, "run": self.id, "parent": self.parent,
                  "step": step, "params": params}
         if self.inference is not None:
-            from .interp._hosted import CHECKPOINT_FORMAT, checkpoint_metadata
+            from .interp._hosted_resources import CHECKPOINT_FORMAT, checkpoint_metadata
             extra.update(self.inference.state_dict(), format=CHECKPOINT_FORMAT)
             if not checkpoint_metadata(extra):
                 raise ValueError("inference checkpoint exceeds the metadata limits")
