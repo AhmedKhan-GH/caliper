@@ -16,8 +16,9 @@
 // on the camera, reads the resource versions of the step history and the
 // values of params' references through functions that the app gives, and
 // pushes a `program` event with half "draw" for each change of a program's
-// state: compiled, refused or stopped, with the code, the message, the pass
-// and its entry. status() gives the `draw` object of program.status.
+// state or warning: compiled, warned, refused or stopped, with the code, the
+// message, the pass and its entry. status() gives the `draw` object of
+// program.status.
 //
 // Threads: every function on the frame thread, but status(), which any
 // thread may call.
@@ -71,8 +72,8 @@ public:
 
 // The `draw` object of program.status for one program.
 nlohmann::json draw_status_json(const DrawStatus& status);
-// The `program` event of a change of a program's draw half: change "compiled", "refused" or
-// "stopped", with half "draw", and the pass, its entry, the code and the message of an error.
+// The `program` event of a change of a program's draw half: change "compiled", "warned", "refused"
+// or "stopped", with half "draw", and the pass, its entry, the code and the message.
 caliper_builder::Event draw_event(const std::string& program, const std::string& panel, const DrawStatus& status,
                                   const char* change);
 
@@ -145,6 +146,7 @@ private:
     mutable std::mutex mutex_;
     std::map<std::string, DrawStatus> status_;
     std::map<std::string, DrawState> reported_;
+    std::map<std::string, std::string> reported_warning_;
 };
 
 }  // namespace caliper_draw

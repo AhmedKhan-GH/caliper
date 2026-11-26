@@ -11895,7 +11895,7 @@
                   "type": "string"
                 },
                 "change": {
-                  "description": "cursor: what changed: live, held, playing, moved (by a command, a step or a key) or clamped (to the nearest kept step); run: what changed: the run's state, a parameter applied at a step, the end of an action, the attachment of a script, the state of a managed run (runner), or an intervention applied at a step (intervene); program: compiled, refused by a check, or stopped by a limit.",
+                  "description": "cursor: what changed: live, held, playing, moved (by a command, a step or a key) or clamped (to the nearest kept step); run: what changed: the run's state, a parameter applied at a step, the end of an action, the attachment of a script, the state of a managed run (runner), or an intervention applied at a step (intervene); program: compiled, warned over its frame budget, refused by a check, or stopped by a limit.",
                   "enum": [
                     "state",
                     "param",
@@ -11904,6 +11904,7 @@
                     "runner",
                     "intervene",
                     "compiled",
+                    "warned",
                     "refused",
                     "stopped",
                     "live",
@@ -11915,7 +11916,7 @@
                   "type": "string"
                 },
                 "code": {
-                  "description": "program with change refused or stopped: a stable code, such as program.writes_input.",
+                  "description": "program with change warned, refused or stopped: a stable code, such as program.writes_input.",
                   "type": "string"
                 },
                 "column": {
@@ -12008,7 +12009,7 @@
                   "type": "integer"
                 },
                 "half": {
-                  "description": "program of an instance of a piece: the half that compiled, was refused or stopped.",
+                  "description": "program of an instance of a piece: the half that compiled, warned, was refused or stopped.",
                   "enum": [
                     "derive",
                     "draw"
@@ -12016,7 +12017,7 @@
                   "type": "string"
                 },
                 "host": {
-                  "description": "program: where it compiled, was refused or stopped.",
+                  "description": "program: where it compiled, warned, was refused or stopped.",
                   "enum": [
                     "script",
                     "viewer"
@@ -12067,7 +12068,7 @@
                   "type": "integer"
                 },
                 "message": {
-                  "description": "program with change refused or stopped: one plain sentence that says why.",
+                  "description": "program with change warned, refused or stopped: one plain sentence that says why.",
                   "type": "string"
                 },
                 "name": {
@@ -12467,7 +12468,7 @@
                     "type": "string"
                   },
                   "frame_ms": {
-                    "description": "The most GPU time of the draw half in one frame in milliseconds; 4 when absent. Over it on 30 frames in a row, the program stops.",
+                    "description": "The most GPU time of the draw half in one frame in milliseconds; 4 when absent. Over it on 30 frames in a row, the program records a warning and keeps drawing.",
                     "maximum": 16,
                     "minimum": 0.1,
                     "type": "number"
@@ -14399,7 +14400,7 @@
                       "description": "The draw half's last error, or null.",
                       "properties": {
                         "code": {
-                          "description": "A stable code, such as program.draw_over_time.",
+                          "description": "A stable code, such as program.draw_timeout.",
                           "type": "string"
                         },
                         "message": {
@@ -14460,6 +14461,33 @@
                         "stopped"
                       ],
                       "type": "string"
+                    },
+                    "warning": {
+                      "additionalProperties": false,
+                      "description": "The draw half's frame-budget warning while running, or null.",
+                      "properties": {
+                        "code": {
+                          "description": "A stable code, such as program.draw_over_time.",
+                          "type": "string"
+                        },
+                        "message": {
+                          "description": "One plain sentence that names the pass, its time, and its limit.",
+                          "type": "string"
+                        },
+                        "where": {
+                          "description": "The pass, such as draw.passes[1], or draw.",
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message",
+                        "where"
+                      ],
+                      "type": [
+                        "object",
+                        "null"
+                      ]
                     }
                   },
                   "required": [
@@ -14469,7 +14497,8 @@
                     "memory_bytes",
                     "memory_limit_bytes",
                     "resource_step",
-                    "error"
+                    "error",
+                    "warning"
                   ],
                   "type": [
                     "object",
@@ -14880,7 +14909,7 @@
                     "type": "string"
                   },
                   "frame_ms": {
-                    "description": "The most GPU time of the draw half in one frame in milliseconds; 4 when absent. Over it on 30 frames in a row, the program stops.",
+                    "description": "The most GPU time of the draw half in one frame in milliseconds; 4 when absent. Over it on 30 frames in a row, the program records a warning and keeps drawing.",
                     "maximum": 16,
                     "minimum": 0.1,
                     "type": "number"
@@ -16050,7 +16079,7 @@
                     "type": "string"
                   },
                   "frame_ms": {
-                    "description": "The most GPU time of the draw half in one frame in milliseconds; 4 when absent. Over it on 30 frames in a row, the program stops.",
+                    "description": "The most GPU time of the draw half in one frame in milliseconds; 4 when absent. Over it on 30 frames in a row, the program records a warning and keeps drawing.",
                     "maximum": 16,
                     "minimum": 0.1,
                     "type": "number"
@@ -17094,7 +17123,7 @@
                     "type": "string"
                   },
                   "frame_ms": {
-                    "description": "The most GPU time of the draw half in one frame in milliseconds; 4 when absent. Over it on 30 frames in a row, the program stops.",
+                    "description": "The most GPU time of the draw half in one frame in milliseconds; 4 when absent. Over it on 30 frames in a row, the program records a warning and keeps drawing.",
                     "maximum": 16,
                     "minimum": 0.1,
                     "type": "number"

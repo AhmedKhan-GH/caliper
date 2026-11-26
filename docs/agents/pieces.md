@@ -403,9 +403,9 @@ Each command is one MCP tool, with the first dot of its name replaced by `_`. Th
 
 ## Program Status and Events
 
-`program.status` gives an instance the kind `piece` and its pin. The derive half reports as for any program, with `host`, `state`, `every`, `memory_bytes` and `error`. An instance that draws also has a `draw` object with `state` (`waiting`, `review`, `compiled`, `running`, `refused` or `stopped`), `frame_ms`, `frame_limit_ms`, `memory_bytes`, `memory_limit_bytes`, `resource_step` and `error`. The `error.where` of the draw half names the pass, such as `draw.passes[1]`.
+`program.status` gives an instance the kind `piece` and its pin. The derive half reports as for any program, with `host`, `state`, `every`, `memory_bytes` and `error`. An instance that draws also has a `draw` object with `state` (`waiting`, `review`, `compiled`, `running`, `refused` or `stopped`), `frame_ms`, `frame_limit_ms`, `memory_bytes`, `memory_limit_bytes`, `resource_step`, `error` and `warning`. Both `error.where` and `warning.where` name the pass, such as `draw.passes[1]`.
 
-The event `program` carries the keys `half` (`derive` or `draw`) and `pass`, the index of the pass or null. An agent waits for the event `compiled` of both halves of an instance before it reads. The changes `stopped` and `refused` carry the codes of this page. The event `pick` carries the keys of the next section. [Run Control and Events](run-control-and-events.md) lists all events.
+The event `program` carries the keys `half` (`derive` or `draw`) and `pass`, the index of the pass or null. An agent waits for the event `compiled` of both halves of an instance before it reads. The changes `warned`, `stopped` and `refused` carry the codes of this page. The event `pick` carries the keys of the next section. [Run Control and Events](run-control-and-events.md) lists all events.
 
 ## Resources and Step History
 
@@ -509,21 +509,21 @@ A draw half writes only the color, ID and depth of its panel and its own targets
 
 A training run on the same GPU can delay a correct frame by a second or more, thus the GPU time of a frame decides. A frame that is not done 1 s after its submit is late, and the program submits no new frame until it is done. A frame over 250 ms of GPU time is heavy, which is more than 15 times the largest `frame_ms`. Heavy frames in a row remove the program when their GPU time passes 1 s together. Thus one frame over 1 s of GPU time removes it at once. Where the backend has no timestamps, three late frames in a row remove it.
 
-The host cannot stop a pass that runs on the GPU. Thus it removes a draw that goes over its budget and reports it. The other programs of the panel keep drawing, and the derive half keeps its own limits.
+The host cannot stop a pass that runs on the GPU. A draw that goes over its frame budget records a warning in status and events while it keeps drawing. The warning clears when the frame time returns within the limit. A hung draw or a draw that passes its memory budget stops and releases its objects. Other programs of the panel keep drawing, and the derive half keeps its own limits.
 
 | Condition | Result |
 |---|---|
-| A program is over `frame_ms` on 30 frames in a row | `program.draw_over_time`, naming the costliest pass |
+| A program is over `frame_ms` on 30 frames in a row | `program.draw_over_time` warning, naming the costliest pass |
 | Heavy frames in a row took more than 1 s of GPU time together | `program.draw_timeout`, at once |
 | The driver ended a late frame | `program.draw_timeout` |
 | Three frames in a row are late, on a backend without timestamps | `program.draw_timeout` |
 | A frame of a program is not done after 5 s | `program.draw_timeout`, at once |
-| The programs of one panel together are over 16.7 ms on 30 frames in a row | `program.draw_over_time` for the costliest program |
+| The programs of one panel together are over 16.7 ms on 30 frames in a row | `program.draw_over_time` warning for the costliest program |
 | A resource, a draw buffer or a target would pass `memory_mb` | `program.draw_over_memory` |
 | The graphics layer refuses a submitted frame | `program.layer_refused` |
 | A version is larger than its declared resource, or does not match its layout and count | `program.resource_too_large` or `program.bad_resource` |
 
-The `draw` object of the status shows `stopped` with the code and the `where` of the pass, such as `draw.passes[2]`. The message names the program and the pass, for example "Stopped tower_arcs: draw pass 2 (bloom) took 50.0 ms a frame, above its 4 ms". A removed program frees its buffers and targets. A change of the program installs it again.
+The `draw` object of the status stays `running` with `warning` set for a frame-budget warning. It shows `stopped` with `error` set for a timeout, refusal or memory breach. Both objects include the code and the `where` of the pass, such as `draw.passes[2]`. For example, a warning message reads "tower_arcs: draw pass 2 (bloom) took 50.0 ms a frame, above its 4 ms". A stopped program frees its buffers and targets. A change of the program installs it again.
 
 ## Refusals
 
@@ -570,7 +570,7 @@ On a WebGPU device in compatibility mode without vertex storage, the viewer repo
 
 The browser module runs the same draw half from the same WGSL and the same declaration. It receives each draw half as PROGRAM from the script, and the resources as RESOURCE. It checks the names, the files, the imports and the hash with the same code that the app compiles. A hash that differs from the pin refuses the program. It then gives each composed module to WebGPU. A compilation message or a refused pipeline refuses the program with `program.browser_refused`, and the line maps back to its file.
 
-The browser has no compiler of its own, because WebGPU keeps each draw inside its bindings. The browser's dashboard viewer gets the instances and the newest resources of a scene panel through `panel.data` and draws them with the same module. A program of a foreign spec stays in review there until the app reviews it. The browser module keeps no step history and draws the newest version of each resource. It keeps a version only of a resource that the piece of its program publishes, with at most the declared count and bytes, and it keeps at most 16 programs of a script. All its versions hold at most 512 MiB together. A version above this limit is not kept. Without timestamps, the frame time is unknown. The time from the submit until the work is seen done also holds the polling of the page, once a frame, thus it cannot judge a limit of a few milliseconds. Only 30 frames in a row over 250 ms of that time stop a program with `program.draw_over_time`, and the rules of late frames apply as in the app.
+The browser has no compiler of its own, because WebGPU keeps each draw inside its bindings. The browser's dashboard viewer gets the instances and the newest resources of a scene panel through `panel.data` and draws them with the same module. A program of a foreign spec stays in review there until the app reviews it. The browser module keeps no step history and draws the newest version of each resource. It keeps a version only of a resource that the piece of its program publishes, with at most the declared count and bytes, and it keeps at most 16 programs of a script. All its versions hold at most 512 MiB together. A version above this limit is not kept. Without timestamps, the frame time is unknown. The time from the submit until the work is seen done also holds the polling of the page, once a frame, thus it cannot judge a limit of a few milliseconds. Only 30 frames in a row over 250 ms of that time record a `program.draw_over_time` warning, and the rules of late frames stop a hung draw as in the app.
 
 ## Builder Pane
 
@@ -601,7 +601,7 @@ These parts are not built, and the pieces do not depend on them.
 - The derive half on a platform other than Metal.
 - A preview of a piece from its sample.
 
-Three points need care when a piece is written. In a fork, another head may form induction arcs in place of the ablated one. Without multisampling, an arc of one pixel aliases, thus a width of at least one pixel times the pixel ratio keeps it visible. The timestamp query is optional in WebGPU, thus a browser does not know the frame time, and it stops a draw only when its frames take far longer than the limit.
+Three points need care when a piece is written. In a fork, another head may form induction arcs in place of the ablated one. Without multisampling, an arc of one pixel aliases, thus a width of at least one pixel times the pixel ratio keeps it visible. The timestamp query is optional in WebGPU, thus a browser without it does not know the frame time, and it warns on a draw only when frames exceed 250 ms.
 
 ## Tests
 

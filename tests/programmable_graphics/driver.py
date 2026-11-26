@@ -504,14 +504,14 @@ def steps(r):
     n = c.differs("tower-parent", "tower-child", 300)
     r.result["fork"] = {"child": child, "step": cb["step"], "scores": ch, "tower_pixels_changed": n}
 
-    # 13. A draw over its time is removed and named, and training goes on.
-    r.step("a draw over its time is stopped and named while training goes on")
+    # 13. A draw over its time records a warning, keeps drawing, and training goes on.
+    r.step("a draw over its time records a warning and keeps drawing while training goes on")
     slow = dict(pieces["attention_arcs"])
     slow["name"] = "attention_arcs_slow"
     slow["params"] = list(slow["params"]) + [{"name": "burn", "default": 20000.0, "min": 0.0, "max": 100000.0}]
     # The draw half's loop holds the GPU that the script's derive half shares, which can put a derive pass of 4 ms,
     # the default, over its limit three times in a row before the draw half's 30 frames: the copy's derive half
-    # takes the highest limit, and the wait below takes the draw half's stop only.
+    # takes the highest limit, and the wait below takes the draw half's warning only.
     slow["derive"] = dict(slow["derive"], time_ms=50.0)
     d = re.sub(r"( *)return (sum \* [0-9.]+ \* params\.glow);",
                r"\1var burn = 0.0;\n\1for (var i = 0u; i < u32(params.burn); i = i + 1u) {\n"
@@ -527,20 +527,22 @@ def steps(r):
     r.call("program_create", {"id": "slow_arcs", "title": "Slow Arcs", "piece": {"name": "attention_arcs_slow",
            "version": 1, "from": "workspace"}, "panel": "slow", "bind": binds, "params": {"threshold": 0.05}})
     r.call("panel_patch", {"id": "slow", "patch": {"bind": {"scene": None}, "options": {"exclude": None}}})
-    stop = c.event("the slow draw stopped",
-                   {"kind": "program", "program": "slow_arcs", "change": "stopped", "half": "draw"}, 180)
+    warned = c.event("the slow draw warned",
+                     {"kind": "program", "program": "slow_arcs", "change": "warned", "half": "draw"}, 180)
     st = c.status("slow_arcs") or {}
     draw = st.get("draw") or {}
-    err = draw.get("error") or {}
-    if err.get("code") != "program.draw_over_time" or "slow_arcs" not in err.get("message", ""):
-        raise Fail(f"slow_arcs stopped with {err}; event {stop}")
-    if not re.fullmatch(r"draw\.passes\[\d+\]", err.get("where", "")):
-        raise Fail(f"the stop names no pass: {err}")
+    warn = draw.get("warning") or {}
+    if draw.get("state") != "running" or draw.get("error") is not None:
+        raise Fail(f"slow_arcs did not stay running: {draw}; event {warned}")
+    if warn.get("code") != "program.draw_over_time" or "slow_arcs" not in warn.get("message", ""):
+        raise Fail(f"slow_arcs warned with {warn}; event {warned}")
+    if not re.fullmatch(r"draw\.passes\[\d+\]", warn.get("where", "")):
+        raise Fail(f"the warning names no pass: {warn}")
     tw = (c.status("tower_arcs") or {}).get("draw") or {}
     if tw.get("state") != "running":
         raise Fail(f"tower_arcs does not draw: {tw}")
     c.until("training goes on", lambda: r.run_step(child) > step_at + 5, 60)
-    r.result["draw_stop"] = {"code": err["code"], "where": err["where"], "message": err["message"]}
+    r.result["draw_warning"] = {"code": warn["code"], "where": warn["where"], "message": warn["message"]}
 
     # 14. The derive halves stay inside their share of the run: 2 percent is the target, a miss is a warning,
     # and only a share above twice the target fails.

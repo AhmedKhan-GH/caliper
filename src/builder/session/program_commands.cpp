@@ -27,8 +27,11 @@ json draw_status_json(const DrawStatus& d) {
                 {"memory_bytes", d.memory_bytes},
                 {"memory_limit_bytes", d.memory_limit_bytes},
                 {"resource_step", opt(d.resource_step)},
-                {"error", nullptr}};
+                {"error", nullptr},
+                {"warning", nullptr}};
     if (d.error) out["error"] = {{"code", d.error->code}, {"message", d.error->message}, {"where", d.error_where}};
+    if (d.warning)
+        out["warning"] = {{"code", d.warning->code}, {"message", d.warning->message}, {"where", d.warning_where}};
     return out;
 }
 
@@ -69,11 +72,12 @@ void push_program_event(EventSink& sink, const ProgramStatus& s, std::string_vie
     e.panel = s.panel;
     e.origin = s.host == "script" ? "script" : "ui";
     e.fields = {{"program", s.id}, {"change", std::string(change)}, {"host", s.host == "none" ? "viewer" : s.host}};
-    if (s.error) {
-        e.fields["code"] = s.error->code;
-        e.fields["message"] = s.error->message;
-        e.fields["line"] = s.error->line;
-        e.fields["column"] = s.error->column;
+    const std::optional<ProgramError>& diag = s.error ? s.error : (s.draw ? s.draw->warning : std::nullopt);
+    if (diag) {
+        e.fields["code"] = diag->code;
+        e.fields["message"] = diag->message;
+        e.fields["line"] = diag->line;
+        e.fields["column"] = diag->column;
     }
     // An instance's half and its pass (design/programmable-graphics.md, Status and Events).
     if (!s.half.empty()) {
@@ -148,7 +152,8 @@ json instance_status(const spec::Spec& s, const spec::Program& p, const ProgramS
                        {"memory_limit_bytes",
                         std::uint64_t(d.memory_mb.value_or(spec::piece_limits::kDrawMemoryMbDefault)) << 20},
                        {"resource_step", nullptr},
-                       {"error", nullptr}};
+                       {"error", nullptr},
+                       {"warning", nullptr}};
     }
     return out;
 }

@@ -123,9 +123,9 @@ async function composite(page: Page, step: number, programs: number, consoleLine
     let running = 0;
     for (const m of (mods.mounts as Map<string, any>).values()) {
       const list = m.handle?.stats.programs;
-      // Drawing the recorded step, or stopped for its frame time, which a software adapter can cause.
+      // Drawing the recorded step; slow software adapters warn on frame time and keep running.
       for (const p of (typeof list === 'string' ? JSON.parse(list) : list ?? []) as any[])
-        if ((p.state === 'running' && p.step === step && p.frames >= 1) || (p.state === 'stopped' && p.code === 'program.draw_over_time')) running++;
+        if (p.state === 'running' && p.step === step && p.frames >= 1) running++;
     }
     return progs.length === n && running === n && s.controls.every((c: any) => c.text || c.kind === 'readout');
   }, [step, programs], { timeout: 90_000, polling: 100 }).catch(async (e) => {
@@ -303,13 +303,9 @@ test('the Arc Tower dashboard draws in the browser as in the app, on the same re
 
   // The page alone: every leaf drawn, both programs drawn by the module, the control's state shown.
   const state = shot.state;
-  const stopped: string[] = [];
   for (const [id, m] of Object.entries(shot.programs) as [string, Json][]) {
     expect(m.mounted, `${id}: the module is mounted`).toBe(true);
-    for (const p of m.programs) {
-      if (p.module === 'stopped' && p.code === 'program.draw_over_time') stopped.push(p.id);
-      else expect(p.module, `${id}/${p.id}: ${p.code}`).toBe('running');
-    }
+    for (const p of m.programs) expect(p.module, `${id}/${p.id}: ${p.code}`).toBe('running');
   }
   expect(state.controls.length).toBe((spec.control ?? []).length);
   for (const c of state.controls) expect(c.enabled).toBe(false);
@@ -324,10 +320,8 @@ test('the Arc Tower dashboard draws in the browser as in the app, on the same re
       fs.writeFileSync(path.join(CAPTURES, `${name}.png`), png);
     }
   };
-  if (fs.existsSync(skipped) || !fs.existsSync(report) || stopped.length) {
-    const why = fs.existsSync(skipped) ? fs.readFileSync(skipped, 'utf8').trim()
-      : stopped.length ? `this adapter stopped ${stopped.join(', ')} over the frame time (program.draw_over_time)`
-      : `no app side in ${APP}`;
+  if (fs.existsSync(skipped) || !fs.existsSync(report)) {
+    const why = fs.existsSync(skipped) ? fs.readFileSync(skipped, 'utf8').trim() : `no app side in ${APP}`;
     write('parity-dashboard-browser', encodePng(W, H, web));
     console.log(`[${info.project.name}] dashboard: comparison skipped: ${why}`);
     info.annotations.push({ type: 'skip', description: `comparison skipped: ${why}` });

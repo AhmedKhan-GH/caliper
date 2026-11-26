@@ -392,6 +392,8 @@ std::string WebPrograms::status_json() const {
         j.set("where", err.where);
         j.set("line", std::uint64_t(err.line));
         j.set("column", std::uint64_t(err.column));
+        j.set("warning_code", p->shown.warning.code);
+        j.set("warning", p->shown.warning.message);
         std::int64_t step = -1;
         for (const auto& [rid, v] : p->versions) step = std::max(step, v.step);
         j.set("step", step);

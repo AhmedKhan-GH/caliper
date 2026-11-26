@@ -1213,6 +1213,10 @@ std::vector<caliper_builder::ProgramStatus> drawn_items(const caliper_draw::Draw
             d.error = caliper_builder::ProgramError{s.error.code, s.error.message, s.error.line, s.error.column};
             d.error_where = s.error.where;
         }
+        if (!s.warning.ok()) {
+            d.warning = caliper_builder::ProgramError{s.warning.code, s.warning.message, s.warning.line, s.warning.column};
+            d.warning_where = s.warning.where;
+        }
         if (s.pass >= 0) st.pass = static_cast<std::uint32_t>(s.pass);
         st.state = d.state;
         st.draw = std::move(d);

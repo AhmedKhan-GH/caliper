@@ -67,10 +67,14 @@ nlohmann::json draw_status_json(const DrawStatus& s) {
                         {"memory_bytes", s.memory_bytes},
                         {"memory_limit_bytes", s.memory_limit_bytes},
                         {"resource_step", s.resource_step < 0 ? nlohmann::json(nullptr) : nlohmann::json(s.resource_step)},
-                        {"error", nullptr}};
+                        {"error", nullptr},
+                        {"warning", nullptr}};
     if (!s.error.ok()) {
         j["error"] = {{"code", s.error.code}, {"message", s.error.message}, {"where", s.error.where},
                       {"line", s.error.line}, {"column", s.error.column}};
+    }
+    if (!s.warning.ok()) {
+        j["warning"] = {{"code", s.warning.code}, {"message", s.warning.message}, {"where", s.warning.where}};
     }
     return j;
 }
@@ -83,12 +87,13 @@ caliper_builder::Event draw_event(const std::string& program, const std::string&
     e.origin = "ui";
     e.fields = {{"program", program}, {"change", change}, {"host", "viewer"}, {"half", "draw"},
                 {"pass", s.pass >= 0 ? nlohmann::json(s.pass) : nlohmann::json(nullptr)}};
-    if (!s.error.ok()) {
-        e.fields["code"] = s.error.code;
-        e.fields["message"] = s.error.message;
-        e.fields["where"] = s.error.where;
-        e.fields["line"] = s.error.line;
-        e.fields["column"] = s.error.column;
+    const Verdict& v = !s.error.ok() ? s.error : s.warning;
+    if (!v.ok()) {
+        e.fields["code"] = v.code;
+        e.fields["message"] = v.message;
+        e.fields["where"] = v.where;
+        e.fields["line"] = v.line;
+        e.fields["column"] = v.column;
         if (!s.entry.empty()) e.fields["entry"] = s.entry;
     }
     return e;
@@ -237,6 +242,7 @@ void DrawHost::reconcile(const cs::Spec& spec) {
             if (kept) ++it;
             else {
                 reported_.erase(it->first);
+                reported_warning_.erase(it->first);
                 it = status_.erase(it);
             }
         }
@@ -277,7 +283,9 @@ std::map<std::string, DrawStatus> DrawHost::status() const {
 
 void DrawHost::report(const std::string& program, const std::string& panel, const DrawStatus& s) {
     DrawState before = DrawState::waiting;
+    std::string warning_before;
     bool known = false;
+    const std::string warning_now = s.warning.ok() ? std::string() : s.warning.code + ":" + s.warning.where;
     {
         std::lock_guard<std::mutex> lock(mutex_);
         status_[program] = s;
@@ -285,14 +293,19 @@ void DrawHost::report(const std::string& program, const std::string& panel, cons
         known = it != reported_.end();
         if (known) before = it->second;
         reported_[program] = s.state;
+        warning_before = reported_warning_[program];
+        reported_warning_[program] = warning_now;
     }
-    if (known && before == s.state) return;
-    const char* change = s.state == DrawState::compiled  ? "compiled"
-                         : s.state == DrawState::refused ? "refused"
-                         : s.state == DrawState::stopped ? "stopped"
-                                                         : nullptr;
-    if (change == nullptr || events_ == nullptr) return;
-    events_->push(draw_event(program, panel, s, change));
+    if (events_ == nullptr) return;
+    if (!known || before != s.state) {
+        const char* change = s.state == DrawState::compiled  ? "compiled"
+                             : s.state == DrawState::refused ? "refused"
+                             : s.state == DrawState::stopped ? "stopped"
+                                                             : nullptr;
+        if (change != nullptr) events_->push(draw_event(program, panel, s, change));
+    }
+    if (s.state == DrawState::running && !warning_now.empty() && warning_now != warning_before)
+        events_->push(draw_event(program, panel, s, "warned"));
 }
 
 std::vector<std::uint8_t> DrawHost::pack_params(const Record& r) const {
