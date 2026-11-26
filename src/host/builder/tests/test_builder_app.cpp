@@ -521,6 +521,61 @@ TEST_CASE("builder app: a panel removed with its x, its menu and the delete key,
     CHECK(undone == 3);
 }
 
+TEST_CASE("builder app: non-closable panel and Lock Layout hide close controls and refuse removal" *
+          doctest::test_suite("app")) {
+    const char* exe = std::getenv("CALIPER_TEST_CALIPER_EXE");
+    const std::string root = app_root(exe, "builder-app-lock-closable");
+    if (root.empty()) return;
+    std::string window = "1440x900", shots = root + "/shots";
+    if (const char* w = std::getenv("CALIPER_TEST_WINDOW"); w && *w) window = w;
+    if (const char* d = std::getenv("CALIPER_TEST_SHOTS"); d && *d) shots = d;
+    std::filesystem::create_directories(root + "/ws/data");
+    {
+        std::ofstream csv(root + "/ws/data/run42_metrics.csv");
+        csv << "step,loss\n";
+        for (int i = 0; i < 40; ++i) csv << i << "," << 1.0 / (1 + i) << "\n";
+    }
+    {
+        std::ofstream f(root + "/build.jsonl");
+        f << R"({"name":"data.import","args":{"paths":["data/run42_metrics.csv"],"run":true}})" << "\n"
+          << R"({"name":"spec.new","args":{"id":"lock-test","title":"Lock Test"}})" << "\n"
+          << R"({"name":"source.add","args":{"id":"metrics","catalog":"table:run42_metrics"}})" << "\n"
+          << R"({"name":"panel.create","args":{"id":"curves","primitive":"series","closable":false,"bind":{"x":"metrics.step","y":["metrics.loss"]}}})"
+          << "\n"
+          << R"({"name":"panel.create","args":{"id":"rows","primitive":"table","bind":{"rows":"metrics"}}})" << "\n"
+          << R"({"name":"applet.save","args":{"overwrite":true}})" << "\n"
+          << R"({"name":"applet.open","args":{"id":"lock-test"}})" << "\n";
+    }
+    // 1) Non-closable `curves` ignores Delete/Backspace and exposes no remove:curves.
+    // 2) Clicking Lock Layout locks the instrument so even closable `rows` ignores Delete/Backspace.
+    // 3) Clicking Lock Layout again unlocks so `remove:rows` works and undo restores it.
+    const std::string script =
+        "wait 60; page spec; wait 30; focus curves; key backspace; wait 10; "
+        "click bar:lock; wait 10; focus rows; key backspace; wait 10; "
+        "click bar:lock; wait 10; click remove:rows; wait 10; key cmd+z; wait 10; leave; wait 5; quit";
+    const auto result = run_app(exe, root, script,
+                                {{"CALIPER_COMMAND_SCRIPT", root + "/build.jsonl"}, {"CALIPER_WINDOW_SIZE", window},
+                                 {"CALIPER_TEST_SPEC_UI_SHOTS", shots}});
+    INFO("stderr tail: " << result.err.substr(result.err.size() > 4000 ? result.err.size() - 4000 : 0));
+    REQUIRE(result.error.ok());
+    if (result.err.find("[renderer] metal") == std::string::npos) {
+        std::printf("caliper_builder_app skipped: no Metal device\n");
+        return;
+    }
+    CHECK(result.status.success());
+    CHECK(result.err.find("[ui] done") != std::string::npos);
+    std::vector<std::string> removed;
+    std::vector<bool> lock_states;
+    for (const auto& e : caliper_builder::read_journal(root + "/ws/journal/commands.jsonl").events) {
+        if (e.name == "panel.remove" && e.event == "do" && e.ok)
+            removed.push_back(e.args.value("id", std::string()));
+        if (e.name == "layout.lock" && e.event == "do" && e.ok)
+            lock_states.push_back(e.args.value("locked", false));
+    }
+    CHECK(lock_states == std::vector<bool>{true, false});
+    CHECK(removed == std::vector<std::string>{"rows"});
+}
+
 // Open in browser hands the browser only a link of the viewer on this
 // machine's loopback API, in the characters such a link holds.
 TEST_CASE("builder app: only a link of the browser viewer on loopback goes to the browser") {

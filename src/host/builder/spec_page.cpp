@@ -210,6 +210,7 @@ struct SpecPage::Impl {
     size_t panels = 0, sources = 0;
     bool has_spec = false;
     bool dirty = false;
+    bool layout_locked = false;
     bool from_file = false;   // enter_file(): a spec applet's file, not the open spec
     // The open spec's saved applet in the workspace (applets/<id>/), "" while
     // it was never saved: what ⌘O Open in browser shows.
@@ -400,7 +401,9 @@ struct SpecPage::Impl {
         if (!builder || !has_spec || from_file || widget_open() || !runtime) return false;
         if (runtime->has_spec_preview() || runtime->has_preview(id)) return false;
         const auto& shown = runtime->spec();   // the open spec as the page shows it
-        return shown && shown->find_panel(id) != nullptr;
+        if (!shown || shown->applet.layout_locked.value_or(false)) return false;
+        const cb::spec::Panel* panel = shown->find_panel(id);
+        return panel != nullptr && panel->closable.value_or(true);
     }
 
     // The × on a panel's strip, at its right end (a tab's panel, whose tab
@@ -651,6 +654,7 @@ struct SpecPage::Impl {
         if (!open) {
             runtime->clear_spec();
             has_spec = false;
+            layout_locked = false;
             applet_id.clear();
             saved_id.clear();
             panels = sources = 0;
@@ -696,6 +700,7 @@ struct SpecPage::Impl {
         const auto& a = spec.applet;
         title = a.title && !a.title->empty() ? *a.title : a.id;
         applet_id = a.id;
+        layout_locked = a.layout_locked.value_or(false);
         panels = spec.panels.size();
         sources = spec.sources.size();
     }
@@ -770,6 +775,7 @@ struct SpecPage::Impl {
                 sternbild::status_item(text);
                 std::snprintf(text, sizeof text, sources == 1 ? "%zu source" : "%zu sources", sources);
                 sternbild::status_item(text);
+                if (layout_locked) sternbild::status_item("layout locked");
                 if (dirty) sternbild::status_item("unsaved");
                 if (const std::string note = browser_note(); !note.empty()) sternbild::status_item(note.c_str());
             }

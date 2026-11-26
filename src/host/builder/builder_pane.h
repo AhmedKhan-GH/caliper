@@ -279,6 +279,8 @@ public:
     void set_build_mode(bool on);
     bool text_open() const { return text_open_; }
     void set_text_open(bool on) { text_open_ = on; }
+    bool layout_locked() const;
+    bool set_layout_locked(bool locked);
 
     // ---- per frame: the import's answer, the catalog when its revision
     // moved, the open spec when the port's version moved.
@@ -364,6 +366,7 @@ public:
     // The focused panel's properties.
     bool set_panel_id(const std::string& id);       // a rename, sent as spec.set_text
     bool set_title(const std::string& title);       // "" removes it
+    bool set_closable(bool closable);               // false sets closable = false; true clears it (default)
     bool set_primitive(caliper_builder::spec::Primitive p);
     std::vector<PaneBindingRow> binding_rows() const;
     const std::vector<PaneBindingChoice>& binding_choices(const std::string& slot, size_t index);
