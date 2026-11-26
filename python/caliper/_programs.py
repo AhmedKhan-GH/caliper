@@ -174,9 +174,9 @@ class _Cadence:
     ``SHRINK``. Thus N rests between the wanted value and ``1 + CHANGE`` times it.
 
     Hosted inference supplies synthetic steps between discrete actions. Its marks use
-    accumulated time inside :func:`at_step` plus measured snapshot work before the call.
+    accumulated useful boundary time plus snapshot work outside measured intervals.
     This time covers synchronization, passes, and publication. Sender time remains an additional cost.
-    Idle gaps and model actions outside that function cannot become pass overhead. The same
+    Explicit exclusions keep idle gaps and model actions out of pass overhead. The same
     feedback limits apply to this smaller time budget. Training retains queue completion times.
     """
 
@@ -199,7 +199,9 @@ class _Cadence:
         self.view_cost: dict = {}   # pass step -> the training thread's time in its view calls
         self.extra = 0.0            # the training thread's time in the parts sent since the last cycle
         self.inference = False     # the clock mode of the current measurement cycle
-        self.inference_s = 0.0      # accumulated hosted publication time
+        self.inference_s = 0.0      # accumulated useful hosted time
+        self.inference_gate = None # one snapshot gate and its accounted cost
+        self.inference_sender = None # one ring and its last sender counter
 
     def restart(self) -> None:
         """Forget the marks and passes of the current cycle, but keep ``b``, ``D``, N and the step
@@ -1048,40 +1050,100 @@ _STOP_TEXT = {
 }
 
 
+class _InferenceClock:
+    """Accumulate measured intervals and credit snapshots outside those intervals."""
+
+    def __init__(self):
+        self.measured = False
+        self.started = _clock()
+
+    def flush(self):
+        with _LOCK:
+            now = _clock()
+            if self.measured:
+                _CAD.inference_s += max(0.0, now - self.started)
+            self.started = now
+            ring = _VIEWS["ring"]
+            prior = _CAD.inference_gate
+            if prior is not None and (prior[0][0] is not ring or not ring.gate_open):
+                # A subscription thread can replace the ring during an exclusion.
+                old = prior[0][0]
+                if not self.measured and old.gate_t == prior[0][2]:
+                    _CAD.inference_s += max(0.0, old.gate_cost - prior[1])
+            if ring is not None and ring.gate_open:
+                # The gate identity survives a step renumber and detects a cost reset.
+                key = (ring, ring.gate_step, ring.gate_t)
+                cost = ring.gate_cost
+                before = prior[1] if prior is not None and prior[0] == key else 0.0
+                if cost < before:
+                    before = 0.0
+                if not self.measured:
+                    _CAD.inference_s += max(0.0, cost - before)
+                _CAD.inference_gate = (key, cost)
+            else:
+                _CAD.inference_gate = None
+            return _CAD.inference_s
+
+
 @contextmanager
 def inference_boundary():
-    """Use publication time for cadence inside a hosted boundary on this thread.
+    """Measure useful hosted work on this thread, with explicit action and wait exclusions.
 
-    This scope changes only cadence marks. Runtime timestamps, pass rates, action timers,
-    and budget history retain their values across boundaries.
+    Nested boundaries share one clock. An enclosing exclusion remains in force.
+    Runtime timestamps, action timers, and budget history retain their values.
     """
-    previous = getattr(_INFERENCE, "active", False)
-    _INFERENCE.active = True
+    previous = getattr(_INFERENCE, "clock", None)
+    if previous is not None:
+        yield
+        return
+    clock = _InferenceClock()
+    _INFERENCE.clock = clock
+    try:
+        clock.flush()                           # snapshots before this scope
+        clock.measured = True
+        yield
+    finally:
+        try:
+            clock.flush()
+        finally:
+            _INFERENCE.clock = None
+
+
+@contextmanager
+def _inference_interval(measured):
+    clock = getattr(_INFERENCE, "clock", None)
+    if clock is None:
+        yield
+        return
+    clock.flush()
+    previous, clock.measured = clock.measured, measured
     try:
         yield
     finally:
-        _INFERENCE.active = previous
+        try:
+            clock.flush()
+        finally:
+            clock.measured = previous
+
+
+def inference_excluded():
+    """Exclude an action or wait while retaining its snapshot charges."""
+    return _inference_interval(False)
 
 
 def at_step(step: int) -> None:
-    """Run the programs that are due at ``step`` and publish their outputs.
+    """Run due programs and publish their outputs at the script's checkpoint.
 
-    ``caliper.step()`` calls it on the training thread after the framework's work of the step is
-    queued, before ``optimizer.step()``. Without an installed program it returns at once and touches
-    no device. With one, it puts the step's mark on torch's queue and reads the marks that completed,
-    without a wait; only a step with a pass waits.
+    Ordinary training retains the framework queue completion clock. Hosted calls
+    measure publication work even when a callback calls this checkpoint again.
     """
     if not ACTIVE:
         return
-    started = _clock() if getattr(_INFERENCE, "active", False) else None
     try:
-        _at_step(int(step), inference_started=started)
+        with _inference_interval(True):
+            _at_step(int(step))
     except Exception as e:  # a program never stops the training loop
         _warn_once(("step",), f"caliper: the GPU programs failed at step {step}: {e!r}")
-    finally:
-        if started is not None:
-            with _LOCK:
-                _CAD.inference_s += max(0.0, _clock() - started)
 
 
 def inference_pending() -> bool:
@@ -1165,21 +1227,27 @@ def _every_ok(p: _Program, step: int) -> bool:
     return p.last_step is None or step < p.last_step or step - p.last_step >= p.every_min
 
 
-def _at_step(step: int, *, inference_started=None) -> None:
-    _pump()
+def _at_step(step: int) -> None:
+    # Chunk sends have one explicit cost owner, regardless of their cycle position.
+    with inference_excluded():
+        _pump()
     changed = []
     published = []
     with _LOCK:
-        inference = inference_started is not None
+        clock = getattr(_INFERENCE, "clock", None)
+        inference = clock is not None
         if _CAD.inference != inference:
+            if _CAD.inference:
+                _inference_sender(None)
             _CAD.restart()                          # a clock change, with budget history intact
             _CAD.inference = inference
+            _CAD.inference_sender = None
             if _STATE["pass"] is not None:
                 _CAD.passes.add(_STATE["pass"])
         if _ABANDONED:
             _reap()
         now = _clock()
-        cadence_now = _CAD.inference_s + now - inference_started if inference else now
+        cadence_now = clock.flush() if inference else now
         marks = _marks()
         ring = _VIEWS["ring"]
         last = _STATE["step"]
@@ -1208,10 +1276,6 @@ def _at_step(step: int, *, inference_started=None) -> None:
         # later than the look of a step without a pass by that work: the marks it finds move back
         # by it, so that every mark is seen as late as at a step without a pass.
         work = ring.gate_cost if ring is not None and is_pass and ring.gate_open else 0.0
-        if inference:
-            # Snapshots before at_step belong to the pass, even though model actions do not.
-            _CAD.inference_s += work
-            cadence_now += work
         done = _mark(marks, step, now, is_pass)
         if work > 0.0:
             done = [(k, lo, max(lo, hi - work)) for k, lo, hi in done]
@@ -1287,26 +1351,27 @@ def _at_step(step: int, *, inference_started=None) -> None:
     _publish_pass(published)
     with _LOCK:
         taken = 0
+        if inference:
+            _inference_sender(_VIEWS["ring"])
         if ring is not None and ring is _VIEWS["ring"] and (is_pass or ring.gate_open):
+            if inference:
+                clock.flush()
             taken = ring.close_pass(step, _clock())
             if taken:
                 # The sender thread's time since the last pass, which published that pass's
                 # snapshots, belongs to that pass: it takes the GIL from the training thread.
                 pub = ring.publish_s
                 last = _STATE.get("pub_pass")
-                if last is not None and last[0] in _CAD.view_cost:
-                    sender_s = max(0.0, pub - last[1])
-                    if inference:
-                        # Sender work outside at_step is absent from hosted marks.
-                        _CAD.extra += sender_s
-                    else:
-                        _CAD.view_cost[last[0]] += sender_s
+                if not inference and last is not None and last[0] in _CAD.view_cost:
+                    _CAD.view_cost[last[0]] += max(0.0, pub - last[1])
                 _STATE["pub_pass"] = (step, pub)
                 _STATE["view_s"].append(ring.gate_cost)
                 if is_pass:
                     _CAD.view_cost[step] = ring.gate_cost
         if is_pass and not ran and not taken:        # nothing was due after all
             _CAD.unpass(step)
+        if inference:
+            clock.flush()
         ring = _VIEWS["ring"]
         _STATE["pass"] = None
         nxt = step + 1
@@ -1378,11 +1443,34 @@ def _views_status(ring, floor: bool) -> dict:
             "share": None if share is None else round(share, 4), "budget": _CAD.target, "limit": limit}
 
 
+def _inference_sender(ring):
+    """Credit sender work once, independent of snapshot and cadence sample retention.
+
+    The caller owns _LOCK. A replacement first credits the old ring, then uses
+    the new ring's current counter as its baseline.
+    """
+    prior = _CAD.inference_sender
+    if prior is not None:
+        old, before = prior
+        published = old.publish_s
+        _CAD.extra += max(0.0, published - before)
+        if old is ring:
+            # Use the same sample for the charge and baseline if the sender advances.
+            _CAD.inference_sender = (ring, published)
+            return
+    _CAD.inference_sender = (ring, ring.publish_s) if ring is not None else None
+
+
 def views(ring) -> None:
     """The network route's ring has snapshots or series values to take (``ring``), or none
     (``None``): from then on the shared cadence gates its snapshots at the checkpoint. Called on
     the thread that changed a subscription."""
     with _LOCK:
+        clock = getattr(_INFERENCE, "clock", None)
+        if clock is not None:
+            clock.flush()
+        if _CAD.inference:
+            _inference_sender(ring)
         old = _VIEWS["ring"]
         if old is not None and old is not ring:
             old.release_gate()
@@ -1402,6 +1490,11 @@ def views_closed(ring) -> None:
     with _LOCK:
         if _VIEWS["ring"] is not ring:
             return
+        clock = getattr(_INFERENCE, "clock", None)
+        if clock is not None:
+            clock.flush()
+        if _CAD.inference:
+            _inference_sender(None)
         ring.release_gate()
         _VIEWS["ring"] = None
         _set_active()
@@ -2024,7 +2117,8 @@ def _pump() -> None:
         except Exception as e:  # the publish path never stops the step
             _OUTBOX.clear()
             _warn_once(("pump",), f"caliper: sending the parts of a resource failed: {e!r}")
-    _CAD.extra += _clock() - t0
+    with _LOCK:
+        _CAD.extra += _clock() - t0
 
 
 def _controls_ports() -> list:

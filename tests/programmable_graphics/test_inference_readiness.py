@@ -314,7 +314,11 @@ def test_hosted_clock_keeps_budget_stop_and_declared_period(producer, monkeypatc
         clock.now += seconds
 
     monkeypatch.setattr(P, "_clock", lambda: clock.now)
-    monkeypatch.setattr(P, "_pump", lambda: advance(1.))
+    def scheduler():
+        advance(1.)                               # controlled base for the ten-second ceiling
+        return None
+
+    monkeypatch.setattr(P, "_marks", scheduler)
     show = caliper.show
 
     def costly_publication(*args, **kwargs):

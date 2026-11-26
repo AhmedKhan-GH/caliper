@@ -450,7 +450,9 @@ class InterpretationService:
                         break
                     method, params, reply = self.queue.popleft()
                 try:
-                    response = self._run_request(method, params, step)
+                    from .._controls import _cadence_excluded
+                    with _cadence_excluded():
+                        response = self._run_request(method, params, step)
                 except CleanStop as exc:
                     error = self.stop(exc, step)
                     try:

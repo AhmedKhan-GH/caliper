@@ -98,6 +98,7 @@ import collections
 import heapq
 import itertools
 import json
+import sys
 import logging
 import math
 import numbers
@@ -1280,6 +1281,12 @@ class Route:
 # ===========================================================================
 # the state
 # ===========================================================================
+def _cadence_excluded():
+    """Exclude discrete work only when the hosted clock is present."""
+    programs = sys.modules.get(__package__ + "._programs")
+    return programs.inference_excluded() if programs is not None else nullcontext()
+
+
 class Controls:
     """The controls and selections of this process (``CONTROLS``)."""
 
@@ -1504,7 +1511,8 @@ class Controls:
     def _run_action(self, a: Action):
         self.counters["actions_run"] += 1
         try:
-            r = a.fn()
+            with _cadence_excluded():
+                r = a.fn()
         except Exception as e:
             if self._resource_stop(e):
                 raise
@@ -1549,7 +1557,8 @@ class Controls:
                     if self.state != RUN_PAUSED:
                         return
                     if not self.queue and not self._npending:
-                        self.cond.wait(WAIT_POLL_S)
+                        with _cadence_excluded():
+                            self.cond.wait(WAIT_POLL_S)
         except BaseException:
             self._release()                       # Ctrl-C: no wait at the next step()
             raise
@@ -2099,7 +2108,8 @@ class Controls:
         """Install one effect with the same error callback on restore and at a boundary."""
         from copy import deepcopy
         callback = lambda message, iv=iv if owner is None else owner: self._intervention_failed(iv, message)
-        iv.hook = service.executor.install(spec, on_error=callback)
+        with _cadence_excluded():
+            iv.hook = service.executor.install(spec, on_error=callback)
         iv.applied_spec = deepcopy(spec)
 
     def _intervene(self, req):

@@ -30,8 +30,9 @@ def action_run(monkeypatch):
     run.controls, run.service = controls, SimpleNamespace(pending=False)
     run.guard = run.managed = run._failure = None
     run.status = SimpleNamespace(set=lambda text: pytest.fail(text))
-    clock = SimpleNamespace(now=0., idle_s=0., action_s=0., pass_s=.00002, export_s=0.)
-    shown, replies, statuses, uniforms = [], [], [], []
+    clock = SimpleNamespace(now=0., idle_s=0., action_s=0., pass_s=.00002, export_s=0.,
+                            scheduler_s=.0005, publish_s=.0001, waves=8, action_finished=0.)
+    shown, replies, statuses, uniforms, delays = [], [], [], [], []
 
     def advance(seconds):
         clock.now += seconds
@@ -40,15 +41,27 @@ def action_run(monkeypatch):
     monkeypatch.setattr(P, "_controls_ports", lambda: [])
     monkeypatch.setattr(P, "_refresh", lambda p: None)
     monkeypatch.setattr(P, "_torch_adapter", lambda: SimpleNamespace(framework_done=lambda: None))
-    monkeypatch.setattr(P, "_pump", lambda: advance(.0005))
+    marks = P._marks
+    boundaries = []
+
+    def scheduler():
+        if len(boundaries) >= 20000:
+            raise AssertionError("finite publication boundary limit")
+        boundaries.append(controls.n)
+        advance(clock.scheduler_s)                  # controlled routine work, not a measurement
+        return marks()
+
+    monkeypatch.setattr(P, "_marks", scheduler)
 
     def outputs(*args):
         advance(clock.export_s)
         return float(_publish._resolve("output.probs").item())
 
     def publish_pass(batch):
-        advance(.0001)
+        advance(clock.publish_s)
         shown.extend(value for _, value in batch)
+        if batch:
+            delays.append(clock.now - clock.action_finished)
 
     monkeypatch.setattr(P, "_outputs", outputs)
     monkeypatch.setattr(P, "_publish_pass", publish_pass)
@@ -72,6 +85,7 @@ def action_run(monkeypatch):
     def action():
         advance(clock.action_s)
         publish("output.probs", torch.tensor([float(len(statuses))]))
+        clock.action_finished = clock.now
 
     controls.action("compare", action)
     route = _controls.Route(controls, SimpleNamespace(
@@ -89,7 +103,7 @@ def action_run(monkeypatch):
         if predicate():
             return True
         statuses.append(program.item())
-        if len(statuses) == 8:
+        if len(statuses) == clock.waves:
             raise Finished
         controls.cond.release()
         try:
@@ -108,7 +122,7 @@ def action_run(monkeypatch):
             run.run()
 
     return SimpleNamespace(run=run, clock=clock, program=program, runtime=runtime, drive=drive,
-                           shown=shown, replies=replies, statuses=statuses, uniforms=uniforms)
+                           shown=shown, replies=replies, statuses=statuses, uniforms=uniforms, delays=delays)
 
 
 @pytest.mark.parametrize("every", [1, 7])
@@ -177,12 +191,13 @@ def test_hosted_clock_counts_framework_waits(action_run, monkeypatch):
 def test_hosted_clock_counts_snapshots_before_checkpoint(action_run, monkeypatch, sender_s):
     case = action_run
     case.clock.idle_s = case.clock.action_s = .55
-    ring = SimpleNamespace(gate_open=False, gate_cost=0., publish_s=0., pass_t=0.,
+    ring = SimpleNamespace(gate_step=None, gate_t=0., gate_open=False, gate_cost=0., publish_s=0., pass_t=0.,
                            step_tick=lambda *args: None, wants_pass=lambda now: False,
                            pass_rate=lambda: None, asked_interval=lambda: None)
 
     def open_pass(step):
         ring.gate_open, ring.gate_cost = True, 0.
+        ring.gate_step, ring.gate_t = step, case.clock.now
 
     def close_pass(step, now):
         ring.gate_open, ring.pass_t = False, now
@@ -220,6 +235,8 @@ def test_normal_steps_keep_wall_clock_feedback(action_run, monkeypatch, failed_b
             with pytest.raises(RuntimeError, match="boundary failure"):
                 case.run.boundary()
     # The same gaps remain visible to the ordinary training entry point.
+    from contextlib import nullcontext
+    monkeypatch.setattr(P, "inference_boundary", nullcontext)
     monkeypatch.setattr(case.run, "boundary", caliper.step)
     case.drive()
     assert P._CAD.cost_s() == pytest.approx(.55002)
