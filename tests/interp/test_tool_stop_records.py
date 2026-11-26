@@ -5,7 +5,7 @@ from types import SimpleNamespace
 import pytest
 
 from caliper._interpret_protocol import bounded
-from tools.interp import build_index as indexing, eval_dictionary as evaluation, train_transcoders as training
+from tools.interp import build_index as indexing, eval_dictionary as evaluation
 from tools.interp.memory_limits import CleanStop
 from tools.interp.stop_records import clean_stop_record, stop_reason
 from tools.interp.text_stream import DATASET_CONFIG, DATASET_ID, DATASET_REVISION, partition_metadata
@@ -25,7 +25,7 @@ def index_metadata(folder):
 
 
 @pytest.mark.parametrize("reason", REASONS)
-@pytest.mark.parametrize("command", [indexing, evaluation, training])
+@pytest.mark.parametrize("command", [indexing, evaluation])
 def test_command_stops_have_one_bounded_record(tmp_path, monkeypatch, capsys, command, reason):
     index_metadata(tmp_path)
     before = (tmp_path / "dictionary.json").read_bytes()
@@ -35,11 +35,7 @@ def test_command_stops_have_one_bounded_record(tmp_path, monkeypatch, capsys, co
 
     monkeypatch.setattr(command, "MemoryGuard", refuse)
     monkeypatch.setattr(command, "load_text_model", lambda **k: pytest.fail("model load ran"))
-    option = "--output" if command is training else "--dictionary"
-    folder = tmp_path / "output" if command is training else tmp_path
-    assert command.main([option, str(folder), "--device", "cpu"]) == 2
-    if command is training:
-        assert not folder.exists()
+    assert command.main(["--dictionary", str(tmp_path), "--device", "cpu"]) == 2
     captured = capsys.readouterr()
     assert not captured.err
     result = json.loads(captured.out)
@@ -121,9 +117,9 @@ def test_index_source_closes_on_every_exit(tmp_path, monkeypatch, capsys, source
         assert events == ["stream closed", "source closed"]
 
 
-@pytest.mark.parametrize("command", [evaluation, training])
 @pytest.mark.parametrize("exit_at", ["stream", "operation", "success"])
-def test_other_commands_close_source_after_regular_errors(tmp_path, monkeypatch, command, exit_at):
+def test_evaluator_closes_source_after_regular_errors(tmp_path, monkeypatch, exit_at):
+    command = evaluation
     events = []
 
     class Source:
@@ -146,27 +142,20 @@ def test_other_commands_close_source_after_regular_errors(tmp_path, monkeypatch,
     def operation(*args, **kwargs):
         if exit_at == "operation":
             raise ValueError("synthetic operation error")
-        return {"status": "passed", "tokens": 16, "dictionary_export": "complete"}
+        return {"status": "passed"}
 
     def load(*, device, memory, mode="inference"):
         assert device == "cpu" and memory is not None
-        assert mode == ("training" if command is training else "inference")
+        assert mode == "inference"
         return None, None
 
     monkeypatch.setattr(command, "MemoryGuard", lambda *a: SimpleNamespace(check=lambda *a, **k: None))
     monkeypatch.setattr(command, "load_text_model", load)
     monkeypatch.setattr(command, "fineweb_documents", lambda **k: Source())
     monkeypatch.setattr(command, "TextStream", Stream)
-    if command is evaluation:
-        monkeypatch.setattr(command, "load_dictionary", lambda *a, **k: None)
-        monkeypatch.setattr(command, "evaluate", operation)
-        argv = ["--dictionary", str(tmp_path)]
-    else:
-        metadata = {"training": {}}
-        monkeypatch.setattr(command, "make_manifest", lambda *a: metadata)
-        monkeypatch.setattr(command, "Trainer", lambda *a, **k: SimpleNamespace(metadata=metadata, fallback_source=None))
-        monkeypatch.setattr(command, "train_online", operation)
-        argv = ["--output", str(tmp_path), "--tokens", "16"]
+    monkeypatch.setattr(command, "load_dictionary", lambda *a, **k: None)
+    monkeypatch.setattr(command, "evaluate", operation)
+    argv = ["--dictionary", str(tmp_path)]
     if exit_at == "success":
         assert command.main([*argv, "--device", "cpu"]) == 0
     else:

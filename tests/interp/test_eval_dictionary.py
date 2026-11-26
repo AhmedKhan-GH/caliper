@@ -357,3 +357,17 @@ def test_early_and_observed_all_layer_quality_have_the_same_schema(tmp_path):
     for name in ("original_cross_entropy", "replaced_cross_entropy"):
         assert early[name] is None and observed[name] is not None
     assert not {"scope", "active_layers", "per_layer_status"} & early.keys()
+
+
+def test_all_layer_report_exports_hash_without_scope_changes(tmp_path):
+    model, _ = write_fixture(tmp_path, TinyLM(layers=4, width=4, heads=2, latents=8, k=2, dtype=torch.float32))
+    dictionary = load_dictionary(tmp_path, model=model)
+    stream = TextStream(documents(), TinyTokenizer(), "quality", source_id="synthetic-text-v1")
+    result = evaluation.evaluate(model, dictionary, stream, tmp_path,
+                                 tokens=8, context=4, batch_tokens=8, chunk_tokens=2)
+    assert result["dictionary_hash"] == evaluation.dictionary_fingerprint(tmp_path, dictionary.metadata)
+    assert result["status"] == "partial" and result["all_mlps_replaced"] == 4
+    assert "scope" not in result and "replaced_mlps" not in result
+    state = json.loads((tmp_path / "evaluation" / "state.json").read_text())
+    assert state["identity"] == result["dictionary_hash"]
+    assert set(state["settings"]) == {"tokens", "context", "batch_tokens", "chunk_tokens"}

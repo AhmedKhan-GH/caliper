@@ -9,9 +9,9 @@ from types import SimpleNamespace
 import pytest
 import torch
 
-from tools.interp import build_index as indexing, text_stream, train_transcoders as training
+from tools.interp import build_index as indexing, text_stream
 from tools.interp.memory_limits import CleanStop, MemoryGuard, StopControl
-from .test_trainer_admission import checkpoint, snapshot
+from .test_dictionary_startup import snapshot
 from .test_training_stream import local_manifest
 
 
@@ -123,79 +123,6 @@ def test_index_checksum_stop_preserves_dictionary_before_model(tmp_path, monkeyp
     assert snapshot(tmp_path) == before
     event = json.loads(capsys.readouterr().out)
     assert event["stage"] == "clean_stop" and reason in event["reason"]
-
-
-@pytest.mark.parametrize("mode", ["all_layers", "upper_half"])
-@pytest.mark.parametrize("reason", ["signal", "pressure", "deadline"])
-def test_trainer_checksum_stop_preserves_prior_artifacts(tmp_path, monkeypatch, capsys, mode, reason):
-    source, output = tmp_path / "source", tmp_path / "output"
-    source.mkdir()
-    manifest = local_manifest(source)
-    argv = ["--output", str(output), "--device", "cpu", "--max-wall-seconds", "180",
-            "--local-dataset-manifest", str(manifest)]
-    if mode == "all_layers":
-        _, record, state_file = checkpoint(output)
-        record["progress"]["elapsed_seconds"] = 100
-        state_file.write_text(json.dumps(record))
-        argv.append("--resume")
-        def load(*, device, memory, mode):
-            assert device == "cpu" and mode == "training" and memory.limit == 24_000_000_000
-            return object(), None
-        monkeypatch.setattr(training, "load_text_model", load)
-        monkeypatch.setattr(training, "make_manifest", lambda *a: copy.deepcopy(record["metadata"]))
-        monkeypatch.setattr(training, "Trainer", lambda metadata, **k: SimpleNamespace(
-            metadata=metadata, fallback_source=None))
-    else:
-        argv.extend(["--upper-half-from", str(source), "--prior-wall-seconds", "100"])
-        monkeypatch.setattr(training, "prepare_upper_half", lambda *a, **k: pytest.fail("fallback admission ran"))
-        monkeypatch.setattr(training, "load_text_model", lambda **_: pytest.fail("model allocation ran"))
-    before = snapshot(tmp_path)
-    state, readers = health_controls(monkeypatch, training, reason)
-    monkeypatch.setattr(training.time, "monotonic", lambda: state.time)
-    monkeypatch.setattr(training, "restore_checkpoint", lambda *a: pytest.fail("checkpoint restore ran"))
-    monkeypatch.setattr(training, "train_online", lambda *a, **k: pytest.fail("batch loop ran"))
-    assert training.main(argv) == 2
-    assert len(readers) == 1 and readers[0].reads == 1 and readers[0].handle.closed
-    assert snapshot(tmp_path) == before
-    assert output.exists() is (mode == "all_layers")
-    event = json.loads(capsys.readouterr().out)
-    assert event["stage"] == "clean_stop"
-    assert ("wall time reserve" if reason == "deadline" else reason) in event["reason"]
-
-
-@pytest.mark.parametrize("prior,elapsed,run,save,export,expected", [
-    (None, 100, None, 0, 0, 840), (200, 100, None, 0, 0, 640),
-    (200, 100, 80, 0, 0, 20), (None, 100, None, 20, 25, 810),
-])
-def test_startup_deadline_accounts_for_each_budget(monkeypatch, prior, elapsed, run, save, export, expected):
-    args = SimpleNamespace(max_wall_seconds=1000, prior_wall_seconds=prior, run_seconds=run)
-    progress = {"elapsed_seconds": elapsed, "checkpoint_seconds": save, "export_seconds": export}
-    monkeypatch.setattr(training.time, "monotonic", lambda: 10)
-    assert training._startup_deadline(args, progress, 10) == 10 + expected
-    monkeypatch.setattr(training.time, "monotonic", lambda: 10 + expected)
-    with pytest.raises(ValueError, match="reserve"):
-        training._startup_deadline(args, progress, 10)
-
-
-@pytest.mark.parametrize("stage", ["start", "before model"])
-def test_startup_health_time_cannot_consume_model_reserve(tmp_path, monkeypatch, capsys, stage):
-    _, record, state_file = checkpoint(tmp_path)
-    record["progress"]["elapsed_seconds"] = 100
-    state_file.write_text(json.dumps(record))
-    before = snapshot(tmp_path)
-    clock = SimpleNamespace(time=0.0)
-
-    def check(name, **kwargs):
-        if name == stage:
-            clock.time = 20.0
-
-    monkeypatch.setattr(training.time, "monotonic", lambda: clock.time)
-    monkeypatch.setattr(training, "MemoryGuard", lambda *a: SimpleNamespace(check=check))
-    monkeypatch.setattr(training, "load_text_model", lambda **_: pytest.fail("model allocation ran"))
-    assert training.main(["--output", str(tmp_path), "--resume", "--device", "cpu",
-                          "--max-wall-seconds", "180"]) == 2
-    assert snapshot(tmp_path) == before
-    assert json.loads(capsys.readouterr().out)["reason"] == "wall time reserve"
 
 
 @contextmanager

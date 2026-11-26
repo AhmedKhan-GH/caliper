@@ -420,11 +420,11 @@ class TopKTranscoder(nn.Module):
 
     activation = "topk"
 
-    def __init__(self, W_enc, b_enc, W_dec, b_dec, k, *, trainable=False):
+    def __init__(self, W_enc, b_enc, W_dec, b_dec, k):
         super().__init__()
         self.k = k
         for name, value in zip(_WEIGHTS, (W_enc, b_enc, W_dec, b_dec)):
-            self.register_parameter(name, nn.Parameter(value, requires_grad=trainable))
+            self.register_parameter(name, nn.Parameter(value, requires_grad=False))
 
     def encode(self, x):
         return self.activate(F.linear(x, self.W_enc, self.b_enc))
@@ -446,16 +446,16 @@ class JumpReLUTranscoder(TopKTranscoder):
 
     activation = "jumprelu"
 
-    def __init__(self, W_enc, b_enc, W_dec, b_dec, threshold, *, trainable=False, W_enc_original=None):
+    def __init__(self, W_enc, b_enc, W_dec, b_dec, threshold, *, W_enc_original=None):
         if (threshold.shape != b_enc.shape or not _finite(threshold)
                 or not _positive(threshold)):
             raise ValueError("JumpReLU requires positive finite thresholds with one value per feature")
-        super().__init__(W_enc, b_enc, W_dec, b_dec, None, trainable=trainable)
-        self.register_parameter("threshold", nn.Parameter(threshold, requires_grad=trainable))
+        super().__init__(W_enc, b_enc, W_dec, b_dec, None)
+        self.register_parameter("threshold", nn.Parameter(threshold, requires_grad=False))
         if W_enc_original is not None:
             if W_enc_original.shape != W_enc.shape or not _finite(W_enc_original):
                 raise ValueError("original encoder must match the finite encoder shape")
-            self.register_parameter("W_enc_original", nn.Parameter(W_enc_original, requires_grad=trainable))
+            self.register_parameter("W_enc_original", nn.Parameter(W_enc_original, requires_grad=False))
 
     def activate(self, preactivation, *, check=None):
         if self.threshold.dtype == preactivation.dtype:

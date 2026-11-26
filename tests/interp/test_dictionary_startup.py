@@ -6,11 +6,11 @@ from types import SimpleNamespace
 import pytest
 
 from caliper._interpret_protocol import bounded
-from tools.interp import eval_dictionary as evaluation, train_transcoders as training
+from tools.interp import eval_dictionary as evaluation
 from tools.interp.memory_limits import CleanStop, StopControl
 from tools.interp.text_stream import TextStream
-from .fixture import TinyTokenizer
-from .test_upper_half_cli import synthetic_source, arguments
+from .fixture import TinyLM, TinyTokenizer
+from .test_dictionary import write_fixture
 
 
 @pytest.fixture(autouse=True)
@@ -24,6 +24,14 @@ def cpu_guard(monkeypatch):
 
 def snapshot(folder):
     return {p.relative_to(folder): p.read_bytes() for p in folder.rglob("*") if p.is_file()}
+
+
+def evaluated_fixture(folder):
+    model, metadata = write_fixture(folder, TinyLM(layers=2, width=4, heads=2, latents=8, k=2))
+    metadata["quality"].update(status="passed", fvu=0.01, dead_fraction=0,
+                               cross_entropy_delta=0, evaluated_tokens=200_000)
+    (folder / "dictionary.json").write_text(json.dumps(metadata))
+    return model
 
 
 def startup(monkeypatch, command, model, target, *, signal_only=False):
@@ -71,7 +79,7 @@ def startup(monkeypatch, command, model, target, *, signal_only=False):
 
     def load(*, device, memory, mode="inference"):
         assert device == memory.device == "cpu"
-        assert mode == ("training" if command is training else "inference")
+        assert mode == "inference"
         return model, TinyTokenizer()
 
     monkeypatch.setattr(command, "StopControl", lambda: control)
@@ -92,56 +100,10 @@ def assert_clean_stop(capsys):
     assert bounded({"result": result})
 
 
-@pytest.mark.parametrize("target", [
-    "checkpoint", "guard", "start", "model", "manifest", "trainer",
-    "after_dictionary_init", "source", "stream", "restore", "after_resume",
-])
-def test_trainer_startup_stop_preserves_checkpoint(tmp_path, monkeypatch, capsys, target):
-    model, _, _ = synthetic_source(tmp_path)
-    before = snapshot(tmp_path)
-    stage, wrap, _, streams, sources = startup(monkeypatch, training, model, target)
-    for name, attribute in (("checkpoint", "checkpoint_record"), ("manifest", "make_manifest"),
-                            ("trainer", "Trainer")):
-        monkeypatch.setattr(training, attribute, wrap(name, getattr(training, attribute)))
-
-    def restore(root, trainer, stream):
-        # A stop after an in-memory mutation must not save a new checkpoint.
-        trainer.metadata["training"]["tokens"] = 1
-        stage("restore")
-        return training.initial_progress()
-
-    monkeypatch.setattr(training, "restore_checkpoint", restore)
-    monkeypatch.setattr(training, "train_online", lambda *a, **k: pytest.fail("batch loop ran"))
-    assert training.main(["--output", str(tmp_path), "--resume", "--device", "cpu",
-                          "--latents", "8", "--k", "2", "--tokens", "16",
-                          "--context", "4", "--batch-tokens", "8", "--microbatch-tokens", "4"]) == 2
-    assert snapshot(tmp_path) == before
-    assert all(stream.closed for stream in streams)
-    assert all(source.closed for source in sources)
-    assert_clean_stop(capsys)
-
-
-@pytest.mark.parametrize("target", ["source", "stream", "admission", "model", "warm"])
-def test_fallback_startup_stop_leaves_output_absent(tmp_path, monkeypatch, capsys, target):
-    source, output = tmp_path / "source", tmp_path / "fallback"
-    model, _, _ = synthetic_source(source)
-    before = snapshot(source)
-    _, wrap, _, streams, sources = startup(monkeypatch, training, model, target)
-    monkeypatch.setattr(training, "prepare_upper_half", wrap("admission", training.prepare_upper_half))
-    monkeypatch.setattr(training.Trainer, "initialize_upper", wrap("warm", training.Trainer.initialize_upper))
-    monkeypatch.setattr(training, "train_online", lambda *a, **k: pytest.fail("batch loop ran"))
-    assert training.main(arguments(source, output)) == 2
-    assert not output.exists()
-    assert snapshot(source) == before
-    assert all(stream.closed for stream in streams)
-    assert all(source.closed for source in sources)
-    assert_clean_stop(capsys)
-
-
 @pytest.mark.parametrize("target", ["guard", "start", "model", "dictionary", "after_dictionary_load",
                                    "source", "stream", "fingerprint", "binding"])
 def test_evaluator_stop_before_artifact_admission_preserves_prior_report(tmp_path, monkeypatch, capsys, target):
-    model, _, _ = synthetic_source(tmp_path)
+    model = evaluated_fixture(tmp_path)
     before = snapshot(tmp_path)
     _, wrap, _, streams, sources = startup(monkeypatch, evaluation, model, target)
     # The command uses real tiny tensors, but no model forward or device admission.
@@ -158,7 +120,7 @@ def test_evaluator_stop_before_artifact_admission_preserves_prior_report(tmp_pat
 
 
 def test_signal_after_stream_creation_preserves_prior_report_before_admission(tmp_path, monkeypatch, capsys):
-    model, _, _ = synthetic_source(tmp_path)
+    model = evaluated_fixture(tmp_path)
     before = snapshot(tmp_path)
     _, _, seen, streams, sources = startup(monkeypatch, evaluation, model, "stream", signal_only=True)
     from caliper.interp import load_dictionary
@@ -174,21 +136,14 @@ def test_signal_after_stream_creation_preserves_prior_report_before_admission(tm
 
 
 @pytest.mark.parametrize("command,target,forbidden", [
-    (training, "model", "manifest"), (training, "trainer", "source"),
     (evaluation, "model", "dictionary"), (evaluation, "dictionary", "source"),
 ])
 def test_signal_flag_stops_before_next_costly_stage(tmp_path, monkeypatch, capsys, command, target, forbidden):
-    model, _, _ = synthetic_source(tmp_path)
+    model = evaluated_fixture(tmp_path)
     before = snapshot(tmp_path)
     _, wrap, seen, _, _ = startup(monkeypatch, command, model, target, signal_only=True)
-    if command is training:
-        for name, attribute in (("manifest", "make_manifest"), ("trainer", "Trainer")):
-            monkeypatch.setattr(command, attribute, wrap(name, getattr(command, attribute)))
-        argv = ["--output", str(tmp_path), "--resume", "--latents", "8", "--k", "2", "--tokens", "16",
-                "--context", "4", "--batch-tokens", "8", "--microbatch-tokens", "4"]
-    else:
-        monkeypatch.setattr(command, "load_dictionary", wrap("dictionary", lambda *a, **k: None))
-        argv = ["--dictionary", str(tmp_path)]
+    monkeypatch.setattr(command, "load_dictionary", wrap("dictionary", lambda *a, **k: None))
+    argv = ["--dictionary", str(tmp_path)]
     assert command.main([*argv, "--device", "cpu"]) == 2
     assert target in seen and forbidden not in seen
     assert snapshot(tmp_path) == before

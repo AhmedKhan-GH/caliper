@@ -8,7 +8,7 @@ import pyarrow.parquet as parquet
 import pytest
 
 from tools.interp import build_index as indexing, eval_dictionary as evaluation
-from tools.interp import text_stream, train_transcoders as training
+from tools.interp import text_stream
 from tools.interp.memory_limits import CleanStop, MemoryGuard
 from .fixture import TinyTokenizer
 from .test_training_stream import documents, local_manifest
@@ -245,7 +245,7 @@ def test_decode_stop_preserves_buffer_cursor_and_exact_resume(tmp_path, monkeypa
         expected.close()
 
 
-@pytest.mark.parametrize("command", ["trainer", "index", "evaluator"])
+@pytest.mark.parametrize("command", ["index", "evaluator"])
 def test_commands_pass_live_memory_guard_to_source(tmp_path, monkeypatch, resources, command):
     guard, _ = resources
     seen = []
@@ -273,21 +273,16 @@ def test_commands_pass_live_memory_guard_to_source(tmp_path, monkeypatch, resour
         assert evaluation.main(["--dictionary", str(tmp_path), "--device", "cpu",
                                 "--local-dataset-manifest", str(args.local_dataset_manifest)]) == 0
     else:
-        module = training if command == "trainer" else indexing
-        monkeypatch.setattr(module, "fineweb_documents", admit)
+        monkeypatch.setattr(indexing, "fineweb_documents", admit)
         with ExitStack() as stack:
-            if command == "trainer":
-                training._training_stream(args, None, stack, memory=guard, health=lambda: None)
-            else:
-                indexing._index_stream(args, {"training": {"source_id": "synthetic"}}, {}, stack,
-                                       memory=guard, health=lambda: None)
+            indexing._index_stream(args, {"training": {"source_id": "synthetic"}}, {}, stack,
+                                   memory=guard, health=lambda: None)
     assert seen == ["admitted", "closed"]
 
 
-@pytest.mark.parametrize("command", ["trainer", "fallback_admission", "index"])
-def test_main_source_admission_uses_guard_without_model_work(tmp_path, monkeypatch, resources, command):
+def test_index_source_admission_uses_guard_without_model_work(tmp_path, monkeypatch, resources):
     guard, _ = resources
-    module = indexing if command == "index" else training
+    module = indexing
     seen = []
 
     def admit(*, memory, health, **kwargs):
@@ -298,27 +293,14 @@ def test_main_source_admission_uses_guard_without_model_work(tmp_path, monkeypat
 
     monkeypatch.setattr(module, "MemoryGuard", lambda *a: guard)
     monkeypatch.setattr(module, "fineweb_documents", admit)
-    if command == "trainer":
-        def load(*, device, memory, mode):
-            assert device == "cpu" and memory is guard and mode == "training"
-            return object(), None
-        monkeypatch.setattr(module, "load_text_model", load)
-        monkeypatch.setattr(module, "make_manifest", lambda *a: {"training": {}})
-        monkeypatch.setattr(module, "Trainer", lambda *a, **k: object())
-    else:
-        monkeypatch.setattr(module, "load_text_model", lambda **k: pytest.fail("model load ran"))
-    if command == "index":
-        metadata = {"training": {"dataset_id": text_stream.DATASET_ID,
-                                 "dataset_config": text_stream.DATASET_CONFIG,
-                                 "dataset_revision": text_stream.DATASET_REVISION,
-                                 "split": "train", "source_id": "synthetic",
-                                 "partitions": text_stream.partition_metadata()}}
-        (tmp_path / "dictionary.json").write_text(json.dumps(metadata))
-        argv = ["--dictionary", str(tmp_path)]
-    else:
-        argv = ["--output", str(tmp_path / "output")]
-        if command == "fallback_admission":
-            argv += ["--upper-half-from", str(tmp_path / "source"), "--prior-wall-seconds", "0"]
+    monkeypatch.setattr(module, "load_text_model", lambda **k: pytest.fail("model load ran"))
+    metadata = {"training": {"dataset_id": text_stream.DATASET_ID,
+                             "dataset_config": text_stream.DATASET_CONFIG,
+                             "dataset_revision": text_stream.DATASET_REVISION,
+                             "split": "train", "source_id": "synthetic",
+                             "partitions": text_stream.partition_metadata()}}
+    (tmp_path / "dictionary.json").write_text(json.dumps(metadata))
+    argv = ["--dictionary", str(tmp_path)]
     argv += ["--device", "cpu", "--local-dataset-manifest", str(tmp_path / "source.json")]
     assert module.main(argv) == 2
     assert seen == ["admitted"]
