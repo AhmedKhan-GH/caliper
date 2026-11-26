@@ -801,15 +801,14 @@ TEST_CASE("gfx layer: copies and dispatches are validated like draws") {
         CHECK(s.gfx.submit(std::move(f)) == 0);
         CHECK(has(s.gfx.last_error(), "multiple of 256"));
     }
-    UpdateResult fill = s.gfx.fill_texture_from_buffer(t, src, 0, 256);
-    REQUIRE(fill.ok);
-    CHECK(fill.route == Route::CopiedOnGpu);
-    const std::vector<uint8_t> got = s.gfx.texture_bytes(t);
-    CHECK(std::equal(got.begin(), got.begin() + 16, rows.begin()));
-    CHECK(std::equal(got.begin() + 16, got.end(), rows.begin() + 256));
-    CHECK_FALSE(s.gfx.fill_texture_from_buffer(t, src, 0, 16).ok);   // the fill program reads storage
-    CHECK(has(s.gfx.last_error(), "kStorage"));
-    CHECK_FALSE(s.gfx.update_texture_from_tensor(t, TensorSource{}, TextureMapping{}).ok);
+    {
+        Frame copy;
+        copy.copy_buffer_to_texture(src, 0, 256, t);
+        REQUIRE(s.gfx.submit(std::move(copy)) != 0);
+        const std::vector<uint8_t> got = s.gfx.texture_bytes(t);
+        CHECK(std::equal(got.begin(), got.begin() + 16, rows.begin()));
+        CHECK(std::equal(got.begin() + 16, got.end(), rows.begin() + 256));
+    }
 
     ComputePipelineDesc cd;
     cd.program = s.program;
@@ -967,150 +966,6 @@ TEST_CASE("gfx layer: every generated program, pipeline pair and compute entry p
             }
         }
     }
-}
-
-// The texture path's operation (ops.cpp) on the recording backend: what update_texture_from_tensor
-// records for each source, the parameters and key block it puts in the frame's arena, the bind
-// groups it caches per buffer and texture and drops once either is gone, and its refusals.
-TEST_CASE("gfx layer: update_texture_from_tensor records the colormap and the fill for each source") {
-    namespace sh = caliper_gfx::shaders;
-    RecordingBackend gfx;
-    const uint32_t W = 5, H = 3;
-    Texture t = gfx.create_texture({W, H, Format::RGBA8Unorm, kSampled | kStorageTex | kCopyDstTex | kCopySrcTex});
-    REQUIRE(t);
-    sh::Cmap block{};
-    block.vmin = 0.0f;
-    block.vmax = 1.0f;
-    block.levels[7][2] = 0xff00ff00u;
-    const TextureMapping m{&block, uint32_t(sizeof block)};
-    std::vector<float> values(size_t(W) * H + 8, 0.25f);
-    Buffer values_buf = gfx.create_buffer({values.size() * 4, kStorage | kCopyDst});
-    REQUIRE(gfx.write_buffer(values_buf, 0, values.data(), values.size() * 4));
-
-    // From a buffer at byte 8, rows of 6 values: one dispatch of colormap_texture over 1 x 1 groups.
-    TensorSource src;
-    src.buffer = values_buf;
-    src.offset = 8;
-    src.w = W;
-    src.h = H;
-    src.stride_y = 6;
-    gfx.clear_log();
-    UpdateResult r = gfx.update_texture_from_tensor(t, src, m);
-    REQUIRE_MESSAGE(r.ok, gfx.last_error());
-    CHECK(std::string(r.path) == "compute-imported");
-    CHECK(r.route == Route::InPlace);
-    CHECK(r.bytes_copied == 0);
-    CHECK(r.serial != 0);
-    REQUIRE(gfx.submitted().size() == 1);
-    {
-        const Frame& f = gfx.submitted()[0].frame;
-        REQUIRE(f.passes().size == 1);
-        const auto* d = std::get_if<DispatchPass>(&f.passes()[0]);
-        REQUIRE(d != nullptr);
-        CHECK(d->x == 1);
-        CHECK(d->y == 1);
-        sh::TexParams tp;
-        std::memcpy(&tp, f.arena().data + d->dynamic_offsets[0], sizeof tp);
-        CHECK(tp.width == W);
-        CHECK(tp.height == H);
-        CHECK(tp.base == 2);
-        CHECK(tp.row == 6);
-        CHECK(std::memcmp(f.arena().data + d->dynamic_offsets[1], &block, sizeof block) == 0);
-        REQUIRE(d->writes.size() == 1);
-        CHECK(d->writes[0] == t);
-    }
-    // Program, pipeline, its group 1 and the group of (buffer, texture) were made once.
-    const size_t groups = gfx.count(RecordingBackend::OpKind::Create, HandleKind::BindGroup);
-    CHECK(groups == 2);
-    REQUIRE(gfx.update_texture_from_tensor(t, src, m).ok);
-    CHECK(gfx.count(RecordingBackend::OpKind::Create, HandleKind::BindGroup) == groups);
-
-    // From host bytes: the values go into a staging buffer the texture keeps, then the colormap.
-    CaliperTensor host{};
-    host.data = values.data();
-    host.device = CALIPER_DEV_CPU;
-    TensorSource hs;
-    hs.tensor = &host;
-    hs.w = W;
-    hs.h = H;
-    gfx.clear_log();
-    r = gfx.update_texture_from_tensor(t, hs, m);
-    REQUIRE_MESSAGE(r.ok, gfx.last_error());
-    CHECK(std::string(r.path) == "cpu-staged");
-    CHECK(r.route == Route::CopiedFromHost);
-    CHECK(r.bytes_copied == W * H * 4);
-    CHECK(gfx.count(RecordingBackend::OpKind::Create, HandleKind::Buffer) == 1);
-    CHECK(gfx.count(RecordingBackend::OpKind::WriteBuffer) == 1);
-    CHECK(gfx.submitted().size() == 1);
-
-    // RGBA8 texels from host bytes: written into the texture, with no pass.
-    std::vector<uint32_t> texels(size_t(W) * H);
-    for (size_t i = 0; i < texels.size(); ++i) texels[i] = uint32_t(i * 0x01020304u);
-    CaliperTensor img{};
-    img.data = texels.data();
-    img.device = CALIPER_DEV_CPU;
-    TensorSource is;
-    is.tensor = &img;
-    is.w = W;
-    is.h = H;
-    is.dtype = CALIPER_DT_U8;
-    is.channels = 4;
-    is.stride_x = 4;
-    gfx.clear_log();
-    r = gfx.update_texture_from_tensor(t, is, TextureMapping{});
-    REQUIRE_MESSAGE(r.ok, gfx.last_error());
-    CHECK(std::string(r.path) == "cpu-staged");
-    CHECK(r.serial == 0);
-    CHECK(gfx.submitted().empty());
-    const std::vector<uint8_t> got = gfx.texture_bytes(t);
-    CHECK(std::memcmp(got.data(), texels.data(), got.size()) == 0);
-
-    // RGBA8 texels from a buffer at byte 4: the fill program, whatever the row pitch.
-    Buffer texel_buf = gfx.create_buffer({texels.size() * 4 + 4, kStorage | kCopyDst});
-    TensorSource bs = is;
-    bs.tensor = nullptr;
-    bs.buffer = texel_buf;
-    bs.offset = 4;
-    gfx.clear_log();
-    r = gfx.update_texture_from_tensor(t, bs, TextureMapping{});
-    REQUIRE_MESSAGE(r.ok, gfx.last_error());
-    CHECK(std::string(r.path) == "blit-imported");
-    REQUIRE(gfx.submitted().size() == 1);
-    {
-        const auto* d = std::get_if<DispatchPass>(&gfx.submitted()[0].frame.passes()[0]);
-        REQUIRE(d != nullptr);
-        sh::FillParams fp;
-        std::memcpy(&fp, gfx.submitted()[0].frame.arena().data + d->dynamic_offsets[0], sizeof fp);
-        CHECK(fp.base == 1);
-        CHECK(fp.row == W);
-    }
-
-    // A released texture's cached groups (over the value buffer, its staging buffer and the texel
-    // buffer) and its staging buffer go at the next update.
-    gfx.release(t);
-    Texture t2 = gfx.create_texture({W, H, Format::RGBA8Unorm, kStorageTex | kCopyDstTex});
-    gfx.clear_log();
-    REQUIRE(gfx.update_texture_from_tensor(t2, src, m).ok);
-    CHECK(gfx.count(RecordingBackend::OpKind::Destroy, HandleKind::BindGroup) == 3);
-    CHECK(gfx.count(RecordingBackend::OpKind::Destroy, HandleKind::Buffer) == 1);
-
-    // Refusals.
-    CHECK_FALSE(gfx.update_texture_from_tensor(t2, src, TextureMapping{}).ok);
-    CHECK(has(gfx.last_error(), "key block"));
-    TensorSource past = src;
-    past.offset = 28;
-    CHECK_FALSE(gfx.update_texture_from_tensor(t2, past, m).ok);
-    CHECK(has(gfx.last_error(), "past the end"));
-    CaliperTensor metal{};
-    metal.data = values.data();
-    metal.device = CALIPER_DEV_METAL;
-    TensorSource ms = hs;
-    ms.tensor = &metal;
-    CHECK_FALSE(gfx.update_texture_from_tensor(t2, ms, m).ok);
-    CHECK(has(gfx.last_error(), "cannot read a tensor on this device in place"));
-    Texture sampled = gfx.create_texture({W, H, Format::RGBA8Unorm, kSampled});
-    CHECK_FALSE(gfx.update_texture_from_tensor(sampled, src, m).ok);
-    CHECK(has(gfx.last_error(), "kStorageTex"));
 }
 
 // ---- Colormaps (src/host/gfx/colormap_tables.h) -----------------------------------------------

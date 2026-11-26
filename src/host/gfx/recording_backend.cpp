@@ -1,8 +1,6 @@
 // recording_backend.cpp: the graphics layer's backend without a GPU (recording_backend.h).
 #include "gfx/recording_backend.h"
 
-#include "gfx/shaders/generated/programs.h"
-
 #include <algorithm>
 #include <cstring>
 
@@ -16,29 +14,7 @@ Caps RecordingBackend::default_caps() {
     return c;
 }
 
-namespace {
-// The generated programs' descriptions with no sources, which the recording backend takes as they
-// are, so that the operations (ops.cpp) record their frames here too.
-const ProgramDesc* recorded_programs() {
-    static const std::vector<ProgramDesc> table = [] {
-        std::vector<ProgramDesc> t(shaders::kProgramCount);
-        for (uint32_t i = 0; i < shaders::kProgramCount; ++i) {
-            const shaders::ProgramDescription& d = shaders::kProgramDescriptions[i];
-            t[i].label = d.name;
-            t[i].entries = d.entries;
-            t[i].entry_count = d.entry_count;
-            t[i].bindings = d.bindings;
-            t[i].binding_count = d.binding_count;
-        }
-        return t;
-    }();
-    return table.data();
-}
-}  // namespace
-
-RecordingBackend::RecordingBackend(const Caps& caps) : Backend(caps) {
-    set_programs(recorded_programs(), shaders::kProgramCount);
-}
+RecordingBackend::RecordingBackend(const Caps& caps) : Backend(caps) {}
 RecordingBackend::~RecordingBackend() = default;
 
 size_t RecordingBackend::count(OpKind k, HandleKind object) const {

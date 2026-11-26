@@ -360,7 +360,6 @@ set_target_properties(caliper_api PROPERTIES
 # (web/wasm, its own Emscripten project); the native renderers keep their own paths for now.
 add_library(caliper_gfx STATIC
     src/host/gfx/core.cpp
-    src/host/gfx/ops.cpp
     src/host/gfx/recording_backend.cpp
 )
 target_include_directories(caliper_gfx PUBLIC ${CMAKE_SOURCE_DIR}/src/host)

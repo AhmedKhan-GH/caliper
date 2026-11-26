@@ -38,7 +38,6 @@ add_library(caliper_view_layer STATIC
     ${CALIPER_ROOT}/src/host/renderer/webgpu_renderer.cpp
     ${CALIPER_ROOT}/src/host/renderer/webgpu_backend.cpp
     ${CALIPER_ROOT}/src/host/gfx/core.cpp
-    ${CALIPER_ROOT}/src/host/gfx/ops.cpp
     ${CALIPER_ROOT}/src/host/ui/sternbild_fonts.cpp
     ${CALIPER_ROOT}/src/host/ui/sternbild_theme.cpp
     ${TP}/imgui/imgui.cpp
