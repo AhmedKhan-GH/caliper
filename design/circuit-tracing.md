@@ -83,7 +83,7 @@ No custom VJP loop or dense Jacobian assembly exists in Caliper.
 
 `Tracer.trace` builds a `Graph` and publishes fixed-capacity tensors on the model device.
 Compact traces up to 512 nodes and 8,192 edges use `(512, 8192)` buffers.
-Larger traces such as Gemma 2 2B Dallas (`847` nodes and `33,999` edges) use `(8192, 262144)` buffers.
+Larger traces such as Gemma 2 2B Dallas (`847` nodes and `34,000` edges) use `(8192, 262144)` buffers.
 `trace.counts` defines the valid prefix rows, and unused rows contain zeros.
 
 | Tensor | Shape | Type | Fields |
@@ -131,7 +131,7 @@ Caliper compares direct `circuit-tracer` outputs against the published tutorial 
 
 - Baseline `' Austin'` (`22605`, probability `0.419921875`, logit `26.125`) and all seven published Dallas intervention top tokens (Cells 14, 16, 18, 20, 24, 26, and 29) match.
 - Six of seven intervention probabilities match bitwise, Cell 26 stays within one `bfloat16` ULP (`2^-10`) from Metal `index_add_` order, and Cell 29 has `Say Victoria == 0.0`.
-- Attribution graph counts match (`5,307` full nodes, `847` kept nodes, `689` kept features, and `33,999` kept nonzero edges at thresholds `0.7` and `0.9`).
+- Attribution graph counts match (`5,307` full nodes, `847` kept nodes, `689` kept features, and `34,000` kept nonzero edges at thresholds `0.7` and `0.9`).
 - `attribution_graph@1`, `token_strip@1`, and `logit_bars@1` render in both the native Metal app and the browser WebGPU viewer.
 - Load, trace, prune, intervention, generation, and sweep durations are measured and reported without arbitrary time gates.
 - Process memory stays within 40 GB and host available memory stays at or above 8 GB.

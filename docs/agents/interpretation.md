@@ -104,8 +104,8 @@ Standalone traces without `Output` also publish baseline-only `live:trace.probs`
 ## Inference Runs
 
 `run.start` accepts `kind: "inference"` with `model`, `dictionary`, and `prompt` to launch a managed `HostedInference` process (`caliper.interp._hosted`).
-Hosted inference registers parameters `prompt`, `selected_node`, `clamp`, `clamp.status`, `retrace`, `output.baseline`, `output.steered`, and `output.status`.
-It also registers actions `apply_clamp`, `reset`, and `generate` (plus `dallas.cell14` through `dallas.cell29` on 26-layer Gemma Scope transcoders).
+Hosted inference registers parameters `prompt`, `show_more`, `selected_node`, `clamp`, `retrace`, and read-only parameters `clamp.status`, `output.baseline`, `output.steered`, and `output.status`.
+It also registers actions `run`, `apply_clamp`, `reset`, and `generate` (plus `dallas.cell14` through `dallas.cell29` on 26-layer Gemma Scope transcoders).
 
 `run.fork` checkpoints the active prompt, feature selection, and intervention specifications into `.json` metadata and starts a branched inference run without copying model weights.
 `trace.status` includes an `inference` dictionary with `prompt_hash`, `interventions_hash`, latest `comparison` top tokens, and `generation` token counts.
@@ -114,8 +114,8 @@ It also registers actions `apply_clamp`, `reset`, and `generate` (plus `dallas.c
 
 `caliper.param("prompt", "")` registers a free-text parameter under the `text_params` wire capability.
 Values accept up to 4,096 UTF-8 bytes without embedded NUL characters.
-Spec controls with `kind = "text"` bind to `param:prompt`, `param:output.baseline`, and `param:output.steered`.
-Pressing Return or leaving the field submits edits at the next run boundary.
+Spec controls with `kind = "text"` bind to `param:prompt`, while read-only `kind = "readout"` controls display `param:output.baseline`, `param:output.steered`, and `param:output.status`.
+Pressing Return or leaving the prompt field retraces the graph, updates output bars, regenerates continuations, and refreshes examples at the next run boundary.
 
 ## Structured Wire Metadata
 
