@@ -1526,8 +1526,8 @@ caliper_live_views::SceneView* SpecRuntime::entity_view(const std::string& panel
             ok = scene_layer_(&ep.gfx, &backend, &programs, &why);
         } else {
             CaliperCore* core = core_ ? core_() : nullptr;
-            ok = core && caliper_live_views::open_layer(core, "scenes", &ep.gfx, &backend, &programs, &why);
-            if (!core) why = "Scene entities need the graphics layer, which starts with a live session";
+            if (!core) return nullptr;   // live session not attached yet: retry once it attaches
+            ok = caliper_live_views::open_layer(core, "scenes", &ep.gfx, &backend, &programs, &why);
         }
         if (ok) {
             auto view = std::make_unique<caliper_live_views::SceneView>(*backend, programs);
