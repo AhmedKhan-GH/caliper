@@ -526,7 +526,6 @@ set_target_properties(caliper_gfx_tests PROPERTIES
 # blit textures back for verification.
 if(APPLE)
     target_link_libraries(caliper_gfx_tests PRIVATE caliper_metal_backend)
-    target_compile_definitions(caliper_gfx_tests PRIVATE CALIPER_HAVE_METAL=1)
     set_source_files_properties(gfx/gfx_main.cpp PROPERTIES
         COMPILE_OPTIONS "-x;objective-c++;-fobjc-arc")
     # The graphics layer's rows on Metal (src/host/gfx), on the same renderer's device.
@@ -559,7 +558,6 @@ endif()
 if(WIN32)
     target_sources(caliper_gfx_tests PRIVATE ${CMAKE_SOURCE_DIR}/src/host/renderer/cuda_driver.cpp)
     target_link_libraries(caliper_gfx_tests PRIVATE caliper_vulkan_backend)
-    target_compile_definitions(caliper_gfx_tests PRIVATE CALIPER_HAVE_VULKAN=1)
 endif()
 
 add_test(NAME caliper_gfx_tests COMMAND caliper_gfx_tests)
@@ -618,7 +616,6 @@ target_link_libraries(caliper_export_tests PRIVATE
 set_target_properties(caliper_export_tests PROPERTIES
     CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
 if(APPLE)
-    target_compile_definitions(caliper_export_tests PRIVATE CALIPER_HAVE_METAL=1)
     # ObjC++ + ARC for the Metal device query of the live cases.
     set_source_files_properties(test_export.cpp PROPERTIES
         COMPILE_OPTIONS "-x;objective-c++;-fobjc-arc")
@@ -765,7 +762,6 @@ target_sources(caliper_live_tests PRIVATE test_live_net.cpp)
 # events. Only this file sees the builder half of the header.
 if(CALIPER_WITH_BUILDER)
     target_sources(caliper_live_tests PRIVATE test_live_programs_host.cpp)
-    set_source_files_properties(test_live_programs_host.cpp PROPERTIES COMPILE_DEFINITIONS CALIPER_WITH_BUILDER=1)
     target_link_libraries(caliper_live_tests PRIVATE caliper_builder_session)
 endif()
 # The 3.1 golden frames (tests/fixtures/wire_v3/v3_1) that the native source

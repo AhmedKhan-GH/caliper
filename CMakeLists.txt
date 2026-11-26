@@ -89,6 +89,8 @@ option(CALIPER_WITH_TORCH   "Download/link the vendored libtorch for torch apple
 # The core build compiles no applets. ON also builds the applets/* tree here,
 # through the same caliper_add_applet() that builds them against the installed SDK.
 option(CALIPER_BUILD_APPLETS "Also build the applets/* tree in the core build" OFF)
+option(CALIPER_BUILD_VIEWER "Build the caliper_viewer live-viewer process" ON)
+option(CALIPER_BUILD_EXAMPLES "Build the embedder example (examples/embed_host)" ON)
 option(CALIPER_BUILD_PYTHON  "Build the caliper Python extension (python/, nanobind)" OFF)
 # slang is configured EXCLUDE_FROM_ALL and linked by nothing that
 # libcaliper / the caliper exe / the tests need. OFF skips its configure
@@ -449,6 +451,7 @@ if(APPLE)
                "-framework Metal" "-framework QuartzCore"
                "-framework Foundation" "-framework Cocoa"
         PRIVATE caliper::ui_stack imgui_backends glfw caliper_gfx)
+    target_compile_definitions(caliper_metal_backend PUBLIC CALIPER_HAVE_METAL=1)
     set_source_files_properties(
         src/host/renderer/metal_renderer.mm
         src/host/background_process_mac.mm
@@ -510,9 +513,10 @@ if(WIN32)
         ${CMAKE_SOURCE_DIR}/src
         ${CMAKE_SOURCE_DIR}/src/host
         ${CALIPER_SPV_DIR})
-    target_compile_definitions(caliper_vulkan_backend PRIVATE
-        IMGUI_IMPL_VULKAN_USE_VOLK
-        VK_USE_PLATFORM_WIN32_KHR)
+    target_compile_definitions(caliper_vulkan_backend
+        PUBLIC CALIPER_HAVE_VULKAN=1
+        PRIVATE IMGUI_IMPL_VULKAN_USE_VOLK
+                VK_USE_PLATFORM_WIN32_KHR)
     target_link_libraries(caliper_vulkan_backend
         PUBLIC caliper::sdk caliper_tensor_bridge volk::volk
         PRIVATE caliper::ui_stack imgui_backends glfw)
@@ -633,7 +637,6 @@ include(cmake/CaliperEmbed.cmake)
 # caliper_viewer — the standalone live viewer process (src/host/live/
 # viewer_main.mm): an AppKit window hosting the embed core attached to a
 # training process's live session. Thin shell; the attach logic is in libcaliper.
-option(CALIPER_BUILD_VIEWER "Build the caliper_viewer live-viewer process" ON)
 if(APPLE AND CALIPER_BUILD_VIEWER)
     add_executable(caliper_viewer src/host/live/viewer_main.mm)
     set_source_files_properties(src/host/live/viewer_main.mm
@@ -782,7 +785,6 @@ endif()
 # bare native-window host with an offscreen mode; not an applet, not linked
 # into `caliper`. It also builds on its own against the installed caliper-embed
 # package (caliper_embed_install does that).
-option(CALIPER_BUILD_EXAMPLES "Build the embedder example (examples/embed_host)" ON)
 if(CALIPER_BUILD_EXAMPLES)
     add_subdirectory(examples/embed_host)
 endif()
@@ -937,15 +939,14 @@ if(CALIPER_WITH_BUILDER)
     # The scene view draws its shapes with the library pieces (draw/scene_pieces.h) wherever it is
     # compiled with the draw layer and linked with this library; the browser module compiles the same
     # converter (web/wasm/CMakeLists.txt).
-    target_compile_definitions(caliper_draw_host PUBLIC CALIPER_HAVE_SCENE_PIECES=1)
+    target_sources(caliper_draw_host PRIVATE src/host/draw/library_pieces.cpp)
+    target_compile_definitions(caliper_draw_host PUBLIC
+        CALIPER_HAVE_DRAW=1
+        CALIPER_HAVE_SCENE_PIECES=1
+        CALIPER_HAVE_LIBRARY_PIECES=1)
     set_target_properties(caliper_draw_host PROPERTIES
         CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON POSITION_INDEPENDENT_CODE ON)
-    # The library pieces of version 1 (draw/library_pieces.h), which the scene view and the live points
-    # view draw with; the browser module compiles the same file (web/wasm/CMakeLists.txt).
-    target_sources(caliper_draw_host PRIVATE src/host/draw/library_pieces.cpp)
-    target_compile_definitions(caliper_draw_host PUBLIC CALIPER_HAVE_LIBRARY_PIECES=1)
     target_link_libraries(libcaliper PUBLIC caliper_draw_host)
-    target_compile_definitions(libcaliper PRIVATE CALIPER_HAVE_DRAW=1)
     if(BUILD_TESTS)
         add_executable(caliper_gfx_draw_tests src/host/draw/tests/test_draw_runtime.cpp)
         target_link_libraries(caliper_gfx_draw_tests PRIVATE caliper_draw_host doctest::doctest)
@@ -956,7 +957,6 @@ if(CALIPER_WITH_BUILDER)
         if(APPLE AND TARGET caliper_gfx_tests)
             target_sources(caliper_gfx_tests PRIVATE ${CMAKE_SOURCE_DIR}/tests/gfx/gfx_pieces.cpp)
             target_link_libraries(caliper_gfx_tests PRIVATE caliper_draw_host)
-            target_compile_definitions(caliper_gfx_tests PRIVATE CALIPER_HAVE_DRAW=1)
         endif()
     endif()
     # The spec applet kind in the loader (src/host/applet_spec.h): with the
@@ -1000,16 +1000,17 @@ add_subdirectory(src/host/producer)
 # (tests/test_app_session.cpp); the second is POSIX only, as the hidden app's
 # other process tests are, and is skipped without a Metal device.
 if(TARGET caliper_builder_session)
+    # Propagate CALIPER_WITH_BUILDER=1 once from caliper_builder_session so
+    # every host target and test that links the session shares one switch.
+    target_compile_definitions(caliper_builder_session PUBLIC CALIPER_WITH_BUILDER=1)
     target_link_libraries(caliper PRIVATE caliper_builder_session caliper_spec_runtime caliper_api_session
         caliper_catalog_providers)
-    target_compile_definitions(caliper PRIVATE CALIPER_WITH_BUILDER=1)
     if(BUILD_TESTS)
         add_executable(caliper_app_session_tests tests/test_app_session.cpp src/host/builder/app_session.cpp)
         target_link_libraries(caliper_app_session_tests PRIVATE caliper_builder_test_main doctest::doctest
             caliper_builder_session caliper_api_session caliper_host_lib)
         target_include_directories(caliper_app_session_tests PRIVATE
             ${CMAKE_SOURCE_DIR}/src/host ${CMAKE_SOURCE_DIR}/tests ${CMAKE_SOURCE_DIR}/third_party/stb)
-        target_compile_definitions(caliper_app_session_tests PRIVATE CALIPER_WITH_BUILDER=1)
         set_target_properties(caliper_app_session_tests PROPERTIES CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON)
         if(TARGET hello_applet)
             add_dependencies(caliper_app_session_tests hello_applet)   # app.launch in the process test

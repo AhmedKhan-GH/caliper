@@ -52,7 +52,6 @@ function(caliper_draw_parity_targets)
             "${CMAKE_SOURCE_DIR}/src/host" "${CMAKE_SOURCE_DIR}/third_party/stb")
         target_link_libraries(caliper_scene_parity_app PRIVATE caliper_draw_host caliper_scene caliper_gfx caliper_net
             caliper_tensor_bridge caliper::sdk "-framework Metal" "-framework Foundation")
-        target_compile_definitions(caliper_scene_parity_app PRIVATE CALIPER_HAVE_DRAW=1)
         set_source_files_properties("${_dir}/scene_parity_app.mm" PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
         set_target_properties(caliper_scene_parity_app PROPERTIES
             CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON OBJCXX_STANDARD 17 OBJCXX_STANDARD_REQUIRED ON)

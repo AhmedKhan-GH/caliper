@@ -24,7 +24,6 @@ function(caliper_image_match_target name)
     target_link_libraries(caliper_${name}_match_tests PRIVATE caliper_draw caliper_draw_host caliper_scene caliper_net
         caliper_tensor_bridge caliper_producer caliper_builder_session caliper::sdk doctest::doctest
         "-framework Metal" "-framework MetalPerformanceShaders" "-framework Foundation")
-    target_compile_definitions(caliper_${name}_match_tests PRIVATE CALIPER_HAVE_DRAW=1)
     set_source_files_properties("${_src}" PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
     set_target_properties(caliper_${name}_match_tests PROPERTIES
         CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON OBJCXX_STANDARD 17 OBJCXX_STANDARD_REQUIRED ON)

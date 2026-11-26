@@ -27,7 +27,7 @@ if(BUILD_TESTS AND TARGET doctest::doctest)
     target_include_directories(caliper_approval_cards_tests PRIVATE ${CMAKE_SOURCE_DIR}/src/host
         ${CMAKE_SOURCE_DIR}/src/host/spec_runtime/tests ${CMAKE_SOURCE_DIR}/src/builder/mcp/tests
         ${CMAKE_SOURCE_DIR}/tests)
-    target_compile_definitions(caliper_approval_cards_tests PRIVATE CALIPER_WITH_BUILDER=1
+    target_compile_definitions(caliper_approval_cards_tests PRIVATE
         CALIPER_SPEC_FIXTURES="${CMAKE_SOURCE_DIR}/src/builder/spec/tests/fixtures"
         CALIPER_SPEC_TEST_TMP="${CMAKE_CURRENT_BINARY_DIR}/approval-test-tmp")
     if(TARGET caliper-mcp)
