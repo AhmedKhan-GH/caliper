@@ -1,5 +1,5 @@
 [build-system]
-requires = ["scikit-build-core>=0.10", "nanobind>=2"]
+requires = ["scikit-build-core>=1.1.2", "nanobind>=3.1.0"]
 build-backend = "scikit_build_core.build"
 
 [project]
@@ -25,7 +25,7 @@ test = [
     "psutil",
     "datasets",
     "transformers>=5.24.0,<5.25.0",
-    "transformer-lens==3.9.0",
+    "transformer-lens==4.4.0",
     "sae-lens==6.56.3",
     "nnsight==0.8.4",
     "circuit-tracer @ git+https://github.com/decoderesearch/circuit-tracer.git@82996f144b3371ae858ea5713590d004c218f0c2",
@@ -37,7 +37,7 @@ interp = [
     "psutil",
     "datasets",
     "transformers>=5.24.0,<5.25.0",
-    "transformer-lens==3.9.0",
+    "transformer-lens==4.4.0",
     "sae-lens==6.56.3",
     "nnsight==0.8.4",
     "circuit-tracer @ git+https://github.com/decoderesearch/circuit-tracer.git@82996f144b3371ae858ea5713590d004c218f0c2",
