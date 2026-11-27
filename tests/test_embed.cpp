@@ -1386,7 +1386,7 @@ TEST_CASE("embed/views: gates refuse honestly; shutdown with live views is clean
     CHECK(std::string(caliper_core_last_error(core)).find("contiguous") != std::string::npos);
     // Bad colormap.
     vd.tensor = &tf;
-    vd.colormap = 7;
+    vd.colormap = 16;
     CHECK(caliper_core_view_tensor(core, &vd) == 0);
     CHECK(std::string(caliper_core_last_error(core)).find("colormap") != std::string::npos);
     vd.colormap = 0;
