@@ -384,7 +384,7 @@ int caliper_core_view_tensor(CaliperCore* core, const CaliperViewDesc* desc) {
     if (mapped) {
         if (colormap_lut(desc->colormap) == nullptr)
             return vfail("bad colormap " + std::to_string(desc->colormap) +
-                         " (0 viridis, 1 magma, 2 rdbu)");
+                         " (expected 0..15)");
         if (!std::isfinite(desc->vmin) || !std::isfinite(desc->vmax))
             return vfail("vmin/vmax must be finite");
     }

@@ -321,7 +321,7 @@ typedef struct CaliperViewDesc {
      * be a multiple of 4.
      */
     uint64_t             byte_offset;
-    /** The `CaliperColormap` for a 2-D f32 tensor: 0 for viridis, 1 for magma and 2 for rdbu. */
+    /** The `CaliperColormap` for a 2-D f32 tensor (0 to 15, starting with 0 viridis, 1 magma, 2 rdbu). */
     int32_t              colormap;
     /** The mapping range of a 2-D f32 tensor. Both ends must be finite. */
     float                vmin, vmax;

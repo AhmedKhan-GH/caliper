@@ -1390,7 +1390,7 @@ def colormap_lut(name="viridis"):
     The call needs no core.
 
     Args:
-        name (str | int): `"viridis"`, `"magma"` or `"rdbu"`, or 0, 1 or 2.
+        name (str | int): A colormap name (such as `"viridis"`, `"magma"` or `"rdbu"`) or index (0 to 15).
 
     Returns:
         numpy.ndarray: A `(256,)` uint32 array. Each entry is `R | G<<8 | B<<16 | A<<24`.

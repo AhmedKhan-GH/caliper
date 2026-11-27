@@ -546,7 +546,7 @@ bool validate(CaliperCore* core, const CaliperLiveSnapshot& s, std::string* why)
             if (d.shape[0] > kMaxTexDim || d.shape[1] > kMaxTexDim)
                 return no("dims must be in 1..16384; got " + shape_str(d));
             if (!caliper_host::colormap_lut(s.colormap))
-                return no("bad colormap " + std::to_string(s.colormap) + " (0 viridis, 1 magma, 2 rdbu)");
+                return no("bad colormap " + std::to_string(s.colormap) + " (expected 0..15)");
             break;
         case CALIPER_LIVE_KIND_IMAGE:
             if (d.dtype != CALIPER_DT_U8 || d.ndim != 3 || d.shape[2] != 4)
@@ -583,7 +583,7 @@ bool validate(CaliperCore* core, const CaliperLiveSnapshot& s, std::string* why)
                     return no("points: aux_offset / 4 must fit 32 bits");
                 if (s.label_count == 0 && !caliper_host::colormap_lut(s.colormap))
                     return no("bad colormap " + std::to_string(s.colormap) +
-                              " (0 viridis, 1 magma, 2 rdbu)");
+                              " (expected 0..15)");
             }
             break;
         }
