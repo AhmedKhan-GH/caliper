@@ -40,7 +40,12 @@ public:
         }
         const std::size_t nl = line.find('\n');
         if (nl == std::string::npos || line.rfind("http://127.0.0.1:", 0) != 0) {
-            if (why) *why = "the fake server printed no address";
+            std::string err;
+            char ebuf[512];
+            std::size_t egot = 0;
+            while (p->read_stderr(ebuf, sizeof ebuf, &egot, 0) == acp::IoStatus::ok && egot > 0)
+                err.append(ebuf, egot);
+            if (why) *why = err.empty() ? "the fake server printed no address" : "the fake server printed no address: " + err;
             p->terminate(2000);
             return nullptr;
         }

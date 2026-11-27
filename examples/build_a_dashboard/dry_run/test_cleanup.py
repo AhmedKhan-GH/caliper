@@ -22,6 +22,7 @@ import json
 import os
 import shutil
 import signal
+import socketserver
 import subprocess
 import sys
 import tempfile
@@ -158,7 +159,13 @@ class Scripts(unittest.TestCase):
         self.python = self.base / "agent-python"        # answers the import check of the agent's dependencies
         self.python.write_text("#!/bin/sh\nexit 0\n")
         self.python.chmod(0o755)
-        self.server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), FakeOllama)
+        class LoopbackServer(http.server.ThreadingHTTPServer):
+            def server_bind(self):
+                socketserver.TCPServer.server_bind(self)
+                self.server_name = "127.0.0.1"
+                self.server_port = self.server_address[1]
+
+        self.server = LoopbackServer(("127.0.0.1", 0), FakeOllama)
         threading.Thread(target=self.server.serve_forever, daemon=True).start()
         self.ollama = f"http://127.0.0.1:{self.server.server_address[1]}"
 
