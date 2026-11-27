@@ -7,8 +7,9 @@ docs-theme/hooks/c_reference.py renders each `<!-- c-api ... -->` placeholder
 from the doc comments of a C header. This check reads the same sources
 statically (no import of caliper, no MkDocs build) and fails when:
 
-  1. a name in `caliper.__all__` or `caliper.live.__all__` has no docstring,
-     or no page has a `:::` directive for it;
+  1. a name in `caliper.__all__`, `caliper.live.__all__` or
+     `caliper.interp.__all__` has no docstring, or no page has a `:::`
+     directive for it;
   2. a function pointer of a struct in sdk/include/caliper/services/, or a
      function of include/caliper/embed.h, live.h or live_views.h, has no
      /** */ comment, or no placeholder on any page renders it;
@@ -119,7 +120,7 @@ def is_type_checking(test):
 
 
 def python_symbols(root):
-    """Yields (public name, docstring) for caliper.__all__ and caliper.live.__all__."""
+    """Yields (public name, docstring) for caliper.__all__, caliper.live.__all__ and caliper.interp.__all__."""
     package = root / PACKAGE
     trees = {}
 
@@ -131,10 +132,12 @@ def python_symbols(root):
     def resolve(module, name, depth=0):
         entry = docstrings(tree_of(module)).get(name)
         if isinstance(entry, tuple) and depth < 4:
-            return resolve(entry[1], entry[2], depth + 1)
+            pkg = module.rsplit("/", 1)[0] if "/" in module else ""
+            target = "%s/%s" % (pkg, entry[1]) if pkg else entry[1]
+            return resolve(target, entry[2], depth + 1)
         return entry
 
-    for module, prefix in (("__init__", "caliper"), ("live", "caliper.live")):
+    for module, prefix in (("__init__", "caliper"), ("live", "caliper.live"), ("interp/__init__", "caliper.interp")):
         for name in module_all(tree_of(module)):
             yield "%s.%s" % (prefix, name), resolve(module, name)
 

@@ -44,6 +44,24 @@ def list_sessions():
     """List the sessions."""
 '''
 
+INTERP_INIT = '''\
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from ._graph import Tracer
+
+__all__ = ["publish", "Tracer"]
+
+
+def publish(name, tensor):
+    """Publish a tensor."""
+'''
+
+INTERP_GRAPH = '''\
+class Tracer:
+    """Trace an attribution graph."""
+'''
+
 SERVICE = '''\
 #pragma once
 /* A service. */
@@ -109,6 +127,10 @@ PAGE = '''\
 
 ::: caliper.live.list_sessions
 
+::: caliper.interp.publish
+
+::: caliper.interp.Tracer
+
 ## Calls
 
 <!-- c-api calls sdk/include/caliper/services/thing_v1.h -->
@@ -131,6 +153,8 @@ class Repo:
             "python/caliper/__init__.py": INIT,
             "python/caliper/_consts.py": CONSTS,
             "python/caliper/live.py": LIVE,
+            "python/caliper/interp/__init__.py": INTERP_INIT,
+            "python/caliper/interp/_graph.py": INTERP_GRAPH,
             "sdk/include/caliper/services/thing_v1.h": SERVICE,
             "include/caliper/embed.h": EMBED,
             "include/caliper/live.h": LIVE_H,
@@ -179,6 +203,7 @@ class CheckTest(unittest.TestCase):
         chk.check(self.repo.root, listing)
         text = "\n".join(listing)
         for name in ("caliper.show", "caliper.LIMIT", "caliper.Thing", "caliper.live.list_sessions",
+                     "caliper.interp.publish", "caliper.interp.Tracer",
                      "CaliperThingV1.open", "CaliperThingV1.close", "caliper_core_create",
                      "caliper_core_live_attach", "caliper_core_live_view_count"):
             self.assertIn(name, text)
@@ -207,6 +232,14 @@ class CheckTest(unittest.TestCase):
     def test_live_symbol_on_no_page_fails(self):
         self.repo.edit("docs/things.md", "::: caliper.live.list_sessions\n", "")
         self.assertProblem("caliper.live.list_sessions: no page")
+
+    def test_interp_symbol_on_no_page_fails(self):
+        self.repo.edit("docs/things.md", "::: caliper.interp.Tracer\n", "")
+        self.assertProblem("caliper.interp.Tracer: no page")
+
+    def test_interp_missing_docstring_fails(self):
+        self.repo.edit("python/caliper/interp/_graph.py", '    """Trace an attribution graph."""\n', "    pass\n")
+        self.assertProblem("caliper.interp.Tracer: no docstring")
 
     def test_directive_in_code_fence_does_not_count(self):
         self.repo.edit("docs/things.md", "::: caliper.Thing\n", "```text\n::: caliper.Thing\n```\n")

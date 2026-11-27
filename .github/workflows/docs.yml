@@ -4,12 +4,22 @@ on:
   pull_request:
     # The docs site, the design pages, their theme and MkDocs configs
     # (design/mkdocs.yml is under design/), the sources the docs embed as
-    # snippets, and the docstrings and headers the API reference is built from.
+    # snippets, the docstrings and headers the API reference is built from,
+    # and the command table, piece definitions, and root docs checked here.
     paths: ['docs/**', 'design/**', 'docs-theme/**', 'mkdocs.yml',
             'sdk/include/**', 'include/caliper/**', 'python/caliper/**', 'examples/**', 'roadmap/**',
-            'candidates/**', 'requirements-docs.txt',
+            'candidates/**', 'requirements-docs.txt', 'CONTRIBUTING.md', 'README.md',
+            'src/builder/commands/command_table.json',
+            'src/builder/include/caliper_builder/spec/piece.h',
+            'src/builder/include/caliper_builder/programs/pieces.h',
+            'src/builder/programs/piece_checks.cpp',
+            'src/builder/spec/schema/caliper-spec-v1.schema.json',
+            'src/host/host_cli.h',
             'scripts/check_api_reference.py', 'scripts/test_check_api_reference.py',
-            '.github/workflows/docs.yml']
+            'scripts/generate_feature_index.py', 'scripts/generate_mcp_reference.py',
+            'scripts/generate_piece_reference.py', 'scripts/check_doc_references.py',
+            'scripts/test_doc_generators.py', 'scripts/test_check_doc_references.py',
+            '.github/pull_request_template.md', '.github/workflows/docs.yml']
   workflow_dispatch:
 permissions:
   contents: read
@@ -37,11 +47,18 @@ jobs:
       # Fails on docs headings that break the title rule (Title Case, no leading article or Your,
       # no colon, no question).
       - run: sternbild-docs check-headings
-      # Fails when a name of caliper.__all__ or caliper.live.__all__ has no
-      # docstring or no ::: directive, or when a service table entry or an embed,
-      # live or live_views function has no doc comment or no generated table,
-      # and tests the check and the header parser of docs-theme/hooks/c_reference.py.
+      # Fails when a name of caliper.__all__, caliper.live.__all__ or caliper.interp.__all__ has no
+      # docstring or no ::: directive, or when a service table entry or an embed, live or live_views
+      # function has no doc comment or no generated table.
       - run: python scripts/check_api_reference.py
-      - run: python -m unittest scripts/test_check_api_reference.py -v
+      # Fails when any shipped feature lacks docs, code or tests, or when any generated reference
+      # page drifts from its source definitions.
+      - run: python scripts/generate_feature_index.py --check
+      - run: python scripts/generate_mcp_reference.py --check
+      - run: python scripts/generate_piece_reference.py --check
+      # Fails on broken links/anchors, stale repository paths, or unknown commands, CLI subcommands,
+      # or Python symbols across docs, CONTRIBUTING.md and README.md.
+      - run: python scripts/check_doc_references.py
+      - run: python -m unittest scripts/test_check_api_reference.py scripts/test_doc_generators.py scripts/test_check_doc_references.py -v
       - run: mkdocs build --strict
       - run: mkdocs build --strict -f design/mkdocs.yml

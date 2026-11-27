@@ -13,7 +13,7 @@ flowchart LR
 
 The direct path writes the image from a kernel, the buffer path copies through a shared buffer, and CPU staging is the last resort.
 
-The backend is `src/host/renderer/vulkan_renderer.cpp`, a Windows-only translation unit. The host loads the CUDA driver API from `nvcuda.dll` at run time (`src/host/cuda_driver.h`). It uses the Vulkan loader that ships with the GPU driver. Thus a build or run needs neither the CUDA toolkit nor the Vulkan SDK. A machine without an NVIDIA GPU builds and runs the same binary, and the Vulkan backend then renders without interop through the CPU-staged paths.
+The backend is `src/host/renderer/vulkan_renderer.cpp`, a Windows-only translation unit. The host loads the CUDA driver API from `nvcuda.dll` at run time (`src/host/renderer/cuda_driver.h`). It uses the Vulkan loader that ships with the GPU driver. Thus a build or run needs neither the CUDA toolkit nor the Vulkan SDK. A machine without an NVIDIA GPU builds and runs the same binary, and the Vulkan backend then renders without interop through the CPU-staged paths.
 
 ## Device Pairing
 
