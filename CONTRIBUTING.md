@@ -61,9 +61,11 @@ uv run --no-project --with-requirements requirements-docs.txt mkdocs build --str
 
 Caliper keeps third-party code as git submodules in `third_party/`. Run `./init-submodules.sh`, not `git submodule update`, because some submodule pins need the script fallbacks. On Windows without Git Bash, run `init-submodules.bat` in Command Prompt. Both scripts delete `third_party/` and local build folders (`cmake-build-*`, `build/`) before they initialize submodules. Do not commit changed submodule pointers unless that update is the purpose of the commit.
 
-## Commits
+## Commits and Pull Requests
 
 - One logical change per commit. Code, its tests and its documentation go in the same commit.
+- Every pull request updates the documentation that its change affects, or states in the pull request description why no documentation page changes.
+- When a change updates `roadmap/*.yml`, `roadmap/index/feature_code_tests.yml`, `src/builder/commands/command_table.json`, `src/builder/include/caliper_builder/spec/piece.h`, `src/builder/include/caliper_builder/programs/pieces.h`, `src/builder/programs/piece_checks.cpp`, or `src/builder/spec/schema/caliper-spec-v1.schema.json`, regenerate the matching reference page (`scripts/generate_feature_index.py --write`, `scripts/generate_mcp_reference.py --write`, or `scripts/generate_piece_reference.py --write`) in the same pull request.
 - The subject line says what changed, in plain words. Start it with the area when that helps, as in `Site: ...`, `CI: ...` or `Docs: ...`.
 - The body says why, and anything a reviewer cannot see in the diff.
 

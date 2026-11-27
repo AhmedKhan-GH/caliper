@@ -1,5 +1,13 @@
 """Live interpretability publication and attribution bridges for Caliper LIB."""
 
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from ._backend import load_backend, make_tiny_backend, make_tiny_sae_backend
+    from ._graph import Graph, Tracer
+    from ._index import FeatureIndex, LiveFeatureIndex
+    from ._sweep import patch_sweep
+
 __all__ = [
     "publish",
     "Graph",

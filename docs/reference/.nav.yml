@@ -3,6 +3,8 @@ nav:
   - cli.md
   - applet-commands.md
   - shot-and-serve-commands.md
+  - mcp-commands.md
+  - piece-format.md
   - wire-protocol.md
   - wire-frames.md
   - session-messages.md

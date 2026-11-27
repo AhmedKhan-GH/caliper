@@ -178,8 +178,84 @@ Clean and corrupted prompts must tokenize to equal lengths within the 32-token c
 `metric` specifies distinct `positive_token` and `negative_token` vocabulary IDs.
 The sweep runs at most 32 cells per forward pass, publishes normalized recovery as `live:patch.grid` `(layers, positions)`, and returns full summary values.
 
-## Refusals And Limits
+## Refusals and Limits
 
 `MemoryGuard` enforces a 40 GB process limit (`40,000,000,000` bytes) and an 8 GB host available memory reserve (`8,000,000,000` bytes).
 Missing dictionaries, unknown probe points, out-of-range features, and unequal patch prompt lengths return structured refusals.
 See [Interpretation Tools](../agents/interpretation.md) for MCP request schemas and paging bounds.
+
+## Reference Calls
+
+The `caliper.interp` package exports the following functions and classes.
+
+[](){#caliper.interp.publish}
+### `publish`
+
+::: caliper.interp.publish
+    options:
+      show_root_heading: false
+      show_root_toc_entry: false
+
+[](){#caliper.interp.load_backend}
+### `load_backend`
+
+::: caliper.interp.load_backend
+    options:
+      show_root_heading: false
+      show_root_toc_entry: false
+
+[](){#caliper.interp.Tracer}
+### `Tracer`
+
+::: caliper.interp.Tracer
+    options:
+      show_root_heading: false
+      show_root_toc_entry: false
+
+[](){#caliper.interp.Graph}
+### `Graph`
+
+::: caliper.interp.Graph
+    options:
+      show_root_heading: false
+      show_root_toc_entry: false
+
+[](){#caliper.interp.FeatureIndex}
+### `FeatureIndex`
+
+::: caliper.interp.FeatureIndex
+    options:
+      show_root_heading: false
+      show_root_toc_entry: false
+
+[](){#caliper.interp.LiveFeatureIndex}
+### `LiveFeatureIndex`
+
+::: caliper.interp.LiveFeatureIndex
+    options:
+      show_root_heading: false
+      show_root_toc_entry: false
+
+[](){#caliper.interp.patch_sweep}
+### `patch_sweep`
+
+::: caliper.interp.patch_sweep
+    options:
+      show_root_heading: false
+      show_root_toc_entry: false
+
+[](){#caliper.interp.make_tiny_backend}
+### `make_tiny_backend`
+
+::: caliper.interp.make_tiny_backend
+    options:
+      show_root_heading: false
+      show_root_toc_entry: false
+
+[](){#caliper.interp.make_tiny_sae_backend}
+### `make_tiny_sae_backend`
+
+::: caliper.interp.make_tiny_sae_backend
+    options:
+      show_root_heading: false
+      show_root_toc_entry: false
