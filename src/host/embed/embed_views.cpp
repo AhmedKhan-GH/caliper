@@ -12,7 +12,6 @@
 // through caliper_embed_views_draw / caliper_embed_views_destroy_all.
 // ===========================================================================
 #include "caliper/embed.h"
-#include "live/live_views_state.h"   // the views' grid, header flags and debug switch
 
 #include <algorithm>
 #include <atomic>
@@ -281,7 +280,7 @@ void caliper_embed_views_draw(CaliperCore* core) {
         const std::string label = v.name + "###caliper.view." + v.name;
         ImGui::PushStyleColor(ImGuiCol_ResizeGrip, 0);   // a view resizes from its edges
         const bool open = ImGui::Begin(label.c_str(), nullptr,
-                                       caliper_live_views::kWindowFlags | ImGuiWindowFlags_NoScrollbar |
+                                       caliper_live_views::window_flags() | ImGuiWindowFlags_NoScrollbar |
                                            ImGuiWindowFlags_NoScrollWithMouse |
                                            (core->views_bare ? ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
                                                                    ImGuiWindowFlags_NoMove : 0));
@@ -385,7 +384,7 @@ int caliper_core_view_tensor(CaliperCore* core, const CaliperViewDesc* desc) {
     if (mapped) {
         if (colormap_lut(desc->colormap) == nullptr)
             return vfail("bad colormap " + std::to_string(desc->colormap) +
-                         " (0 viridis, 1 magma, 2 rdbu)");
+                         " (expected 0..15)");
         if (!std::isfinite(desc->vmin) || !std::isfinite(desc->vmax))
             return vfail("vmin/vmax must be finite");
     }

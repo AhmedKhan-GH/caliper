@@ -2,7 +2,7 @@
 // (design/instrument-interface.md, Label Placement).
 #include <doctest/doctest.h>
 
-#include "spec_runtime/label_layout.h"
+#include "scene/label_layout.h"
 
 #include <algorithm>
 #include <cmath>

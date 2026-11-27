@@ -114,7 +114,7 @@ if(BUILD_TESTS AND TARGET doctest::doctest AND NOT WIN32 AND TARGET caliper)
     target_link_libraries(caliper_chat_pane_tests PRIVATE caliper_side_chat caliper_api_session caliper_host_lib
         doctest::doctest caliper_builder_duckdb)
     target_include_directories(caliper_chat_pane_tests PRIVATE ${CMAKE_SOURCE_DIR}/src/host ${THIRD_PARTY_DIR}/stb)
-    target_compile_definitions(caliper_chat_pane_tests PRIVATE CALIPER_WITH_BUILDER=1
+    target_compile_definitions(caliper_chat_pane_tests PRIVATE
         CALIPER_SPEC_TEST_TMP="${CMAKE_CURRENT_BINARY_DIR}/chat-pane-test-tmp"
         CALIPER_ACP_STUB_AGENT="$<TARGET_FILE:caliper_acp_stub_agent>"
         CALIPER_CHAT_STUB_AGENT="$<TARGET_FILE:caliper_chat_stub_agent>")

@@ -6,6 +6,7 @@
 
 import type { Page } from '@playwright/test';
 import { colormapLut, lutIndex, PALETTE } from '../src/render/colormap.js';
+import { TOKENS } from '../src/render/palette.gen.js';
 import { bodyPixels, expect, shotPath, test } from './util.js';
 
 type Dbg = Record<string, unknown> & {
@@ -123,9 +124,9 @@ test.describe('heatmap', () => {
     await check(7);
   });
 
-  test('takes vmin and vmax from stats when the AUTO flags are set, with magma and rdbu', async ({ harness: page }) => {
+  test('takes vmin and vmax from stats when the AUTO flags are set, with live wire colormaps', async ({ harness: page }) => {
     await mount(page, 'h', 'heatmap');
-    for (const [name, cm] of [['magma', 1], ['rdbu', 2]] as const) {
+    for (const [name, cm] of [['magma', 1], ['rdbu', 2], ['greys', 3], ['cividis', 4], ['berlin', 15]] as const) {
       await push(page, 'h', { data: [-1, 0, 1, 3], shape: [1, 4], colormap: cm, flags: 3, stats: [-1, 3], vmin: 0, vmax: 1 });
       const d = await dbg(page, 'h');
       const { px } = await bodyPixels(page, '#h');
@@ -449,9 +450,9 @@ test('histogram draws bars, hovers a bin, toggles log counts, zooms and selects'
   expect([d.renderer, d.bins, d.range]).toEqual(['canvas2d', 10, [-5, 5]]);
   const { px } = await bodyPixels(page, '#hist');
   const bar = toPage(d, { x: 0, y: 0 }, 0.5, 1, false);
-  expect(px.at(bar.bx, bar.by)).toEqual([0xd0, 0xc9, 0xba, 255]);
+  expect(px.at(bar.bx, bar.by)).toEqual([...TOKENS.secondary, 255]);
   const empty = toPage(d, { x: 0, y: 0 }, 4.5, 1, false);
-  expect(px.at(empty.bx, empty.by)).toEqual([0x27, 0x26, 0x22, 255]);
+  expect(px.at(empty.bx, empty.by)).toEqual([...TOKENS.plate, 255]);
   await page.locator('#hist').screenshot({ path: shotPath(info, 'histogram') });
   const box = await bodyBox(page, 'hist');
   const p = toPage(d, box, -1.5, 3, false);

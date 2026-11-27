@@ -89,6 +89,8 @@ option(CALIPER_WITH_TORCH   "Download/link the vendored libtorch for torch apple
 # The core build compiles no applets. ON also builds the applets/* tree here,
 # through the same caliper_add_applet() that builds them against the installed SDK.
 option(CALIPER_BUILD_APPLETS "Also build the applets/* tree in the core build" OFF)
+option(CALIPER_BUILD_VIEWER "Build the caliper_viewer live-viewer process" ON)
+option(CALIPER_BUILD_EXAMPLES "Build the embedder example (examples/embed_host)" ON)
 option(CALIPER_BUILD_PYTHON  "Build the caliper Python extension (python/, nanobind)" OFF)
 # slang is configured EXCLUDE_FROM_ALL and linked by nothing that
 # libcaliper / the caliper exe / the tests need. OFF skips its configure
@@ -286,7 +288,7 @@ else()
     # NVIDIA driver fall through to the same CPU defaults as the old stub.
     target_sources(caliper_host_lib PRIVATE
         src/host/device_query_cuda.cpp
-        src/host/cuda_driver.cpp)
+        src/host/renderer/cuda_driver.cpp)
     if(UNIX)
         target_link_libraries(caliper_host_lib PRIVATE ${CMAKE_DL_LIBS})
     endif()
@@ -323,6 +325,10 @@ add_library(caliper_net STATIC
     src/host/net/ws.cpp
     src/host/net/json.cpp
     src/host/net/wire.cpp
+    src/host/net/wire_controls.cpp
+    src/host/net/wire_scene.cpp
+    src/host/net/wire_timelines.cpp
+    src/host/net/wire_programs.cpp
     src/host/net/upgrade.cpp
     src/host/net/http_door.cpp
     src/host/net/hub.cpp
@@ -358,7 +364,6 @@ set_target_properties(caliper_api PROPERTIES
 # (web/wasm, its own Emscripten project); the native renderers keep their own paths for now.
 add_library(caliper_gfx STATIC
     src/host/gfx/core.cpp
-    src/host/gfx/ops.cpp
     src/host/gfx/recording_backend.cpp
 )
 target_include_directories(caliper_gfx PUBLIC ${CMAKE_SOURCE_DIR}/src/host)
@@ -379,6 +384,7 @@ add_library(caliper_scene STATIC
     src/host/scene/scene_tree.cpp
     src/host/scene/camera.cpp
     src/host/scene/labels.cpp
+    src/host/scene/label_layout.cpp
     src/host/scene/pick.cpp
     src/host/scene/scale_bar.cpp)
 target_include_directories(caliper_scene PUBLIC ${CMAKE_SOURCE_DIR}/src/host)
@@ -409,6 +415,19 @@ target_include_directories(caliper_spec_page PRIVATE "${CMAKE_SOURCE_DIR}/src/ho
 set_target_properties(caliper_spec_page PROPERTIES CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON)
 
 # ============================================================================
+# Tensor bridge and CPU colormap reference (compiled once)
+# ============================================================================
+# Bridge v1-v1.2 plus the shared CPU colormap reference (colormap_lut,
+# map_f32_to_rgba8, expand_u8_to_rgba8). One static library that libcaliper,
+# the renderer backends, and the tests link, so tensor_bridge.cpp compiles
+# once instead of in every test executable.
+add_library(caliper_tensor_bridge STATIC src/host/tensor_bridge.cpp)
+target_include_directories(caliper_tensor_bridge PUBLIC ${CMAKE_SOURCE_DIR}/src/host)
+target_link_libraries(caliper_tensor_bridge PUBLIC caliper::sdk)
+set_target_properties(caliper_tensor_bridge PROPERTIES
+    CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON POSITION_INDEPENDENT_CODE ON)
+
+# ============================================================================
 # Metal renderer backend (C2, Apple only)
 # ============================================================================
 # The Metal HostRenderer backend + the ImGui Metal backend live in their own
@@ -431,10 +450,11 @@ if(APPLE)
     target_include_directories(caliper_metal_backend PRIVATE
         ${CMAKE_SOURCE_DIR}/src)
     target_link_libraries(caliper_metal_backend
-        PUBLIC caliper::sdk
+        PUBLIC caliper::sdk caliper_tensor_bridge
                "-framework Metal" "-framework QuartzCore"
                "-framework Foundation" "-framework Cocoa"
         PRIVATE caliper::ui_stack imgui_backends glfw caliper_gfx)
+    target_compile_definitions(caliper_metal_backend PUBLIC CALIPER_HAVE_METAL=1)
     set_source_files_properties(
         src/host/renderer/metal_renderer.mm
         src/host/background_process_mac.mm
@@ -496,11 +516,12 @@ if(WIN32)
         ${CMAKE_SOURCE_DIR}/src
         ${CMAKE_SOURCE_DIR}/src/host
         ${CALIPER_SPV_DIR})
-    target_compile_definitions(caliper_vulkan_backend PRIVATE
-        IMGUI_IMPL_VULKAN_USE_VOLK
-        VK_USE_PLATFORM_WIN32_KHR)
+    target_compile_definitions(caliper_vulkan_backend
+        PUBLIC CALIPER_HAVE_VULKAN=1
+        PRIVATE IMGUI_IMPL_VULKAN_USE_VOLK
+                VK_USE_PLATFORM_WIN32_KHR)
     target_link_libraries(caliper_vulkan_backend
-        PUBLIC caliper::sdk volk::volk
+        PUBLIC caliper::sdk caliper_tensor_bridge volk::volk
         PRIVATE caliper::ui_stack imgui_backends glfw)
     set_target_properties(caliper_vulkan_backend PROPERTIES
         CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON
@@ -521,38 +542,51 @@ endif()
 # headless (l1-survey do-not-touch): the renderer/bridge join the graph only at
 # this layer. Metal/Vulkan backends link in per-OS exactly as they did in the
 # exe. Output name `caliper` -> libcaliper.a (no clash with the `caliper` exe).
-# src/host/live: the live-streaming attach (typed views fed from a training
-# process's shared-memory snapshots) — globbed so the module can grow files
-# without touching this list; its .mm files compile with ARC like the backend.
-file(GLOB CALIPER_LIVE_SOURCES CONFIGURE_DEPENDS
-    ${CMAKE_SOURCE_DIR}/src/host/live/*.cpp
-    ${CMAKE_SOURCE_DIR}/src/host/live/*.mm)
-list(FILTER CALIPER_LIVE_SOURCES EXCLUDE REGEX "viewer_main\\.mm$")
+# src/host/live: the live-streaming attach (typed views fed from shared-memory
+# or network snapshots). Listed explicitly so new files enter libcaliper and
+# caliper_embed only by design; its .mm files compile with ARC like the backend.
+# viewer_main.mm belongs only to caliper_viewer below.
+set(CALIPER_LIVE_SOURCES
+    src/host/live/live_controls.cpp
+    src/host/live/live_points.cpp
+    src/host/live/live_programs.cpp
+    src/host/live/live_scene.cpp
+    src/host/live/live_views.cpp
+    src/host/live/live_views_draw.cpp
+    src/host/live/live_views_scene.cpp
+    src/host/live/scene_legacy.cpp
+    src/host/live/scene_overlays.cpp
+    src/host/live/scene_piece_form.cpp
+)
 if(APPLE)
-    list(FILTER CALIPER_LIVE_SOURCES EXCLUDE REGEX "live_unsupported\\.cpp$")
+    set(CALIPER_LIVE_OBJCXX_SOURCES
+        src/host/live/live_activity.mm
+        src/host/live/live_client.mm
+        src/host/live/live_net_source.mm
+        src/host/live/live_session.mm
+        src/host/live/live_views_metal.mm
+    )
+    set_source_files_properties(${CALIPER_LIVE_OBJCXX_SOURCES}
+        PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
+    list(APPEND CALIPER_LIVE_SOURCES
+        src/host/live/live_attach.cpp
+        src/host/live/live_core.cpp
+        ${CALIPER_LIVE_OBJCXX_SOURCES}
+    )
 else()
     # The session code is macOS-only so far; live_unsupported.cpp stands in.
-    list(FILTER CALIPER_LIVE_SOURCES EXCLUDE REGEX "\\.mm$|live_core\\.cpp$|live_attach\\.cpp$")
+    list(APPEND CALIPER_LIVE_SOURCES
+        src/host/live/live_unsupported.cpp
+    )
 endif()
 add_library(libcaliper STATIC
     src/host/host_services.cpp
     src/host/export_service.cpp
-    src/host/tensor_bridge.cpp
     src/host/core_lifecycle.cpp
     src/host/embed/embed_core.cpp
     src/host/embed/embed_views.cpp
-    # The label placement of the scene overlays (live/scene_overlays.cpp),
-    # which the spec runtime shares through this library.
-    src/host/spec_runtime/label_layout.cpp
     ${CALIPER_LIVE_SOURCES}
 )
-if(APPLE)
-    foreach(_src ${CALIPER_LIVE_SOURCES})
-        if(_src MATCHES "\\.mm$")
-            set_source_files_properties(${_src} PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
-        endif()
-    endforeach()
-endif()
 # stb_image_write (vendored, third_party/stb) backs the host's PNG writers
 # (export_service.cpp); build-time generated sources live in
 # ${CMAKE_BINARY_DIR}/generated.
@@ -580,7 +614,7 @@ target_include_directories(libcaliper PUBLIC
 # caliper_scene (with caliper_gfx): the scene view of the live views draws scenes through the
 # scene core and the graphics layer (src/host/live/live_scene.h).
 target_link_libraries(libcaliper
-    PUBLIC caliper_host_lib caliper::sdk caliper::ui_stack caliper_app_paths caliper_net caliper_scene
+    PUBLIC caliper_host_lib caliper_tensor_bridge caliper::sdk caliper::ui_stack caliper_app_paths caliper_net caliper_scene
     PRIVATE ${CALIPER_CORE_LIBS})
 if(APPLE)
     target_link_libraries(libcaliper PUBLIC caliper_metal_backend)
@@ -606,7 +640,6 @@ include(cmake/CaliperEmbed.cmake)
 # caliper_viewer — the standalone live viewer process (src/host/live/
 # viewer_main.mm): an AppKit window hosting the embed core attached to a
 # training process's live session. Thin shell; the attach logic is in libcaliper.
-option(CALIPER_BUILD_VIEWER "Build the caliper_viewer live-viewer process" ON)
 if(APPLE AND CALIPER_BUILD_VIEWER)
     add_executable(caliper_viewer src/host/live/viewer_main.mm)
     set_source_files_properties(src/host/live/viewer_main.mm
@@ -639,12 +672,12 @@ set_target_properties(caliper_sternbild_ui PROPERTIES CXX_STANDARD 17 CXX_STANDA
 add_executable(caliper
     src/main.cpp
     # The landing screen, drawn with ImGui on every renderer backend.
-    src/host/ui/landing_screen.cpp
+    src/host/pages/landing_screen.cpp
     # The applet page (page bar, status bar, dock space, docking by role, the
     # applet's frame, the jobs tray), drawn by the app and by `caliper shot`,
     # which renders it into an offscreen canvas and writes a PNG.
-    src/host/ui/applet_page.cpp
-    src/host/shot.cpp
+    src/host/pages/applet_page.cpp
+    src/host/app/shot.cpp
     # Caliper API v0 for the app and for `caliper shot` (--api), and the
     # spec page's Open in browser, which hands the viewer's link to the
     # default browser.
@@ -700,11 +733,11 @@ endif()
 if(MSVC AND CALIPER_WITH_TORCH)
     # LIBTORCH_DIR is the variant-specific dir set by Dependencies.cmake
     # (libtorch-debug / libtorch-release on Windows).
-    file(GLOB TORCH_DLLS "${LIBTORCH_DIR}/lib/*.dll")
     add_custom_command(TARGET caliper POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            ${TORCH_DLLS}
-            $<TARGET_FILE_DIR:caliper>
+        COMMAND ${CMAKE_COMMAND}
+            "-DSRC_DIR=${LIBTORCH_DIR}/lib"
+            "-DDST_DIR=$<TARGET_FILE_DIR:caliper>"
+            -P "${CMAKE_SOURCE_DIR}/cmake/copy_torch_dlls.cmake"
         COMMENT "Copying PyTorch DLLs to executable directory"
     )
 endif()
@@ -732,10 +765,9 @@ endif()
 # standalone the same way (cmake -S <folder> -DCMAKE_PREFIX_PATH=<sdk prefix>).
 # CALIPER_BUILD_APPLETS=ON also builds the applets/* tree here.
 if(CALIPER_BUILD_APPLETS)
-    file(GLOB applet_dirs LIST_DIRECTORIES true CONFIGURE_DEPENDS applets/*)
-    foreach(dir ${applet_dirs})
+    foreach(applet_name IN ITEMS embed_scope gpt_scope pulse_scope)
+        set(dir "${CMAKE_SOURCE_DIR}/applets/${applet_name}")
         if(IS_DIRECTORY "${dir}" AND EXISTS "${dir}/CMakeLists.txt")
-            get_filename_component(applet_name "${dir}" NAME)
             message(STATUS "  Found applet: ${applet_name}")
             add_subdirectory("${dir}")
         endif()
@@ -756,7 +788,6 @@ endif()
 # bare native-window host with an offscreen mode; not an applet, not linked
 # into `caliper`. It also builds on its own against the installed caliper-embed
 # package (caliper_embed_install does that).
-option(CALIPER_BUILD_EXAMPLES "Build the embedder example (examples/embed_host)" ON)
 if(CALIPER_BUILD_EXAMPLES)
     add_subdirectory(examples/embed_host)
 endif()
@@ -911,15 +942,14 @@ if(CALIPER_WITH_BUILDER)
     # The scene view draws its shapes with the library pieces (draw/scene_pieces.h) wherever it is
     # compiled with the draw layer and linked with this library; the browser module compiles the same
     # converter (web/wasm/CMakeLists.txt).
-    target_compile_definitions(caliper_draw_host PUBLIC CALIPER_HAVE_SCENE_PIECES=1)
+    target_sources(caliper_draw_host PRIVATE src/host/draw/library_pieces.cpp)
+    target_compile_definitions(caliper_draw_host PUBLIC
+        CALIPER_HAVE_DRAW=1
+        CALIPER_HAVE_SCENE_PIECES=1
+        CALIPER_HAVE_LIBRARY_PIECES=1)
     set_target_properties(caliper_draw_host PROPERTIES
         CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON POSITION_INDEPENDENT_CODE ON)
-    # The library pieces of version 1 (draw/library_pieces.h), which the scene view and the live points
-    # view draw with; the browser module compiles the same file (web/wasm/CMakeLists.txt).
-    target_sources(caliper_draw_host PRIVATE src/host/draw/library_pieces.cpp)
-    target_compile_definitions(caliper_draw_host PUBLIC CALIPER_HAVE_LIBRARY_PIECES=1)
     target_link_libraries(libcaliper PUBLIC caliper_draw_host)
-    target_compile_definitions(libcaliper PRIVATE CALIPER_HAVE_DRAW=1)
     if(BUILD_TESTS)
         add_executable(caliper_gfx_draw_tests src/host/draw/tests/test_draw_runtime.cpp)
         target_link_libraries(caliper_gfx_draw_tests PRIVATE caliper_draw_host doctest::doctest)
@@ -930,7 +960,6 @@ if(CALIPER_WITH_BUILDER)
         if(APPLE AND TARGET caliper_gfx_tests)
             target_sources(caliper_gfx_tests PRIVATE ${CMAKE_SOURCE_DIR}/tests/gfx/gfx_pieces.cpp)
             target_link_libraries(caliper_gfx_tests PRIVATE caliper_draw_host)
-            target_compile_definitions(caliper_gfx_tests PRIVATE CALIPER_HAVE_DRAW=1)
         endif()
     endif()
     # The spec applet kind in the loader (src/host/applet_spec.h): with the
@@ -974,16 +1003,17 @@ add_subdirectory(src/host/producer)
 # (tests/test_app_session.cpp); the second is POSIX only, as the hidden app's
 # other process tests are, and is skipped without a Metal device.
 if(TARGET caliper_builder_session)
+    # Propagate CALIPER_WITH_BUILDER=1 once from caliper_builder_session so
+    # every host target and test that links the session shares one switch.
+    target_compile_definitions(caliper_builder_session PUBLIC CALIPER_WITH_BUILDER=1)
     target_link_libraries(caliper PRIVATE caliper_builder_session caliper_spec_runtime caliper_api_session
         caliper_catalog_providers)
-    target_compile_definitions(caliper PRIVATE CALIPER_WITH_BUILDER=1)
     if(BUILD_TESTS)
         add_executable(caliper_app_session_tests tests/test_app_session.cpp src/host/builder/app_session.cpp)
         target_link_libraries(caliper_app_session_tests PRIVATE caliper_builder_test_main doctest::doctest
             caliper_builder_session caliper_api_session caliper_host_lib)
         target_include_directories(caliper_app_session_tests PRIVATE
             ${CMAKE_SOURCE_DIR}/src/host ${CMAKE_SOURCE_DIR}/tests ${CMAKE_SOURCE_DIR}/third_party/stb)
-        target_compile_definitions(caliper_app_session_tests PRIVATE CALIPER_WITH_BUILDER=1)
         set_target_properties(caliper_app_session_tests PROPERTIES CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON)
         if(TARGET hello_applet)
             add_dependencies(caliper_app_session_tests hello_applet)   # app.launch in the process test

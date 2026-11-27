@@ -8,8 +8,13 @@ COLORMAP_NAMES: tuple[str, ...] = (
 
 COLORMAP_IDS: dict[str, int] = {name: idx for idx, name in enumerate(COLORMAP_NAMES)}
 
-# Live wire protocol v3 supports ids 0 to 2 (include/caliper/live_net.h).
-LIVE_COLORMAPS: dict[str, int] = {'viridis': 0, 'magma': 1, 'rdbu': 2}
+# Live wire protocol v3 supports all 16 shared colormaps (ids 0 to 15, include/caliper/live_net.h).
+LIVE_COLORMAPS: dict[str, int] = {
+    'viridis': 0, 'magma': 1, 'rdbu': 2, 'greys': 3,
+    'cividis': 4, 'inferno': 5, 'plasma': 6, 'turbo': 7,
+    'twilight': 8, 'coolwarm': 9, 'batlow': 10, 'vik': 11,
+    'roma': 12, 'oslo': 13, 'lajolla': 14, 'berlin': 15,
+}
 
 # 256-entry packed RGBA8 LUTs (r | g << 8 | b << 16 | 0xff << 24) for all 16 colormaps.
 COLORMAP_LUTS: dict[str, tuple[int, ...]] = {
@@ -610,18 +615,6 @@ UNTOKENIZED_THEME_COLORS: dict[str, tuple[int, int, int, int]] = {
     'bar_text': (255, 255, 255, 255),
     'bar_secondary': (190, 190, 190, 255),
     'bar_faint': (128, 128, 128, 255),
-}
-
-# Browser element view v1 palette (web/src/views/theme.ts).
-VIEWS_THEME_V1: dict[str, str] = {
-    'ground': '#181715',
-    'plate': '#272622',
-    'ruleFaint': '#36342f',
-    'rule': '#5a5751',
-    'parchment': '#f0e9db',
-    'secondary': '#d0c9ba',
-    'faint': '#a49d8f',
-    'bronze': '#b38b59',
 }
 
 # Fixed 16-colour categorical palette (caliper_scene::kPalette).

@@ -24,7 +24,7 @@
 #include "spec_runtime/spec_annotations.h"
 #include "ui/sternbild_theme.h"
 
-#include "spec_runtime/label_layout.h"
+#include "scene/label_layout.h"
 
 #include <caliper_builder/text/bound_text.h>
 

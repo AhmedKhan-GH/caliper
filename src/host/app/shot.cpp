@@ -1,6 +1,6 @@
 // caliper shot (shot.h): the app's applet page, or its spec page, drawn into
 // an offscreen canvas and written as a PNG.
-#include "shot.h"
+#include "app/shot.h"
 
 #include "api/app_api.h"
 #include "app_paths.h"
@@ -13,8 +13,8 @@
 #include "host_services.h"
 #include "job_system.h"
 #include "negotiation.h"
+#include "pages/applet_page.h"
 #include "renderer/host_renderer.h"
-#include "ui/applet_page.h"
 #include "ui/dock_layout.h"
 #include "ui/sternbild_fonts.h"
 #include "ui/sternbild_theme.h"

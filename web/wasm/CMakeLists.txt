@@ -38,7 +38,6 @@ add_library(caliper_view_layer STATIC
     ${CALIPER_ROOT}/src/host/renderer/webgpu_renderer.cpp
     ${CALIPER_ROOT}/src/host/renderer/webgpu_backend.cpp
     ${CALIPER_ROOT}/src/host/gfx/core.cpp
-    ${CALIPER_ROOT}/src/host/gfx/ops.cpp
     ${CALIPER_ROOT}/src/host/ui/sternbild_fonts.cpp
     ${CALIPER_ROOT}/src/host/ui/sternbild_theme.cpp
     ${TP}/imgui/imgui.cpp
@@ -64,7 +63,7 @@ target_include_directories(caliper_view_layer PUBLIC
 target_sources(caliper_view_layer PRIVATE
     ${CALIPER_ROOT}/src/host/live/live_views_scene.cpp
     ${CALIPER_ROOT}/src/host/live/scene_overlays.cpp
-    ${CALIPER_ROOT}/src/host/spec_runtime/label_layout.cpp
+    ${CALIPER_ROOT}/src/host/scene/label_layout.cpp
     ${CALIPER_ROOT}/src/host/live/live_scene.cpp ${CALIPER_ROOT}/src/host/live/scene_legacy.cpp
     ${CALIPER_ROOT}/src/host/live/scene_piece_form.cpp
     ${CALIPER_ROOT}/src/host/live/live_points.cpp
@@ -161,6 +160,10 @@ set_property(SOURCE ${CALIPER_ROOT}/src/host/live/live_points.cpp APPEND PROPERT
 # ---- the wire protocol v3 codec (shared with the native NetSource) ---------------
 add_library(caliper_wire STATIC
     ${CALIPER_ROOT}/src/host/net/wire.cpp
+    ${CALIPER_ROOT}/src/host/net/wire_controls.cpp
+    ${CALIPER_ROOT}/src/host/net/wire_scene.cpp
+    ${CALIPER_ROOT}/src/host/net/wire_timelines.cpp
+    ${CALIPER_ROOT}/src/host/net/wire_programs.cpp
     ${CALIPER_ROOT}/src/host/net/json.cpp)
 target_include_directories(caliper_wire PUBLIC ${CALIPER_ROOT}/src/host ${CALIPER_ROOT}/include)
 

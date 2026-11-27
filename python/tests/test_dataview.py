@@ -719,7 +719,9 @@ def test_watch_groups_beside_the_existing_views(fake, device):
         assert h.modules == ["conv1", "fc1", "fc2"]               # as before
         assert set(h.views) == {"conv1.act", "fc1.act", "fc2.act", "conv1.weight.grad",
                                 "fc1.weight.grad", "fc2.weight.grad"}
-        assert _hook_count(net) == 3 and len(h) == 6
+        # 3 activation forward hooks + 3 intervention shape hooks; 3 activation + 3 grad
+        # + inference capabilities + programs + interventions handles.
+        assert _hook_count(net) == 6 and len(h) == 9
         assert h.groups == ["weights", "activations", "gradients"]
         _step(net, x)
         assert caliper.flush(timeout=5.0) == 0

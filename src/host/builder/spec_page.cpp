@@ -23,8 +23,8 @@
 #include "gfx/metal_backend.h"
 #include "gfx/shaders/generated/programs_metal.h"
 #endif
-#include "ui/applet_page.h"      // begin_page_bar, JobsTray
-#include "ui/landing_screen.h"   // draw_host_status_items
+#include "pages/applet_page.h"      // begin_page_bar, JobsTray
+#include "pages/landing_screen.h"   // draw_host_status_items
 #include "ui/sternbild_fonts.h"
 #include "ui/sternbild_theme.h"
 #include "ui/work_area.h"

@@ -45,9 +45,9 @@ json tool(const std::string& id, const std::string& name, const json& input) {
     return {{"type", "tool_use"}, {"id", id}, {"name", name}, {"input", input}};
 }
 
-json step(json content, const std::string& stop, int cache_read) {
+json step(json::array_t content, const std::string& stop, int cache_read) {
     return {{"message",
-             {{"content", std::move(content)},
+             {{"content", json(std::move(content))},
               {"stop_reason", stop},
               {"usage", {{"input_tokens", 40}, {"output_tokens", 20}, {"cache_read_input_tokens", cache_read},
                          {"cache_creation_input_tokens", cache_read ? 50 : 9000}}}}}};
@@ -101,12 +101,12 @@ TEST_CASE("the BYOK agent builds the dashboard through caliper-builder-host") {
     if (dashboard.applet.title) applet["title"] = *dashboard.applet.title;
     if (dashboard.applet.description) applet["description"] = *dashboard.applet.description;
     steps.push_back(step({text_block("Now the spec."), call("spec.new", applet)}, "tool_use", 9000));
-    json sources = json::array();
+    json::array_t sources;
     for (const auto& s : dashboard.sources) sources.push_back(call("source.add", source_command_args(s)));
-    steps.push_back(step(sources, "tool_use", 9000));
-    json panels = json::array();
+    steps.push_back(step(std::move(sources), "tool_use", 9000));
+    json::array_t panels;
     for (const auto& p : dashboard.panels) panels.push_back(call("panel.create", panel_command_args(p)));
-    steps.push_back(step(panels, "tool_use", 9000));
+    steps.push_back(step(std::move(panels), "tool_use", 9000));
     REQUIRE(dashboard.layout);
     steps.push_back(step({call("layout.set", {{"layout", layout_to_flat(*dashboard.layout, dashboard)}})},
                          "tool_use", 9000));

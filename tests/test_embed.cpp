@@ -1029,14 +1029,14 @@ std::vector<uint8_t> blob_at(size_t junk, const void* data, size_t bytes) {
 }  // namespace
 
 TEST_CASE("embed/views: colormap_lut ABI == the bridge's internal LUTs") {
-    for (int32_t cm = 0; cm < 3; ++cm) {
+    for (int32_t cm = 0; cm < 16; ++cm) {
         uint32_t lut[256] = {};
         REQUIRE(caliper_core_colormap_lut(cm, lut) == 1);
         CHECK(std::memcmp(lut, caliper_host::colormap_lut(cm), sizeof lut) == 0);
         CHECK((lut[0] >> 24) == 0xffu);   // opaque
     }
     uint32_t lut[256];
-    CHECK(caliper_core_colormap_lut(3, lut) == 0);
+    CHECK(caliper_core_colormap_lut(16, lut) == 0);
     CHECK(caliper_core_colormap_lut(-1, lut) == 0);
 }
 
@@ -1386,7 +1386,7 @@ TEST_CASE("embed/views: gates refuse honestly; shutdown with live views is clean
     CHECK(std::string(caliper_core_last_error(core)).find("contiguous") != std::string::npos);
     // Bad colormap.
     vd.tensor = &tf;
-    vd.colormap = 7;
+    vd.colormap = 16;
     CHECK(caliper_core_view_tensor(core, &vd) == 0);
     CHECK(std::string(caliper_core_last_error(core)).find("colormap") != std::string::npos);
     vd.colormap = 0;

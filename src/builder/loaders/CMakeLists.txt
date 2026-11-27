@@ -83,12 +83,11 @@ if(TARGET caliper_builder_loaders_tests)
     endif()
 endif()
 
-# The Python loader. CALIPER_BUILDER_TEST_PYTHON names an interpreter with numpy
-# (and pyarrow, for the Parquet path), such as a `uv venv` in the worktree. When
-# it is empty, the tests that run Python print that they are skipped and the
-# rest still run; loader_host.py's own tests are reported as skipped.
-set(CALIPER_BUILDER_TEST_PYTHON "" CACHE FILEPATH
-    "A Python interpreter with numpy for the Python loader tests; empty skips the tests that run Python")
+# The Python loader. CALIPER_BUILDER_TEST_PYTHON (defined and validated in
+# src/builder/CMakeLists.txt) names an interpreter with numpy, pyarrow and the
+# caliper-agent test dependencies. When it is empty, the tests that run Python
+# print that they are skipped and the rest still run; loader_host.py's own tests
+# are reported as skipped.
 if(BUILD_TESTS AND NOT WIN32)
     caliper_builder_add_tests(loaders_python
         SOURCES tests/test_python_loader.cpp

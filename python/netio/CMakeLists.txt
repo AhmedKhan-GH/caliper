@@ -36,7 +36,7 @@ find_package(nanobind CONFIG REQUIRED)
 
 # caliper_net's sources (as the root CMakeLists.txt lists them; upgrade.cpp holds
 # the upgrade checks in later trees).
-set(NET_SOURCES sha1.cpp ws.cpp json.cpp wire.cpp upgrade.cpp)
+set(NET_SOURCES sha1.cpp ws.cpp json.cpp wire.cpp wire_controls.cpp wire_scene.cpp wire_timelines.cpp wire_programs.cpp upgrade.cpp)
 list(TRANSFORM NET_SOURCES PREPEND ${REPO}/src/host/net/)
 foreach(f ${NET_SOURCES})
     if(NOT EXISTS ${f})

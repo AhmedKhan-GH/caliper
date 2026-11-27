@@ -15,6 +15,7 @@
 #include "example_draw.h"
 #include "gfx/colormap_tables.h"
 #include "gfx/metal_backend.h"
+#include "gfx/recording_backend.h"
 #include "gfx/shaders/generated/programs_metal.h"
 #include "live/live_scene.h"
 #include "net/wire.h"
@@ -692,6 +693,34 @@ fn slow(in: CaliperFullscreen) -> @location(0) vec4<f32> {
     for (const cd::DrawRuntime* rt : rig.view->draw_runtimes())
         if (rt->instance().program == "tower_arcs") CHECK(rt->status().state == cd::DrawState::running);
     rig.view->set_draw_feed(nullptr);
+}
+
+TEST_CASE("gfx/Recording pieces: queued submits without timestamps measure each frame from when prior submits finish") {
+    gfx::Caps caps = gfx::RecordingBackend::default_caps();
+    caps.backend = "webgpu";
+    gfx::RecordingBackend backend(caps);
+    backend.set_auto_complete(false);
+    caliper_live_views::SceneView view(backend, nullptr);
+    std::string why;
+    REQUIRE_MESSAGE(view.init(&why), why);
+    view.describe(caliper_net::wire::SceneView{CALIPER_NET_SPACE_3D, "+y", ""});
+    FixedFeed feed;
+    feed.add(ex::attention_arcs(), "tower_arcs", 1u << 24);
+    view.set_draw_feed(&feed);
+    for (int i = 0; i < 6; ++i) REQUIRE_MESSAGE(view.render(64, 64, 1.0f, kBackground, &why), why);
+    REQUIRE(view.draw_runtimes().size() == 1);
+    REQUIRE(backend.submitted().size() == 12);   // scene clear + program submit per frame
+    // Six frames queued together, each taking ~260 ms at the front of the queue (> 1.5 s total wall time):
+    // none took over 1 s on its own, so the program stays running without a false draw_timeout.
+    for (int i = 0; i < 6; ++i) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(260));
+        backend.finish(backend.submitted()[std::size_t(2 * i + 1)].serial);
+        view.poll();
+        const cd::DrawStatus s = view.draw_runtimes()[0]->status();
+        CHECK_MESSAGE(s.state == cd::DrawState::running, s.error.message);
+        CHECK(s.error.ok());
+    }
+    view.set_draw_feed(nullptr);
 }
 
 #endif  // CALIPER_HAVE_METAL

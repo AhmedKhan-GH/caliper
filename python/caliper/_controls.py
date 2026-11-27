@@ -21,19 +21,93 @@ action can be called from Python.
 """
 from __future__ import annotations
 
-from contextlib import contextmanager
 import collections
-from copy import copy, deepcopy
+from contextlib import contextmanager
 import heapq
 import itertools
-import json
-import logging
-import math
 import numbers
 import threading
 import time
 import warnings
-from typing import Any, Callable
+
+from ._controls_interventions import (
+    Interventions,
+    _Intervention,
+    _InterventionsMixin,
+    _record_specifications,
+)
+from ._controls_selection import (
+    ItemSpace,
+    _DetailsWorker,
+    _SelectionMixin,
+    _axis_rows,
+    _cell,
+    _column,
+    _details_from,
+    _event_items,
+    _fields,
+    _ids_list,
+    _normalise,
+    _range_ids,
+    _view_dims,
+)
+from ._controls_spec import (
+    CAPABILITIES,
+    CAP_CONTROLS,
+    CAP_SELECTION,
+    DETAIL_TEXT_MAX,
+    ERR_BAD_RANGE,
+    ERR_NOT_SUPPORTED,
+    ERR_OP_RESERVED,
+    ERR_UNKNOWN_POINT,
+    INTERVENE_OPS,
+    INTERVENE_RESERVED,
+    IV_ACTIVE,
+    IV_ENDED,
+    IV_PENDING,
+    MAX_ACTIONS,
+    MAX_CHOICES,
+    MAX_DETAIL_FIELDS,
+    MAX_DETAIL_ITEMS,
+    MAX_INTERVENTIONS,
+    MAX_ITEM_SPACES,
+    MAX_META_BYTES,
+    MAX_PARAMS,
+    MAX_POINTS_LISTED,
+    MAX_SELECTION,
+    NAME_MAX,
+    OP_INTERVENE,
+    PARAM_TEXT_MAX,
+    POINT_MAX,
+    RUN_NONE,
+    RUN_PAUSED,
+    RUN_PAUSING,
+    RUN_RUNNING,
+    RUN_STEPPING,
+    TEXT_MAX,
+    Action,
+    Param,
+    Route,
+    _FIRST,
+    _INT_EXACT,
+    _ITEM_KINDS,
+    _LAST,
+    _LIFECYCLE_HEADROOM,
+    _NO,
+    _check_controls_budget,
+    _check_help,
+    _check_name,
+    _cut,
+    _json_bytes,
+    _log,
+    _name_ok,
+    _param_spec,
+    _run_value,
+    _scalar,
+    _step_ok,
+    _w,
+    intervention_key,
+)
 
 __all__ = [
     "CONTROLS",
@@ -48,23 +122,6 @@ __all__ = [
     "intervention_key",
 ]
 
-CAP_CONTROLS, CAP_SELECTION = "controls", "selection"
-CAPABILITIES = (CAP_CONTROLS, CAP_SELECTION)
-RUN_NONE, RUN_RUNNING, RUN_PAUSING, RUN_PAUSED, RUN_STEPPING = (
-    "none", "running", "pausing", "paused", "stepping")
-NAME_MAX = 63
-MAX_PARAMS = 64
-MAX_ACTIONS = 64
-MAX_META_BYTES = 1 << 20
-MAX_CHOICES = 64
-TEXT_MAX = 1024
-PARAM_TEXT_MAX = 4096
-MAX_ITEM_SPACES = 16
-MAX_SELECTION = 32768                  # CALIPER_NET_MAX_EVENT_INDICES
-MAX_DETAIL_ITEMS = 32
-MAX_DETAIL_FIELDS = 16
-DETAIL_TEXT_MAX = 256
-
 ACTION_WAIT_S = 600.0                  # CALIPER_NET_ACTION_WAIT_MS
 DETAILS_TIMEOUT_S = 2.0                # CALIPER_NET_DETAILS_TIMEOUT_MS
 RELEASE_GRACE_S = 10.0
@@ -73,486 +130,9 @@ STEPS_REPORT_S = 0.1
 RUN_REPORT_S = 1.0
 LINGER_CHECK_S = 0.25
 
-OP_INTERVENE = "intervene"
-INTERVENE_OPS = ("ablate", "add", "scale", "clamp", "patch")
-INTERVENE_RESERVED = ("steer",)
-MAX_POINTS_LISTED = 4096               # CALIPER_NET_MAX_POINTS_LISTED
-MAX_INTERVENTIONS = 64                 # CALIPER_NET_MAX_INTERVENTIONS
-POINT_MAX = 255                        # CALIPER_NET_POINT_MAX
-ERR_UNKNOWN_POINT = "intervene.unknown_point"
-ERR_OP_RESERVED = "intervene.op_reserved"
-ERR_BAD_RANGE = "intervene.bad_range"
-ERR_NOT_SUPPORTED = "intervene.not_supported"
-IV_PENDING, IV_ACTIVE, IV_ENDED = "pending", "active", "ended"
-
-_ITEM_KINDS = ("heatmap", "image", "points", "series")
-_INT_EXACT = 1 << 53
-_LIFECYCLE_HEADROOM = 1280
-_NO = object()
-
-_log = logging.getLogger("caliper.controls")
-_log.addHandler(logging.NullHandler())
-_log.propagate = False
-
-_wire_mod = None
-
-
-def _w():
-    """caliper._wire, imported on first use (it imports numpy)."""
-    global _wire_mod
-    if _wire_mod is None:
-        from . import _wire
-        _wire_mod = _wire
-    return _wire_mod
-
-
-def _name_ok(v) -> bool:
-    return isinstance(v, str) and 0 < len(v.encode("utf-8")) <= NAME_MAX
-
-
-def _check_name(v, what: str) -> str:
-    if not _name_ok(v):
-        raise ValueError(f"invalid {what} name {v!r} (a str of 1 to {NAME_MAX} UTF-8 bytes)")
-    return v
-
-
-def _cut(text: str, limit: int) -> str:
-    b = text.encode("utf-8")
-    if len(b) <= limit:
-        return text
-    return b[:limit].decode("utf-8", "ignore")
-
-
-def _check_help(help) -> str | None:
-    if help is None:
-        return None
-    if not isinstance(help, str) or len(help.encode("utf-8")) > TEXT_MAX:
-        raise ValueError(f"help must be a str of at most {TEXT_MAX} UTF-8 bytes")
-    return help
-
-
-def intervention_key(spec):
-    """Keep legacy keys and distinguish each positioned feature record."""
-    key = (spec["point"], spec.get("op", spec.get("kind")))
-    if key[1] in ("clamp", "scale") and "positions" in spec:
-        return (*key, spec["feature"], tuple(sorted(spec["positions"])))
-    return key
-
-
-def _json_bytes(value) -> int:
-    return len(json.dumps(value, ensure_ascii=False, allow_nan=False,
-                          separators=(",", ":")).encode("utf-8"))
-
-
-def _check_controls_budget(meta, *, ivs=None) -> None:
-    """Check direct UTF-8 JSON size against wire metadata limits."""
-    from ._intervention_protocol import MAX_BYTES
-
-    entries = meta.get("interventions", {}).get("active", [])
-    live_count = 0
-    for entry in entries:
-        extra = _LIFECYCLE_HEADROOM if entry.get("state") != IV_ENDED else 0
-        if extra:
-            live_count += 1
-        if _json_bytes(entry) + extra > MAX_BYTES:
-            raise ValueError("intervention metadata exceeds the wire limit")
-    reserve = 128 + live_count * _LIFECYCLE_HEADROOM
-    if _json_bytes(meta) + reserve > MAX_META_BYTES:
-        raise ValueError("CONTROLS metadata exceeds the wire limit")
-
-
-def _scalar(v):
-    if isinstance(v, (bool, int, float, str)) or v is None:
-        return v
-    item = getattr(v, "item", None)
-    if item is not None:
-        try:
-            return item()
-        except (TypeError, ValueError, RuntimeError):
-            return v
-    return v
-
 
 # ===========================================================================
-# parameters
-# ===========================================================================
-def _run_value(p) -> None:
-    from . import _managed
-    v = _managed.value(p.name)
-    if v is _managed.NONE:
-        return
-    w = _w()
-    try:
-        p._value = w.param_value(p.entry(), _scalar(v))
-    except w.MessageError as e:
-        warnings.warn(f"caliper: the managed run's value of parameter {p.name!r} does not "
-                      f"apply: {e.message}", RuntimeWarning, stacklevel=4)
-
-
-class Param:
-    """A parameter that viewers can change while the script runs, made by [`param`][caliper.param].
-
-    The script reads `value` in its loop. A viewer changes it through the stream.
-
-    Attributes:
-        name (str): The name of the parameter.
-        type (str): `"boolean"`, `"integer"`, `"number"`, `"choice"`, or `"text"`.
-        min (int | float | None): The lower end of the range, or `None`.
-        max (int | float | None): The upper end of the range, or `None`.
-        log (bool): Whether a viewer draws the slider on a log scale.
-        choices (tuple[str, ...] | None): The choices of a `"choice"` parameter, or `None`.
-        help (str | None): The tooltip, or `None`.
-    """
-    __slots__ = ("name", "type", "min", "max", "log", "choices", "help", "_value", "_pending",
-                 "_ctl", "removed", "_version")
-
-    def __init__(self, ctl, name, type_, value, lo, hi, log, choices, help):
-        self.name, self.type = name, type_
-        self.min, self.max, self.log, self.choices, self.help = lo, hi, log, choices, help
-        self._value = value
-        self._pending = _NO
-        self._ctl = ctl
-        self.removed = False
-        self._version = 0
-
-    @property
-    def value(self):
-        """The current value, to read in the loop, from any thread.
-
-        It changes only in [`step`][caliper.step], or at once before the first `step()` of the
-        script.
-        """
-        return self._value
-
-    @property
-    def pending(self):
-        """A value from a viewer that `value` takes at the next `step()`, or `None`."""
-        p = self._pending
-        return None if p is _NO else p
-
-    def set(self, value):
-        """Set the value from the script, at once and for every viewer.
-
-        The value is checked and clamped like a value from a viewer.
-
-        Args:
-            value (bool | int | float | str): The new value, of the type of the parameter.
-
-        Returns:
-            bool | int | float | str: The value set.
-
-        Raises:
-            ValueError: When the value has another type or is not one of the choices.
-        """
-        return self._ctl._script_set(self, value)
-
-    def remove(self) -> bool:
-        """Take the parameter away from the viewers.
-
-        `value` keeps its last value.
-
-        Returns:
-            bool: `True` if the parameter was registered.
-        """
-        return self._ctl._remove_param(self)
-
-    def entry(self) -> dict:
-        """The parameter object of a CONTROLS message."""
-        e = {"name": self.name, "type": self.type, "value": self._value}
-        if self._pending is not _NO:
-            e["pending"] = self._pending
-        if self.min is not None:
-            e["min"] = self.min
-        if self.max is not None:
-            e["max"] = self.max
-        if self.log:
-            e["log"] = True
-        if self.choices is not None:
-            e["choices"] = list(self.choices)
-        if self.help is not None:
-            e["help"] = self.help
-        return e
-
-    def __repr__(self) -> str:
-        p = "" if self._pending is _NO else f", pending {self._pending!r}"
-        return f"<caliper.Param {self.name!r} {self.type} = {self._value!r}{p}>"
-
-
-def _param_spec(name, value, lo, hi, log, choices, help):
-    _check_name(name, "parameter")
-    help = _check_help(help)
-    value, lo, hi = _scalar(value), _scalar(lo), _scalar(hi)
-    if choices is not None:
-        choices = list(choices)
-        if (not 1 <= len(choices) <= MAX_CHOICES or not all(_name_ok(c) for c in choices)
-                or len(set(choices)) != len(choices)):
-            raise ValueError(f"choices must be 1 to {MAX_CHOICES} distinct str of 1 to "
-                             f"{NAME_MAX} UTF-8 bytes")
-        if value not in choices:
-            raise ValueError(f"parameter {name!r}: {value!r} is not one of {choices}")
-        if lo is not None or hi is not None or log:
-            raise ValueError(f"parameter {name!r}: a choice takes no min, max or log")
-        return "choice", value, None, None, False, tuple(choices), help
-    if isinstance(value, bool):
-        if lo is not None or hi is not None or log:
-            raise ValueError(f"parameter {name!r}: a boolean takes no min, max or log")
-        return "boolean", value, None, None, False, None, help
-    if isinstance(value, str):
-        from ._interpret_protocol import text
-        if not text(value, PARAM_TEXT_MAX):
-            raise ValueError(f"parameter {name!r}: text must be valid UTF-8 without NUL within {PARAM_TEXT_MAX} bytes")
-        if lo is not None or hi is not None or log:
-            raise ValueError(f"parameter {name!r}: text takes no min, max or log")
-        return "text", value, None, None, False, None, help
-    if isinstance(value, numbers.Integral):
-        type_, conv = "integer", int
-        ok = (lambda x: isinstance(x, numbers.Integral) and not isinstance(x, bool)
-              and abs(int(x)) <= _INT_EXACT)
-    elif isinstance(value, numbers.Real):
-        type_, conv = "number", float
-        ok = (lambda x: isinstance(x, numbers.Real) and not isinstance(x, bool)
-              and math.isfinite(float(x)))
-    else:
-        raise TypeError(f"parameter {name!r}: the value must be a bool, int, float or a str "
-                        f"with choices, not {type(value).__name__}")
-    for what, x in (("value", value), ("min", lo), ("max", hi)):
-        if x is not None and not ok(x):
-            raise ValueError(f"parameter {name!r}: {what} {x!r} is not a"
-                             f"{' whole number' if type_ == 'integer' else ' finite number'}"
-                             f"{f' of magnitude at most 2**53' if type_ == 'integer' else ''}")
-    value = conv(value)
-    lo = None if lo is None else conv(lo)
-    hi = None if hi is None else conv(hi)
-    if lo is not None and hi is not None and lo > hi:
-        raise ValueError(f"parameter {name!r}: min {lo} is above max {hi}")
-    if (lo is not None and value < lo) or (hi is not None and value > hi):
-        raise ValueError(f"parameter {name!r}: value {value} is outside [{lo}, {hi}]")
-    log = bool(log)
-    if log and not (lo is not None and lo > 0 and hi is not None):
-        raise ValueError(f"parameter {name!r}: log=True needs min > 0 and max")
-    return type_, value, lo, hi, log, None, help
-
-
-# ===========================================================================
-# actions
-# ===========================================================================
-class Action:
-    """A function that viewers can run, made by [`action`][caliper.action].
-
-    A request of a viewer runs `fn()` at the next `caliper.step()`, on the thread that calls it.
-
-    Attributes:
-        name (str): The name of the action.
-        fn (Callable[[], object]): The registered function.
-        help (str | None): The tooltip, or `None`.
-    """
-    __slots__ = ("name", "fn", "help", "queued", "running", "waiters", "run_id", "_ctl",
-                 "removed", "__wrapped__")
-
-    def __init__(self, ctl, name, fn, help):
-        self.name, self.fn, self.help = name, fn, help
-        self.queued = self.running = False
-        self.waiters: list = []
-        self.run_id = 0
-        self._ctl = ctl
-        self.removed = False
-        self.__wrapped__ = fn
-
-    def __call__(self, *args, **kwargs):
-        """Run `fn` at once, on the thread of the caller, and return what it returns."""
-        return self.fn(*args, **kwargs)
-
-    def remove(self) -> bool:
-        """Take the action away from the viewers.
-
-        A run that waits is answered `unknown_control`.
-
-        Returns:
-            bool: `True` if the action was registered.
-        """
-        return self._ctl._remove_action(self)
-
-    def entry(self) -> dict:
-        """The action object of a CONTROLS message."""
-        e = {"name": self.name, "running": self.running, "queued": self.queued}
-        if self.help is not None:
-            e["help"] = self.help
-        return e
-
-    def __repr__(self) -> str:
-        state = "running" if self.running else ("queued" if self.queued else "idle")
-        return f"<caliper.Action {self.name!r} {state}>"
-
-
-# ===========================================================================
-# item spaces, selections and details
-# ===========================================================================
-def _column(seq) -> list:
-    tolist = getattr(seq, "tolist", None)
-    if tolist is not None and not isinstance(seq, (list, tuple)):
-        detach = getattr(seq, "detach", None)
-        if detach is not None:
-            seq = detach()
-            tolist = seq.tolist
-        out = tolist()
-        return out if isinstance(out, list) else [out]
-    return list(seq)
-
-
-def _cell(v):
-    v = _scalar(v)
-    if v is None or isinstance(v, bool):
-        return v
-    if isinstance(v, numbers.Integral):
-        return int(v) if abs(int(v)) <= _INT_EXACT else float(v)
-    if isinstance(v, numbers.Real):
-        f = float(v)
-        return f if math.isfinite(f) else None
-    return _cut(v if isinstance(v, str) else str(v), DETAIL_TEXT_MAX)
-
-
-def _fields(names) -> list:
-    names = [n for n in names]
-    if len(names) > MAX_DETAIL_FIELDS:
-        raise ValueError(f"details have at most {MAX_DETAIL_FIELDS} fields, not {len(names)}")
-    for n in names:
-        _check_name(n, "details field")
-    return names
-
-
-class ItemSpace:
-    """A set of items numbered from 0 that several views index, made by [`items`][caliper.items].
-
-    An example is the samples of an evaluation set. A selection in one view highlights the same
-    items in every view that names the space.
-
-    Attributes:
-        name (str): The name of the item space.
-    """
-    __slots__ = ("name", "_ctl", "_table", "_fields", "_fn", "_selection", "_truncated",
-                 "_view", "_version", "_details", "_details_error", "_settled")
-
-    def __init__(self, ctl, name):
-        self.name = name
-        self._ctl = ctl
-        self._table = None
-        self._fields: list = []
-        self._fn = None
-        self._selection: list = []
-        self._truncated = False
-        self._view = None
-        self._version = 0
-        self._details = None
-        self._details_error = None
-        self._settled = True
-
-    @property
-    def selection(self) -> list:
-        """The list of selected item ids, ascending.
-
-        A viewer or `select` set it. It is current even while a notebook cell runs.
-        """
-        return list(self._selection)
-
-    @property
-    def truncated(self) -> bool:
-        return self._truncated
-
-    def select(self, items) -> list:
-        """Set the selection from the script, for every viewer.
-
-        An empty sequence clears it.
-
-        Args:
-            items (Iterable[int]): The item ids to select.
-
-        Returns:
-            list[int]: The item ids as viewers get them: ascending, without repeats, at most 32,768.
-
-        Raises:
-            ValueError: When an id is negative.
-        """
-        ids = [int(i) for i in items]
-        if any(i < 0 for i in ids):
-            raise ValueError("item ids are non-negative integers")
-        self._ctl._set_selection(self.name, ids, None, False)
-        return self.selection
-
-    def clear(self) -> None:
-        """Clear the selection for every viewer."""
-        self.select(())
-
-    @staticmethod
-    def _details_source(details) -> tuple:
-        if details is None:
-            return None, [], None
-        if callable(details):
-            return None, [], details
-        if not (hasattr(details, "items") and callable(details.items)):
-            raise TypeError("details must be a mapping {field: sequence} or a function")
-        pairs = list(details.items())
-        fields = _fields([k for k, _ in pairs])
-        return {k: _column(v) for k, v in pairs}, fields, None
-
-    def _lookup(self, ids) -> dict:
-        values = []
-        for i in ids:
-            row = []
-            for f in self._fields:
-                col = self._table[f]
-                row.append(_cell(col[i]) if 0 <= i < len(col) else None)
-            values.append(row)
-        return {"fields": list(self._fields), "items": list(ids), "values": values}
-
-    def __repr__(self) -> str:
-        n = len(self._selection)
-        return f"<caliper.ItemSpace {self.name!r}, {n} selected>"
-
-
-def _details_from(out, ids) -> dict:
-    if isinstance(out, dict) or (hasattr(out, "items") and callable(out.items)
-                                 and not isinstance(out, (list, tuple))):
-        pairs = list(out.items())
-        fields = _fields([k for k, _ in pairs])
-        cols = [_column(v) for _, v in pairs]
-        values = [[_cell(c[r]) if r < len(c) else None for c in cols] for r in range(len(ids))]
-        return {"fields": fields, "items": list(ids), "values": values}
-    rows = list(out)
-    fields: list = []
-    for r in rows:
-        for k in r:
-            if k not in fields:
-                fields.append(k)
-    fields = _fields(fields)
-    values = [[_cell(rows[r].get(f)) if r < len(rows) else None for f in fields]
-              for r in range(len(ids))]
-    return {"fields": fields, "items": list(ids), "values": values}
-
-
-_FIRST, _LAST = 0, -1
-
-
-def _view_dims(kind: str, items) -> dict:
-    if kind not in _ITEM_KINDS:
-        raise ValueError(f"items= is for heatmaps, images, points and series, not {kind!r}")
-    if isinstance(items, str):
-        _check_name(items, "item space")
-        if kind == "series":
-            return {None: items}
-        return {(_LAST if kind == "points" else _FIRST): items}
-    if isinstance(items, dict):
-        if kind == "series":
-            raise ValueError("a series has no dims: items= takes the space's name as a str")
-        out = {}
-        for d, s in items.items():
-            _check_name(d, "dim")
-            out[d] = _check_name(s, "item space")
-        return out
-    raise TypeError("items= takes an item space name (str) or a dict {dim: space}")
-
-
-# ===========================================================================
-# time-outs and details functions off the training thread
+# time-outs off the training thread
 # ===========================================================================
 class _Timers:
     def __init__(self):
@@ -583,415 +163,10 @@ class _Timers:
                 _log.debug("a timer failed", exc_info=True)
 
 
-class _DetailsWorker:
-    def __init__(self):
-        self._jobs: collections.OrderedDict = collections.OrderedDict()
-        self._cond = threading.Condition()
-        self._thread = None
-
-    def submit(self, key, fn) -> None:
-        with self._cond:
-            self._jobs.pop(key, None)
-            self._jobs[key] = fn
-            if self._thread is None:
-                self._thread = threading.Thread(target=self._run, name="caliper.details",
-                                                daemon=True)
-                self._thread.start()
-            self._cond.notify()
-
-    def _run(self) -> None:
-        while True:
-            with self._cond:
-                while not self._jobs:
-                    self._cond.wait()
-                _, fn = self._jobs.popitem(last=False)
-            try:
-                fn()
-            except Exception:
-                _log.debug("a details job failed", exc_info=True)
-
-
-# ===========================================================================
-# interventions
-# ===========================================================================
-class _Intervention:
-    """One intervention of the watched model, with a stable specification key."""
-
-    __slots__ = ("point", "op", "from_step", "until_step", "since_step", "state", "hook",
-                 "clear", "error", "error_code", "spec", "applied_spec", "replace", "report")
-
-    def __init__(self, point: str, op: str, from_step, until_step, spec=None):
-        self.point, self.op = point, op
-        self.from_step, self.until_step = from_step, until_step
-        self.since_step = None
-        self.state = IV_PENDING
-        self.hook = None
-        self.clear = False
-        self.error = None
-        self.error_code = None
-        self.spec = spec or {"point": point, "op": op, "kind": op,
-                             "from_step": from_step, "until_step": until_step}
-        self.applied_spec = None
-        self.replace = False
-        self.report = False
-
-    def entry(self) -> dict:
-        entry = dict(deepcopy(self.spec), from_step=self.from_step, until_step=self.until_step,
-                     since_step=self.since_step, state=self.state)
-        if self.op == "ablate":
-            entry.pop("kind", None)
-        if self.error is not None:
-            entry["error"] = self.error
-        if self.error_code is not None:
-            entry["error_code"] = self.error_code
-        return entry
-
-
-class Interventions:
-    """The interventions of ``caliper.watch(model)``."""
-
-    def __init__(self, ctl: "Controls", model, adapter):
-        from ._ablate import InterventionExecutor
-        self._ctl = ctl
-        self.model = model
-        self.adapter = adapter
-        self.points: list = []
-        self.names: frozenset = frozenset()
-        self._shapes_off = None
-        self.executor = InterventionExecutor(model, adapter=adapter)
-
-    @property
-    def dictionary(self):
-        return self.executor.dictionary
-
-    @property
-    def suspended(self) -> bool:
-        return self.executor.suspended
-
-    def suspend(self):
-        return self.executor.suspend()
-
-    def rows(self, indices):
-        return self.executor.rows(indices)
-
-    def invalidate_source_cache(self) -> None:
-        with self._ctl.lock:
-            with self._ctl._outside_lock():
-                self.executor.invalidate_cache()
-
-    def configure(self, *, dictionary=None, tokenizer=None, dictionary_id=None,
-                  resource_guard=None, backend=None):
-        """Bind resources and end prior interventions after validation succeeds."""
-        with self._ctl.lock:
-            if self._ctl._iv_model is not self:
-                raise ValueError("the intervention service is no longer attached")
-            records = list(self._ctl._ivs.values())
-            with self._ctl._outside_lock():
-                self.executor.configure(dictionary=dictionary, tokenizer=tokenizer,
-                                        dictionary_id=dictionary_id, resource_guard=resource_guard,
-                                        backend=backend)
-                for iv in records:
-                    if iv.hook is not None:
-                        iv.hook()
-            if self._ctl._iv_model is not self:
-                raise ValueError("the intervention service is no longer attached")
-            for iv in records:
-                iv.hook, iv.applied_spec = None, None
-                if iv.state != IV_ENDED:
-                    iv.state = IV_ENDED
-                    iv.error = "intervention resources changed"
-                    iv.error_code = "intervene.configuration_changed"
-            self._ctl._iv_revision += 1
-            self._ctl._iv_due = True
-            self._ctl._update_busy()
-        self._ctl._publish()
-        return self
-
-    def set(self, specification) -> None:
-        self._request({"set": specification})
-
-    def clear(self, point=None) -> None:
-        self._request({"clear_all": True} if point is None else {"clear": point})
-
-    def _request(self, request) -> None:
-        from ._intervention_protocol import InterventionError
-        with self._ctl.lock:
-            if self._ctl._iv_model is not self:
-                raise InterventionError("the intervention service is no longer attached")
-            refused = self._ctl._intervene(request)
-            self._ctl._update_busy()
-        if refused is not None:
-            raise InterventionError(refused[1], refused[0])
-
-    def specifications(self, *, active_only: bool = True) -> list[dict]:
-        with self._ctl.lock:
-            if self._ctl._iv_model is not self:
-                return []
-            if active_only:
-                return [deepcopy(iv.applied_spec) for iv in self._ordered_records()
-                        if iv.state == IV_ACTIVE and iv.hook is not None and iv.applied_spec is not None]
-            return [deepcopy(iv.spec) for iv in self._ctl._ivs.values()
-                    if iv.state != IV_ENDED and not iv.clear]
-
-    def state_dict(self) -> dict:
-        with self._ctl.lock:
-            if self._ctl._iv_model is not self:
-                raise ValueError("the intervention service is no longer attached")
-            return self._state_dict()
-
-    def _state_dict(self) -> dict:
-        return {"version": 1, "interventions": [
-            {"specification": deepcopy(iv.spec), "state": iv.state,
-             "applied_specification": deepcopy(iv.applied_spec),
-             "since_step": iv.since_step, "clear": iv.clear,
-             "error": iv.error, "error_code": iv.error_code}
-            for iv in self._ordered_records()]}
-
-    def _ordered_records(self, records=None) -> list[_Intervention]:
-        items = list(self._ctl._ivs.values() if records is None else records.values())
-        active = iter(sorted((iv for iv in items if iv.hook is not None),
-                             key=lambda iv: self.executor.execution_order(iv.hook)))
-        return [next(active) if iv.hook is not None else iv for iv in items]
-
-    def _order_live_records(self) -> None:
-        ordered = {intervention_key(iv.spec): iv for iv in self._ordered_records()}
-        self._ctl._ivs.clear()
-        self._ctl._ivs.update(ordered)
-
-    @contextmanager
-    def temporary_state(self, state):
-        """Replay active snapshot effects on the run thread without lifecycle changes."""
-        from ._ablate import InterventionReplay
-        from ._intervention_protocol import InterventionError
-        if isinstance(state, list):
-            if len(state) > MAX_INTERVENTIONS:
-                raise InterventionError("invalid intervention records")
-            state = {"version": 1, "interventions": [
-                {"specification": spec, "state": IV_ACTIVE, "since_step": 0,
-                 "clear": False, "error": None, "error_code": None} for spec in state]}
-        if (not isinstance(state, dict) or type(state.get("version")) is not int
-                or state["version"] != 1 or set(state) != {"version", "interventions"}):
-            raise InterventionError("unsupported intervention state")
-        records = state["interventions"]
-        if not isinstance(records, list) or len(records) > MAX_INTERVENTIONS:
-            raise InterventionError("invalid intervention records")
-        with self._ctl.lock:
-            if self._ctl._iv_model is not self:
-                raise InterventionError("the intervention service is no longer attached")
-            hooks = [iv.hook for iv in self._ctl._ivs.values() if iv.hook is not None]
-            with self._ctl._outside_lock():
-                replay = InterventionReplay(self.executor)
-                specifications, keys = [], set()
-                for record in records:
-                    spec, applied = _record_specifications(record, replay.executor)
-                    key = intervention_key(spec)
-                    if key in keys:
-                        raise InterventionError("duplicate intervention record")
-                    keys.add(key)
-                    if record["state"] == IV_ACTIVE:
-                        spec = dict(applied)
-                        spec.pop("from_step", None)
-                        spec.pop("until_step", None)
-                        specifications.append(spec)
-                with replay._scope(hooks, specifications):
-                    yield replay
-
-    def load_state_dict(self, state, *, restore_active: bool = False) -> None:
-        """Restore queued records, optionally installing saved active hooks."""
-        from ._intervention_protocol import InterventionError
-        if (not isinstance(state, dict) or type(state.get("version")) is not int
-                or state["version"] != 1 or set(state) != {"version", "interventions"}):
-            raise InterventionError("unsupported intervention state")
-        records = state["interventions"]
-        if not isinstance(records, list) or len(records) > MAX_INTERVENTIONS:
-            raise InterventionError("invalid intervention records")
-        with self._ctl.lock:
-            if self._ctl._iv_model is not self:
-                raise InterventionError("the intervention service is no longer attached")
-            self._restore_records(records, restore_active=restore_active)
-
-    def apply_overrides(self, specifications) -> None:
-        """Apply explicit fork overrides before the first forward pass."""
-        from ._intervention_protocol import InterventionError
-        if not isinstance(specifications, list) or len(specifications) > MAX_INTERVENTIONS:
-            raise InterventionError("invalid intervention overrides")
-        with self._ctl.lock:
-            if self._ctl._iv_model is not self:
-                raise InterventionError("the intervention service is no longer attached")
-            if not specifications:
-                return
-            records = {intervention_key(record["specification"]): record
-                       for record in self._state_dict()["interventions"]}
-            keys = set()
-            step = self._ctl._next_step()
-            for request in specifications:
-                with self._ctl._outside_lock():
-                    spec = self.executor.validate(request)
-                key = intervention_key(spec)
-                if key in keys:
-                    raise InterventionError("duplicate intervention override")
-                keys.add(key)
-                if spec.get("until_step") is not None and spec["until_step"] <= step:
-                    raise InterventionError("override until_step is in the past", ERR_BAD_RANGE)
-                active = spec.get("from_step") is None or spec["from_step"] <= step
-                records[key] = {
-                    "specification": spec,
-                    "state": IV_ACTIVE if active else IV_PENDING,
-                    "applied_specification": deepcopy(spec) if active else None,
-                    "since_step": step if active else None,
-                    "clear": False,
-                    "error": None,
-                    "error_code": None,
-                }
-            while len(records) > MAX_INTERVENTIONS:
-                old = next((k for k, rec in records.items() if rec["state"] == IV_ENDED), None)
-                if old is None:
-                    raise InterventionError("too many live intervention records", _w().ERR_LIMIT)
-                del records[old]
-            self._restore_records(list(records.values()), restore_active=True, evict_ended=True)
-        self._ctl._publish()
-
-    def _restore_records(self, records, *, restore_active: bool, evict_ended: bool = False) -> None:
-        from ._intervention_protocol import InterventionError
-        restored: dict = {}
-        with self._ctl._outside_lock():
-            for record in records:
-                spec, applied = _record_specifications(record, self.executor)
-                key = intervention_key(spec)
-                if key in restored:
-                    raise InterventionError("duplicate intervention record")
-                iv = _Intervention(spec["point"], spec["op"], spec.get("from_step"), spec.get("until_step"), spec)
-                iv.state, iv.since_step = record["state"], record["since_step"]
-                iv.clear, iv.error, iv.error_code = record["clear"], record["error"], record["error_code"]
-                iv.applied_spec = applied
-                iv.replace = applied is not None and spec != applied
-                restored[key] = iv
-        try:
-            self._ctl._check_intervention_step(restored, self._ctl._next_step())
-        except ValueError as error:
-            raise InterventionError(str(error), ERR_BAD_RANGE) from None
-        try:
-            restored = self._ctl._admit_interventions(restored, evict_ended=evict_ended)
-        except ValueError as error:
-            raise InterventionError(str(error), _w().ERR_LIMIT) from None
-        cache = self.executor._cache.copy()
-        try:
-            if restore_active:
-                with self._ctl._outside_lock():
-                    for iv in restored.values():
-                        if iv.applied_spec is not None:
-                            self._ctl._install_intervention(self, iv, iv.applied_spec)
-            old = list(self._ctl._ivs.values())
-            self._ctl._ivs = {intervention_key(iv.spec): iv for iv in self._ordered_records(restored)}
-            self._ctl._iv_revision += 1
-            self._ctl._iv_due = True
-            self._ctl.busy = True
-        except BaseException:
-            with self._ctl._outside_lock():
-                for iv in restored.values():
-                    self._ctl._unhook(iv, retain_source=True)
-                self.executor._cache.clear()
-                self.executor._cache.update(cache)
-            raise
-        with self._ctl._outside_lock():
-            for iv in old:
-                self._ctl._unhook(iv, retain_source=True)
-            self.executor._discard_unused_sources()
-
-    def remove(self) -> None:
-        self._ctl._interventions_off(self)
-
-
-def _record_specifications(record, executor):
-    from . import _intervention_protocol as metadata
-    from ._intervention_protocol import InterventionError
-    fields = {"specification", "state", "since_step", "clear", "error", "error_code"}
-    if not isinstance(record, dict) or set(record) not in (fields, fields | {"applied_specification"}):
-        raise InterventionError("invalid intervention record")
-    state, since = record["state"], record["since_step"]
-    if (state not in (IV_PENDING, IV_ACTIVE, IV_ENDED) or type(record["clear"]) is not bool
-            or (state == IV_ACTIVE and since is None)
-            or (state == IV_PENDING and since is not None)):
-        raise InterventionError("invalid intervention lifecycle state")
-    spec = executor.validate(record["specification"], resources=False)
-    entry = dict(spec, state=state, since_step=since)
-    entry.update({key: record[key] for key in ("error", "error_code") if record[key] is not None})
-    if not metadata.specification(entry, lifecycle=True):
-        raise InterventionError("invalid intervention lifecycle metadata")
-    if state != IV_ENDED:
-        spec = executor.validate(spec)
-    applied = record.get("applied_specification", spec if state == IV_ACTIVE else None)
-    if state == IV_ACTIVE:
-        applied = executor.validate(applied)
-        if intervention_key(applied) != intervention_key(spec):
-            raise InterventionError("applied intervention must match the record identity")
-    elif applied is not None:
-        raise InterventionError("inactive intervention cannot have an applied specification")
-    return spec, applied
-
-
-def _step_ok(v) -> bool:
-    return v is None or (isinstance(v, numbers.Integral) and not isinstance(v, bool)
-                         and 0 <= v < _INT_EXACT)
-
-
-class Route:
-    """A transport attached to the controls."""
-
-    def __init__(self, ctl: "Controls", transport):
-        self.ctl = ctl
-        self.transport = transport
-        self.attached = True
-
-    def on_control(self, conn, meta, *, acknowledge=None):
-        return self.ctl._on_control(self, conn, meta, acknowledge=acknowledge)
-
-    def on_select(self, conn, meta, axes=None) -> None:
-        try:
-            self.ctl._on_select(meta, axes)
-        except Exception:
-            _log.debug("a select event failed", exc_info=True)
-
-    def snapshot_state(self) -> list:
-        return self.ctl.snapshot_state()
-
-    def annotate_view(self, entry: dict) -> dict:
-        return self.ctl.annotate_view(entry)
-
-    def detach(self) -> None:
-        self.ctl._detach(self)
-
-    def _reply(self, conn, meta) -> None:
-        if self.attached:
-            try:
-                self.transport.reply(conn, meta)
-            except Exception:
-                _log.debug("a reply failed", exc_info=True)
-
-    def _broadcast(self, type_, meta, after_data: bool = False) -> None:
-        if self.attached:
-            try:
-                if after_data:
-                    self.transport.broadcast(type_, meta, after_data=True)
-                else:
-                    self.transport.broadcast(type_, meta)
-            except Exception:
-                _log.debug("a broadcast failed", exc_info=True)
-
-    def _controllers(self) -> int:
-        fn = getattr(self.transport, "controllers", None)
-        if fn is None:
-            return 1
-        try:
-            return int(fn())
-        except Exception:
-            return 0
-
-
 # ===========================================================================
 # the state
 # ===========================================================================
-class Controls:
+class Controls(_SelectionMixin, _InterventionsMixin):
     """The controls and selections of this process (``CONTROLS``)."""
 
     def __init__(self):
@@ -1086,7 +261,7 @@ class Controls:
         self.busy = (self.state in (RUN_NONE, RUN_PAUSING, RUN_STEPPING)
                      or self._npending > 0 or bool(self.queue) or self._report_due
                      or self._iv_due or (self.interpretation_service is not None
-                                        and self.interpretation_service.pending))
+                                         and self.interpretation_service.pending))
 
     def _arm_report(self) -> None:
         if self.state == RUN_RUNNING and not self._report_armed:
@@ -1188,9 +363,11 @@ class Controls:
     def _action_replies(self, action, waiters, ok, text):
         w = _w()
         for route, conn, rid in waiters:
-            meta = w.ControlReply(rid, w.OP_RUN, w.STATUS_OK if ok else w.STATUS_ERROR, action.name,
+            meta = w.ControlReply(
+                rid, w.OP_RUN, w.STATUS_OK if ok else w.STATUS_ERROR, action.name,
                 message=(text or None) if ok else None,
-                error=None if ok else {"code": w.ERR_ACTION_FAILED, "message": text}).to_meta()
+                error=None if ok else {"code": w.ERR_ACTION_FAILED, "message": text},
+            ).to_meta()
             route._reply(conn, meta)
 
     def _run_action(self, a: Action):
@@ -1370,92 +547,6 @@ class Controls:
         self._answer(waiters, a.name, "unknown_control", f"the action {a.name!r} was removed")
         return True
 
-    def items(self, space, details=None) -> ItemSpace:
-        _check_name(space, "item space")
-        source = ItemSpace._details_source(details)
-        with self.lock:
-            sp = self.spaces.get(space)
-            if sp is None:
-                if len(self.spaces) >= MAX_ITEM_SPACES:
-                    raise ValueError(f"at most {MAX_ITEM_SPACES} item spaces")
-                sp = self.spaces[space] = ItemSpace(self, space)
-            sp._table, sp._fields, sp._fn = source
-        return sp
-
-    def view_items_call(self, name: str, kind: str, items) -> None:
-        args = (kind, items)
-        if self._view_args.get(name) == args:
-            return
-        mapping = _view_dims(kind, items)
-        with self.lock:
-            spaces = set(self.spaces) | {s for m in self.view_items.values() for s in m.values()}
-            if len(spaces | set(mapping.values())) > MAX_ITEM_SPACES:
-                raise ValueError(f"a session uses at most {MAX_ITEM_SPACES} item spaces")
-            changed = self.view_items.get(name) != mapping
-            self.view_items[name] = mapping
-            self._view_args[name] = args
-            self._resolved.pop(name, None)
-            routes = list(self.routes)
-        if changed:
-            for r in routes:
-                fn = getattr(r.transport, "views_changed", None)
-                if fn is not None:
-                    try:
-                        fn()
-                    except Exception:
-                        _log.debug("views_changed failed", exc_info=True)
-
-    def forget_view(self, name: str) -> None:
-        with self.lock:
-            self.view_items.pop(name, None)
-            self._view_args.pop(name, None)
-            self._resolved.pop(name, None)
-
-    def annotate_view(self, entry: dict) -> dict:
-        name = entry.get("name")
-        m = self.view_items.get(name)
-        if not m:
-            return entry
-        out = dict(entry)
-        resolved = {}
-        if None in m and entry.get("kind") == 4:
-            out["items"] = resolved[None] = m[None]
-        sources = []
-        for s in entry.get("sources") or []:
-            dims = list(s.get("dims", []))
-            new = []
-            for i, d in enumerate(dims):
-                space = m.get(d.get("name"))
-                if space is None and i == 0:
-                    space = m.get(_FIRST)
-                if space is None and i == len(dims) - 1:
-                    space = m.get(_LAST)
-                if space is not None:
-                    resolved[d["name"]] = space
-                    d = dict(d, items=space)
-                new.append(d)
-            sources.append(dict(s, dims=new))
-        out["sources"] = sources
-        with self.lock:
-            if self.view_items.get(name) is m:
-                self._resolved[name] = resolved
-        return out
-
-    def _dims_of(self, view: str) -> dict:
-        r = self._resolved.get(view)
-        if r is not None:
-            return r
-        m = self.view_items.get(view) or {}
-        out = {}
-        for k, space in m.items():
-            if k == _FIRST:
-                out.setdefault("row", space)
-            elif k == _LAST:
-                out.setdefault("point", space)
-            else:
-                out[k] = space
-        return out
-
     # -- requests (the transport's thread) -------------------------------------------
     def _on_control(self, route: Route, conn, meta, *, acknowledge=None):
         w = _w()
@@ -1593,415 +684,6 @@ class Controls:
             route._reply(conn, w.ControlReply(rid, w.OP_RUN, w.STATUS_ERROR, name, error={
                 "code": code, "message": text}).to_meta())
 
-    # -- selections ----------------------------------------------------------------
-    def _on_select(self, meta, axes=None) -> None:
-        if not isinstance(meta, dict) or meta.get("type") != "select":
-            return
-        view, detail = meta.get("view"), meta.get("detail")
-        m = self._dims_of(view) if isinstance(view, str) else None
-        if not m or not isinstance(detail, dict):
-            return
-        self.counters["selects_in"] += 1
-        for space, ids, cut in _event_items(m, detail, axes):
-            self._set_selection(space, ids, view, cut)
-
-    def _set_selection(self, space: str, ids, view, cut: bool) -> None:
-        ids, cut2 = _normalise(ids)
-        submit = None
-        with self.lock:
-            sp = self.spaces.get(space)
-            if sp is None:
-                if len(self.spaces) >= MAX_ITEM_SPACES:
-                    return
-                sp = self.spaces[space] = ItemSpace(self, space)
-            sp._selection, sp._truncated, sp._view = ids, cut or cut2, view
-            sp._version += 1
-            sp._details, sp._details_error, sp._settled = None, None, True
-            if ids and sp._table is not None:
-                sp._details = sp._lookup(ids[:MAX_DETAIL_ITEMS])
-            elif ids and sp._fn is not None:
-                sp._settled = False
-                submit = (sp, sp._version)
-        self._publish_selection(sp)
-        if submit is not None:
-            sp_, version = submit
-            self._details_worker.submit(sp_.name, lambda: self._run_details(sp_, version))
-            self._timers.at(time.monotonic() + DETAILS_TIMEOUT_S, self._details_late, sp_,
-                            version)
-
-    def _run_details(self, sp: ItemSpace, version: int) -> None:
-        with self.lock:
-            if sp._version != version or sp._settled:
-                return
-            ids, fn = sp._selection[:MAX_DETAIL_ITEMS], sp._fn
-        details = error = None
-        try:
-            details = _details_from(fn(list(ids)), ids)
-        except Exception as e:
-            error = _cut(f"{type(e).__name__}: {e}", TEXT_MAX)
-        with self.lock:
-            if sp._version != version or sp._settled:
-                return
-            sp._settled = True
-            sp._details, sp._details_error = details, error
-        self._publish_selection(sp)
-
-    def _details_late(self, sp: ItemSpace, version: int) -> None:
-        with self.lock:
-            if sp._version != version or sp._settled:
-                return
-            sp._settled = True
-            sp._details_error = f"timeout: the details function took more than " \
-                                f"{DETAILS_TIMEOUT_S:g} s"
-        self._publish_selection(sp)
-
-    # -- interventions -------------------------------------------------------------
-    @property
-    def intervention_service(self):
-        return self._iv_model
-
-    def interventions_on(self, model, handle=None, adapter=None) -> Interventions:
-        if adapter is None:
-            from ._adapter import TORCH as adapter
-        from . import _ablate
-        m = Interventions(self, model, adapter)
-        pts = list(adapter.points(model))
-        m.points = pts[:MAX_POINTS_LISTED]
-        m.names = frozenset(p["point"] for p in pts)
-        m.executor._ablation_points = m.names
-        old = self._iv_model
-        if old is not None:
-            self._interventions_off(old)
-        try:
-            m._shapes_off = _ablate.record_shapes(model)
-        except Exception:
-            _log.debug("the shape hooks failed", exc_info=True)
-        with self.lock:
-            self._check_metadata_budget(points=m.points, ivs={})
-            self._iv_model = m
-            self._iv_revision += 1
-            self._iv_due = m._shapes_off is not None
-            self._update_busy()
-        if handle is not None and hasattr(handle, "_handles"):
-            handle._handles.append(m)
-        self._publish()
-        return m
-
-    def _interventions_off(self, m: Interventions) -> None:
-        with self.lock:
-            if self._iv_model is not m:
-                return
-            self._iv_model = None
-            ivs, self._ivs = list(self._ivs.values()), {}
-            shapes_off, m._shapes_off = m._shapes_off, None
-            self._iv_revision += 1
-            self._iv_due = False
-            self._update_busy()
-        for iv in ivs:
-            self._unhook(iv)
-        m.executor.close()
-        m.executor.dictionary = m.executor.tokenizer = m.executor.backend = None
-        if shapes_off is not None:
-            shapes_off()
-        self._publish()
-
-    @staticmethod
-    def _unhook(iv: _Intervention, *, retain_source: bool = False) -> None:
-        hook, iv.hook = iv.hook, None
-        iv.applied_spec = None
-        if hook is not None:
-            try:
-                if retain_source and hasattr(hook, "_remove"):
-                    hook._remove(retain_source=True)
-                else:
-                    hook()
-            except Exception:
-                _log.debug("removing the hook of %s failed", iv.point, exc_info=True)
-
-    def _install_intervention(self, service, iv, spec, *, owner=None) -> None:
-        target = iv if owner is None else owner
-        callback = lambda message, iv=target: self._intervention_failed(iv, message)
-        iv.hook = service.executor.install(spec, on_error=callback)
-        iv.applied_spec = deepcopy(spec)
-
-    def _intervene(self, req):
-        m = self._iv_model
-        if m is None:
-            return (ERR_NOT_SUPPORTED, "the script takes no interventions: it watches no model "
-                                       "with caliper.watch(model)")
-        if (not isinstance(req, dict) or set(req) - {"set", "clear", "clear_all"}
-                or sum(req.get(k) is not None for k in ("set", "clear", "clear_all")) != 1):
-            return (_w().ERR_BAD_REQUEST, "intervene holds exactly one of set, clear or clear_all")
-        if req.get("set") is not None:
-            from ._intervention_protocol import InterventionError
-            try:
-                with self._outside_lock():
-                    spec = m.executor.validate(req["set"])
-            except InterventionError as error:
-                return error.code, str(error)
-            if self._iv_model is not m:
-                return (ERR_NOT_SUPPORTED, "the intervention service is no longer attached")
-            if getattr(self.interpretation_service, "failure", None) is not None:
-                return ("interpret.stopped", "The interpretation run stopped.")
-            nxt = self._next_step()
-            point, op = spec["point"], spec["op"]
-            frm, until = spec.get("from_step"), spec.get("until_step")
-            if until is not None and until <= nxt:
-                return (ERR_BAD_RANGE, f"until_step {until} is in the past: the next step is {nxt}")
-            key = intervention_key(spec)
-            iv = self._ivs.get(key)
-            candidate = _Intervention(point, op, frm, until, spec)
-            if iv is not None and iv.state != IV_ENDED:
-                candidate.state, candidate.since_step = iv.state, iv.since_step
-                candidate.applied_spec = iv.applied_spec
-            try:
-                self._check_intervention_step({key: candidate}, nxt)
-            except ValueError as error:
-                return ERR_BAD_RANGE, str(error)
-            try:
-                prospective = self._admit_interventions({**self._ivs, key: candidate}, evict_ended=True)
-            except ValueError as error:
-                return _w().ERR_LIMIT, str(error)
-            if iv is not None:
-                iv.replace = iv.applied_spec is not None and spec != iv.applied_spec
-                iv.spec = spec
-                iv.from_step, iv.until_step = frm, until
-                iv.clear, iv.error, iv.error_code = False, None, None
-                if iv.state == IV_ENDED:
-                    iv.state, iv.since_step = IV_PENDING, None
-                prospective[key] = iv
-            self._ivs.clear()
-            self._ivs.update(prospective)
-        elif req.get("clear") is not None:
-            point = req["clear"]
-            if not isinstance(point, str) or point not in m.names:
-                return (ERR_UNKNOWN_POINT, f"the model has no point {point!r}")
-            for iv in self._ivs.values():
-                if iv.point == point:
-                    iv.clear = True
-        elif req.get("clear_all") is True:
-            for iv in self._ivs.values():
-                iv.clear = True
-        else:
-            return (_w().ERR_BAD_REQUEST, "intervene holds set, clear or clear_all")
-        self._iv_due = True
-        self._iv_revision += 1
-        self.counters["interventions_in"] += 1
-        return None
-
-    @staticmethod
-    def _check_intervention_step(records, step):
-        if 0 <= step < _INT_EXACT:
-            return
-        for iv in records.values():
-            if (iv.clear or iv.state == IV_ENDED
-                    or (iv.until_step is not None and iv.until_step <= step)
-                    or (iv.from_step is not None and iv.from_step > step)):
-                continue
-            applied_until = (iv.applied_spec or {}).get("until_step")
-            if iv.state != IV_ACTIVE or (applied_until is not None and applied_until <= step):
-                raise ValueError("intervention since_step must be in 0 .. 2**53 - 1")
-
-    def _next_step(self) -> int:
-        n = self.n
-        return int(n) + 1 if isinstance(n, numbers.Integral) and not isinstance(n, bool) else 1
-
-    def _controllers_due(self):
-        now = time.monotonic()
-        with self.lock:
-            if not any(iv.state != IV_ENDED and not iv.clear for iv in self._ivs.values()):
-                self._alone_since = None
-                return None
-            if now < self._linger_next:
-                return None
-            self._linger_next = now + LINGER_CHECK_S
-            routes = list(self.routes)
-        return sum(r._controllers() for r in routes) if routes else 0
-
-    def _linger(self, controllers: int, records=None) -> bool:
-        from ._net_programs import LINGER_S
-        now = time.monotonic()
-        if controllers > 0:
-            self._alone_since = None
-            return False
-        if self._alone_since is None:
-            self._alone_since = now
-        if now - self._alone_since < LINGER_S:
-            return False
-        if records is None:
-            self._alone_since = None
-        ended, removed = [], []
-        for iv in (self._ivs if records is None else records).values():
-            if iv.state == IV_ENDED or iv.clear:
-                continue
-            removed.append(copy(iv))
-            iv.hook, iv.applied_spec = None, None
-            iv.state = IV_ENDED
-            iv.error = self._stop_message(
-                f"ended: no connection that may control the run stayed for {LINGER_S:g} s")
-            iv.error_code = "intervene.no_controller"
-            ended.append(iv.point)
-        if ended and records is None:
-            self._iv_revision += 1
-            with self._outside_lock():
-                for iv in removed:
-                    self._unhook(iv)
-                self._report_linger(ended)
-        return bool(ended)
-
-    def _report_linger(self, ended):
-        from ._net_programs import LINGER_S
-        self.counters["interventions_lingered"] += len(ended)
-        warnings.warn(f"caliper: no connection that may control the run stayed for {LINGER_S:g} s, "
-                      f"so the interventions on {', '.join(ended)} ended", RuntimeWarning,
-                      stacklevel=2)
-
-    def _intervention_failed(self, iv, message):
-        with self.lock:
-            if self._ivs.get(intervention_key(iv.spec)) is not iv:
-                return
-            removed = copy(iv)
-            iv.hook, iv.applied_spec = None, None
-            iv.state, iv.error = IV_ENDED, self._stop_message(message)
-            iv.error_code, iv.report = "intervene.hook_failed", True
-            self._iv_revision += 1
-            self._iv_due = True
-            self._update_busy()
-            with self._outside_lock():
-                self._unhook(removed)
-
-    def _apply_interventions(self, controllers=None) -> bool:
-        changed, ready = self._intervention_boundary(controllers)
-        if not ready:
-            self._iv_boundary_failures += 1
-        return changed
-
-    def _intervention_boundary(self, controllers=None) -> tuple[bool, bool]:
-        """Apply expirations, clears, and hook installations in one clean pass."""
-        if not self._iv_due:
-            return False, True
-        m = self._iv_model
-        if m is None:
-            self._iv_due = False
-            return False, True
-        revision = self._iv_revision
-        originals = {intervention_key(iv.spec): iv for iv in m._ordered_records()}
-        records = {key: copy(iv) for key, iv in originals.items()}
-        previous = {key: copy(iv) for key, iv in originals.items()}
-        changed = controllers is not None and self._linger(controllers, records)
-        lingered = [iv.point for key, iv in records.items()
-                    if changed and iv.state == IV_ENDED and previous[key].state != IV_ENDED]
-        s = self._next_step()
-        self._check_intervention_step(records, s)
-        cache = m.executor._cache.copy()
-        committed = False
-        reports: list[str] = []
-        points_changed = False
-        try:
-            if m._shapes_off is not None and self.state != RUN_NONE:
-                shapes_off, m._shapes_off = m._shapes_off, None
-                try:
-                    with self._outside_lock():
-                        shapes_off()
-                        pts = list(m.adapter.points(m.model))[:MAX_POINTS_LISTED]
-                    if self._iv_model is m:
-                        self._check_metadata_budget(points=pts)
-                        m.points = pts
-                        points_changed = True
-                except Exception:
-                    _log.debug("the shapes of the points failed", exc_info=True)
-                changed = True
-            with self._outside_lock():
-                reinstall = False
-                for key in list(records):
-                    iv = records[key]
-                    if iv.report:
-                        changed = True
-                    if iv.replace:
-                        iv.hook, iv.applied_spec = None, None
-                        iv.replace = False
-                        changed = True
-                    if iv.clear:
-                        del records[key]
-                        changed = True
-                        continue
-                    if iv.state == IV_ENDED:
-                        continue
-                    failed = iv.hook is not None and getattr(iv.hook, "errors", 0)
-                    if failed:
-                        iv.error = self._stop_message(getattr(iv.hook, "error", None) or "the hook failed")
-                        iv.error_code = "intervene.hook_failed"
-                    ended = failed or (iv.until_step is not None and iv.until_step <= s)
-                    if ended and not failed:
-                        iv.error, iv.error_code = None, None
-                    on = not ended and (iv.from_step is None or iv.from_step <= s)
-                    if on and (iv.hook is None or reinstall):
-                        iv.hook, iv.applied_spec = None, None
-                        try:
-                            self._install_intervention(m, iv, iv.spec, owner=originals[key])
-                            reinstall = True
-                        except Exception as e:
-                            from .interp._memory import CleanStop
-                            if isinstance(e, CleanStop) or self._resource_stop(e):
-                                raise
-                            iv.error = self._stop_message(f"{type(e).__name__}: {e}")
-                            iv.error_code = "intervene.hook_failed"
-                            ended, on = True, False
-                            reports.append(f"caliper: the intervention at {iv.point!r} failed: {iv.error}")
-                    if not on:
-                        iv.hook, iv.applied_spec = None, None
-                    state = IV_ACTIVE if on else IV_ENDED if ended else IV_PENDING
-                    if state != iv.state:
-                        iv.state = state
-                        iv.since_step = s if on else iv.since_step if ended else None
-                        changed = True
-                        if failed:
-                            reports.append(f"caliper: the intervention at {iv.point!r} failed and ended: {iv.error}")
-            if self._iv_model is not m or self._iv_revision != revision:
-                return points_changed, False
-            self._check_metadata_budget(ivs=records)
-            for key, iv in originals.items():
-                if key not in records:
-                    del self._ivs[key]
-                else:
-                    prepared = records[key]
-                    for field in _Intervention.__slots__:
-                        setattr(iv, field, getattr(prepared, field))
-            m._order_live_records()
-            self._iv_revision += 1
-            self._iv_due = m._shapes_off is not None or any(
-                iv.clear or iv.state != IV_ENDED for iv in self._ivs.values())
-            if lingered:
-                self._alone_since = None
-            committed = True
-            return changed, True
-        finally:
-            with self._outside_lock():
-                if committed:
-                    effects_changed = False
-                    for key, iv in previous.items():
-                        if key not in records or iv.hook is not records[key].hook:
-                            effects_changed = True
-                            self._unhook(iv, retain_source=True)
-                    if changed or effects_changed:
-                        m.executor._discard_unused_sources()
-                else:
-                    for key, iv in records.items():
-                        if iv.hook is not previous[key].hook:
-                            self._unhook(iv, retain_source=True)
-                    m.executor._cache.clear()
-                    m.executor._cache.update(cache)
-            if committed:
-                for iv in self._ivs.values():
-                    if iv.report:
-                        iv.report = False
-                        reports.append(f"caliper: the intervention at {iv.point!r} failed and ended: {iv.error}")
-                with self._outside_lock():
-                    if lingered:
-                        self._report_linger(lingered)
-                    for message in reports:
-                        warnings.warn(message, RuntimeWarning, stacklevel=2)
-
     # -- messages ------------------------------------------------------------------
     def _run_obj(self) -> dict:
         r = {"state": self.state}
@@ -2040,32 +722,6 @@ class Controls:
         meta["params"] = [entry if p is param else p.entry() for p in self.params.values()]
         _check_controls_budget(meta, ivs=self._ivs)
 
-    def _admit_interventions(self, ivs, *, evict_ended: bool = False):
-        ivs = dict(ivs)
-        while True:
-            try:
-                if len(ivs) > MAX_INTERVENTIONS:
-                    raise ValueError(f"the script holds {MAX_INTERVENTIONS} interventions")
-                self._check_metadata_budget(ivs=ivs)
-                checkpoint_budget = getattr(self.interpretation_service, "_check_intervention_budget", None)
-                if checkpoint_budget is not None:
-                    checkpoint_budget(ivs)
-                return ivs
-            except ValueError:
-                old = next((key for key, iv in ivs.items() if iv.state == IV_ENDED), None)
-                if not evict_ended or old is None:
-                    raise
-                del ivs[old]
-
-    def _interventions_obj(self) -> dict:
-        return {"points": list(self._iv_model.points),
-                "active": [iv.entry() for iv in self._ivs.values()]}
-
-    def _selection_meta(self, sp: ItemSpace) -> dict:
-        w = _w()
-        return w.Selection(sp.name, list(sp._selection), sp._view, sp._truncated, sp._details,
-                           sp._details_error).to_meta()
-
     def snapshot_state(self) -> list:
         w = _w()
         with self.lock:
@@ -2088,18 +744,6 @@ class Controls:
             self.counters["controls_out"] += 1
             for r in routes:
                 r._broadcast(w.MsgType.CONTROLS, meta, after_data)
-
-    def _publish_selection(self, sp: ItemSpace) -> None:
-        if not self.routes:
-            return
-        w = _w()
-        with self._send:
-            with self.lock:
-                meta = self._selection_meta(sp)
-                routes = list(self.routes)
-            self.counters["selections_out"] += 1
-            for r in routes:
-                r._broadcast(w.MsgType.SELECTION, meta)
 
     def attach(self, transport) -> Route:
         r = Route(self, transport)
@@ -2126,75 +770,6 @@ class Controls:
                     "interventions": [dict(iv.entry(), error=iv.error)
                                       for iv in self._ivs.values()],
                     "routes": len(self.routes), **dict(self.counters)}
-
-
-def _normalise(ids):
-    out = sorted({int(i) for i in ids if isinstance(i, numbers.Integral)
-                  and not isinstance(i, bool) and i >= 0})
-    return out[:MAX_SELECTION], len(out) > MAX_SELECTION
-
-
-def _ids_list(v):
-    if not isinstance(v, list):
-        return None, False
-    cut = len(v) > MAX_SELECTION
-    return v[:MAX_SELECTION], cut
-
-
-def _range_ids(r):
-    if not (isinstance(r, list) and len(r) == 2 and all(
-            isinstance(x, numbers.Integral) and not isinstance(x, bool) for x in r)):
-        return None, False
-    a, b = max(int(r[0]), 0), int(r[1])
-    if b <= a:
-        return [], False
-    return range(a, min(b, a + MAX_SELECTION)), b - a > MAX_SELECTION
-
-
-def _axis_rows(axis: dict, positions) -> list:
-    start, step, count, size = (int(axis["start"]), int(axis["step"]), int(axis["count"]),
-                                int(axis["size"]))
-    return [start + (int(i) * count // size) * step for i in positions
-            if isinstance(i, numbers.Integral) and 0 <= i < size]
-
-
-def _event_items(m: dict, detail: dict, axes=None):
-    spaces = set(m.values())
-    if not detail:
-        return [(s, [], False) for s in sorted(spaces)]
-    space = detail.get("space")
-    if space is not None:
-        ids, cut = _ids_list(detail.get("items"))
-        if space not in spaces or ids is None:
-            return []
-        return [(space, ids, cut or detail.get("truncated") is True)]
-    cut = detail.get("truncated") is True
-    if "row_ids" in detail or "indices" in detail:
-        dims = [k for k in m if k is not None]
-        dim = axes[-1]["dim"] if axes else (dims[0] if len(dims) == 1 else "point")
-        space = m.get(dim)
-        if space is None:
-            return []
-        ids, c = _ids_list(detail.get("row_ids"))
-        if ids is None:
-            pos, c = _ids_list(detail.get("indices"))
-            if pos is None or not axes:
-                return []
-            ids = _axis_rows(axes[-1], pos)
-        return [(space, ids, cut or c)]
-    if "steps" in detail:
-        space = m.get(None)
-        ids, c = _range_ids(detail.get("steps"))
-        return [] if space is None or ids is None else [(space, ids, cut or c)]
-    if "rows" in detail or "cols" in detail:
-        row_dim = axes[-2]["dim"] if axes and len(axes) >= 2 else "row"
-        col_dim = axes[-1]["dim"] if axes else "col"
-        for dim, key in ((row_dim, "rows"), (col_dim, "cols")):
-            if dim in m:
-                ids, c = _range_ids(detail.get(key))
-                if ids is not None:
-                    return [(m[dim], ids, cut or c)]
-    return []
 
 
 CONTROLS = Controls()

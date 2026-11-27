@@ -22,7 +22,6 @@
 //    newBufferWithBytesNoCopy: no copy on either route.
 #include "gfx/metal_backend.h"
 #include "gfx/backend_impl.h"
-#include "gfx/shaders/generated/programs_metal.h"
 
 #import <Metal/Metal.h>
 
@@ -237,7 +236,6 @@ public:
         ring_.init(device);
         unified_ = device.hasUnifiedMemory;
         page_ = (uint64_t)getpagesize();
-        set_programs(shaders::kMetalPrograms, shaders::kProgramCount);
     }
 
     bool reap_ = false;   // the destructor gives the objects to the reaper instead of a wait
@@ -271,7 +269,6 @@ public:
         kept->groups = std::move(groups_);
         kept->buffer_writes = std::move(buffer_writes_);
         kept->texture_writes = std::move(texture_writes_);
-        kept->events = std::move(producer_events_);
         @autoreleasepool {
             id<MTLCommandBuffer> marker = [queue_ commandBuffer];
             if (marker == nil) {   // no marker: the objects stay until the process exits
@@ -934,35 +931,8 @@ protected:
         return (uint64_t)(__bridge void*)textures_[slot].texture;
     }
 
-    // A producer's queue: a small command buffer on it signals the next value of that queue's
-    // event, after the work the producer committed before, and the update's frame waits for it on
-    // the GPU. No CPU waits, unless no event can be made: then the producer's queue is drained once,
-    // slower and still ordered.
-    bool on_sync_after_stream(void* stream, ExternalSync* out) override {
-        id<MTLCommandQueue> producer = (__bridge id<MTLCommandQueue>)stream;
-        if (producer == nil) return false;
-        @autoreleasepool {
-            QueueEvent& e = producer_events_[stream];
-            if (e.event == nil) e.event = [device_ newSharedEvent];
-            id<MTLCommandBuffer> sig = [producer commandBuffer];
-            if (sig == nil) return false;
-            if (e.event == nil) {
-                [sig commit];
-                [sig waitUntilCompleted];
-                *out = ExternalSync{};
-                return true;
-            }
-            const uint64_t v = ++e.value;
-            [sig encodeSignalEvent:e.event value:v];
-            [sig commit];
-            *out = ExternalSync{ExternalSync::MetalEvent, (__bridge void*)e.event, v};
-            return true;
-        }
-    }
-
 private:
     struct Inflight { Serial serial; id<MTLCommandBuffer> cb; };
-    struct QueueEvent { id<MTLSharedEvent> event = nil; uint64_t value = 0; };
     // The Metal objects of a backend that went while its last submit ran (~MetalBackend).
     struct Reaped {
         UniformRing ring;
@@ -974,7 +944,6 @@ private:
         std::vector<MPipe> pipes;
         std::vector<MGroup> groups;
         std::vector<id<MTLCommandBuffer>> buffer_writes, texture_writes;
-        std::unordered_map<void*, QueueEvent> events;
     };
     id<MTLDevice> device_;
     id<MTLCommandQueue> queue_;
@@ -993,8 +962,6 @@ private:
     std::vector<id<MTLBuffer>> readbacks_;
     // The command buffer of each resource's last queued write, until it completed.
     std::vector<id<MTLCommandBuffer>> buffer_writes_, texture_writes_;
-    // One event per producer queue that an update was ordered after, with its last signalled value.
-    std::unordered_map<void*, QueueEvent> producer_events_;
 };
 
 }  // namespace

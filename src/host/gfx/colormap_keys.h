@@ -28,9 +28,9 @@
 // compares colormap_index with map_f32_to_rgba8 for all 2^32 inputs on a set of ranges.
 #pragma once
 
+#include "gfx/colormap_ref.h"      // map_f32_to_rgba8 (the reference)
 #include "gfx/colormap_tables.h"   // builtin_lut: the sixteen tables
 #include "gfx/shaders/generated/uniforms.h"
-#include "tensor_bridge.h"   // map_f32_to_rgba8 (the reference)
 
 #include <cstddef>
 #include <cstdint>

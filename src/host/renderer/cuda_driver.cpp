@@ -1,6 +1,6 @@
 // Runtime loader for the CUDA driver API (see cuda_driver.h for why the host
 // loads nvcuda.dll instead of linking the CUDA toolkit).
-#include "cuda_driver.h"
+#include "renderer/cuda_driver.h"
 
 #ifdef _WIN32
 #include <windows.h>

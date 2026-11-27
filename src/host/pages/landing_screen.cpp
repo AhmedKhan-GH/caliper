@@ -20,7 +20,7 @@
 //   error prevention and honesty           disabled actions say why
 // ============================================================================
 
-#include "ui/landing_screen.h"
+#include "pages/landing_screen.h"
 
 #include "ui/sternbild_fonts.h"
 #include "ui/sternbild_theme.h"

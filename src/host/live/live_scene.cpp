@@ -852,13 +852,17 @@ void SceneView::poll_programs() {
         // panel was not drawn for a while), and the time from the submit until the work was seen
         // done, an upper bound. A frame not done after 1 s is late, and the runtime judges it by
         // its GPU time once it is done.
+        bool slot_completed = false;
         while (!d->pending.empty()) {
             double ms = -1;
             if (!gfx_.submit_gpu_ms(d->pending.front().first, &ms)) break;
             d->runtime->frame_done(ms, ms_since(d->pending.front().second));
             d->pending.pop_front();
+            slot_completed = true;
             completed = true;
         }
+        if (slot_completed && !d->pending.empty())
+            d->pending.front().second = std::max(d->pending.front().second, std::chrono::steady_clock::now());
         if (!d->pending.empty()) d->runtime->frame_pending(ms_since(d->pending.front().second));
         const int prev_state = d->reported;
         report_state(slot_feed(*d), &d->reported, &d->reported_step, &d->reported_ms, &d->reported_warning,

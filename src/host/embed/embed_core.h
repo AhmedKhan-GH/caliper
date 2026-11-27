@@ -187,6 +187,16 @@ void caliper_live_set_event_tap(CaliperCore* core, std::function<void(const cali
 void caliper_live_views_frame(CaliperCore* core);
 void caliper_live_views_shutdown(CaliperCore* core);
 
+// View-window grid and diagnostics hooks (defined in src/host/live/live_views.cpp),
+// declared here so embed_core.cpp and embed_views.cpp do not include live headers.
+namespace caliper_live_views {
+bool views_debug(const CaliperCore* core);
+void layout_views(CaliperCore* core);
+bool window_before(CaliperCore* core, const std::string& name);
+void window_after(CaliperCore* core, const std::string& name);
+int  window_flags();
+}  // namespace caliper_live_views
+
 // ---- Hosted core (host-internal; the Caliper app's live page) ---------------
 // For a host that already owns the window, the renderer (bound to the tensor
 // bridge), the ImGui contexts and the services: the core borrows `renderer`

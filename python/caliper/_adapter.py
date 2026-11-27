@@ -22,10 +22,12 @@ it patches torch. The shipped torch reductions of the data views and the forward
 """
 from __future__ import annotations
 
+import atexit
 import functools
 import io
 import threading
 import time
+import weakref
 from collections import deque
 
 __all__ = ["TorchAdapter", "TORCH", "StepMarks"]
@@ -347,6 +349,7 @@ class StepMarks:
         self._next = 0
         self._pending: deque = deque()      # (step, event, time of the record), oldest first
         self._seen = float("-inf")          # the last poll that found the oldest mark pending
+        _MARKS.add(self)
 
     def record(self, step: int, now: float) -> None:
         """Put the mark of ``step`` after the queued work; ``now`` is the caller's clock."""
@@ -390,5 +393,15 @@ class StepMarks:
         self._pending.clear()
 
 
+_MARKS: weakref.WeakSet[StepMarks] = weakref.WeakSet()
 TORCH = TorchAdapter()
 """The torch adapter of this process."""
+
+
+@atexit.register
+def _clear_mps_events() -> None:
+    """Release MPS events before module teardown clears torch._C."""
+    TORCH._event = None
+    for marks in list(_MARKS):
+        marks._pending.clear()
+        marks._ring.clear()

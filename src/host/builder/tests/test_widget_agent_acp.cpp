@@ -54,8 +54,8 @@ json tool(const std::string& id, const std::string& name, const json& input) {
     return {{"type", "tool_use"}, {"id", id}, {"name", name}, {"input", input}};
 }
 json text_block(const std::string& t) { return {{"type", "text"}, {"text", t}}; }
-json step(json content, const std::string& stop) {
-    return {{"message", {{"content", std::move(content)}, {"stop_reason", stop},
+json step(json::array_t content, const std::string& stop) {
+    return {{"message", {{"content", json(std::move(content))}, {"stop_reason", stop},
                          {"usage", {{"input_tokens", 30}, {"output_tokens", 12}}}}}};
 }
 

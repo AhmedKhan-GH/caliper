@@ -65,8 +65,11 @@ jobs:
       - uses: actions/cache@v5
         with:
           path: ~/Library/Caches/pip
-          key: pip-acceptance-macos-arm64-interp-torch${{ env.ACCEPTANCE_TORCH_VERSION }}
-      - name: Make the instrument test Python
+          key: pip-acceptance-macos-arm64-interp-agent-torch${{ env.ACCEPTANCE_TORCH_VERSION }}-${{ hashFiles('src/builder/agent/pyproject.toml') }}
+          restore-keys: |
+            pip-acceptance-macos-arm64-interp-agent-torch${{ env.ACCEPTANCE_TORCH_VERSION }}-
+            pip-acceptance-macos-arm64-interp-
+      - name: Make the test Python
         run: |
           python3 -m venv "$RUNNER_TEMP/acceptance-py"
           "$RUNNER_TEMP/acceptance-py/bin/pip" install \
@@ -76,9 +79,10 @@ jobs:
             sae-lens==6.56.3 \
             nnsight==0.8.4 \
             "circuit-tracer @ git+https://github.com/decoderesearch/circuit-tracer.git@82996f144b3371ae858ea5713590d004c218f0c2" \
-            numpy Pillow websockets nanobind pytest safetensors psutil datasets jsonschema
+            -e "./src/builder/agent[test]" \
+            numpy pyarrow pyyaml anywidget Pillow websockets nanobind pytest safetensors psutil datasets jsonschema
           "$RUNNER_TEMP/acceptance-py/bin/python" scripts/build_netio.py
-          PYTHONPATH=python "$RUNNER_TEMP/acceptance-py/bin/python" -c "import torch, circuit_tracer, transformer_lens, sae_lens, caliper, caliper._netio; print('Instrument test Python ready, torch', torch.__version__)"
+          PYTHONPATH=python "$RUNNER_TEMP/acceptance-py/bin/python" -c "import torch, circuit_tracer, transformer_lens, sae_lens, pydantic_ai, anthropic, openai, acp.schema, pyarrow.parquet, anywidget, yaml, caliper, caliper._netio; print('Test Python ready, torch', torch.__version__)"
       # The runtime WGSL compiler (tools/shaders/caliper-wgsl) is built from source in this job
       # (CALIPER_WGSL_FROM_SOURCE=ON below), so the programs of the GPU programs tests compile and run.
       # The hosted macOS image carries a Rust toolchain; nothing is installed or pinned here. Cargo's
@@ -114,16 +118,17 @@ jobs:
           -DCALIPER_SDK_PROBE_DIR="$RUNNER_TEMP/sdk-probe"
           -DCALIPER_EMBED_PROBE_DIR="$RUNNER_TEMP/embed-probe"
           -DCALIPER_ACCEPTANCE_PYTHON="$RUNNER_TEMP/acceptance-py/bin/python"
+          -DCALIPER_BUILDER_TEST_PYTHON="$RUNNER_TEMP/acceptance-py/bin/python"
           -DCALIPER_WGSL_FROM_SOURCE=ON
       - run: cmake --build cmake-build-release --parallel
-      # The GPU programs acceptance test imports caliper._producer, the producer runtime of the programs.
-      # The Python modules build in a second, small folder, because CALIPER_BUILD_PYTHON=ON names the
-      # viewer program caliper-viewer, as the wheel ships it, and the steps below check the programs of
-      # cmake-build-release by their own names. That folder takes the compiler library of the build
-      # above, keeps the builder's sandbox (CALIPER_WITH_BUILDER is ON by default) and builds only
-      # _producer. The test finds the module, like caliper._netio, in python/caliper, so it is copied
-      # there. A missing module fails the job here, not as a skip later.
-      - name: Build and place the producer module
+      # Build the Python extension modules (_producer, _native and _live) in a second folder because
+      # CALIPER_BUILD_PYTHON=ON renames caliper_viewer to caliper-viewer for the wheel, whereas the
+      # steps below check cmake-build-release binaries by their own names. That folder reuses the
+      # WGSL compiler library from cmake-build-release, keeps CALIPER_WITH_BUILDER=ON for the
+      # producer sandbox, and copies all three extensions into python/caliper beside caliper._netio.
+      # _native and _live allow test_import.py, test_live_session.py (CPU tests) and test_routing.py
+      # to run in CI alongside the GPU programs acceptance tests.
+      - name: Build and place the Python modules
         run: |
           set -e
           cmake -S . -B cmake-build-python -G Ninja -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTS=OFF \
@@ -132,14 +137,16 @@ jobs:
             -DCMAKE_OBJC_COMPILER_LAUNCHER=sccache -DCMAKE_OBJCXX_COMPILER_LAUNCHER=sccache \
             -DCALIPER_WGSL_LIBRARY="$PWD/cmake-build-release/caliper-wgsl/source/lib/libcaliper_wgsl.a" \
             -DCALIPER_BUILD_PYTHON=ON -DPython_EXECUTABLE="$RUNNER_TEMP/acceptance-py/bin/python"
-          cmake --build cmake-build-python --target _producer --parallel
-          built=$(find cmake-build-python/python -maxdepth 2 -name '_producer*.so' | head -n 1)
-          if [ -z "$built" ]; then
-            echo "::error::The build made no caliper._producer module"
-            exit 1
-          fi
-          cp "$built" python/caliper/
-          PYTHONPATH=python "$RUNNER_TEMP/acceptance-py/bin/python" -c "import caliper._producer; print('Producer module ready')"
+          cmake --build cmake-build-python --target _producer _native _live --parallel
+          for mod in _producer _native _live; do
+            built=$(find cmake-build-python/python -maxdepth 2 -name "${mod}*.so" | head -n 1)
+            if [ -z "$built" ]; then
+              echo "::error::The build made no caliper.${mod} module"
+              exit 1
+            fi
+            cp "$built" python/caliper/
+          done
+          PYTHONPATH=python "$RUNNER_TEMP/acceptance-py/bin/python" -c "import caliper._producer, caliper._native, caliper._live; print('Python modules ready')"
       # Every binary must say macOS 14.0 as its minimum (cmake/CaliperMacOSTarget.cmake).
       - run: >-
           python3 scripts/check_macos_min.py 14.0
@@ -149,8 +156,20 @@ jobs:
       # report that as Skipped, not Passed. A hosted runner's Metal
       # availability is not guaranteed, so skips are accepted here; a lane
       # that must have a GPU sets CALIPER_REQUIRE_GPU=1 to turn them into
-      # failures.
-      - run: ctest --test-dir cmake-build-release --output-on-failure --timeout 600
+      # failures. builder_agent_py runs in its own step right after with its
+      # 900 s timeout so its result is visible and a skip fails the job.
+      - run: ctest --test-dir cmake-build-release --output-on-failure --timeout 600 -E '^builder_agent_py$'
+      # The caliper-agent pytest suite (src/builder/agent/tests/), including conformance and ACP
+      # schema validation. A skip here means CALIPER_BUILDER_TEST_PYTHON was not wired correctly.
+      - name: Builder agent Python tests
+        run: |
+          set -o pipefail
+          log="$RUNNER_TEMP/builder-agent-py.log"
+          ctest --test-dir cmake-build-release -R '^builder_agent_py$' --output-on-failure -V --timeout 900 | tee "$log"
+          if grep -q "builder_agent_py skipped" "$log"; then
+            echo "::error::Builder agent Python tests: SKIPPED (CI setup error)"
+            exit 1
+          fi
       # The instrument acceptance test on its own, so that its result is visible. A skip because the runner has
       # no Metal device is accepted. A skip because torch or the native network sender is missing is a
       # setup error, and so is any other outcome that is neither a pass nor a Metal skip.
@@ -273,40 +292,38 @@ jobs:
             echo "::error::Piece path acceptance: neither passed nor skipped for lack of Metal"
             exit 1
           fi
-      # The Python tests of managed runs, the adapter, watch and controls run with the acceptance
-      # Python, which has torch, websockets and the native sender. The four tests of test_watch.py that
-      # need the native core module (caliper._native, which the CMake build does not install into
-      # python/caliper) are deselected by name. So is the flood test of the controls, which holds 20,000
-      # requests to a wall-clock limit that a hosted runner does not meet. The tests of programs, of the
-      # network programs, of the ablation and of wire 3.2 run here as well. One test of test_programs.py
-      # is deselected: it publishes a program output through the real scene calls, which need the
-      # caliper._live module, and the job builds only caliper._producer of the Python modules.
-      # The tests of step stamps and of tensor programs run here too: the stamps test needs only numpy, and the tensor
-      # test skips itself where torch has no MPS device or caliper._producer is older than ABI version 2.
-      # No test of those four files holds a wall-clock limit: their step and cost times run on a fake clock.
-      # So do the stamps of both senders end to end, which need torch, websockets and the native sender, and
-      # the shared cadence of the views, whose times run on a fake clock or scale with the measured time.
-      # The tests of programmable graphics run here as well: the wire's resource message and the instance
-      # form of PROGRAM (test_wire.py, numpy only), and the pieces' derive halves in the script
-      # (test_programs_pieces.py), which skip themselves where torch has no MPS device or caliper._producer
-      # is older than ABI version 3, as the tensor test does. So do the forks of a managed run
-      # (test_managed_fork.py): the kept checkpoints on a fake clock, the interventions, and a fork that resumes
-      # from a kept checkpoint in a subprocess, which waits only on the exit of that process.
-      - name: Python tests of the acceptance Python
+      # Set up Node before the Python tests so npm is on PATH for python/tests/test_assets.py
+      # as well as the Playwright draw-parity step below.
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '26'
+      # Run all python/tests/ suites (rather than an allowlist, so newly added suites run automatically).
+      # Every marker excluded below names the suites/cases in python/tests/conftest.py that cannot run
+      # on a GPU-less hosted macos-15 runner:
+      #   - gpu: offscreen Metal canvas suites (test_image_rgba.py, test_kinds_offscreen.py,
+      #     test_ramp_reference.py, test_show_cpu.py, test_show_mps.py, test_window_transport.py),
+      #     hidden-app Metal scene suites (test_scene_app.py, test_scene_events.py,
+      #     test_scene_pieces_app.py), and the 3 offscreen-canvas cases in test_watch.py. Caliper has
+      #     no fallback renderer, so offscreen Metal and hidden-app drawing fail without a Metal device.
+      #   - window: test_window_real.py (opens a real GLFW/AppKit window; needs window server + Metal).
+      #   - notebook: test_live_training_notebook.py and test_widget.py::test_widget_draws_in_jupyterlab
+      #     (require JupyterLab, ipykernel, Python Playwright Chromium, and WebGPU Metal mode; browser
+      #     views and WebAssembly rendering are covered on SwiftShader and Canvas 2D in web.yml).
+      #   - timing: test_controls.py::test_a_flood_of_values_from_several_threads (holds 20,000 threaded
+      #     requests to a 20 s wall-clock limit that a 3-core hosted runner does not reliably meet).
+      # Within the remaining 35 suites, individual MPS device cases, the 2 Metal viewer cases of
+      # test_live_session.py, test_assets.py::test_the_package_ships_the_wasm_views (enforced in web.yml),
+      # and the CALIPER_WATCH_TIMING benchmark in test_watch.py skip with explicit reasons on a GPU-less runner.
+      - name: Python tests of Caliper LIB
+        env:
+          PYTHONPATH: python
+          CALIPER_AGENT_OFFLINE: '1'
+          CALIPER_TEST_NO_WINDOW: '1'
+          CALIPER_TEST_CALIPER_EXE: ${{ github.workspace }}/cmake-build-release/caliper
+          CALIPER_VIEWER: ${{ github.workspace }}/cmake-build-release/caliper_viewer
         run: >-
-          PYTHONPATH=python "$RUNNER_TEMP/acceptance-py/bin/python" -m pytest -q -p no:cacheprovider
-          python/tests/test_managed_run.py python/tests/test_adapter.py
-          python/tests/test_watch.py python/tests/test_controls.py
-          python/tests/test_programs.py python/tests/test_net_programs.py
-          python/tests/test_ablate.py python/tests/test_wire_32.py python/tests/test_step_stamps.py
-          python/tests/test_program_tensor.py python/tests/test_step_stamps_senders.py
-          python/tests/test_cadence_views.py
-          python/tests/test_wire.py python/tests/test_programs_pieces.py python/tests/test_managed_fork.py
-          --deselect "python/tests/test_watch.py::test_watch_registers_produces_and_removes"
-          --deselect "python/tests/test_watch.py::test_watch_include_and_every"
-          --deselect "python/tests/test_watch.py::test_watch_is_free_when_nothing_is_attached"
-          --deselect "python/tests/test_controls.py::test_a_flood_of_values_from_several_threads"
-          --deselect "python/tests/test_programs.py::test_outputs_pass_the_argument_checks_of_the_real_scene_calls"
+          "$RUNNER_TEMP/acceptance-py/bin/python" -m pytest -q -rs -p no:cacheprovider
+          python/tests -m "not gpu and not window and not notebook and not timing" --strict-markers
       - name: Native Interpretation Capability
         env:
           CALIPER_AGENT_OFFLINE: '1'
@@ -353,9 +370,6 @@ jobs:
         with:
           path: ~/emsdk
           key: emsdk-${{ runner.os }}-${{ runner.arch }}-${{ steps.emscripten-pin.outputs.emscripten }}
-      - uses: actions/setup-node@v6
-        with:
-          node-version: '26'
       - name: Pixel comparison of the app and the browser module
         env:
           EMSCRIPTEN_VERSION: ${{ steps.emscripten-pin.outputs.emscripten }}

@@ -68,8 +68,6 @@
 // default device does not have (kCapTimestamps unset).
 #include "webgpu_backend.h"
 
-#include "gfx/shaders/generated/programs_webgpu.h"
-
 #include <algorithm>
 #include <cstdio>
 #include <cstring>
@@ -253,7 +251,6 @@ WebGpuBackend::WebGpuBackend(WGPUDevice device, WGPUQueue queue, const Caps& cap
     : Backend(caps), device_(device), queue_(queue), compat_(compat) {
     wgpuDeviceAddRef(device_);
     wgpuQueueAddRef(queue_);
-    set_programs(shaders::kWebgpuPrograms, shaders::kProgramCount);
 }
 
 WebGpuBackend::~WebGpuBackend() {

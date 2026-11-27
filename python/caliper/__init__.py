@@ -1390,7 +1390,7 @@ def colormap_lut(name="viridis"):
     The call needs no core.
 
     Args:
-        name (str | int): `"viridis"`, `"magma"` or `"rdbu"`, or 0, 1 or 2.
+        name (str | int): A colormap name (such as `"viridis"`, `"magma"` or `"rdbu"`) or index (0 to 15).
 
     Returns:
         numpy.ndarray: A `(256,)` uint32 array. Each entry is `R | G<<8 | B<<16 | A<<24`.
@@ -1543,7 +1543,8 @@ __all__ += ["step", "pause", "param", "action", "items", "controls", "Param", "A
             "ItemSpace"]
 from . import _controls                                        # noqa: E402
 from . import _programs                                        # noqa: E402
-from ._controls import Action, ItemSpace, Param                # noqa: E402
+from ._controls_selection import ItemSpace                    # noqa: E402
+from ._controls_spec import Action, Param                       # noqa: E402
 _CTL = _controls.CONTROLS
 
 

@@ -13,6 +13,7 @@ import difflib
 import json
 import os
 import queue
+import socketserver
 import struct
 import subprocess
 import sys
@@ -24,6 +25,13 @@ from pathlib import Path
 from typing import Any, Callable
 
 import pytest
+
+
+class _LoopbackHTTPServer(ThreadingHTTPServer):
+    def server_bind(self) -> None:
+        socketserver.TCPServer.server_bind(self)
+        self.server_name = "127.0.0.1"
+        self.server_port = self.server_address[1]
 
 AGENT_DIR = Path(__file__).resolve().parent.parent
 # No test reaches a model server off loopback (caliper_agent/offline.py): the
@@ -124,7 +132,7 @@ class FakeCaliper:
                     return
                 self._json(404, {"error": "No such endpoint."})
 
-        self.server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        self.server = _LoopbackHTTPServer(("127.0.0.1", 0), Handler)
         self.port = self.server.server_address[1]
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
         self.thread.start()

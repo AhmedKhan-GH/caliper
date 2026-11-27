@@ -4,6 +4,8 @@ import path from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 
+import { COLORMAPS } from '../src/protocol/messages.js';
+import { colormapLut } from '../src/render/colormap.js';
 import { FLAT_POINT, SPEC_COLORMAP_NAMES, isSpecColormapName, specColormapLut } from '../src/render/colormaps.gen.js';
 import { CATEGORICAL, HOUSE_PIGMENTS, TOKENS } from '../src/render/palette.gen.js';
 import { lut, preparePanel } from '../src/spec/prepare.js';
@@ -18,7 +20,6 @@ const shared = JSON.parse(fs.readFileSync(path.join(repoRoot, 'scripts', 'shared
     tokens: { name: string; rgb: [number, number, number] }[];
     house_pigments: string[];
     untokenized: { name: string; rgba: [number, number, number, number] }[];
-    views_theme_v1: Record<string, string>;
   };
   categorical_palette: [number, number, number][];
 };
@@ -28,18 +29,22 @@ function encodeF32(values: number[]): string {
   return buf.toString('base64');
 }
 
-test('specColormapLut and prepare.lut expose all 16 colormaps matching shared_colors.json', () => {
+test('live wire COLORMAPS, colormapLut, specColormapLut, and prepare.lut expose all 16 colormaps matching shared_colors.json', () => {
   const wantNames = shared.colormaps.entries.map((e) => e.name);
   assert.deepEqual([...SPEC_COLORMAP_NAMES], wantNames);
+  assert.deepEqual([...COLORMAPS], wantNames);
   assert.equal(isSpecColormapName('cividis'), true);
   assert.equal(isSpecColormapName('berlin'), true);
   assert.equal(isSpecColormapName('jet'), false);
 
   for (const entry of shared.colormaps.entries) {
-    const a = specColormapLut(entry.name as (typeof SPEC_COLORMAP_NAMES)[number]);
+    const name = entry.name as (typeof SPEC_COLORMAP_NAMES)[number];
+    const a = specColormapLut(name);
     const b = lut(entry.name);
+    const c = colormapLut(name);
     assert.equal(a.length, 1024, entry.name);
     assert.deepEqual(b, a, entry.name);
+    assert.deepEqual(c, a, `live ${entry.name}`);
     if (entry.kind === 'lut256' && entry.rgba8) {
       for (let i = 0; i < 256; i++) {
         const packed: number = Number.parseInt(entry.rgba8[i], 16) >>> 0;
@@ -102,5 +107,18 @@ test('palette.gen.ts, FLAT_POINT, and views/theme.ts match shared_colors.json', 
   const flat = shared.theme.untokenized.find((u) => u.name === 'flat_point')!;
   assert.deepEqual([...FLAT_POINT], flat.rgba.slice(0, 3));
   assert.deepEqual(CATEGORICAL.map((c) => [...c]), shared.categorical_palette);
-  assert.deepEqual({ ...C }, shared.theme.views_theme_v1);
+  const hex = (rgb: readonly [number, number, number]) =>
+    `#${rgb.map((v) => v.toString(16).padStart(2, '0')).join('')}`;
+  const tokByName = Object.fromEntries(shared.theme.tokens.map((t) => [t.name, t.rgb]));
+  assert.deepEqual({ ...C }, {
+    deep: hex(tokByName.deep),
+    ground: hex(tokByName.ground),
+    plate: hex(tokByName.plate),
+    ruleFaint: hex(tokByName.rule_faint),
+    rule: hex(tokByName.rule),
+    parchment: hex(tokByName.parchment),
+    secondary: hex(tokByName.secondary),
+    faint: hex(tokByName.faint),
+    bronze: hex(tokByName.bronze),
+  });
 });

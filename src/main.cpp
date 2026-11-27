@@ -6,16 +6,16 @@
 #include <implot.h>
 #include <implot3d.h>
 
-#include "ui/applet_page.h"
+#include "pages/applet_page.h"
 #include "ui/dock_layout.h"
-#include "ui/landing_screen.h"
+#include "pages/landing_screen.h"
 #include "ui/sternbild_fonts.h"
 #include "ui/sternbild_theme.h"
 #include "ui/ui_recovery.h"
 #include "host/applet_loader.h"
 #include "host/host_cli.h"
 #include "host/background_process.h"
-#include "host/shot.h"
+#include "host/app/shot.h"
 #include "host/host_services.h"
 #include "host/core_lifecycle.h"
 #include "host/job_system.h"

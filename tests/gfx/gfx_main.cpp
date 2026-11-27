@@ -44,7 +44,7 @@
 #endif
 
 #ifdef CALIPER_HAVE_VULKAN
-#include "cuda_driver.h"
+#include "renderer/cuda_driver.h"
 #include <utility>
 #ifdef _WIN32
 #include <windows.h>   // CloseHandle for the VMM shareable-handle test blocks

@@ -51,7 +51,7 @@
 #include <GLFW/glfw3.h>           // sees VK_VERSION_1_0 -> vulkan support on
 
 #include "host_renderer.h"
-#include "../cuda_driver.h"
+#include "cuda_driver.h"
 #include <caliper/services/tensor_bridge_v1_2.h>   // CALIPER_ALLOC_HANDLE_OPAQUE_WIN32
 
 #include <imgui.h>

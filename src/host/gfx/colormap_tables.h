@@ -12,7 +12,7 @@
 // half to even. An entry packs r | g << 8 | b << 16 | 0xff << 24.
 #pragma once
 
-#include "tensor_bridge.h"   // caliper_host::colormap_lut and CALIPER_CMAP_*
+#include "gfx/colormap_ref.h"   // caliper_host::colormap_lut and CALIPER_CMAP_*
 
 #include <cstdint>
 

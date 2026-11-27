@@ -8,6 +8,7 @@ import io
 import json
 import os
 import re
+import socketserver
 import stat
 import subprocess
 import sys
@@ -207,7 +208,13 @@ class FakeGitHub:
                     return self.send(200, json.dumps(fake.release).encode())
                 return self.send(404, b'{"message": "Not Found"}')
 
-        self.server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        class LoopbackServer(ThreadingHTTPServer):
+            def server_bind(self):
+                socketserver.TCPServer.server_bind(self)
+                self.server_name = "127.0.0.1"
+                self.server_port = self.server_address[1]
+
+        self.server = LoopbackServer(("127.0.0.1", 0), Handler)
         self.base = f"http://127.0.0.1:{self.server.server_address[1]}"
         threading.Thread(target=self.server.serve_forever, daemon=True).start()
 
