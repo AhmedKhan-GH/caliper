@@ -25,6 +25,7 @@
 // in. docs/web/browser-elements.md has the whole interface.
 
 import { acquire, release } from './client/socket.js';
+import { ReplaySource } from './client/replay.js';
 import type { StreamClient, StreamListener } from './client/stream.js';
 import {
   CAP, KIND_IDS, kindName, LIMITS, type ControlReplyMsg, type DataView, type Kind, type SelectionMsg, type SeriesMsg,
@@ -38,7 +39,7 @@ import { toggle } from './views/base.js';
 import { Picker } from './views/picker.js';
 import { PointsView } from './views/points.js';
 import { SeriesView } from './views/series.js';
-import { assetBase, hasAdapter, mountWasm, wasmKinds, type WasmHandle } from './wasm.js';
+import { hasAdapter, mountWasm, resolveWasmBase, wasmKinds, type WasmHandle } from './wasm.js';
 import { factsInfo, type ViewFacts } from './views/info.js';
 import { C, FONT_MONO, FONT_TEXT, fmt } from './views/theme.js';
 
@@ -90,6 +91,14 @@ select:focus-visible, input:focus-visible, button:focus-visible { outline: 1px s
 .details th { color: ${C.faint}; font: 11px ${FONT_TEXT}; text-align: left; font-weight: normal; padding: 0 14px 1px 0; }
 .details td { color: ${C.secondary}; padding: 0 14px 0 0; white-space: nowrap; }
 .details .more { color: ${C.faint}; font: 11px ${FONT_TEXT}; padding-top: 2px; }
+.scrub { flex: none; display: flex; align-items: center; gap: 8px; padding: 5px 10px; border-top: 1px solid ${C.ruleFaint};
+  background: ${C.deep}; font: 11.5px ${FONT_MONO}; color: ${C.secondary}; }
+.scrub[hidden] { display: none; }
+.scrub-btn { font: 11px ${FONT_TEXT}; color: ${C.parchment}; background: ${C.plate}; border: 1px solid ${C.rule};
+  border-radius: 3px; padding: 1px 8px; height: 22px; cursor: pointer; flex: none; }
+.scrub-btn:hover { border-color: ${C.bronze}; }
+.scrub-range { flex: 1; min-width: 80px; width: auto; height: 18px; accent-color: ${C.bronze}; border: none; background: transparent; padding: 0; }
+.scrub-step { flex: none; white-space: nowrap; color: ${C.faint}; }
 `;
 
 /** What a scene's plate says where the WebAssembly views cannot draw it. */
@@ -98,13 +107,15 @@ const HOVER_MS = 1000 / 30;
 
 export class CaliperView extends HTMLElement {
   static get observedAttributes(): string[] {
-    return ['src', 'view', 'kind', 'height', 'renderer', 'run-controls', 'link', 'details'];
+    return ['src', 'view', 'kind', 'height', 'renderer', 'run-controls', 'link', 'details', 'wasm-base', 'no-scrubber'];
   }
 
   private sourceProp: StreamClient | null = null;
   private client: StreamClient | null = null;
   private acquired: string | null = null;
   private unlisten: (() => void) | null = null;
+  private unlistenTimeline: (() => void) | null = null;
+  private wasmPeerDetach: (() => void) | null = null;
   private names: string[] = [];
   private subs: number[] = [];
   private live: LiveView | null = null;
@@ -135,6 +146,7 @@ export class CaliperView extends HTMLElement {
   private readonly parts: {
     name: HTMLElement; info: HTMLElement; tools: HTMLElement; dot: HTMLElement; body: HTMLElement;
     overlay: HTMLCanvasElement; tip: HTMLElement; msg: HTMLElement; plate: HTMLElement; wasm: HTMLElement; details: HTMLElement;
+    scrub: HTMLElement; scrubBtn: HTMLButtonElement; scrubRange: HTMLInputElement; scrubStep: HTMLElement;
   };
   /** 3.1: the linked selection this view draws, if one of its axes carries the selection's space. */
   private linked: { space: string; axis: LinkAxis; items: readonly number[] } | null = null;
@@ -151,6 +163,7 @@ export class CaliperView extends HTMLElement {
       name: el('span', 'name'), info: el('span', 'info'), tools: el('span', 'tools'), dot: el('span', 'dot'),
       body: el('div', 'body'), overlay: el('canvas', 'overlay'), tip: el('div', 'tip'), msg: el('div', 'msg'),
       plate: el('div', 'plate'), wasm: el('div', 'wasm'), details: el('div', 'details'),
+      scrub: el('div', 'scrub'), scrubBtn: el('button', 'scrub-btn'), scrubRange: el('input', 'scrub-range'), scrubStep: el('span', 'scrub-step'),
     };
   }
 
@@ -424,7 +437,8 @@ export class CaliperView extends HTMLElement {
       this.parts.details.hidden = true;
       this.parts.details.replaceChildren();
     }
-    else if (name === 'src' || name === 'view' || name === 'renderer') this.reattach();
+    else if (name === 'no-scrubber') this.syncScrubber();
+    else if (name === 'src' || name === 'view' || name === 'renderer' || name === 'wasm-base') this.reattach();
     else if (name === 'kind') this.wasm ? this.reattach() : this.recreate();
   }
 
@@ -443,7 +457,25 @@ export class CaliperView extends HTMLElement {
     p.wasm.hidden = true;
     p.body.append(p.wasm, p.overlay, p.tip, p.msg);
     p.details.hidden = true;
-    plate.append(head, p.body, p.details);
+    p.scrubBtn.type = 'button';
+    p.scrubBtn.textContent = 'Play';
+    p.scrubBtn.addEventListener('click', () => {
+      if (this.client instanceof ReplaySource) this.client.togglePlay();
+    });
+    p.scrubRange.type = 'range';
+    p.scrubRange.min = '0';
+    p.scrubRange.max = '0';
+    p.scrubRange.value = '0';
+    p.scrubRange.setAttribute('aria-label', 'Replay step');
+    p.scrubRange.addEventListener('input', () => {
+      if (this.client instanceof ReplaySource) {
+        this.client.pause();
+        this.client.seekIndex(Number(p.scrubRange.value));
+      }
+    });
+    p.scrub.hidden = true;
+    p.scrub.append(p.scrubBtn, p.scrubRange, p.scrubStep);
+    plate.append(head, p.body, p.details, p.scrub);
     this.root.append(style, plate);
     this.ro = new ResizeObserver(() => {
       this.live?.resize();
@@ -492,12 +524,16 @@ export class CaliperView extends HTMLElement {
     this.deciding = true;
     const mode = this.getAttribute('renderer') ?? 'auto';
     const src = this.getAttribute('src');
-    const base = src && assetBase(src);
+    const replay = this.client instanceof ReplaySource ? this.client : null;
+    const base = resolveWasmBase(src ?? replay?.src ?? null, this.getAttribute('wasm-base'));
     let handle: WasmHandle | null = null;
-    if (!this.sourceProp && base && this.names.length === 1 && (mode === 'auto' || mode === 'wasm')) {
+    const allowWasm = (!this.sourceProp || replay !== null) && !!base && this.names.length === 1 && (mode === 'auto' || mode === 'wasm');
+    if (allowWasm) {
       const kinds = await wasmKinds(base);
       const ok = !!kinds && kinds.includes(kind) && (mode === 'wasm' || (await hasAdapter()));
-      if (ok && gen === this.generation) handle = await this.mountWasm(src!, base, kind);
+      if (ok && gen === this.generation) {
+        handle = replay ? await this.mountWasmReplay(gen, replay, base, kind) : await this.mountWasm(src!, base, kind);
+      }
     }
     if (gen !== this.generation) {
       handle?.destroy();
@@ -513,6 +549,50 @@ export class CaliperView extends HTMLElement {
     // own views do not draw scenes, so it subscribes to nothing and shows a notice in its place.
     if (kind !== 'scene') this.subscribe();
     this.views(this.client?.views ?? []);
+  }
+
+  private async mountWasmReplay(gen: number, replay: ReplaySource, base: string, kind: Kind): Promise<WasmHandle | null> {
+    const view = this.names[0];
+    this.parts.wasm.hidden = false;
+    let currentHandle: WasmHandle | null = null;
+    const peer = replay.attachFramePeer((frame) => { currentHandle?.feedFrame?.(frame); });
+    const handle = await mountWasm(this.parts.wasm, {
+      src: '', view, kind, header: false, assetBase: base, feed: 'frames',
+      onFrame: (bytes, h) => {
+        currentHandle = h;
+        peer.receive(bytes);
+      },
+      onSelect: (e) => {
+        const event = 'detail' in e && 'type' in e ? e : { view, type: 'select', detail: e };
+        this.dispatchEvent(new CustomEvent('caliper-select', { detail: event, bubbles: true, composed: true }));
+      },
+      onInfo: (facts) => {
+        if (this.drawer !== 'wasm' && !this.deciding) return;
+        const text = factsInfo(facts);
+        if (text !== null) {
+          this.parts.info.textContent = text;
+          this.parts.info.title = text;
+        }
+        this.wasmRotateTool(facts);
+      },
+      onToggle: (name, on) => this.wasmToggles.get(name)?.set(on),
+      augment: (detail) => this.augment(detail),
+      onDataView: (dv) => {
+        if (this.drawer !== 'wasm') return;
+        this.resolved = dv;
+        this.wanted = null;
+        this.picker.show(dv);
+        this.refreshLink();
+      },
+    });
+    if (!handle || typeof handle.feedFrame !== 'function' || gen !== this.generation) {
+      peer.detach();
+      handle?.destroy();
+      return null;
+    }
+    currentHandle = handle;
+    this.wasmPeerDetach = peer.detach;
+    return handle;
   }
 
   private mountWasm(src: string, base: string, kind: Kind): Promise<WasmHandle | null> {
@@ -643,6 +723,9 @@ export class CaliperView extends HTMLElement {
       },
     };
     this.unlisten = client.listen(listener);
+    if (client instanceof ReplaySource) {
+      this.unlistenTimeline = client.onTimeline(() => this.syncScrubber());
+    }
     client.connect();
     if (gen !== this.generation) return;
     // Several series may share one plate: view="loss,val_loss".
@@ -651,6 +734,22 @@ export class CaliperView extends HTMLElement {
     this.views(client.views);
     this.status();
     this.runBar.update();
+    this.syncScrubber();
+  }
+
+  private syncScrubber(): void {
+    const p = this.parts;
+    const replay = this.client instanceof ReplaySource ? this.client : null;
+    const steps = replay?.steps ?? [];
+    if (!replay || steps.length <= 1 || this.hasAttribute('no-scrubber')) {
+      p.scrub.hidden = true;
+      return;
+    }
+    p.scrub.hidden = false;
+    p.scrubRange.max = String(steps.length - 1);
+    p.scrubRange.value = String(replay.stepIndex);
+    p.scrubBtn.textContent = replay.playing ? 'Pause' : 'Play';
+    p.scrubStep.textContent = `step ${replay.currentStep} / ${steps[steps.length - 1]}`;
   }
 
   /** The element's own views draw: subscribe on the shared client. */
@@ -661,6 +760,11 @@ export class CaliperView extends HTMLElement {
   }
 
   private detach(): void {
+    this.wasmPeerDetach?.();
+    this.wasmPeerDetach = null;
+    this.unlistenTimeline?.();
+    this.unlistenTimeline = null;
+    this.parts.scrub.hidden = true;
     if (this.wasm) {
       try {
         this.wasm.destroy();

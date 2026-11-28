@@ -7,6 +7,7 @@
 
 import type { DataView } from './protocol/messages.js';
 import type { ViewFacts } from './views/info.js';
+import { isStreamUrl, resolvePageUrl } from './client/replay.js';
 
 export interface WasmSelect {
   view: string;
@@ -26,6 +27,8 @@ export interface WasmHandle {
   setToggle?(name: string, on: boolean): boolean;
   /** Draws a linked selection: the axis carrying the space ('' to clear) and the items. */
   setLink?(axis: string, items: readonly number[]): boolean;
+  /** feed 'frames': delivers one binary wire v3 frame to the WebAssembly view. */
+  feedFrame?(bytes: Uint8Array): boolean;
   onDataView?: ((dataView: DataView) => void) | null;
 }
 
@@ -36,8 +39,12 @@ export interface WasmOptions {
   height?: number;
   /** False: the element draws the view's header, so the WebAssembly view has no title bar. */
   header?: boolean;
-  /** The HTTP origin of the stream's server, with a trailing slash. */
+  /** The HTTP origin or folder URL of the WebAssembly views, with a trailing slash. */
   assetBase: string;
+  /** 'frames': page-fed binary wire v3 frames with no WebSocket. */
+  feed?: 'frames';
+  /** feed 'frames': outgoing wire v3 frames from the WebAssembly view. */
+  onFrame?: (bytes: Uint8Array, handle: WasmHandle) => void;
   /** Every selection the module's views make; the module has already sent it to the producer. */
   onSelect(event: WasmSelect | Record<string, unknown>): void;
   /** What the element's header says about the view, as it changes. */
@@ -51,6 +58,7 @@ export interface WasmOptions {
 
 interface Loader {
   mountCaliperViews(container: HTMLElement, options: WasmOptions): WasmHandle | Promise<WasmHandle>;
+  preloadCaliperViews?(assetBase?: string, assetQuery?: string): Promise<unknown>;
   /** The kinds the WebAssembly views draw; a loader without the list is taken to draw every kind. */
   CALIPER_VIEWS_KINDS?: readonly string[];
 }
@@ -63,6 +71,24 @@ export function assetBase(src: string): string | null {
     const u = new URL(src);
     if (u.protocol !== 'ws:' && u.protocol !== 'wss:') return null;
     return `${u.protocol === 'wss:' ? 'https:' : 'http:'}//${u.host}/`;
+  } catch {
+    return null;
+  }
+}
+
+/** Resolves the WebAssembly asset folder from an explicit wasm-base or src URL. */
+export function resolveWasmBase(src: string | null, wasmBaseAttr: string | null): string | null {
+  if (wasmBaseAttr && wasmBaseAttr.trim()) {
+    try {
+      return resolvePageUrl(wasmBaseAttr.trim()).replace(/\/?$/, '/');
+    } catch {
+      return null;
+    }
+  }
+  if (!src) return null;
+  if (isStreamUrl(src)) return assetBase(src);
+  try {
+    return new URL('.', resolvePageUrl(src)).href;
   } catch {
     return null;
   }
@@ -81,6 +107,19 @@ function load(base: string): Promise<Loader | null> {
     loaders.set(base, p);
   }
   return p;
+}
+
+/** Starts downloading and compiling the WebAssembly views from base. */
+export async function preloadWasm(base: string): Promise<boolean> {
+  const loader = await load(base);
+  if (!loader) return false;
+  if (typeof loader.preloadCaliperViews !== 'function') return true;
+  try {
+    await loader.preloadCaliperViews(base);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /**

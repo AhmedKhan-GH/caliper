@@ -24,6 +24,8 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const at = (...p) => path.join(here, ...p);
 const dist = at('dist');
 fs.mkdirSync(dist, { recursive: true });
+const docsEmbed = at('docs-embed');
+fs.mkdirSync(docsEmbed, { recursive: true });
 
 // Read the local Sternbild design token JSON when a checkout or cache at the
 // pinned commit is present, so the build verifies shared_colors.json against
@@ -116,6 +118,7 @@ const common = { bundle: true, format: 'esm', target: 'es2022', minify: true, le
 await esbuild.build({ ...common, entryPoints: [at('src/index.ts')], outfile: path.join(dist, 'caliper-view.js') });
 await esbuild.build({ ...common, entryPoints: [at('src/widget.ts')], outfile: path.join(dist, 'caliper-widget.js') });
 await esbuild.build({ ...common, entryPoints: [at('src/controls-widget.ts')], outfile: path.join(dist, 'caliper-controls-widget.js') });
+await esbuild.build({ ...common, entryPoints: [at('src/docs-embed.ts')], outfile: path.join(docsEmbed, 'caliper-replay.js') });
 
 const page = await esbuild.build({
   ...common, banner: {}, entryPoints: [at('src/page/main.ts')], write: false, external: ['./caliper-view.js'],
@@ -142,7 +145,7 @@ fs.writeFileSync(path.join(dist, 'spec.html'),
   specTemplate.replace('/*@FONTS@*/', () => fonts).replace('/*@SCRIPT@*/', () => specScript));
 
 if (process.argv.includes('--test')) {
-  for (const name of ['text-params', 'spec-colormaps']) {
+  for (const name of ['text-params', 'spec-colormaps', 'replay']) {
     const nodeTest = at(`test-dist/${name}.mjs`);
     await esbuild.build({
       bundle: true, platform: 'node', format: 'esm', logLevel: 'warning',
@@ -156,8 +159,11 @@ if (process.argv.includes('--test')) {
   });
 }
 
-const sizes = ['caliper-view.js', 'caliper-widget.js', 'caliper-controls-widget.js', 'index.html', 'spec.html'].map((f) => {
-  const buf = fs.readFileSync(path.join(dist, f));
-  return `${f.padEnd(27)} ${String(buf.length).padStart(8)} bytes  ${String(zlib.gzipSync(buf, { level: 9 }).length).padStart(7)} gzipped`;
+const sizes = [
+  ...['caliper-view.js', 'caliper-widget.js', 'caliper-controls-widget.js', 'index.html', 'spec.html'].map((f) => [f, path.join(dist, f)]),
+  ['docs-embed/caliper-replay.js', path.join(docsEmbed, 'caliper-replay.js')],
+].map(([label, full]) => {
+  const buf = fs.readFileSync(full);
+  return `${label.padEnd(30)} ${String(buf.length).padStart(8)} bytes  ${String(zlib.gzipSync(buf, { level: 9 }).length).padStart(7)} gzipped`;
 });
 console.log(sizes.join('\n'));

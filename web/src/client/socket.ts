@@ -9,6 +9,7 @@ import {
 import {
   emit, type ConnectionState, type ControlAccess, type StreamClient, type StreamListener,
 } from './stream.js';
+import { isStreamUrl, ReplaySource, resolvePageUrl } from './replay.js';
 
 const VERSION = '0.1.0';
 type ControlRequest = Omit<ControlMsg, 'type' | 'request_id'>;
@@ -428,9 +429,13 @@ export class SocketClient implements StreamClient {
   }
 }
 
-// --- one socket per src -------------------------------------------------------
+// --- one client per src -------------------------------------------------------
 
-const shared = new Map<string, { client: SocketClient; refs: number; timer: ReturnType<typeof setTimeout> | null }>();
+const shared = new Map<string, { client: SocketClient | ReplaySource; refs: number; timer: ReturnType<typeof setTimeout> | null }>();
+
+function sharedKey(src: string): string {
+  return isStreamUrl(src) ? src : resolvePageUrl(src);
+}
 
 /** The shared client of src, connected. Elements with the same src share it. */
 export function connect(src: string): StreamClient {
@@ -439,10 +444,12 @@ export function connect(src: string): StreamClient {
 
 /** Takes a reference on the shared client of src (released with release()). */
 export function acquire(src: string): StreamClient {
-  let e = shared.get(src);
+  const key = sharedKey(src);
+  let e = shared.get(key);
   if (!e || e.client.state === 'ended') {
-    e = { client: new SocketClient(src), refs: 0, timer: null };
-    shared.set(src, e);
+    const client = isStreamUrl(src) ? new SocketClient(src) : new ReplaySource(key);
+    e = { client, refs: 0, timer: null };
+    shared.set(key, e);
   }
   e.refs++;
   if (e.timer) {
@@ -453,15 +460,16 @@ export function acquire(src: string): StreamClient {
   return e.client;
 }
 
-/** Drops a reference; the socket closes shortly after the last one goes. */
+/** Drops a reference; the client closes shortly after the last one goes. */
 export function release(src: string): void {
-  const e = shared.get(src);
+  const key = sharedKey(src);
+  const e = shared.get(key);
   if (!e) return;
   e.refs = Math.max(0, e.refs - 1);
   if (e.refs === 0 && !e.timer) {
     e.timer = setTimeout(() => {
-      if (e.refs === 0 && shared.get(src) === e) {
-        shared.delete(src);
+      if (e.refs === 0 && shared.get(key) === e) {
+        shared.delete(key);
         e.client.close();
       }
     }, 2000);
