@@ -24,7 +24,7 @@ The stream server sends snapshots from the training loop to each viewer and pass
 
 ## Requirements
 
-The tutorial trains a two-layer transformer that classifies synthetic token sequences, and it downloads nothing. The excerpts below come from `examples/notebooks/live_training.ipynb`, which holds the full version. These items are necessary:
+The canonical notebook example is `examples/mnist/train.ipynb` in `examples/mnist/`. The excerpts below show the stream server, controls and widgets. These items are necessary:
 
 - Apple Silicon with macOS 14 (Sonoma) or later.
 - Python 3.12 with PyTorch and MPS.
@@ -43,7 +43,7 @@ Install the wheel with the extra `caliper[notebook]`, which adds anywidget for t
 uv pip install --python .venv/bin/python --reinstall-package caliper "$(ls dist/caliper-*.whl)[notebook]" jupyterlab
 .venv/bin/python scripts/build_netio.py   # the native sender, a few seconds
 .venv/bin/python scripts/fetch_wasm.py    # or scripts/build_wasm.py, with Emscripten
-.venv/bin/jupyter lab examples/notebooks/live_training.ipynb
+.venv/bin/jupyter lab examples/mnist/train.ipynb
 ```
 
 The script `build_netio.py` builds the native sender of `caliper.serve()` and copies it into the installed package. Run it again after each reinstall of the wheel. The widgets draw with views of Caliper compiled to WebAssembly, which the repository does not hold. The script `fetch_wasm.py` downloads the build of CI, and `build_wasm.py` builds the views. Both scripts work before or after the wheel install, and a wheel that you build after either one ships the views.

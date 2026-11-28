@@ -65,7 +65,7 @@ jobs:
       - uses: actions/cache@v5
         with:
           path: ~/Library/Caches/pip
-          key: pip-acceptance-macos-arm64-interp-agent-torch${{ env.ACCEPTANCE_TORCH_VERSION }}-${{ hashFiles('src/builder/agent/pyproject.toml') }}
+          key: pip-acceptance-macos-arm64-interp-agent-torch${{ env.ACCEPTANCE_TORCH_VERSION }}-tv0.29.2-${{ hashFiles('src/builder/agent/pyproject.toml') }}
           restore-keys: |
             pip-acceptance-macos-arm64-interp-agent-torch${{ env.ACCEPTANCE_TORCH_VERSION }}-
             pip-acceptance-macos-arm64-interp-
@@ -74,6 +74,7 @@ jobs:
           python3 -m venv "$RUNNER_TEMP/acceptance-py"
           "$RUNNER_TEMP/acceptance-py/bin/pip" install \
             "torch==$ACCEPTANCE_TORCH_VERSION" \
+            torchvision==0.29.2 \
             transformers==5.24.0 \
             transformer-lens==3.9.0 \
             sae-lens==6.56.3 \
@@ -82,7 +83,7 @@ jobs:
             -e "./src/builder/agent[test]" \
             numpy pyarrow pyyaml anywidget Pillow websockets nanobind pytest safetensors psutil datasets jsonschema
           "$RUNNER_TEMP/acceptance-py/bin/python" scripts/build_netio.py
-          PYTHONPATH=python "$RUNNER_TEMP/acceptance-py/bin/python" -c "import torch, circuit_tracer, transformer_lens, sae_lens, pydantic_ai, anthropic, openai, acp.schema, pyarrow.parquet, anywidget, yaml, caliper, caliper._netio; print('Test Python ready, torch', torch.__version__)"
+          PYTHONPATH=python "$RUNNER_TEMP/acceptance-py/bin/python" -c "import torch, torchvision, circuit_tracer, transformer_lens, sae_lens, pydantic_ai, anthropic, openai, acp.schema, pyarrow.parquet, anywidget, yaml, caliper, caliper._netio; print('Test Python ready, torch', torch.__version__)"
       # The runtime WGSL compiler (tools/shaders/caliper-wgsl) is built from source in this job
       # (CALIPER_WGSL_FROM_SOURCE=ON below), so the programs of the GPU programs tests compile and run.
       # The hosted macOS image carries a Rust toolchain; nothing is installed or pinned here. Cargo's
@@ -306,8 +307,8 @@ jobs:
       #     test_scene_pieces_app.py), and the 3 offscreen-canvas cases in test_watch.py. Caliper has
       #     no fallback renderer, so offscreen Metal and hidden-app drawing fail without a Metal device.
       #   - window: test_window_real.py (opens a real GLFW/AppKit window; needs window server + Metal).
-      #   - notebook: test_live_training_notebook.py and test_widget.py::test_widget_draws_in_jupyterlab
-      #     (require JupyterLab, ipykernel, Python Playwright Chromium, and WebGPU Metal mode; browser
+      #   - notebook: test_widget.py::test_widget_draws_in_jupyterlab
+      #     (requires JupyterLab, ipykernel, Python Playwright Chromium, and WebGPU Metal mode; browser
       #     views and WebAssembly rendering are covered on SwiftShader and Canvas 2D in web.yml).
       #   - timing: test_controls.py::test_a_flood_of_values_from_several_threads (holds 20,000 threaded
       #     requests to a 20 s wall-clock limit that a 3-core hosted runner does not reliably meet).
@@ -324,6 +325,44 @@ jobs:
         run: >-
           "$RUNNER_TEMP/acceptance-py/bin/python" -m pytest -q -rs -p no:cacheprovider
           python/tests -m "not gpu and not window and not notebook and not timing" --strict-markers
+      # Cache the torchvision MNIST dataset across runs so CI does not depend on a live mirror more than once.
+      - uses: actions/cache@v5
+        with:
+          path: ~/.cache/caliper/mnist
+          key: mnist-dataset-v1
+      # Canonical MNIST example check: run --mode none for 20 steps (fewer than the published 14 epochs
+      # for CI speed on a GPU-less hosted runner) and check that the printed result is finite and
+      # improves over 10-class uniform random chance (loss < ln(10), accuracy > 10%).
+      - name: Canonical MNIST example
+        env:
+          PYTHONPATH: python
+          CALIPER_DATA_DIR: ${{ runner.temp }}/mnist-example-data
+        run: |
+          set -euo pipefail
+          mkdir -p "$CALIPER_DATA_DIR"
+          log="$RUNNER_TEMP/mnist-example.log"
+          CALIPER_MNIST_DATA_DIR="$HOME/.cache/caliper/mnist" \
+            "$RUNNER_TEMP/acceptance-py/bin/python" examples/mnist/train.py --mode none --steps 20 | tee "$log"
+          "$RUNNER_TEMP/acceptance-py/bin/python" - "$log" <<'PY'
+          import math, re, sys
+          text = open(sys.argv[1], encoding="utf-8").read()
+          m = re.search(
+              r"done\s+steps=(\d+)\s+elapsed=([0-9.]+)s\s+rate=([0-9.]+)\s+steps/s\s+"
+              r"train_loss=([0-9.eE+-]+)\s+test_loss=([0-9.eE+-]+)\s+test_acc=([0-9.]+)%",
+              text,
+          )
+          assert m is not None, f"missing summary line in output:\n{text}"
+          steps = int(m.group(1))
+          train_loss = float(m.group(4))
+          test_loss = float(m.group(5))
+          test_acc = float(m.group(6))
+          chance_loss = math.log(10.0)
+          assert steps == 20, f"expected 20 steps, got {steps}"
+          assert math.isfinite(train_loss) and train_loss < chance_loss, f"bad train_loss {train_loss}"
+          assert math.isfinite(test_loss) and test_loss < chance_loss, f"bad test_loss {test_loss}"
+          assert math.isfinite(test_acc) and test_acc > 10.0, f"test_acc {test_acc}% did not beat 10% chance"
+          print(f"MNIST CI check passed: steps={steps}, test_loss={test_loss:.4f}, test_acc={test_acc:.2f}%")
+          PY
       - name: Native Interpretation Capability
         env:
           CALIPER_AGENT_OFFLINE: '1'

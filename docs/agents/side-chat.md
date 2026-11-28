@@ -45,11 +45,10 @@ tools. The command line is:
 /usr/bin/env PYTHONPATH=/path/to/caliper/src/builder/agent /path/to/python -P -m caliper_agent --preset ollama --base-url http://127.0.0.1:11434/v1 --model <model>
 ```
 
-The script `examples/build_a_dashboard/chat-agent.sh` wraps this line. Give its absolute path as the custom command. The
-script reads the interpreter from `CALIPER_AGENT_PYTHON` (the `.venv` of the repository by default) and the model from
-`CALIPER_CHAT_MODEL`. An app that starts from the Finder gives its agents only the system `PATH`. Thus set such a
-variable in the line itself, as `/usr/bin/env CALIPER_AGENT_PYTHON=... /path/to/chat-agent.sh`. This agent reaches
-Caliper with the API file of its session, so its edits wait on the approval cards like those of any other agent.
+You can wrap this line in a small shell script and give its absolute path as the custom command. An app that starts
+from the Finder gives its agents only the system `PATH`. Thus set environment variables in the command line itself
+with `/usr/bin/env`. This agent reaches Caliper with the API file of its session. Thus its edits wait on the approval
+cards like those of any other agent.
 
 The agent uses its own login. When it answers that it needs a login, the pane shows LOGIN with the login methods that
 the agent names. Caliper never asks for a key and runs no login flow. Log in in your own terminal and choose Restart.

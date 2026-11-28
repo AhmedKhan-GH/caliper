@@ -39,7 +39,7 @@ _GPU_CASES = frozenset({
     ("test_watch.py", "test_watch_is_free_when_nothing_is_attached"),
 })
 _WINDOW_SUITES = frozenset({"test_window_real.py"})
-_NOTEBOOK_SUITES = frozenset({"test_live_training_notebook.py"})
+_NOTEBOOK_SUITES: frozenset[str] = frozenset()
 _NOTEBOOK_CASES = frozenset({("test_widget.py", "test_widget_draws_in_jupyterlab")})
 _TIMING_CASES = frozenset({("test_controls.py", "test_a_flood_of_values_from_several_threads")})
 

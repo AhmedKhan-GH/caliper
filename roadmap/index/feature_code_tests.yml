@@ -938,7 +938,6 @@ STR-07:
   - web/src/element.ts
   tests:
   - python/tests/test_widget.py
-  - python/tests/test_live_training_notebook.py
 STR-08:
   code:
   - python/caliper/_dataview.py
