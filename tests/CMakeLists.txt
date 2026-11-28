@@ -297,7 +297,7 @@ if(TARGET caliper)
     caliper_cli_test(info ARGS "info" EXIT 0
         MATCH "abi_epoch 4.*service caliper\\.ui\\.v1_1")
     caliper_cli_test(list ARGS "list|--instruments|${CMAKE_BINARY_DIR}/instruments" EXIT 0
-        MATCH "READY +dev\\.caliper\\.hello-world +0\\.1\\.0 ")
+        MATCH "READY +ai\\.caliperapp\\.hello-world +0\\.1\\.0 ")
     caliper_cli_test(check ARGS "check|${CMAKE_BINARY_DIR}/test-instruments" EXIT 0
         MATCH "1 of 1 instruments pass the checks")
     # An instrument's build folder, its manifests only in build/instruments as
@@ -311,12 +311,12 @@ if(TARGET caliper)
     caliper_cli_test(check_missing ARGS "check|${_cli_work}/nowhere" EXIT 1
         ERROR "not a folder")
     caliper_cli_test(install ARGS "install|${CMAKE_BINARY_DIR}/test-instruments" EXIT 0
-        MATCH "installed dev\\.caliper\\.throwing 0\\.1\\.0 in .*user-instruments"
+        MATCH "installed ai\\.caliperapp\\.test\\.throwing 0\\.1\\.0 in .*user-instruments"
         CLEAN "${_cli_work}/user-instruments")
     # Without CALIPER_USER_INSTRUMENTS_DIR install writes instruments/ under the
     # app-data folder, and nothing else there.
     caliper_cli_test(install_default ARGS "install|${CMAKE_BINARY_DIR}/test-instruments" EXIT 0
-        MATCH "installed dev\\.caliper\\.throwing 0\\.1\\.0 in .*app-data-install_default[/\\]instruments"
+        MATCH "installed ai\\.caliperapp\\.test\\.throwing 0\\.1\\.0 in .*app-data-install_default[/\\]instruments"
         DEFAULT_USER_INSTRUMENTS ALLOW "instruments")
     caliper_cli_test(new ARGS "new|com.example.cli-made|${_cli_work}/cli-made" EXIT 0
         MATCH "created .*cli-made for instrument com\\.example\\.cli-made"
