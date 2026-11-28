@@ -190,15 +190,8 @@ target_include_directories(caliper_app_paths PUBLIC ${CMAKE_SOURCE_DIR}/src)
 set_target_properties(caliper_app_paths PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
 # doctest backs the tests here and ships in the package for an applet's own
-# tests. doctest v2.4.11 declares cmake_minimum_required 2.8, which CMake 4
-# rejects without this floor.
-include(FetchContent)
-set(CMAKE_POLICY_VERSION_MINIMUM 3.5)
-FetchContent_Declare(doctest
-    GIT_REPOSITORY https://github.com/doctest/doctest.git
-    GIT_TAG v2.4.11 GIT_SHALLOW TRUE)
-FetchContent_MakeAvailable(doctest)
-unset(CMAKE_POLICY_VERSION_MINIMUM)
+# tests (declared and fetched in cmake/Dependencies.cmake).
+caliper_fetch_doctest()
 
 # Fixture host for TDD of applets and the sugar, plus doctest.
 add_library(caliper_sdk_testing INTERFACE)
@@ -243,10 +236,8 @@ install(FILES
     DESTINATION lib/cmake/caliper-sdk COMPONENT sdk)
 
 # Host library: loader/negotiation logic, unit-testable without a renderer.
-FetchContent_Declare(tomlplusplus
-    GIT_REPOSITORY https://github.com/marzer/tomlplusplus.git
-    GIT_TAG v3.4.0 GIT_SHALLOW TRUE)
-FetchContent_MakeAvailable(tomlplusplus)
+# tomlplusplus::tomlplusplus is declared and fetched in cmake/Dependencies.cmake.
+caliper_fetch_tomlplusplus()
 
 add_library(caliper_host_lib STATIC
     src/host/applet_manifest.cpp

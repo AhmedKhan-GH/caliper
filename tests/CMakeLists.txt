@@ -1,12 +1,5 @@
-# doctest v2.4.11 declares cmake_minimum_required 2.8, which CMake >= 4.0
-# rejects; this floor lets FetchContent configure it without a manual flag.
-set(CMAKE_POLICY_VERSION_MINIMUM 3.5)
-
-include(FetchContent)
-FetchContent_Declare(doctest
-    GIT_REPOSITORY https://github.com/doctest/doctest.git
-    GIT_TAG v2.4.11 GIT_SHALLOW TRUE)
-FetchContent_MakeAvailable(doctest)
+# doctest is declared and fetched in cmake/Dependencies.cmake.
+caliper_fetch_doctest()
 
 # The app-data guard's marker (src/app_paths.h, THE GUARD): every test binary
 # that can open the stores links it, so a run without CALIPER_DATA_DIR, from a
