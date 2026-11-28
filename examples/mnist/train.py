@@ -43,7 +43,7 @@ MNIST_MEAN = (0.1307,)
 MNIST_STD = (0.3081,)
 DEFAULT_DATA_DIR = Path(
     os.environ.get("CALIPER_MNIST_DATA_DIR", str(Path.home() / ".cache" / "caliper" / "mnist"))
-)
+).expanduser()
 
 
 # --8<-- [start:model]
@@ -86,6 +86,7 @@ def load_mnist(
         transforms.ToTensor(),
         transforms.Normalize(MNIST_MEAN, MNIST_STD),
     ])
+    data_dir = data_dir.expanduser()
     data_dir.mkdir(parents=True, exist_ok=True)
     train_set = datasets.MNIST(root=str(data_dir), train=True, download=True, transform=transform)
     test_set = datasets.MNIST(root=str(data_dir), train=False, download=True, transform=transform)
