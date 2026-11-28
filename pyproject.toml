@@ -1,5 +1,5 @@
 [build-system]
-requires = ["scikit-build-core>=0.10", "nanobind>=2"]
+requires = ["scikit-build-core>=1.1.2", "nanobind>=3.1.0"]
 build-backend = "scikit_build_core.build"
 
 [project]
@@ -17,38 +17,38 @@ classifiers = [
 torch = ["torch"]
 examples = ["torch", "torchvision"]
 agent = [
-    "pydantic-ai-slim[anthropic]>=2.68,<3",
-    "anthropic>=2.8,<3",
-    "openai>=3.51,<4",
+    "pydantic-ai-slim[anthropic]>=2.74.0,<3",
+    "anthropic>=2.14.0,<3",
+    "openai>=3.59.0,<4",
 ]
 docs = [
     "mkdocs==1.6.1",
-    "mkdocs-material==9.8.1",
+    "mkdocs-material==9.8.2",
     "mkdocs-awesome-nav==3.3.0",
-    "pymdown-extensions==13.1",
+    "pymdown-extensions==13.1.2",
     "mkdocstrings==1.0.8",
-    "mkdocstrings-python==2.0.10",
+    "mkdocstrings-python==2.0.11",
     "griffelib==2.4.1",
     "mkdocs-autorefs==1.4.5",
-    "ruff==0.17.3",
+    "ruff==0.17.6",
     "sternbild-docs @ git+https://github.com/AhmedKhan-GH/organization@docs-v1.0.1#subdirectory=packages/sternbild-docs",
 ]
 test = [
-    "pytest>=8",
+    "pytest>=9.2.0",
     "jsonschema",
     "anywidget",
     "pyyaml",
     "pyarrow",
-    "pydantic-ai-slim[anthropic]>=2.68,<3",
-    "anthropic>=2.8,<3",
-    "openai>=3.51,<4",
+    "pydantic-ai-slim[anthropic]>=2.74.0,<3",
+    "anthropic>=2.14.0,<3",
+    "openai>=3.59.0,<4",
     "agent-client-protocol>=1.0,<2",
     "torch>=2.15.0",
     "safetensors",
     "psutil",
     "datasets",
-    "transformers>=5.24.0,<5.25.0",
-    "transformer-lens==3.9.0",
+    "transformers>=5.24.1,<5.25.0",
+    "transformer-lens==4.4.1",
     "sae-lens==6.56.3",
     "nnsight==0.8.4",
     "circuit-tracer @ git+https://github.com/decoderesearch/circuit-tracer.git@82996f144b3371ae858ea5713590d004c218f0c2",
@@ -59,8 +59,8 @@ interp = [
     "safetensors",
     "psutil",
     "datasets",
-    "transformers>=5.24.0,<5.25.0",
-    "transformer-lens==3.9.0",
+    "transformers>=5.24.1,<5.25.0",
+    "transformer-lens==4.4.1",
     "sae-lens==6.56.3",
     "nnsight==0.8.4",
     "circuit-tracer @ git+https://github.com/decoderesearch/circuit-tracer.git@82996f144b3371ae858ea5713590d004c218f0c2",
