@@ -44,55 +44,55 @@ candidates:
     summary: "A 3-D view shows the same tokens mapped into a head's query, key and value spaces."
     serves: "A person sees how one head separates what a token asks for from what it offers."
     origin: adjacent-work
-    depends_on: [INT-03]
+    depends_on: [INT-35]
   - key: score-projection-view
     title: "Score as Projection View"
     summary: "A query and every key are drawn as arrows from one origin, with each score as the key's projection onto the query."
     serves: "A person sees why one token attends to another."
     origin: adjacent-work
-    depends_on: [INT-03]
+    depends_on: [INT-35]
   - key: attention-arc-view
     title: "Attention Arc View"
     summary: "Attention from one token is drawn as arcs over the text, with weight as thickness and a number on each arc."
     serves: "A person reads one head's pattern on a sentence without a matrix."
     origin: adjacent-work
-    depends_on: [INT-03]
+    depends_on: [INT-35]
   - key: softmax-temperature-view
     title: "Softmax Temperature View"
     summary: "A control changes the temperature of a softmax, and the weights and arcs change with it."
     serves: "A person sees how scaling and temperature sharpen attention or sampling."
     origin: adjacent-work
-    depends_on: [INT-03]
+    depends_on: [INT-35]
   - key: causal-mask-view
     title: "Causal Mask View"
     summary: "A view shows the mask of an attention layer and the growing triangle of attention as tokens are generated."
     serves: "A person sees what each position may read."
     origin: adjacent-work
-    depends_on: [INT-03]
+    depends_on: [INT-35]
   - key: head-subspace-view
     title: "Head Subspace View"
     summary: "Each head of a layer is drawn in its own low-dimensional subspace, with the output mix that joins them."
     serves: "A person sees what each head contributes to the layer's output."
     origin: adjacent-work
-    depends_on: [INT-03]
+    depends_on: [INT-35]
   - key: position-encoding-view
     title: "Position Encoding View"
     summary: "A view shows sinusoidal and rotary position encodings, the rotary one as rotations of query and key pairs."
     serves: "A person sees how a model knows order and relative distance."
     origin: adjacent-work
-    depends_on: [INT-03]
+    depends_on: [INT-35]
   - key: head-type-catalogue
     title: "Head Type Catalogue"
     summary: "Every head of a model is scored against known kinds, such as previous-token, positional and induction heads."
     serves: "A person finds the heads worth studying in a new model."
     origin: adjacent-work
-    depends_on: [INT-16]
+    depends_on: [INT-35]
   - key: linear-attention-comparison
     title: "Linear Attention Comparison"
     summary: "Softmax attention and linear attention are shown on the same input in the same views."
     serves: "A person sees what an efficient attention variant keeps and loses."
     origin: adjacent-work
-    depends_on: [INT-03]
+    depends_on: [INT-35]
   - key: live-probe-any-architecture
     title: "Live Probe for Any Architecture"
     summary: "The live probe generates with any base and edited model pair, not only the one supplied architecture."
@@ -104,19 +104,19 @@ candidates:
     summary: "A person drags a token or a key in a 3-D scene and sees its query and score change as it moves."
     serves: "A learner or researcher tests how a position in the space changes what a head attends to."
     origin: adjacent-work
-    depends_on: [INT-03]
+    depends_on: [INT-35]
   - key: weighted-sum-hull-view
     title: "Weighted-Sum View"
     summary: "A 3-D view shows each attention output as a point inside the hull of the value vectors, pulled towards the values it attends to."
     serves: "A person sees an attention output as a convex combination of values."
     origin: adjacent-work
-    depends_on: [INT-03]
+    depends_on: [INT-35]
   - key: scaling-variance-histograms
     title: "Scaling Variance Histograms"
     summary: "Two histograms of dot products at small and large dimension are shown before and after division by the square root of the key size."
     serves: "A person sees why attention scores are scaled before the softmax."
     origin: adjacent-work
-    depends_on: [INT-03]
+    depends_on: [INT-35]
   - key: sae-loader
     title: "Sparse Autoencoder Loader"
     summary: "A trained dictionary of features for a layer is loaded and applied to live activations as a new source."
@@ -158,7 +158,7 @@ candidates:
     summary: "Features are mapped by the similarity of their decoder directions, with nearest features listed."
     serves: "A person finds related, duplicate and absorbed features."
     origin: field
-    depends_on: [INT-27]
+    depends_on: [REN-12]
   - key: feature-absorption-check
     title: "Feature Absorption Check"
     summary: "A check finds features that stop firing where a more specific feature has taken over."
@@ -272,7 +272,7 @@ candidates:
     summary: "A grid shows the effect of patching by layer, position and component, computed over a batch of runs."
     serves: "A person locates where information flows."
     origin: field
-    depends_on: [INT-14, INT-17]
+    depends_on: [INT-14]
   - key: path-patching
     title: "Path Patching"
     summary: "Activations are patched along a chosen sender-to-receiver path, with the effect plotted per head pair."
@@ -368,7 +368,7 @@ candidates:
     summary: "A layer's activations are clustered into a map, each cell drawn by what it represents."
     serves: "A person surveys what a layer holds."
     origin: field
-    depends_on: [INT-27]
+    depends_on: [REN-12]
   - key: neuron-page
     title: "Neuron Page"
     summary: "One page per neuron shows its activation histogram, top tokens, output weights and logit effect."
@@ -386,19 +386,19 @@ candidates:
     summary: "Attention is propagated across layers to estimate each token's influence."
     serves: "A person gets an aggregate attribution through depth."
     origin: field
-    depends_on: [INT-03]
+    depends_on: [INT-35]
   - key: ov-qk-circuits
     title: "OV and QK Circuit View"
     summary: "A head's OV and QK matrices are shown as token-to-token maps through the embedding and unembedding."
     serves: "A person reads what a head looks for and what it writes."
     origin: field
-    depends_on: [INT-03]
+    depends_on: [INT-35]
   - key: composition-scores
     title: "Composition Scores"
     summary: "Query, key and value composition between heads of different layers is drawn as a matrix."
     serves: "A person finds heads that work together."
     origin: field
-    depends_on: [INT-03]
+    depends_on: [INT-35]
   - key: virtual-weights
     title: "Virtual Weights Browser"
     summary: "Weights are multiplied across layers to show direct paths from what one component writes to what another reads."
@@ -410,13 +410,13 @@ candidates:
     summary: "The share of attention each head places on the first or special tokens is measured per layer."
     serves: "A person separates sink behaviour from real patterns."
     origin: field
-    depends_on: [INT-03]
+    depends_on: [INT-35]
   - key: long-context-attention
     title: "Long-Context Attention Map"
     summary: "Attention over a whole long sequence is reduced to a map with bands and retrieval heads marked."
     serves: "A person studies behaviour over long contexts."
     origin: field
-    depends_on: [INT-03, STR-08]
+    depends_on: [INT-35, STR-08]
   - key: singular-spectrum
     title: "Singular Value Spectrum of Weights"
     summary: "The singular values of any weight matrix are plotted per layer and over training, with effective rank."
@@ -584,13 +584,13 @@ candidates:
     summary: "Each image patch is scored by rollout, gradients or occlusion."
     serves: "A vision transformer's prediction is explained."
     origin: field
-    depends_on: [INT-03]
+    depends_on: [INT-35]
   - key: attention-on-images
     title: "Attention Overlay on Images"
     summary: "A chosen head's attention from the class token is drawn over the image."
     serves: "Heads of vision models are read."
     origin: field
-    depends_on: [INT-03]
+    depends_on: [INT-35]
   - key: concept-activation-vectors
     title: "Concept Activation Vectors"
     summary: "A concept direction is learned from example inputs, and a model's sensitivity to it is measured."
@@ -608,7 +608,7 @@ candidates:
     summary: "Each prompt token's spatial attention is shown over the denoising steps."
     serves: "A person sees which words control which regions."
     origin: field
-    depends_on: [INT-03]
+    depends_on: [INT-35]
   - key: denoising-trajectory
     title: "Denoising Trajectory View"
     summary: "The predicted clean image, the noise estimate and the latent are shown at each step on a timeline."
@@ -716,61 +716,61 @@ candidates:
     summary: "One source is projected by PCA, UMAP, t-SNE or PaCMAP, with parameters changed live."
     serves: "No single projection misleads."
     origin: field
-    depends_on: [INT-27]
+    depends_on: [REN-12]
   - key: projection-stability
     title: "Projection Stability Check"
     summary: "Projections are compared across seeds and parameters, and persistent neighbours are shown."
     serves: "Structure is told from artefact."
     origin: field
-    depends_on: [INT-27]
+    depends_on: [REN-12]
   - key: parametric-projection
     title: "Parametric Projection"
     summary: "A small network learns the projection, so new points map at once and views stay consistent during training."
     serves: "Evolving embeddings are followed without jumps."
     origin: field
-    depends_on: [INT-26]
+    depends_on: [REN-12]
   - key: neighbourhood-preservation
     title: "Neighbourhood Preservation Metrics"
     summary: "Trustworthiness and continuity scores are reported for a projection."
     serves: "A map's quality is known."
     origin: field
-    depends_on: [INT-27]
+    depends_on: [REN-12]
   - key: density-overlay
     title: "Density Overlay on Maps"
     summary: "Density contours or a heat layer are drawn over a 2-D map."
     serves: "Crowded regions are read."
     origin: field
-    depends_on: [INT-27]
+    depends_on: [REN-12]
   - key: cluster-labels
     title: "Clusters with Generated Labels"
     summary: "Density clusters are found and named, at several zoom levels."
     serves: "A large collection is navigated by topic."
     origin: field
-    depends_on: [INT-27]
+    depends_on: [REN-12]
   - key: nearest-neighbour-inspector
     title: "Nearest-Neighbour Inspector"
     summary: "A picked point lists its nearest neighbours in the original and the projected space, with distances."
     serves: "Local structure is checked."
     origin: field
-    depends_on: [INT-27, REN-15]
+    depends_on: [REN-12, REN-15]
   - key: neighbour-disagreement
     title: "Neighbour Disagreement View"
     summary: "Points whose neighbours differ between two models or spaces are highlighted."
     serves: "A person finds what changed between two representations."
     origin: field
-    depends_on: [INT-27]
+    depends_on: [REN-12]
   - key: embedding-drift
     title: "Embedding Drift Between Checkpoints"
     summary: "Each point is followed across checkpoints with trails and displacement statistics."
     serves: "A person sees how representations move in training."
     origin: field
-    depends_on: [INT-27, RUN-10]
+    depends_on: [REN-12, RUN-10]
   - key: space-alignment
     title: "Alignment of Two Embedding Spaces"
     summary: "Two spaces are aligned by rotation or a learned map, and the residuals shown."
     serves: "Two models are compared in one frame."
     origin: field
-    depends_on: [INT-27]
+    depends_on: [REN-12]
   - key: named-selection-groups
     title: "Named Selection Groups"
     summary: "A selection is saved as a named group and reused as a label, a filter or a direction."
@@ -782,25 +782,25 @@ candidates:
     summary: "Linked histograms of metadata filter a map, and a selection on the map filters them."
     serves: "A dataset is sliced on its map."
     origin: field
-    depends_on: [INT-27]
+    depends_on: [REN-12]
   - key: text-search-on-map
     title: "Text Search on Maps"
     summary: "A query is embedded, and its nearest points are highlighted."
     serves: "Examples are found by meaning."
     origin: field
-    depends_on: [INT-27]
+    depends_on: [REN-12]
   - key: vector-index-inspector
     title: "Vector Index Inspector"
     summary: "An approximate index's structure and its recall against exact search are shown."
     serves: "Vector search is tuned."
     origin: field
-    depends_on: [INT-27]
+    depends_on: [REN-12]
   - key: anisotropy-report
     title: "Anisotropy Report"
     summary: "Average cosine, the share of the top principal component and the norm distribution of a space are reported."
     serves: "Degenerate geometry is spotted."
     origin: field
-    depends_on: [INT-27]
+    depends_on: [REN-12]
   - key: intrinsic-dimension
     title: "Intrinsic Dimension Estimate"
     summary: "Local and global dimension estimates are computed per layer."
@@ -812,31 +812,31 @@ candidates:
     summary: "How often each point is another's neighbour is counted."
     serves: "Hubs that distort retrieval are found."
     origin: field
-    depends_on: [INT-27]
+    depends_on: [REN-12]
   - key: hyperbolic-views
     title: "Hyperbolic and Spherical Views"
     summary: "Embeddings of those geometries are drawn on a Poincare disk or a sphere."
     serves: "Hierarchies and directions are shown in their own geometry."
     origin: field
-    depends_on: [INT-27]
+    depends_on: [REN-12]
   - key: distance-histogram
     title: "Pairwise Distance Histogram"
     summary: "The distribution of distances and angles between sampled pairs is drawn."
     serves: "Concentration of distances is spotted."
     origin: field
-    depends_on: [INT-27]
+    depends_on: [REN-12]
   - key: concept-axes
     title: "Axes by Concept"
     summary: "A map's axes are defined by two chosen directions or word pairs."
     serves: "A plane is read by meaning."
     origin: field
-    depends_on: [INT-27]
+    depends_on: [REN-12]
   - key: persistent-homology
     title: "Persistent Homology Barcodes"
     summary: "The topology of a point cloud is shown as barcodes or a persistence diagram."
     serves: "The shape of an embedding is measured."
     origin: field
-    depends_on: [INT-27]
+    depends_on: [REN-12]
   - key: next-token-panel
     title: "Next-Token Distribution Panel"
     summary: "The top tokens with probabilities and entropy are shown, with the sampler's settings applied live."

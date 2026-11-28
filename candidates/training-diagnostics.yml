@@ -112,13 +112,13 @@ candidates:
     summary: "Loss is evaluated along the line between two checkpoints."
     serves: "A person judges whether two runs share a basin."
     origin: field
-    depends_on: [STR-11, RUN-10]
+    depends_on: [RUN-10]
   - key: loss-landscape-slice
     title: "Loss Landscape Slice of a Checkpoint"
     summary: "Loss is drawn along one or two normalised directions around any saved checkpoint."
     serves: "The flatness of a minimum is judged after the fact."
     origin: field
-    depends_on: [STR-11]
+    depends_on: [REN-12, RUN-10]
   - key: hessian-spectrum
     title: "Hessian Spectrum"
     summary: "The top eigenvalues, trace and spectral density of the Hessian are estimated and tracked over training."

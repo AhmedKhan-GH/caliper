@@ -10,7 +10,7 @@ candidates:
     summary: "Evaluation problems are drawn as points placed by the model's own representation and coloured by outcome, with each problem's history as a trail."
     serves: "A person sees which kinds of problem a change fixes and which it breaks."
     origin: adjacent-work
-    depends_on: [INT-27]
+    depends_on: [REN-12]
   - key: outcome-against-dose
     title: "Outcome Against a Swept Parameter"
     summary: "Evaluation outcomes are plotted against one swept parameter, with each example's state at each value."
@@ -82,7 +82,7 @@ candidates:
     summary: "Examples are plotted by embedding with errors highlighted, so clusters of failures stand out."
     serves: "Patterns in errors are seen."
     origin: field
-    depends_on: [INT-27]
+    depends_on: [REN-12]
   - key: counterfactual-editing
     title: "Counterfactual Editing"
     summary: "A person edits one input and sees the changed output and score, or asks for the nearest example that flips the label."
@@ -202,7 +202,7 @@ candidates:
     summary: "Queries, documents and retrieved results are plotted in one projection."
     serves: "Retrieval gaps are found."
     origin: field
-    depends_on: [INT-27]
+    depends_on: [REN-12]
   - key: source-attribution
     title: "Attribution to Sources"
     summary: "The parts of an answer that match each retrieved passage are highlighted."

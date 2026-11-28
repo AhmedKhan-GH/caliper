@@ -13,23 +13,19 @@ entries:
   item: Demo 0 is built on the sprint's own build branch and under verification; nothing else on the page
     is built. The demos rest on built pieces of sprint 2 (controls of protocol 3.1, caliper.serve, the
     web viewer, the live_training notebook) and on main's Python API.
-  ids:
-  - STR-11
+  reason: superseded
 - heading: The increment demo, a loss landscape
   item: 'Demo 0, the loss landscape: the loss surface around the current weights over the plane of the
     path''s two principal components, with the optimizer''s path, in a notebook and the browser viewer,
     recomputed on the device every 2,000 steps by default.'
-  ids:
-  - STR-11
+  reason: superseded
 - heading: The increment demo, a loss landscape
   item: 'Demo 0''s numerical module: snapshots and the plane of the path, filter-normalised random directions
     as a switch, the grid evaluated on the device with vmap, the projection.'
-  ids:
-  - STR-11
+  reason: superseded
 - heading: The increment demo, a loss landscape
   item: Demo 0's tutorial, headless test and cost row (python/bench/bench_landscape.py).
-  ids:
-  - STR-11
+  reason: superseded
 - heading: The first demo, structure from motion
   item: 'Demo 1, structure from motion: which frames of a moving shot does structure-from-motion place
     least accurately; sparse cloud, a frustum per frame, camera path coloured by reprojection error, scrubbed
@@ -59,7 +55,6 @@ entries:
     day, demo 0 needs 3. The table maps each demo to the renderer core, scenes, web geometry, recordings
     and protocol pieces it needs.'
   ids:
-  - STR-11
   - STR-30
   - REN-55
   - REN-56
@@ -68,14 +63,12 @@ entries:
   item: 'Limits: data still to verify (film URL and size, package licences, whether a shot reconstructs),
     COCO-trained weights, large downloads that skip CI, zero-copy only for the app on the same machine,
     no bitwise determinism on MPS, demo 0''s plane and omissions, a defect of the app''s run bar.'
-  ids:
-  - STR-11
+  reason: superseded
 - heading: Limits
   item: 'Demo 0''s omissions by the user''s decision: evaluation mode for the surface, keeping the path
     inside the box at a small span, a test that the landscape leaves training unchanged, a finer grid,
     a switch of the height, a projected path, a span tied to the recent path.'
-  ids:
-  - STR-11
+  reason: superseded
 - heading: Decisions
   item: 'Decisions: data and model choices for demos 1 to 4 (Tears of Steel, pycolmap, the Panda, manipulability,
     RT-DETR, Fashion-MNIST perceptron), PCA by warm-started orthogonal iteration, encoded frames, references
@@ -90,5 +83,4 @@ entries:
     the path''s principal-component plane by default, Gram-matrix snapshots refitted every N steps, first
     plane at step 40, defaults and cost budget of 1.5 times, cost rows against the committed baseline,
     fixed box and anchor, log loss range, vmap over rows of 41 grid points.'
-  ids:
-  - STR-11
+  reason: superseded

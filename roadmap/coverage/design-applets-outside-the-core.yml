@@ -25,8 +25,7 @@ entries:
   - COR-16
 - heading: Moving the applets out
   item: examples/hello and examples/sine_scope stay because tutorials embed them and tests load them.
-  ids:
-  - COR-13
+  reason: superseded
 - heading: Shipping the SDK
   item: The SDK ships as a release asset beside the app; a separate SDK repository can wait until outside
     contributors exist.

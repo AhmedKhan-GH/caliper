@@ -566,7 +566,6 @@ entries:
     six layers.
   ids:
   - INT-31
-  - INT-16
 - branch: inspector
   state: unique
   wip: false
@@ -695,7 +694,6 @@ entries:
   - REN-14
   - STR-09
   - STR-10
-  - STR-11
 - branch: sprint4-build-pre-rebase
   state: contained
   in:
@@ -708,7 +706,6 @@ entries:
   item: Build branch before the rebase on main.
   ids:
   - REN-11
-  - STR-11
 - branch: sprint4-carry2
   state: contained
   in:
@@ -753,8 +750,7 @@ entries:
   wip: false
   commits: 77 commits, none outside sprint4-integ3
   item: Demo 0, the loss landscape.
-  ids:
-  - STR-11
+  reason: superseded
 - branch: sprint4-draws
   state: unique
   wip: true
@@ -844,7 +840,6 @@ entries:
   - REN-17
   - STR-09
   - STR-10
-  - STR-11
 - branch: sprint4-nogl
   state: contained
   in:
@@ -896,7 +891,6 @@ entries:
   - REN-14
   - STR-09
   - STR-10
-  - STR-11
 - branch: sprint4-pr2
   state: contained
   in:
@@ -960,7 +954,6 @@ entries:
   item: Run bar fixes with caliper.flush() and demo 0 browser row.
   ids:
   - INT-04
-  - STR-11
 - branch: sprint4-scene
   state: contained
   in:
@@ -1213,14 +1206,12 @@ entries:
   item: 'Demo 0, the loss landscape: a Landscape that streams the loss surface around a model''s weights
     as a mesh with the path and PCA plane, a notebook, a tutorial, headless and capture rows, and a cost
     benchmark.'
-  ids:
-  - STR-11
+  reason: superseded
 - branch: sprint4-integ3
   state: unique
   commits: e4bd1496
   item: Costs of the scene calls and the benchmark rows for demo 0.
   ids:
-  - STR-11
   - STR-10
 - branch: sprint4-integ3
   state: unique

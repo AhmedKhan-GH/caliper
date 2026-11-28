@@ -149,7 +149,6 @@ entries:
   - REN-14
   - STR-09
   - STR-10
-  - STR-11
 - file: _notes/HANDOFF-sprint4.md
   item: A flaky Python test, test_offer_and_update_fetch_only_what_is_subscribed, timed out once at load
     13 and passed alone three times; check first on resuming.
@@ -195,7 +194,6 @@ entries:
   item: The run bar fixes with the caliper.flush() fix and the browser capture row's fix are on sprint4-pr2.
   ids:
   - REN-12
-  - STR-11
 - file: _notes/HANDOFF-sprint4.md
   item: The remaining parts of protocol 3.2 (transforms, class tables, stamps, recording messages, split
     updates), every caliper.scene call, both senders and the hub are finished on sprint4-proto3 and carried
@@ -319,8 +317,7 @@ entries:
 - file: _notes/HANDOFF-sprint4.md
   item: 'Decision: demo 0''s defaults and its known limits (training-mode evaluation, path leaving the
     box, uniform grid, no non-interference test).'
-  ids:
-  - STR-11
+  reason: superseded
 - file: _notes/HANDOFF-sprint4.md
   item: 'Decision: recordings use Caliper''s own MCAP writer and reader, recovery cuts at the last commit
     point, and a full queue never blocks the producer.'
@@ -520,8 +517,7 @@ entries:
 - file: s4-demo0/STATUS.md
   item: 'Demo 0, the loss landscape: landscape.py, the notebook, tests/demos, a cost benchmark and a docs
     tutorial; the cost ratio fell from about 2.0 to 1.20 with the new defaults.'
-  ids:
-  - STR-11
+  reason: superseded
 - file: s4-points/RESULT.md
   item: 'Step 7: the points view on the scene core, with 36 recorded reference cases, a CPU reference
     rasterisation, one set of uniform bytes on every backend and the old path deleted; the before and
@@ -577,7 +573,6 @@ entries:
     was replaced under the new camera.
   ids:
   - REN-12
-  - STR-11
 - file: s4-rebase/CONFLICTS.md
   item: Conflict record of the merge with main, including two semantic conflicts git did not report (the
     default camera and the Windows include check).
@@ -769,8 +764,7 @@ entries:
 - file: s4-orch/pr1/PR-1.md
   item: 'Known limits of demo 0: evaluation in the current training mode, the path leaving the box below
     span 2/3, a uniform grid and no test that showing the surface leaves training untouched.'
-  ids:
-  - STR-11
+  reason: superseded
 - file: s4-orch/pr1/PR-1.md
   item: Viewer scene queue bounded by messages and not bytes; a second send of state after the hub resubscribes;
     image bind groups not released; storage aliasing accepted by the core; scene.mjs not in CI; design

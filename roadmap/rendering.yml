@@ -147,7 +147,7 @@ features:
     title: Applets on the Scene Service
     status: planned
     scope: supporting
-    summary: EmbedScope and GPTScope draw through the scene service, so that every 3-D applet of the repository draws through one scene model.
+    summary: Native 3-D applets draw through the scene service, so that every 3-D applet uses one scene model.
     depends_on: [REN-35]
     sprint: 4
     design: design/roadmap.md#renderers
@@ -666,16 +666,6 @@ features:
     issue: null
     docs: docs/development/compatibility-and-epochs.md#host-abi-epoch-and-service-revisions
 
-  - id: REN-73
-    title: MeshScope
-    status: built
-    scope: peripheral
-    summary: Deleted demo applet (removed in epoch 3). Trained a small network on a 2-D surface drawn as lit triangles with a wireframe.
-    depends_on: [REN-65]
-    branches: [playground-m6]
-    issue: null
-    docs: docs/development/compatibility-and-epochs.md#host-abi-epoch-and-service-revisions
-
   - id: REN-74
     title: SculptScope
     status: built
@@ -757,15 +747,6 @@ features:
     summary: The browser module runs the draw half on WebGPU from the same WGSL and declaration, with the same hash checks and refusals, and a test compares its pictures with the pictures of the app.
     depends_on: [REN-69, REN-79]
     docs: docs/agents/pieces.md#browser-viewer
-    issue: null
-
-  - id: REN-83
-    title: Attention Arc Tower Demo
-    status: shipped
-    scope: peripheral
-    summary: A small transformer trains while an agent writes the pieces that draw the attention arcs of its tokens on rings, the induction score of each head and the attention grid, and an ablation and a fork test whether the induction heads cause the loss to fall.
-    depends_on: [INT-34, REN-80, RUN-15]
-    docs: docs/agents/pieces.md#attention-arc-tower
     issue: null
 
   - id: REN-84

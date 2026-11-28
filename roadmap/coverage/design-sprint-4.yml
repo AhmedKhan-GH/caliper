@@ -63,8 +63,7 @@ entries:
   item: 'Increment 1 as a whole: demo 0, the loss surface around the current weights as a mesh with the
     optimizer''s path, in a notebook widget and the browser viewer, recomputed on the device every N steps
     (18.5 days).'
-  ids:
-  - STR-11
+  reason: superseded
 - heading: 1. A loss landscape in a notebook
   item: 'The protocol 3.2 subset in three codecs with golden frames: capability scenes, kind scene (6),
     SCENE_UPDATE with points, lines and mesh, SCENE_CLEAR with reset (2 of 4 days).'
@@ -111,8 +110,7 @@ entries:
 - heading: 1. A loss landscape in a notebook
   item: 'Demo 0, the loss landscape: notebook, landscape.py, headless test, reference captures and cost
     measurement (3 days, new).'
-  ids:
-  - STR-11
+  reason: superseded
 - heading: 1. A loss landscape in a notebook
   item: 'What increment 1 defers: picking, events and selection; arrows, boxes, images, cameras, entity
     transforms, class table, labels, normals, textures; index-pair edges, up-axis switch, scale bar and
@@ -401,7 +399,6 @@ entries:
     migration step; the subset of increment 1 is what demo 0 draws; the network route only in increment
     1; the box and floor grid as ordinary line draws; step 6 in two halves.
   ids:
-  - STR-11
   - REN-14
 - heading: Decisions
   item: The graphics change with no backwards compatibility, a scene service for applets replacing the
@@ -416,14 +413,12 @@ entries:
     defaults and cost budget, MCAP and recording only when started.'
   ids:
   - STR-09
-  - STR-11
   - STR-12
 - heading: Risks
   item: 'Risks: the cost of the landscape''s surface, its changing plane, a slower fast path with no switch
     back, Windows and GPU-less machines, applets outside the repository, applet pictures that change,
     ids under review and one browser, MCAP with no size margin, scope of 162 days.'
   ids:
-  - STR-11
   - REN-17
   - STR-12
 - heading: Open questions
@@ -436,4 +431,3 @@ entries:
     recommends increment 2.
   ids:
   - REN-12
-  - STR-11

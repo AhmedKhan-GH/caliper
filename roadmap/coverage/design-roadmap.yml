@@ -16,7 +16,6 @@ entries:
   ids:
   - COR-01
   - COR-03
-  - COR-13
   - EMB-07
   - INT-05
 - heading: Where things stand
@@ -598,20 +597,16 @@ entries:
   - COR-35
 - heading: Undecided
   item: 'GPTScope follow-ups: point picking in ThoughtSpace.'
-  ids:
-  - INT-25
+  reason: abandoned
 - heading: Undecided
   item: 'GPTScope follow-ups: a learned projection in ThoughtSpace.'
-  ids:
-  - INT-26
+  reason: abandoned
 - heading: Undecided
   item: 'GPTScope follow-ups: induction-head metrics.'
-  ids:
-  - INT-16
+  reason: abandoned
 - heading: Undecided
   item: 'GPTScope follow-ups: activation patching.'
-  ids:
-  - INT-17
+  reason: abandoned
 - heading: Undecided
   item: 'Instrument inputs: live input slots bound to applet manifests through a live_input service.'
   ids:
@@ -663,7 +658,6 @@ entries:
     loss landscape and the training run, with three other demos moved to sprint 5.'
   ids:
   - REN-13
-  - STR-11
   - REN-37
   - REN-38
   - REN-39

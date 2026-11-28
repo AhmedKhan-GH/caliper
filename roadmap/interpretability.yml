@@ -2,35 +2,8 @@
 prefix: INT
 title: Interpretability and Interventions
 order: 7
-summary: This pillar covers the tools for looking inside a model while it runs, GPTScope and the inspector, and the planned interventions that change a model's computation during a run.
+summary: This pillar covers the tools for looking inside a model while it runs and the interventions that change a model's computation during a run.
 features:
-  - id: INT-01
-    title: GPTScope
-    status: shipped
-    scope: peripheral
-    summary: GPTScope is an applet that trains a small character-level language model live and shows what it has learned in seven windows, each answering one question.
-    depends_on: [COR-03]
-    docs: docs/applets/in-tree-applets.md#gptscope
-    issue: null
-
-  - id: INT-02
-    title: ThoughtSpace
-    status: shipped
-    scope: peripheral
-    summary: ThoughtSpace draws the model's residual stream as a 3-D constellation, with every token's state at every depth as a point and a trail joining the depths.
-    depends_on: [INT-01]
-    docs: docs/applets/in-tree-applets.md#gptscope
-    issue: null
-
-  - id: INT-03
-    title: Head Views
-    status: shipped
-    scope: peripheral
-    summary: The head views plot each attention head by mean attended distance and entropy, and draw the attention matrix of a selected head as a texture.
-    depends_on: [INT-01]
-    docs: docs/applets/in-tree-applets.md#gptscope
-    issue: null
-
   - id: INT-04
     title: Controls for Experiments
     status: shipped
@@ -142,24 +115,6 @@ features:
     branches: [inspector]
     issue: null
 
-  - id: INT-16
-    title: Induction Metrics
-    status: planned
-    scope: peripheral
-    summary: Induction metrics score each attention head for induction behaviour and show the scores in GPTScope.
-    depends_on: [INT-03]
-    design: design/roadmap.md#undecided
-    issue: null
-
-  - id: INT-17
-    title: Activation Patching in GPTScope
-    status: planned
-    scope: peripheral
-    summary: Activation patching in GPTScope lets a person replace activations of one run with those of another and see the effect on the model's output.
-    depends_on: [INT-01, INT-14]
-    design: design/roadmap.md#undecided
-    issue: null
-
   - id: INT-18
     title: MLX Support
     status: planned
@@ -189,7 +144,7 @@ features:
     status: planned
     scope: core
     summary: A person picks a head in the attention view and ablates it, or turns a selection in an embedding into a steering direction, from the viewer.
-    depends_on: [INT-03, INT-10]
+    depends_on: [INT-10]
     sprint: 6
     issue: null
 
@@ -202,46 +157,12 @@ features:
     sprint: 6
     issue: null
 
-  - id: INT-23
-    title: Head Ablation Demo
-    status: shipped
-    scope: peripheral
-    summary: A demo ablates the strongest induction head of a transformer that trains, live and with a toggle, and the loss rises while the head is out, in the Attention Arc Tower.
-    depends_on: [INT-11, REN-83]
-    docs: docs/agents/pieces.md#attention-arc-tower
-    issue: null
-
   - id: INT-24
     title: OpenGLlama Applet
     status: idea
     scope: peripheral
     summary: OpenGLlama could return as an applet of its own beside the inspector.
     depends_on: [INT-05]
-    issue: null
-
-  - id: INT-25
-    title: Point Picking in ThoughtSpace
-    status: idea
-    scope: peripheral
-    summary: A person could pick a point in ThoughtSpace's constellation and see its token and depth.
-    depends_on: [INT-02]
-    issue: null
-
-  - id: INT-26
-    title: Learned Projection in ThoughtSpace
-    status: idea
-    scope: peripheral
-    summary: ThoughtSpace could offer a learned projection of the residual stream beside its fixed one.
-    depends_on: [INT-02]
-    issue: null
-
-  - id: INT-27
-    title: EmbedScope
-    status: shipped
-    scope: peripheral
-    summary: EmbedScope trains a small MNIST network with a learned 3-D bottleneck and draws the test set's embeddings as a live scatter of ten classes, with SQL panels.
-    depends_on: [REN-08, RUN-01]
-    docs: docs/applets/in-tree-applets.md#embedscope
     issue: null
 
   - id: INT-28
