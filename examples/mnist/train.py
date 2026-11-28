@@ -170,8 +170,14 @@ def train(
     pace: float,
 ) -> dict[str, float | int]:
     """Run the MNIST training loop and publish live Caliper views."""
+    from caliper import interp as caliper_interp
+
     probe_acts: dict[str, torch.Tensor] = {}
     capturing = False
+    probe_images = (probe_x.squeeze(1) * MNIST_STD[0] + MNIST_MEAN[0]).clamp(0.0, 1.0).contiguous()
+    probe_labels = probe_y.to(torch.int32).contiguous()
+    caliper_interp.publish("probe.images", probe_images)
+    caliper_interp.publish("probe.labels", probe_labels)
 
     def save_conv1(_mod, _inp, out):
         if capturing:
@@ -191,13 +197,14 @@ def train(
         capturing = True
         try:
             with torch.no_grad():
-                model(probe_x)
+                probe_out = model(probe_x)
         finally:
             capturing = False
             if was_training:
                 model.train()
         caliper.show(probe_acts["conv1"], "conv1.act")
         caliper.points(probe_acts["hidden"] @ proj, probe_y, "embedding", classes=10)
+        caliper_interp.publish("probe.logits", probe_out.detach().contiguous())
 
     step = 0
     last_loss = float("nan")
