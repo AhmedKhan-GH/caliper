@@ -512,3 +512,146 @@ def test_interventions_end_when_the_server_goes(monkeypatch):
     with pytest.warns(RuntimeWarning):
         _train(model, batch, ctl)
     assert _hooks(model) == 0
+
+
+# ---------------------------------------------------------------------------
+# per-filter ConvNd channel intervention points
+# ---------------------------------------------------------------------------
+class TinyConv(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.conv1 = nn.Conv2d(1, 4, 3, 1)
+        self.single = nn.Conv2d(4, 1, 1, 1)
+        self.relu = nn.ReLU(inplace=True)
+        self.head = nn.Linear(4, 3)
+
+    def forward(self, x):
+        h = self.relu(self.conv1(x))
+        _ = self.single(h)
+        return self.head(h.mean(dim=(-2, -1)))
+
+
+def _conv_model():
+    torch.manual_seed(0)
+    return TinyConv()
+
+
+def _conv_batch():
+    g = torch.Generator().manual_seed(2)
+    return torch.randn(3, 1, 6, 6, generator=g), torch.randint(0, 3, (3,), generator=g)
+
+
+def test_conv_points_list_each_output_filter_and_skip_single_channel():
+    model = _conv_model()
+    pts = TORCH.points(model)
+    by_name = {p["point"]: p for p in pts}
+    for c in range(4):
+        assert by_name[f"conv1#{c}"] == {
+            "point": f"conv1#{c}",
+            "kind": "module",
+            "module": "conv1",
+            "head": None,
+            "type": "Conv2d",
+            "shape": None,
+        }
+    assert "single" in by_name
+    assert "single#0" not in by_name
+    assert "conv1#4" not in by_name
+    for bad in ("conv1#4", "conv1#01", "conv1#-1", "single#0"):
+        with pytest.raises(KeyError):
+            TORCH.ablate(model, bad)
+
+
+def test_conv_channel_ablation_zeroes_only_one_filter_batched_and_unbatched():
+    model, (x, y) = _conv_model(), _conv_batch()
+    with torch.no_grad():
+        base_b = model.conv1(x)
+        base_u = model.conv1(x[0])
+        base_logits = model(x)
+
+    off = TORCH.ablate(model, "conv1#2")
+    assert _hooks(model) == 1
+    with torch.no_grad():
+        abl_b = model.conv1(x)
+        abl_u = model.conv1(x[0])
+        abl_logits = model(x)
+
+    assert torch.count_nonzero(abl_b[:, 2]) == 0
+    assert torch.count_nonzero(abl_u[2]) == 0
+    for c in (0, 1, 3):
+        assert torch.equal(abl_b[:, c], base_b[:, c])
+        assert torch.equal(abl_u[c], base_u[c])
+    assert not torch.equal(abl_logits, base_logits)
+
+    # Backward + inplace ReLU after the ablated conv channel must still work.
+    loss = torch.nn.functional.cross_entropy(model(x), y)
+    loss.backward()
+    assert model.conv1.weight.grad is not None
+    assert torch.count_nonzero(model.conv1.weight.grad[2]) == 0
+
+    off()
+    assert _hooks(model) == 0
+    with torch.no_grad():
+        assert torch.equal(model(x), base_logits)
+
+
+def test_conv_channel_controls_and_wire_round_trip():
+    model, (x, y) = _conv_model(), _conv_batch()
+    ctl = C.Controls()
+    w = pytest.importorskip("caliper._wire")
+    if not hasattr(w, "OP_INTERVENE"):
+        pytest.skip("this codec has no CONTROL op intervene")
+    t = _Transport()
+    route = ctl.attach(t)
+    ctl.interventions_on(model)
+
+    def step_once():
+        opt = torch.optim.SGD(model.parameters(), lr=0.0)
+        opt.zero_grad()
+        torch.nn.functional.cross_entropy(model(x), y).backward()
+        ctl.step()
+        opt.step()
+
+    with torch.no_grad():
+        base = model(x)
+    step_once()
+
+    # Non-ablate op on a channel point is rejected cleanly by InterventionExecutor.
+    ex = _ablate.InterventionExecutor(model)
+    with pytest.raises(_ablate.InterventionError, match="ablate only"):
+        ex.validate({"point": "conv1#1", "op": "add", "vector": [1.0], "coefficient": 1.0})
+
+    reply = route.on_control("c", {
+        "request_id": 11,
+        "op": "intervene",
+        "intervene": {"set": {"point": "conv1#1", "op": "ablate"}},
+    })
+    w.ControlReply.from_frame(w.Frame(w.MsgType.CONTROL_REPLY, reply))
+    assert reply["status"] == "ok" and reply["op"] == "intervene"
+
+    step_once()
+    assert _hooks(model) == 1
+    with torch.no_grad():
+        ablated = model(x)
+    assert not torch.equal(ablated, base)
+
+    controls = [m for ty, m in t.out if ty == w.MsgType.CONTROLS]
+    last = w.Controls.from_frame(w.Frame(w.MsgType.CONTROLS, controls[-1])).to_meta()
+    iv = last["interventions"]
+    assert iv["active"] == [{
+        "point": "conv1#1",
+        "op": "ablate",
+        "from_step": None,
+        "until_step": None,
+        "since_step": 3,
+        "state": "active",
+    }]
+    pts = {p["point"]: p for p in iv["points"]}
+    assert pts["conv1#1"]["kind"] == "module" and pts["conv1#1"]["module"] == "conv1"
+
+    route.on_control("c", {"request_id": 12, "op": "intervene", "intervene": {"clear": "conv1#1"}})
+    step_once()
+    assert _hooks(model) == 0
+    with torch.no_grad():
+        assert torch.equal(model(x), base)
+    route.detach()
