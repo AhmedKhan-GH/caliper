@@ -378,7 +378,7 @@ endif()
 # Category 4: PyTorch (Large dependency)
 # ============================================================================
 # APPLET-ONLY. libcaliper / the caliper exe / embed_host never link libtorch:
-# TORCH_LIBRARIES is consumed by applets/* and the
+# TORCH_LIBRARIES is consumed by examples/mnist/applet and the
 # torch-labelled tests, never appended to CALIPER_DEPENDENCY_LIBS. With
 # CALIPER_WITH_TORCH=OFF the whole category is skipped (no download, no
 # find_package(Torch)) and TORCH_LIBRARIES stays empty.

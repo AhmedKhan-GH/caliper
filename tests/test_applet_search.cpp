@@ -51,13 +51,13 @@ void fake_applet(const fs::path& dir, const std::string& stem, const std::string
     std::ofstream(dir / lib_name(stem)) << "never opened";
 }
 
-// The hello fixture's library under `stem`, with its own manifest.
-void hello_applet(const fs::path& dir, const std::string& stem) {
+// The hello_world fixture's library under `stem`, with its own manifest.
+void hello_world_applet(const fs::path& dir, const std::string& stem) {
     fs::create_directories(dir);
-    fs::copy_file(fs::path(CALIPER_TEST_APPLETS_DIR) / lib_name("hello"),
+    fs::copy_file(fs::path(CALIPER_TEST_APPLETS_DIR) / lib_name("hello_world"),
                   dir / lib_name(stem), fs::copy_options::overwrite_existing);
     std::ofstream(dir / (stem + ".caliper.toml")) <<
-        "[applet]\nid=\"dev.caliper.hello\"\nname=\"Hello\"\nversion=\"0.1.0\"\n"
+        "[applet]\nid=\"dev.caliper.hello-world\"\nname=\"Hello World\"\nversion=\"0.1.0\"\n"
         "[compat]\nabi_epoch=3\n[services]\nrequired=[\"caliper.ui.v1\"]\n";
 }
 
@@ -258,41 +258,41 @@ TEST_CASE("copies: the data schema decides with the other checks") {
 TEST_CASE("copies: a later scan can take over, and only the chosen copy launches") {
     caliper::testing::FixtureHost fx;
     TempDir t("launch");
-    hello_applet(t.path / "first", "hello");
-    hello_applet(t.path / "second", "hello_copy");
+    hello_world_applet(t.path / "first", "hello_world");
+    hello_world_applet(t.path / "second", "hello_world_copy");
     AppletLoader L(caps(), t.str("data"));
     L.scan(t.str("first"));
-    CHECK(L.at(L.find("dev.caliper.hello")).status == AppletStatus::Ready);
+    CHECK(L.at(L.find("dev.caliper.hello-world")).status == AppletStatus::Ready);
     L.scan(t.str("second"));   // equal version, searched later: shadowed
     REQUIRE(L.count() == 2);
-    const int first = entry_in(L, "dev.caliper.hello", t.path / "first");
-    const int second = entry_in(L, "dev.caliper.hello", t.path / "second");
-    CHECK(L.find("dev.caliper.hello") == first);
+    const int first = entry_in(L, "dev.caliper.hello-world", t.path / "first");
+    const int second = entry_in(L, "dev.caliper.hello-world", t.path / "second");
+    CHECK(L.find("dev.caliper.hello-world") == first);
     CHECK(L.at(second).status == AppletStatus::Shadowed);
     CHECK_FALSE(L.launch(second, *fx.host()));      // a shadowed copy never runs
     CHECK(L.at(second).handle == nullptr);
     REQUIRE(L.launch(first, *fx.host()));
     CHECK(L.at(first).status == AppletStatus::Active);
-    CHECK(L.find("dev.caliper.hello") == first);    // a running copy is the one
+    CHECK(L.find("dev.caliper.hello-world") == first);    // a running copy is the one
     L.close_all();
 }
 
 TEST_CASE("copies: probe opens, checks and creates without initializing") {
     caliper::testing::FixtureHost fx;
     TempDir t("probe");
-    hello_applet(t.path / "a", "hello");
+    hello_world_applet(t.path / "a", "hello_world");
     std::ofstream(t.path / "a" / "liar.caliper.toml") <<   // descriptor disagrees
         "[applet]\nid=\"dev.caliper.liar\"\nname=\"Liar\"\nversion=\"0.1.0\"\n"
         "[compat]\nabi_epoch=3\n";
-    fs::copy_file(t.path / "a" / lib_name("hello"), t.path / "a" / lib_name("liar"));
+    fs::copy_file(t.path / "a" / lib_name("hello_world"), t.path / "a" / lib_name("liar"));
     AppletLoader L(caps(), t.str("data"));
     L.scan(t.str("a"));
-    const int hello = L.find("dev.caliper.hello");
+    const int hello = L.find("dev.caliper.hello-world");
     const int liar = L.find("dev.caliper.liar");
     CHECK(L.probe(hello));
     CHECK(L.at(hello).status == AppletStatus::Ready);
-    CHECK_FALSE(fx.log_contains("hello.on_init"));
-    CHECK_FALSE(fs::exists(t.path / "data" / "dev.caliper.hello"));   // no data folder
+    CHECK_FALSE(fx.log_contains("hello_world.on_init"));
+    CHECK_FALSE(fs::exists(t.path / "data" / "dev.caliper.hello-world"));   // no data folder
     CHECK_FALSE(L.probe(liar));
     CHECK(L.at(liar).status == AppletStatus::Failed);
     CHECK(L.at(liar).status_text == "descriptor id disagrees with manifest");

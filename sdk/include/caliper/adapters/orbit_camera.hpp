@@ -1,11 +1,7 @@
 #pragma once
 
-// Header-only orbit-camera math, hoisted verbatim from the TwinScope donor
-// applet (git show codex/twinscope-implementation:applets/twin_scope/
-// twin_scope.cpp, the V3/look_at/perspective block) so that draw AND pick share
-// ONE eye computation (design §8.f). The math is byte-identical to the donor;
-// only the two convenience helpers (orbit_eye, cursor_ray) are factored out of
-// the donor's draw_ui usage so the applet stops duplicating them.
+// Header-only orbit-camera math (V3, look_at, perspective, orbit_eye, and
+// cursor_ray) so that draw and pick share one eye computation.
 
 #include <cmath>
 #include <cstring>

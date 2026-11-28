@@ -1295,7 +1295,7 @@ TEST_CASE("gfx/Vulkan+CUDA: timing — update cost by size") {
     }
 }
 
-// Frame-thread hitch forensics (embed_scope "hitches every batch" report):
+// Frame-thread hitch forensics (per-batch texture refresh report):
 // the applet's per-generation refresh does release+create for all 9 textures
 // (8x conv 48x48 + 1x embw 36x512). On the Vulkan+CUDA path a CREATE is the
 // full interop setup — vkCreateImage + exportable memory + cuImportExternalMemory
