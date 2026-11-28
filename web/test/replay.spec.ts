@@ -387,6 +387,8 @@ test('docs embed replays the recorded MNIST run via static files and WASM on Web
 
     // WebGPU (metal) and SwiftShader: real WASM views draw every recorded view with no server and no WebSocket.
     const firstState = await waitReplayLive(page);
+    // A measurement for READY_DEADLINE_MS in docs-embed.ts: the time from live mode until every plate is ready.
+    console.log(`${info.project.name} docs embed ready after ${Number(firstState.readyMs).toFixed(0)} ms`);
     const steps = firstState.steps as number[];
     expect(steps.length).toBeGreaterThan(1);
     // The timeline holds every recorded step of any view, not only the snapshot steps.

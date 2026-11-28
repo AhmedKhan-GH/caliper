@@ -16,6 +16,13 @@ defineView();
 
 const SCREENSHOT_TEXT = 'The image below is a static screenshot of the replay.';
 
+// Hang guard: the time from live mode until every plate's WebAssembly view is ready, after which a
+// plate that is still not ready falls back. The module is fetched before live mode, so this covers
+// only the mount on the device. Measured in headless Chromium on Apple silicon, five runs each
+// (web/test/replay.spec.ts prints it): ready at the first 200 ms poll on Metal WebGPU and at the second,
+// 0.4 s, on SwiftShader. 30 s is 75 times the slowest run, generous for slower machines.
+const READY_DEADLINE_MS = 30_000;
+
 /** The first sentence of the fallback notice: why the live replay does not show. */
 function fallbackCause(reason: string): string {
   if (reason === 'insecure-context') {
@@ -76,6 +83,8 @@ export class CaliperReplay extends HTMLElement {
   private replay: ReplaySource | null = null;
   private unlistenTimeline: (() => void) | null = null;
   private healthTimer: ReturnType<typeof setInterval> | null = null;
+  private liveSince = 0;
+  private readyMs: number | null = null;
   private plates: CaliperView[] = [];
   private readonly parts: {
     shell: HTMLElement;
@@ -172,6 +181,7 @@ export class CaliperReplay extends HTMLElement {
       stepIndex: r ? r.stepIndex : 0,
       currentStep: r ? r.currentStep : 0,
       playing: r ? r.playing : false,
+      readyMs: this.readyMs,
       fallbackShown: !this.parts.fallback.hidden,
       fallbackImgVisible: !this.parts.fallback.hidden && !this.parts.fallbackImg.hidden,
       fallbackSrc: this.parts.fallbackImg.getAttribute('src') ?? '',
@@ -405,7 +415,10 @@ export class CaliperReplay extends HTMLElement {
     this.syncTimeline();
 
     // Monitor WASM device startup: if any plate fails to acquire a WebGPU device or falls off WASM,
-    // switch cleanly to the static fallback instead of showing a blank box.
+    // switch cleanly to the static fallback instead of showing a blank box. A plate that never gets
+    // ready and never reports an error also falls back, after READY_DEADLINE_MS.
+    this.liveSince = performance.now();
+    this.readyMs = null;
     this.healthTimer = setInterval(() => {
       if (gen !== this.generation || this.mode !== 'live') return;
       let allReady = true;
@@ -423,8 +436,11 @@ export class CaliperReplay extends HTMLElement {
         if (!st.wasmReady) allReady = false;
       }
       if (allReady && this.healthTimer) {
+        this.readyMs = performance.now() - this.liveSince;
         clearInterval(this.healthTimer);
         this.healthTimer = null;
+      } else if (!allReady && performance.now() - this.liveSince > READY_DEADLINE_MS) {
+        this.showFallback('wasm-ready-timeout');
       }
     }, 200);
   }
