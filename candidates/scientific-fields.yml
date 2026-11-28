@@ -3,7 +3,7 @@ pillar: SCI
 title: Scientific Fields
 proposed: true
 description: "This pillar holds views by field: fluids, operator learning, molecules, materials, climate, astronomy, particle and plasma physics, neuroscience, genomics, quantum, dynamics, control, signals, Bayesian inference, hardware design."
-alternative: "Scientific fields could be kept out of the registry entirely as a catalogue of applets to build on the platform, since most entries are applets and not platform features."
+alternative: "Scientific fields could be kept out of the registry entirely as a catalogue of instruments to build on the platform, since most entries are instruments and not platform features."
 candidates:
   - key: internals-beside-lab-data
     title: "Model Internals Beside Laboratory Data"

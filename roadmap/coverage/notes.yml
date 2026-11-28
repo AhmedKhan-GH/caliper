@@ -154,7 +154,7 @@ entries:
     13 and passed alone three times; check first on resuming.
   reason: maintenance
 - file: _notes/HANDOFF-sprint4.md
-  item: caliper_cli_api fails in the release-notorch preset because it builds no sine-scope applet; Python
+  item: caliper_cli_api fails in the release-notorch preset because it builds no sine-scope instrument; Python
     tests need the wheel's native modules.
   reason: maintenance
 - file: _notes/HANDOFF-sprint4.md
@@ -328,7 +328,7 @@ entries:
   ids:
   - REN-25
 - file: _notes/HANDOFF-sprint4.md
-  item: 'Trim: the port of one applet from outside the repository (step 16, 3 days) moved to when it is
+  item: 'Trim: the port of one instrument from outside the repository (step 16, 3 days) moved to when it is
     needed.'
   ids:
   - REN-35
@@ -351,7 +351,7 @@ entries:
   - REN-55
   - REN-56
 - file: _notes/HANDOFF-sprint4.md
-  item: 'Trim: recordings through the hub with spec version 1 and applet scenes in recordings moved to
+  item: 'Trim: recordings through the hub with spec version 1 and instrument scenes in recordings moved to
     sprint 5.'
   ids:
   - STR-15
@@ -757,7 +757,7 @@ entries:
   - REN-09
 - file: s4-orch/pr1/PR-1.md
   item: 'Known gap: the scene view draws points, lines and meshes only; the other parts, picking and the
-    applet service come in later parts.'
+    instrument service come in later parts.'
   ids:
   - REN-12
   - REN-15
@@ -809,7 +809,7 @@ entries:
   ids:
   - AGT-05
 - file: sprint3-integration/PR.md
-  item: 'In the app: command endpoints of Caliper API, spec runtime and spec applet kind, catalog providers,
+  item: 'In the app: command endpoints of Caliper API, spec runtime and spec-based instrument kind, catalog providers,
     builder pane, drag and drop, approval cards and stacked previews; in the browser GET /v0/spec, panel.data
     and a viewer token.'
   ids:
@@ -1166,8 +1166,8 @@ entries:
   ids:
   - HYG-05
 - file: codebase-hygiene/BRIEF.md
-  item: Codebase hygiene brief, Showcase Applets Repository row, which moves the hand-built showcase
-    applets out of the core repository after the separate applets repository exists.
+  item: Codebase hygiene brief, Showcase Instruments Repository row, which moves the hand-built showcase
+    instruments out of the core repository after the separate instruments repository exists.
   ids:
   - HYG-06
 - file: codebase-hygiene/BRIEF.md

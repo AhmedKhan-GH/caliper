@@ -10,7 +10,7 @@ features:
     scope: supporting
     summary: macOS is the primary platform, where the host draws with its own Metal renderer and takes tensors from torch on MPS without a copy.
     depends_on: []
-    docs: docs/applets/rendering.md#backends
+    docs: docs/instruments/rendering.md#backends
     issue: null
 
   - id: PLT-02
@@ -26,7 +26,7 @@ features:
     title: Continuous Integration
     status: shipped
     scope: supporting
-    summary: Continuous integration builds and tests the core on macOS and on windows-latest, builds the applets and packages against the installed SDK, and checks that the host names no applet.
+    summary: Continuous integration builds and tests the core on macOS and on windows-latest, builds the instruments and packages against the installed SDK, and checks that the host names no instrument.
     depends_on: []
     docs: docs/development/ci.md
     issue: null
@@ -38,7 +38,7 @@ features:
     summary: The macOS app is signed and notarized for distribution, together with the agents it packages.
     depends_on: [PLT-01]
     sprint: 5
-    design: design/applets-outside-the-core.md#signing-on-macos
+    design: design/instruments-outside-the-core.md#signing-on-macos
     issue: null
 
   - id: PLT-05
@@ -52,12 +52,12 @@ features:
     issue: null
 
   - id: PLT-06
-    title: Applet Platform on Windows
+    title: Instrument Platform on Windows
     status: planned
     scope: supporting
-    summary: The applet platform on Windows gets applet loading with the right DLL search directories, the libtorch pin with its CUDA variant, install over a loaded DLL, a console entry point, and caliper shot and caliper build.
+    summary: The instrument platform on Windows gets instrument loading with the right DLL search directories, the libtorch pin with its CUDA variant, install over a loaded DLL, a console entry point, and caliper shot and caliper build.
     depends_on: [COR-08, COR-10, PLT-13]
-    design: design/windows-parity.md#2-the-applet-platform
+    design: design/windows-parity.md#2-the-instrument-platform
     issue: null
 
   - id: PLT-07
@@ -109,7 +109,7 @@ features:
     title: Signing and Packaging on Windows
     status: planned
     scope: peripheral
-    summary: Windows gets Authenticode signing of the app, the CLI entry point and the first-party applet DLLs, an installer, and a winget package that puts the CLI on the path.
+    summary: Windows gets Authenticode signing of the app, the CLI entry point and the first-party instrument DLLs, an installer, and a winget package that puts the CLI on the path.
     depends_on: [PLT-06]
     design: design/windows-parity.md#8-signing-packaging-and-distribution
     issue: null

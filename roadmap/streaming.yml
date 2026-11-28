@@ -270,10 +270,10 @@ features:
     issue: null
 
   - id: STR-31
-    title: Applet Scenes in Recordings and the Hub
+    title: Instrument Scenes in Recordings and the Hub
     status: planned
     scope: peripheral
-    summary: Scenes that applets draw through the scene service are recorded with a session and travel through the hub like a script's scenes.
+    summary: Scenes that instruments draw through the scene service are recorded with a session and travel through the hub like a script's scenes.
     depends_on: [REN-35, STR-15]
     sprint: 5
     issue: null
@@ -356,9 +356,9 @@ features:
     title: Feed Service
     status: shipped
     scope: peripheral
-    summary: caliper.feed.v1 gives applets telemetry channels of the machine from ring buffers that the host owns, read without blocking and with every lost sample counted.
+    summary: caliper.feed.v1 gives instruments telemetry channels of the machine from ring buffers that the host owns, read without blocking and with every lost sample counted.
     depends_on: [COR-03]
-    docs: docs/applets/services/caliper-feed-v1.md
+    docs: docs/instruments/services/caliper-feed-v1.md
     issue: null
 
   - id: STR-43

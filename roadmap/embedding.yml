@@ -20,7 +20,7 @@ features:
     scope: core
     summary: Points draw in the browser through the WebGPU renderer, as instanced quads with the native colour rule and depth test, because WebGPU draws a point one pixel wide.
     depends_on: [EMB-04]
-    docs: docs/applets/rendering.md#webgpu-backend
+    docs: docs/instruments/rendering.md#webgpu-backend
     design: design/streaming-and-embedding.md#the-web-viewer
     issue: null
 
@@ -56,10 +56,10 @@ features:
     title: Spec Page
     status: shipped
     scope: core
-    summary: A saved spec applet opens in a browser tab at the page that Caliper API serves at /v0/spec, drawn with the spec page's layout and look from the app's panel data.
+    summary: A saved spec-based instrument opens in a browser tab at the page that Caliper API serves at /v0/spec, drawn with the spec page's layout and look from the app's panel data.
     depends_on: [AGT-01, SPC-08]
     docs: docs/agents/http-api.md#get-v0spec
-    design: design/streaming-and-embedding.md#spec-applets
+    design: design/streaming-and-embedding.md#spec-based-instruments
     issue: null
 
   - id: EMB-07
@@ -86,7 +86,7 @@ features:
     title: ImPlot3D in the Browser
     status: planned
     scope: peripheral
-    summary: ImPlot3D, which C++ applets use for 3-D plots, is part of the browser module so that its views draw in a browser.
+    summary: ImPlot3D, which C++ instruments use for 3-D plots, is part of the browser module so that its views draw in a browser.
     depends_on: [EMB-02]
     design: design/streaming-and-embedding.md#the-web-viewer
     issue: null
@@ -101,12 +101,12 @@ features:
     issue: null
 
   - id: EMB-11
-    title: Applets in a Browser
+    title: Instruments in a Browser
     status: planned
     scope: supporting
-    summary: Applets run in a browser by splitting each into a native computation and a WebAssembly interface that draws from the data stream.
+    summary: Instruments run in a browser by splitting each into a native computation and a WebAssembly interface that draws from the data stream.
     depends_on: [EMB-10, SPC-21]
-    design: design/streaming-and-embedding.md#applets-in-the-browser
+    design: design/streaming-and-embedding.md#instruments-in-the-browser
     issue: null
 
   - id: EMB-12
@@ -242,7 +242,7 @@ features:
     title: Spec Page from a Hub or a Script
     status: planned
     scope: core
-    summary: The browser page of a spec applet reads its data from a hub or from a script's caliper.serve(), follows live sources over the stream and runs the tensor transforms itself.
+    summary: The browser page of a spec-based instrument reads its data from a hub or from a script's caliper.serve(), follows live sources over the stream and runs the tensor transforms itself.
     depends_on: [EMB-06, STR-06]
     issue: null
 
@@ -250,7 +250,7 @@ features:
     title: Spec Page Tooltips and Selection
     status: planned
     scope: core
-    summary: The browser page of a spec applet draws tooltips, selection, zoom and the grid and ticks of 3-D walls, as the app does.
+    summary: The browser page of a spec-based instrument draws tooltips, selection, zoom and the grid and ticks of 3-D walls, as the app does.
     depends_on: [EMB-06]
     issue: null
 

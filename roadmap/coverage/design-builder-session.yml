@@ -59,12 +59,12 @@ entries:
   - SPC-06
 - heading: The commands it binds
   item: 'The table of command groups the session binds: catalog, data, loader, spec, source, panel, layout,
-    preview, applet, review and history.'
+    preview, instrument, review and history.'
   ids:
   - SPC-06
   - SPC-05
 - heading: What SessionHost leaves to the app
-  item: Five commands (app.info, app.applets, app.launch, panel.render, capture.frame) need the running
+  item: Five commands (app.info, app.instruments, app.launch, panel.render, capture.frame) need the running
     app and are bound through SessionHost.
   ids:
   - SPC-06
@@ -105,9 +105,9 @@ entries:
     outputs with it.
   ids:
   - SPC-03
-- heading: Applets
-  item: applet.save writes the spec and manifest atomically, applet.open and spec.open check paths, and
-    applet.list lists spec applets.
+- heading: Instruments
+  item: instrument.save writes the spec and manifest atomically, instrument.open and spec.open check paths, and
+    instrument.list lists spec-based instruments.
   ids:
   - SPC-08
   - SPC-05
@@ -166,13 +166,13 @@ entries:
   - AGT-01
   - SPC-06
 - heading: SessionHost
-  item: The app implements app.info, app.applets, app.launch, capture.frame and panel.render for the session.
+  item: The app implements app.info, app.instruments, app.launch, capture.frame and panel.render for the session.
   ids:
   - SPC-06
   - COR-08
 - heading: The spec page
-  item: The spec page draws the open spec after any successful applet.open, lists the workspace's spec
-    applets under Projects, and gives each key one meaning (command input, inline prompt, Escape).
+  item: The spec page draws the open spec after any successful instrument.open, lists the workspace's spec
+    instruments under Projects, and gives each key one meaning (command input, inline prompt, Escape).
   ids:
   - SPC-07
   - SPC-08
@@ -244,12 +244,12 @@ entries:
   ids:
   - SPC-03
 - heading: Limits
-  item: 'Undo and replay stop at the session: saved applets and loader tables stay, and replay rebuilds
+  item: 'Undo and replay stop at the session: saved instruments and loader tables stay, and replay rebuilds
     the open spec but not the loaders.'
   ids:
   - SPC-05
 - heading: Limits
-  item: The stand-in serves no stream, info, applets or capture and runs on macOS and Linux only.
+  item: The stand-in serves no stream, info, instruments or capture and runs on macOS and Linux only.
   ids:
   - SPC-06
 - heading: Limits
@@ -258,7 +258,7 @@ entries:
   ids:
   - SPC-05
 - heading: Limits
-  item: Going Home from an applet joins every job of the host's job system, so it waits for a running
+  item: Going Home from an instrument joins every job of the host's job system, so it waits for a running
     loader up to five seconds.
   ids:
   - SPC-06

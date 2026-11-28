@@ -233,9 +233,9 @@ read as allowing every command to agents. An agent takes back a change with an e
 Output schemas and structured content came with revision 2025-06-18, so every revision `caliper-mcp` serves has them
 and every tool states its output schema. A client that asks for an older revision is answered with 2025-11-25.
 
-`app.launch` does not mutate the workspace in the command layer's sense, but it tears down the open applet and
+`app.launch` does not mutate the workspace in the command layer's sense, but it tears down the open instrument and
 changes the page the person sees (an attached live session stays attached), so it is not read-only in MCP's sense ("does not modify its environment") and its
-`readOnlyHint` is false. A client may approve read-only tools without asking, and launching an applet should not be one
+`readOnlyHint` is false. A client may approve read-only tools without asking, and launching an instrument should not be one
 of them.
 
 For example, `app.launch` becomes:
@@ -244,7 +244,7 @@ For example, `app.launch` becomes:
 {
   "name": "app_launch",
   "title": "app.launch",
-  "description": "Opens the page of one applet, as a click on its row on the app's landing screen does. ...",
+  "description": "Opens the page of one instrument, as a click on its row on the app's landing screen does. ...",
   "inputSchema": {"type": "object", "additionalProperties": false, "required": ["id"],
                   "properties": {"id": {"type": "string", "pattern": "^[A-Za-z0-9._-]{1,128}$", "...": "..."}}},
   "outputSchema": {"type": "object", "additionalProperties": false,
@@ -289,8 +289,8 @@ the limit of the endpoint, are refused the same way.
 | Tool | Request | Notes |
 |---|---|---|
 | `app_info` | `GET /v0/info` | |
-| `app_applets` | `GET /v0/applets` | |
-| `app_launch` | `POST /v0/applets/{id}/launch` | The id is checked again against the API's grammar before it enters the path. |
+| `app_instruments` | `GET /v0/instruments` | |
+| `app_launch` | `POST /v0/instruments/{id}/launch` | The id is checked again against the API's grammar before it enters the path. |
 | `capture_frame` | `GET /v0/capture.png` | The PNG becomes image content. |
 | every other tool | `POST /v0/commands/{name}` | The body is the arguments; `Content-Type: application/json` and `X-Caliper-Origin: mcp` (or `agent`). |
 
@@ -311,7 +311,7 @@ A successful call becomes a `CallToolResult` with:
   endpoint itself and reads the size from the PNG header.
 
 `app_launch` relays the launch's answer as it is. When the app answers `status` `PENDING_APPROVAL` (the dashboard
-would replace the open spec's unsaved changes, so its `applet.open` waits on an approval card) or `PENDING`, the call
+would replace the open spec's unsaved changes, so its `instrument.open` waits on an approval card) or `PENDING`, the call
 succeeds, and the text block an agent reads holds that status and the `note`, which says the dashboard is not open
 yet and that `spec_get` names the open spec once it is; so an agent checks rather than believes that it opened.
 
@@ -346,7 +346,7 @@ An error envelope from the command layer passes through unchanged, with `approva
 | `mcp.bad_response`, `mcp.response_too_large` | An answer that is malformed or larger than 64 MiB. |
 | `mcp.invalid_result` | A result that does not match the output schema, or a `png_base64` that is not a PNG. |
 | `capture.unavailable` | `GET /v0/capture.png` answered 501: the renderer cannot read the window back (GL and Vulkan; Metal can). |
-| `app.applet_not_found`, `app.launch_refused` | A launch answered 404 or 409. |
+| `app.instrument_not_found`, `app.launch_refused` | A launch answered 404 or 409. |
 
 ### Approval
 
@@ -373,7 +373,7 @@ other flags when `caliper-mcp` parses the app's table; its annotations stay `rea
 |---|---|---|
 | `caliper://docs/<path>` | A Markdown page (`.md`) under the `--docs` folder | `text/markdown` |
 | `caliper://sdk/<path>` | A header (`.h`, `.hpp`) under the `--sdk` folder | `text/x-c`, `text/x-c++hdr` |
-| `caliper://schema/caliper-spec-v0.schema.json` | The JSON Schema of a spec's canonical JSON, compiled into `caliper-mcp` from `src/builder/spec/schema/` | `application/schema+json` |
+| `caliper://schema/caliper-spec-v2.schema.json` | The JSON Schema of a spec's canonical JSON, compiled into `caliper-mcp` from `src/builder/spec/schema/` | `application/schema+json` |
 | `caliper://commands/command_table.json` | The command table the tools come from, in the form of `GET /v0/commands` | `application/json` |
 
 `resources/list` lists them sorted by URI, 200 to a page, with an opaque `nextCursor`. `resources/templates/list`
@@ -423,7 +423,7 @@ never puts a header value into an error message.
 | Limit | Value |
 |---|---|
 | Connect | 2 seconds |
-| API v0 endpoints (info, applets, launch, capture) | 15 seconds, as silence and as the whole exchange |
+| API v0 endpoints (info, instruments, launch, capture) | 15 seconds, as silence and as the whole exchange |
 | `GET /v0/commands` | 10 seconds; the table at most 8 MiB |
 | `POST /v0/commands/{name}` | 130 seconds by default (`--command-timeout`) |
 | A response body | 64 MiB, which a `panel.render` of the largest size could exceed |
@@ -431,10 +431,10 @@ never puts a header value into an error message.
 
 ## What works against API v0
 
-API v0, as it is on `sprint2`, has `GET /v0/info`, `GET /v0/applets`, `POST /v0/applets/{id}/launch`,
+API v0, as it is on `sprint2`, has `GET /v0/info`, `GET /v0/instruments`, `POST /v0/instruments/{id}/launch`,
 `GET /v0/capture.png` and the stream, and no command layer. Against it:
 
-- `app_info`, `app_applets`, `app_launch` and `capture_frame` work. `capture_frame` works in the app's window on Metal,
+- `app_info`, `app_instruments`, `app_launch` and `capture_frame` work. `capture_frame` works in the app's window on Metal,
   hidden or not, and in `caliper shot --api`; on the GL and Vulkan renderers it is the tool error
   `capture.unavailable`.
 - `tools/list` offers the compiled-in table, since `GET /v0/commands` answers 404.
@@ -496,7 +496,7 @@ The tests are headless and run with the builder project's ctest.
   messages alone does what an outside agent would: it lists the tools (the host's table), reads a docs page, the
   command table and the spec schema as resources, imports the two files, runs their loaders while the host holds each
   call until the test allows it through the host's approval lines, reads the catalog, queries the table, builds the
-  three-panel dashboard of the spec fixture `dashboard.spec.toml` command by command, saves the applet and reads the
+  three-panel dashboard of the spec fixture `dashboard.spec.toml` command by command, saves the instrument and reads the
   spec back. The saved spec on disk must equal the fixture. A second `caliper-mcp` with `--origin agent` then sends a
   destructive command, which the host announces with the origin `agent` and the test denies. The build's arguments
   come from the fixture through the session's conversions, so the test knows no command's schema. It runs whenever
@@ -504,7 +504,7 @@ The tests are headless and run with the builder project's ctest.
 - `builder_mcp_app` is the end-to-end test against the real app, after contracts sections 14 and 17. When the CMake
   variable `CALIPER_BUILDER_TEST_APP` names a `caliper` executable, it starts it with
   `--hidden --api --api-port 0` and its own `CALIPER_DATA_DIR`, runs `caliper-mcp` against the API file it writes,
-  calls `app_info`, `app_applets` and `capture_frame` (which must give a PNG that is not blank, or the documented
+  calls `app_info`, `app_instruments` and `capture_frame` (which must give a PNG that is not blank, or the documented
   `capture.unavailable`), calls a command tool and expects `mcp.no_command_layer`, and stops the app with SIGTERM.
   Without the variable, ctest reports it as skipped. To run it, configure the builder project with
   `-DCALIPER_BUILDER_TEST_APP=<path to a caliper executable>`; the app must be able to start hidden on that machine.
@@ -512,8 +512,8 @@ The tests are headless and run with the builder project's ctest.
 ### Results on this branch
 
 The end-to-end test was run on 15 November 2026 with a copy of the `caliper` executable built from `sprint2`, on
-macOS with the Metal renderer. It passed: `app_info` gave the app's version and services, `app_applets` an empty list
-(the copy had no applets beside it), `capture_frame` a PNG of 2560 by 1600 pixels that is not blank, and
+macOS with the Metal renderer. It passed: `app_info` gave the app's version and services, `app_instruments` an empty list
+(the copy had no instruments beside it), `capture_frame` a PNG of 2560 by 1600 pixels that is not blank, and
 `catalog_list` the tool error `mcp.no_command_layer`. The app ended with exit code 0 after SIGTERM and removed its API
 file, and the token did not appear in the output of `caliper-mcp`.
 
@@ -555,7 +555,7 @@ declarations. `caliper-mcp` passes the schemas through unchanged; see [Open ques
 - **The four v0 tools always use their v0 endpoints**, so they work against every version of the app.
 - **The app's table wins**, and a bad command in it is left out alone, so one fault does not take every tool away.
 - **The output schema is checked before a result is returned**; a mismatch is a tool error that keeps the result.
-- **`app.launch` is not read-only**, because it changes what the person sees and tears down the open applet.
+- **`app.launch` is not read-only**, because it changes what the person sees and tears down the open instrument.
 - **The API file is read at every call.** It is small, and it makes a restarted app work at the next call with no
   cache to invalidate. The retry after a 401 or a refused connection covers the moment between two reads.
 - **No half-close.** The client keeps its writing side open until the answer arrives, because a server may take the end

@@ -2,10 +2,10 @@
 title: Docs pages
 kind: docs
 summary: 'The pages of the docs site, which describe what is shipped on main: each CLI subcommand, service,
-  applet, reference, guide and explanation, mapped to the shipped feature it describes.'
+  instrument, reference, guide and explanation, mapped to the shipped feature it describes.'
 entries:
 - page: docs/reference/cli.md#app-startup
-  item: Starting the app with caliper, with --applets folders and --url to attach to a stream at start.
+  item: Starting the app with caliper, with --instruments folders and --url to attach to a stream at start.
   ids:
   - COR-06
   - STR-43
@@ -18,7 +18,7 @@ entries:
   ids:
   - SPC-06
 - page: docs/builder/workspace.md#spec-page
-  item: Launching a spec applet or opening a spec through a command shows the spec page.
+  item: Launching a spec-based instrument or opening a spec through a command shows the spec page.
   ids:
   - SPC-08
   - EMB-06
@@ -28,45 +28,45 @@ entries:
   ids:
   - COR-42
 - page: docs/reference/cli.md#search-order
-  item: The fixed search order of development folders, CALIPER_APPLET_PATH, the user applets folder and
+  item: The fixed search order of development folders, CALIPER_INSTRUMENT_PATH, the user instruments folder and
     the app folder.
   ids:
   - COR-06
 - page: docs/reference/cli.md#build-folders
-  item: A build folder stands for its applets/ subfolder in every search list.
+  item: A build folder stands for its instruments/ subfolder in every search list.
   ids:
   - COR-06
-- page: docs/reference/applet-commands.md#caliper-list
-  item: caliper list prints every applet in the search folders with its status, id, version, kind and
+- page: docs/reference/instrument-commands.md#caliper-list
+  item: caliper list prints every instrument in the search folders with its status, id, version, kind and
     folder, without opening a library.
   ids:
   - COR-39
-- page: docs/reference/applet-commands.md#caliper-check
-  item: caliper check runs the pre-load checks on every applet of one folder and validates each spec applet
+- page: docs/reference/instrument-commands.md#caliper-check
+  item: caliper check runs the pre-load checks on every instrument of one folder and validates each spec-based instrument
     in full.
   ids:
   - COR-07
   - SPC-02
-- page: docs/reference/applet-commands.md#caliper-install
-  item: caliper install checks a folder and copies the applets into the user applets folder all or nothing.
+- page: docs/reference/instrument-commands.md#caliper-install
+  item: caliper install checks a folder and copies the instruments into the user instruments folder all or nothing.
   ids:
   - COR-12
-- page: docs/reference/applet-commands.md#caliper-new
-  item: caliper new creates an applet project from a built-in template with a manifest, a source file,
+- page: docs/reference/instrument-commands.md#caliper-new
+  item: caliper new creates an instrument project from a built-in template with a manifest, a source file,
     a CMake file and a test.
   ids:
   - COR-41
-- page: docs/reference/applet-commands.md#caliper-build
-  item: caliper build configures and builds an applet folder against the installed SDK and runs the checks.
+- page: docs/reference/instrument-commands.md#caliper-build
+  item: caliper build configures and builds an instrument folder against the installed SDK and runs the checks.
   ids:
   - COR-10
-- page: docs/reference/applet-commands.md#caliper-info
+- page: docs/reference/instrument-commands.md#caliper-info
   item: caliper info prints the host version, ABI epoch, SDK version, libtorch version, UI-stack hash
     and every service the host serves.
   ids:
   - COR-40
 - page: docs/reference/shot-and-serve-commands.md#caliper-shot
-  item: caliper shot draws one applet page without a window and writes the last frame as a PNG.
+  item: caliper shot draws one instrument page without a window and writes the last frame as a PNG.
   ids:
   - COR-08
 - page: docs/reference/shot-and-serve-commands.md#caliper-serve
@@ -92,82 +92,82 @@ entries:
   item: The environment variables the subcommands read.
   ids:
   - COR-06
-- page: docs/applets/services/service-catalog.md#revisions
+- page: docs/instruments/services/service-catalog.md#revisions
   item: A revision is a new id with a _N suffix whose table begins with a byte-identical copy of the previous
     one.
   ids:
   - COR-03
-- page: docs/applets/services/service-catalog.md#service-ids
+- page: docs/instruments/services/service-catalog.md#service-ids
   item: The 13 service ids, their purpose, page and threading.
   ids:
   - COR-03
-- page: docs/applets/services/service-catalog.md#companion-types
+- page: docs/instruments/services/service-catalog.md#companion-types
   item: CaliperTensor and the Arrow C Data Interface are the two interchange types the services pass.
   ids:
   - COR-49
   - COR-50
-- page: docs/applets/services/caliper-ui-v1.md#semantics
-  item: caliper.ui.v1 hands an applet the ImGui, ImPlot and ImPlot3D contexts and the host allocator pair.
+- page: docs/instruments/services/caliper-ui-v1.md#semantics
+  item: caliper.ui.v1 hands an instrument the ImGui, ImPlot and ImPlot3D contexts and the host allocator pair.
   ids:
   - COR-44
-- page: docs/applets/services/caliper-ui-v1-1.md#semantics
+- page: docs/instruments/services/caliper-ui-v1-1.md#semantics
   item: caliper.ui.v1_1 adds dock_hint, the role of each window in the docked layout.
   ids:
   - COR-44
-- page: docs/applets/services/caliper-log-v1.md#semantics
-  item: caliper.log.v1 writes timestamped log lines from an applet into the host console.
+- page: docs/instruments/services/caliper-log-v1.md#semantics
+  item: caliper.log.v1 writes timestamped log lines from an instrument into the host console.
   ids:
   - COR-45
-- page: docs/applets/services/caliper-jobs-v1.md#semantics
+- page: docs/instruments/services/caliper-jobs-v1.md#semantics
   item: caliper.jobs.v1 runs background work on a host worker thread with progress and cancellation under
     the crash guard.
   ids:
   - COR-46
-- page: docs/applets/services/caliper-device-v1.md#semantics
-  item: caliper.device.v1 reports the compute device the host found, CPU, CUDA or Metal, for the applet
+- page: docs/instruments/services/caliper-device-v1.md#semantics
+  item: caliper.device.v1 reports the compute device the host found, CPU, CUDA or Metal, for the instrument
     to map to its own framework.
   ids:
   - COR-47
-- page: docs/applets/services/caliper-metrics-v1.md#semantics
+- page: docs/instruments/services/caliper-metrics-v1.md#semantics
   item: caliper.metrics.v1 is a write-only metrics log of scalars, histograms, images and hyperparameters
     per run, tag and step.
   ids:
   - RUN-01
-- page: docs/applets/services/caliper-metrics-v1.md#calipermetricsv1_1
+- page: docs/instruments/services/caliper-metrics-v1.md#calipermetricsv1_1
   item: caliper.metrics.v1_1 adds query, a read-only SQL query that returns an Arrow stream.
   ids:
   - RUN-01
-- page: docs/applets/services/caliper-tensor-bridge-v1.md#semantics
+- page: docs/instruments/services/caliper-tensor-bridge-v1.md#semantics
   item: caliper.tensor_bridge.v1 turns a CaliperTensor into a live texture this frame, GPU-resident on
     the native backends.
   ids:
   - REN-64
-- page: docs/applets/services/caliper-tensor-bridge-v1.md#calipertensor_bridgev1_1-handoff
+- page: docs/instruments/services/caliper-tensor-bridge-v1.md#calipertensor_bridgev1_1-handoff
   item: caliper.tensor_bridge.v1_1 adds caps() and a stream-ordered handoff.
   ids:
   - REN-08
   - REN-64
-- page: docs/applets/services/caliper-tensor-bridge-v1.md#calipertensor_bridgev1_2-imported-allocations
+- page: docs/instruments/services/caliper-tensor-bridge-v1.md#calipertensor_bridgev1_2-imported-allocations
   item: caliper.tensor_bridge.v1_2 adds imported device allocations.
   ids:
   - REN-08
   - REN-64
-- page: docs/applets/services/caliper-artifacts-v1.md#semantics
+- page: docs/instruments/services/caliper-artifacts-v1.md#semantics
   item: caliper.artifacts.v1 is a content-addressed, deduplicated, lineage-tracked store of checkpoints
     and exports.
   ids:
   - RUN-02
-- page: docs/applets/services/caliper-data-v1.md#semantics
+- page: docs/instruments/services/caliper-data-v1.md#semantics
   item: caliper.data.v1 runs SQL over the embedded DuckDB store, with datasets as named shared resources
     and results as Arrow streams.
   ids:
   - COR-48
-- page: docs/applets/services/caliper-feed-v1.md#semantics
+- page: docs/instruments/services/caliper-feed-v1.md#semantics
   item: caliper.feed.v1 vends machine telemetry channels by pull from per-channel ring buffers with an
     honest-loss contract.
   ids:
   - STR-41
-- page: docs/applets/services/caliper-feed-v1.md#providers
+- page: docs/instruments/services/caliper-feed-v1.md#providers
   item: The macOS and Windows telemetry providers and their channels; Linux has none.
   ids:
   - STR-41
@@ -284,16 +284,16 @@ entries:
   item: The threading rules of the Python calls.
   ids:
   - STR-01
-- page: docs/applets/cpp-sugar.md#caliper_applet-macro
-  item: The CALIPER_APPLET macro and the caliper::Applet class replace the five extern C bridge functions
+- page: docs/instruments/cpp-sugar.md#caliper_instrument-macro
+  item: The CALIPER_INSTRUMENT macro and the caliper::Instrument class replace the five extern C bridge functions
     and the hand-built descriptor.
   ids:
   - COR-51
-- page: docs/applets/cpp-sugar.md#uiconnect-semantics
-  item: ui::connect binds an applet to the UI service contexts.
+- page: docs/instruments/cpp-sugar.md#uiconnect-semantics
+  item: ui::connect binds an instrument to the UI service contexts.
   ids:
   - COR-51
-- page: docs/applets/cpp-sugar.md#service-wrappers
+- page: docs/instruments/cpp-sugar.md#service-wrappers
   item: Typed C++ wrappers Jobs, Metrics, Artifacts, Data, Bridge, Geometry, Export and Device over the
     C services.
   ids:
@@ -302,11 +302,11 @@ entries:
   - COR-51
   - COR-46
   - COR-48
-- page: docs/applets/cpp-sugar.md#fixture-host-tdd-recipe
-  item: A fixture host runs an applet lifecycle in a test without a window.
+- page: docs/instruments/cpp-sugar.md#fixture-host-tdd-recipe
+  item: A fixture host runs an instrument lifecycle in a test without a window.
   ids:
   - COR-52
-- page: docs/applets/cpp-sugar.md#full-source
+- page: docs/instruments/cpp-sugar.md#full-source
   item: The full caliper.hpp source.
   ids:
   - COR-51
@@ -338,13 +338,13 @@ entries:
   ids:
   - AGT-01
   - COR-40
-- page: docs/agents/http-api.md#get-v0applets
-  item: GET /v0/applets returns what caliper list prints.
+- page: docs/agents/http-api.md#get-v0instruments
+  item: GET /v0/instruments returns what caliper list prints.
   ids:
   - AGT-01
   - COR-39
-- page: docs/agents/http-api.md#post-v0appletsidlaunch
-  item: POST /v0/applets/{id}/launch opens an applet page.
+- page: docs/agents/http-api.md#post-v0instrumentsidlaunch
+  item: POST /v0/instruments/{id}/launch opens an instrument page.
   ids:
   - AGT-01
 - page: docs/agents/http-api.md#get-v0capturepng
@@ -370,7 +370,7 @@ entries:
   ids:
   - SPC-05
 - page: docs/agents/http-api.md#get-v0spec
-  item: GET /v0/spec serves the browser viewer of a spec applet.
+  item: GET /v0/spec serves the browser viewer of a spec-based instrument.
   ids:
   - EMB-06
 - page: docs/agents/http-api.md#threads-and-limits
@@ -386,7 +386,7 @@ entries:
   ids:
   - AGT-01
 - page: docs/web/embedding-api.md#core-calls
-  item: The core calls of embed.h create, attach a canvas, load an applet, run a frame and shut down.
+  item: The core calls of embed.h create, attach a canvas, load an instrument, run a frame and shut down.
   ids:
   - EMB-07
 - page: docs/web/embedding-api.md#embedh-functions
@@ -727,97 +727,97 @@ entries:
   item: Publishing results.
   ids:
   - AGT-14
-- page: docs/applets/manifest.md#search-order
+- page: docs/instruments/manifest.md#search-order
   item: Where the host looks for manifests.
   ids:
   - COR-05
   - COR-06
-- page: docs/applets/manifest.md#schema
+- page: docs/instruments/manifest.md#schema
   item: The manifest schema.
   ids:
   - COR-05
-- page: docs/applets/manifest.md#spec-applets
-  item: A spec applet is a folder with a manifest of kind spec and a spec, found in the search folders
+- page: docs/instruments/manifest.md#spec-based-instruments
+  item: A spec-based instrument is a folder with a manifest of kind spec and a spec, found in the search folders
     one folder down.
   ids:
   - SPC-08
   - SPC-01
-- page: docs/applets/manifest.md#spec-applet-ids
-  item: Spec applet ids are written as local.<id>.
+- page: docs/instruments/manifest.md#workspace-instrument-ids
+  item: Spec-based instrument ids are written as local.<id>.
   ids:
   - SPC-08
-- page: docs/applets/manifest.md#spec-applet-search-order
-  item: Where spec applets are found.
+- page: docs/instruments/manifest.md#spec-search-order
+  item: Where spec-based instruments are found.
   ids:
   - SPC-08
-- page: docs/applets/manifest.md#applet-ids
-  item: The rules for applet ids.
+- page: docs/instruments/manifest.md#instrument-ids
+  item: The rules for instrument ids.
   ids:
   - COR-05
-- page: docs/applets/manifest.md#worked-example
+- page: docs/instruments/manifest.md#worked-example
   item: An example manifest.
   ids:
   - COR-05
-- page: docs/applets/sdk-package.md#installation
+- page: docs/instruments/sdk-package.md#installation
   item: Installing the SDK from a core build folder.
   ids:
   - COR-04
-- page: docs/applets/sdk-package.md#installed-files
+- page: docs/instruments/sdk-package.md#installed-files
   item: What the SDK installs.
   ids:
   - COR-04
-- page: docs/applets/sdk-package.md#package-usage
+- page: docs/instruments/sdk-package.md#package-usage
   item: Targets and variables of the caliper-sdk package.
   ids:
   - COR-04
-- page: docs/applets/sdk-package.md#caliper_add_applet
-  item: caliper_add_applet() builds, checks and stamps an applet.
+- page: docs/instruments/sdk-package.md#caliper_add_instrument
+  item: caliper_add_instrument() builds, checks and stamps an instrument.
   ids:
   - COR-04
-- page: docs/applets/sdk-package.md#ui-stack-hash
+- page: docs/instruments/sdk-package.md#ui-stack-hash
   item: The UI-stack hash pins the ImGui stack.
   ids:
   - COR-04
-- page: docs/applets/adapters.md#torchhpp
+- page: docs/instruments/adapters.md#torchhpp
   item: torch.hpp turns a torch tensor into a CaliperTensor, rejects rather than copies, and applies the
     MPS and CUDA rules.
   ids:
   - REN-08
   - REN-66
-- page: docs/applets/adapters.md#alloc_registryhpp
+- page: docs/instruments/adapters.md#alloc_registryhpp
   item: alloc_registry.hpp tracks allocations the host can import.
   ids:
   - REN-67
-- page: docs/applets/adapters.md#exportable_poolhpp
+- page: docs/instruments/adapters.md#exportable_poolhpp
   item: ExportablePool allocates tensors the renderer can draw from in place.
   ids:
   - REN-08
   - REN-67
-- page: docs/applets/adapters.md#objhpp
-  item: obj.hpp loads an OBJ mesh for an applet.
+- page: docs/instruments/adapters.md#objhpp
+  item: obj.hpp loads an OBJ mesh for an instrument.
   ids:
   - REN-68
-- page: docs/applets/adapters.md#orbit_camerahpp
-  item: orbit_camera.hpp gives an applet an orbit camera with cursor picking.
+- page: docs/instruments/adapters.md#orbit_camerahpp
+  item: orbit_camera.hpp gives an instrument an orbit camera with cursor picking.
   ids:
   - REN-68
-- page: docs/applets/adapters.md#torchhpp-source
+- page: docs/instruments/adapters.md#torchhpp-source
   item: The full source of torch.hpp.
   ids:
   - REN-66
-- page: docs/applets/tensor-and-arrow-headers.md#overview
+- page: docs/instruments/tensor-and-arrow-headers.md#overview
   item: The Arrow C Data Interface is the ABI tabular boundary.
   ids:
   - COR-50
-- page: docs/applets/tensor-and-arrow-headers.md#vendored-header
+- page: docs/instruments/tensor-and-arrow-headers.md#vendored-header
   item: The vendored Arrow header.
   ids:
   - COR-50
-- page: docs/applets/tensor-and-arrow-headers.md#tensor-header
+- page: docs/instruments/tensor-and-arrow-headers.md#tensor-header
   item: caliper/tensor.h is the frozen DLPack-aligned tensor interchange type, a type and not a service.
   ids:
   - COR-49
-- page: docs/applets/applet-contract.md
+- page: docs/instruments/instrument-contract.md
   item: The frozen epoch 3 ABI header.
   ids:
   - COR-02
@@ -834,8 +834,8 @@ entries:
   ids:
   - PLT-01
   - PLT-02
-- page: docs/reference/folders-and-environment.md#applet-and-example-variables
-  item: The applet and example variables.
+- page: docs/reference/folders-and-environment.md#instrument-and-example-variables
+  item: The instrument and example variables.
   reason: superseded
 - page: docs/reference/folders-and-environment.md#test-variables
   item: The test variables.
@@ -852,7 +852,7 @@ entries:
   - PLT-02
   - REN-03
 - page: docs/reference/refusal-messages.md#negotiation-refusals
-  item: Negotiation refuses an applet before any code runs, with one message for each cause.
+  item: Negotiation refuses an instrument before any code runs, with one message for each cause.
   ids:
   - COR-06
   - COR-07
@@ -861,23 +861,23 @@ entries:
   ids:
   - COR-06
   - COR-07
-- page: docs/reference/refusal-messages.md#spec-applets
-  item: Refusals for spec applets.
+- page: docs/reference/refusal-messages.md#spec-based-instruments
+  item: Refusals for spec-based instruments.
   ids:
   - SPC-08
-- page: docs/applets/torch-per-platform.md#step-details
+- page: docs/instruments/torch-per-platform.md#step-details
   item: The six steps of the zero-copy path on macOS Metal and on Windows Vulkan with CUDA.
   ids:
   - REN-08
   - PLT-01
   - PLT-02
-- page: docs/applets/torch-per-platform.md#windows-memory-sharing
+- page: docs/instruments/torch-per-platform.md#windows-memory-sharing
   item: Two ways to share memory on Windows.
   ids:
   - PLT-02
   - REN-67
-- page: docs/applets/torch-per-platform.md#exportablepool-opt-in
-  item: An applet opts in to ExportablePool.
+- page: docs/instruments/torch-per-platform.md#exportablepool-opt-in
+  item: An instrument opts in to ExportablePool.
   ids:
   - REN-67
 - page: docs/reference/glossary.md
@@ -885,15 +885,15 @@ entries:
   ids:
   - COR-01
 - page: docs/development/development-basics.md#mental-model
-  item: 'The mental model: the host is a running program and an applet is one shared library it loads.'
+  item: 'The mental model: the host is a running program and an instrument is one shared library it loads.'
   ids:
   - COR-01
 - page: docs/development/development-basics.md#library-sources
   item: Where every library comes from.
   ids:
   - COR-04
-- page: docs/development/development-basics.md#applet-anatomy
-  item: The anatomy of an applet.
+- page: docs/development/development-basics.md#instrument-anatomy
+  item: The anatomy of an instrument.
   ids:
   - COR-05
   - COR-51
@@ -924,8 +924,8 @@ entries:
   item: The rules each guard something real.
   ids:
   - COR-01
-- page: docs/applets/first-applet.md
-  item: Your first applet builds Hello step by step with the manifest, the macro and the lifecycle.
+- page: docs/instruments/first-instrument.md
+  item: Your first instrument builds Hello step by step with the manifest, the macro and the lifecycle.
   ids:
   - COR-05
   - COR-04
@@ -992,15 +992,15 @@ entries:
   ids:
   - STR-03
   - INT-04
-- page: docs/applets/applet-debugging.md#debugger-attachment
-  item: Attach a debugger to the running host to step through an applet.
+- page: docs/instruments/instrument-debugging.md#debugger-attachment
+  item: Attach a debugger to the running host to step through an instrument.
   ids:
   - COR-09
-- page: docs/applets/applet-debugging.md#host-logging
+- page: docs/instruments/instrument-debugging.md#host-logging
   item: Log through caliper.log.v1 instead of printf.
   ids:
   - COR-45
-- page: docs/applets/applet-debugging.md#frame-stall-diagnosis
+- page: docs/instruments/instrument-debugging.md#frame-stall-diagnosis
   item: Find what stalls the frame with the frame watchdog.
   ids:
   - COR-53
@@ -1028,7 +1028,7 @@ entries:
   - AGT-03
   - AGT-05
 - page: docs/introduction/architecture.md#components
-  item: The layers of the host, the SDK and the applets.
+  item: The layers of the host, the SDK and the instruments.
   ids:
   - COR-01
 - page: docs/introduction/architecture.md#design-decisions
@@ -1049,7 +1049,7 @@ entries:
   ids:
   - COR-02
 - page: docs/development/compatibility-and-epochs.md#versioning
-  item: Versioning of the host ABI epoch, service revisions, the SDK and applets.
+  item: Versioning of the host ABI epoch, service revisions, the SDK and instruments.
   ids:
   - COR-02
   - COR-03
@@ -1059,7 +1059,7 @@ entries:
   ids:
   - COR-06
 - page: docs/development/compatibility-and-epochs.md#promotion-rule
-  item: The rule for promoting an applet capability into the core.
+  item: The rule for promoting an instrument capability into the core.
   ids:
   - COR-14
 - page: docs/development/compatibility-and-epochs.md#toolchain-contract
@@ -1085,25 +1085,25 @@ entries:
   - STR-05
   - STR-08
   - EMB-04
-- page: docs/applets/rendering.md#backends
+- page: docs/instruments/rendering.md#backends
   item: The backends Metal, Vulkan, OpenGL and WebGPU.
   ids:
   - REN-01
   - REN-02
   - REN-03
   - PLT-01
-- page: docs/applets/rendering.md#webgpu-backend
+- page: docs/instruments/rendering.md#webgpu-backend
   item: The WebGPU renderer draws the browser views with a WGSL colormap pass and instanced quads for
     points.
   ids:
   - EMB-02
   - EMB-04
   - REN-69
-- page: docs/applets/rendering.md#pixel-space-contract
+- page: docs/instruments/rendering.md#pixel-space-contract
   item: The pixel-space contract.
   ids:
   - REN-01
-- page: docs/applets/rendering.md#graphics-api-independence
+- page: docs/instruments/rendering.md#graphics-api-independence
   item: Why the ABI never names a graphics API.
   ids:
   - COR-02
@@ -1112,24 +1112,24 @@ entries:
   ids:
   - PLT-03
   - COR-52
-- page: docs/applets/trust-model.md#fault-quarantine
-  item: A faulting applet is quarantined and its UI unwound, as containment and not a sandbox.
+- page: docs/instruments/trust-model.md#fault-quarantine
+  item: A faulting instrument is quarantined and its UI unwound, as containment and not a sandbox.
   ids:
   - COR-53
-- page: docs/applets/trust-model.md#frame-watchdog
+- page: docs/instruments/trust-model.md#frame-watchdog
   item: The frame watchdog.
   ids:
   - COR-53
-- page: docs/applets/trust-model.md#pre-flight-checks
-  item: Checks run before any applet code loads.
+- page: docs/instruments/trust-model.md#pre-flight-checks
+  item: Checks run before any instrument code loads.
   ids:
   - COR-06
   - COR-07
-- page: docs/applets/trust-model.md#spec-applets
-  item: Spec applets are data and run no code.
+- page: docs/instruments/trust-model.md#spec-based-instruments
+  item: Spec-based instruments are data and run no code.
   ids:
   - SPC-08
-- page: docs/applets/trust-model.md#supply-chain-and-data
+- page: docs/instruments/trust-model.md#supply-chain-and-data
   item: Supply chain and data.
   ids:
   - COR-01
@@ -1379,7 +1379,7 @@ entries:
   item: "A program declares its WGSL source, its read-only inputs, one output and its limits."
   ids:
   - SPC-14
-- page: docs/builder/spec-version-1.md#old-stage-tables
+- page: docs/builder/spec-format.md#old-stage-tables
   item: "Old stage tables require a replacement piece."
   ids:
   - SPC-14
@@ -1427,11 +1427,11 @@ entries:
   item: "A toggle bound to an intervention point sets and clears the ablation of the point."
   ids:
   - INT-11
-- page: docs/agents/instrument-tools.md#tool-kinds
+- page: docs/agents/scene-and-state-tools.md#tool-kinds
   item: "The tools of entities, cameras, state, selections, controls, the cursor and annotations."
   ids:
   - AGT-33
-- page: docs/builder/spec-version-1.md#scene-panel
+- page: docs/builder/spec-format.md#scene-panel
   item: "The scene panel and the other keys that version 1 adds to a spec."
   ids:
   - SPC-11
@@ -1463,7 +1463,7 @@ entries:
   item: "A binding reference stands where the spec takes a literal."
   ids:
   - SPC-44
-- page: docs/builder/spec-version-1.md#layout-shares
+- page: docs/builder/spec-format.md#layout-shares
   item: "A split takes shares for its children and a leaf takes a minimum size."
   ids:
   - SPC-45
@@ -1531,7 +1531,7 @@ entries:
   - STR-57
 
 - page: docs/development/compatibility-and-epochs.md#host-abi-epoch-and-service-revisions
-  item: ABI epoch 3 removes the geometry and export services and their demo applets.
+  item: ABI epoch 3 removes the geometry and export services and their demo instruments.
   ids:
   - COR-25
   - REN-04

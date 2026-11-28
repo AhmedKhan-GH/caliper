@@ -2,7 +2,7 @@
 prefix: SPC
 title: Builder and Specs
 order: 4
-summary: This pillar covers building dashboards from data inside the app, with specs, loaders, a catalog of sources, a command layer and a builder pane. It also covers the later work on custom views and on promoting proven applet features into the core.
+summary: This pillar covers building dashboards from data inside the app, with specs, loaders, a catalog of sources, a command layer and a builder pane. It also covers the later work on custom views and on promoting proven instrument features into the core.
 features:
   - id: SPC-01
     title: Spec Format
@@ -10,7 +10,7 @@ features:
     scope: core
     summary: The spec format describes a dashboard as text, with sources, panels built from seven primitives, bindings and a layout, in a TOML form and a canonical JSON form.
     depends_on: []
-    docs: docs/applets/manifest.md#spec-applets
+    docs: docs/instruments/manifest.md#spec-based-instruments
     design: design/spec-format.md
     issue: null
 
@@ -20,7 +20,7 @@ features:
     scope: core
     summary: The spec validator checks a spec against the format and reports each error and warning with a stable code, a line and a column.
     depends_on: [SPC-01]
-    docs: docs/reference/applet-commands.md#caliper-check
+    docs: docs/reference/instrument-commands.md#caliper-check
     design: design/spec-format.md#validation
     issue: null
 
@@ -75,13 +75,13 @@ features:
     issue: null
 
   - id: SPC-08
-    title: Spec Applets
+    title: Spec-Based Instruments
     status: shipped
     scope: core
-    summary: A spec applet is a folder with a manifest and a spec and no library, which the loader lists, validates and the app draws as a page without running applet code.
+    summary: A spec-based instrument is a folder with a manifest and a spec and no library, which the loader lists, validates and the app draws as a page without running instrument code.
     depends_on: [COR-05, SPC-02]
-    docs: docs/applets/manifest.md#spec-applets
-    design: design/spec-format.md#the-manifest-of-a-spec-applet
+    docs: docs/instruments/manifest.md#spec-based-instruments
+    design: design/spec-format.md#the-manifest-of-a-spec-based-instrument
     issue: null
 
   - id: SPC-09
@@ -110,7 +110,7 @@ features:
     scope: core
     summary: Spec version 1 adds the scene panel, which draws the entities of a scene that Caliper builds from live tensors, with a camera and picking, and the top-level arrays and keys that an instrument needs.
     depends_on: [REN-12, SPC-05]
-    docs: docs/builder/spec-version-1.md#scene-panel
+    docs: docs/builder/spec-format.md#scene-panel
     issue: null
 
   - id: SPC-12
@@ -149,14 +149,14 @@ features:
     summary: A spec carries a WebAssembly module with a fixed host interface that reads its bound sources, draws into a scene or a 2-D canvas and emits selections, without files or the network and under memory and time limits, in the app and in a browser.
     depends_on: [COR-24, SPC-12, SPC-21]
     sprint: 7
-    design: design/streaming-and-embedding.md#applets-in-the-browser
+    design: design/streaming-and-embedding.md#instruments-in-the-browser
     issue: null
 
   - id: SPC-16
     title: Capture Service
     status: planned
     scope: supporting
-    summary: The capture service gives every applet screenshots, scripted runs and recordings through one host interface, starting from what caliper shot already does.
+    summary: The capture service gives every instrument screenshots, scripted runs and recordings through one host interface, starting from what caliper shot already does.
     depends_on: [COR-08]
     design: design/platform-candidates.md#findings-about-existing-services
     issue: null
@@ -174,7 +174,7 @@ features:
     title: Tours
     status: planned
     scope: peripheral
-    summary: A host tour service steps through the regions of an applet from a data file, outlining each region as it goes.
+    summary: A host tour service steps through the regions of an instrument from a data file, outlining each region as it goes.
     depends_on: []
     design: design/platform-candidates.md#candidates
     issue: null
@@ -183,7 +183,7 @@ features:
     title: Python Sidecar
     status: planned
     scope: core
-    summary: A sidecar service starts a Python process beside an applet, with a version handshake, a cache version that triggers a rebuild and a synthetic-data mode.
+    summary: A sidecar service starts a Python process beside an instrument, with a version handshake, a cache version that triggers a rebuild and a synthetic-data mode.
     depends_on: []
     design: design/platform-candidates.md#candidates
     issue: null
@@ -192,16 +192,16 @@ features:
     title: Viz Components
     status: planned
     scope: supporting
-    summary: The caliper viz components add an annotation scene for geometry, colour by value with a key, and a catalog tree, promoted from applet code into the SDK.
+    summary: The caliper viz components add an annotation scene for geometry, colour by value with a key, and a catalog tree, promoted from instrument code into the SDK.
     depends_on: []
     design: design/platform-candidates.md#candidates
     issue: null
 
   - id: SPC-21
-    title: WebAssembly and Third-Party Applets
+    title: WebAssembly and Third-Party Instruments
     status: decision
     scope: core
-    summary: This decision sets how sprint 7's sandboxed custom views relate to the roadmap's Not now list, which names WebAssembly and third-party applets, and to Phase 2's split of applets into a native computation and a WebAssembly interface.
+    summary: This decision sets how sprint 7's sandboxed custom views relate to the roadmap's Not now list, which names WebAssembly and third-party instruments, and to Phase 2's split of instruments into a native computation and a WebAssembly interface.
     depends_on: []
     design: design/roadmap.md#not-now
     issue: null
@@ -210,7 +210,7 @@ features:
     title: Recording Bindings in Spec Panels
     status: planned
     scope: peripheral
-    summary: A spec panel binds to a recording as it binds to a live source, so that a spec applet replays what was recorded.
+    summary: A spec panel binds to a recording as it binds to a live source, so that a spec-based instrument replays what was recorded.
     depends_on: [SPC-11, STR-12]
     sprint: 5
     issue: null
@@ -251,10 +251,10 @@ features:
     issue: null
 
   - id: SPC-27
-    title: Panel Ejected to a Native Applet
+    title: Panel Ejected to a Native Instrument
     status: idea
     scope: supporting
-    summary: A spec panel that needs more speed could be turned into a native applet built outside the app and loaded like any other.
+    summary: A spec panel that needs more speed could be turned into a native instrument built outside the app and loaded like any other.
     depends_on: [COR-10, SPC-08]
     issue: null
 
@@ -405,7 +405,7 @@ features:
     scope: supporting
     summary: A split of the layout gives each child a share of the space, a leaf may state a minimum size in characters and lines, and a control is a leaf of the layout as a panel is.
     depends_on: [SPC-12]
-    docs: docs/builder/spec-version-1.md#layout-shares
+    docs: docs/builder/spec-format.md#layout-shares
     issue: null
 
   - id: SPC-46

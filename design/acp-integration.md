@@ -14,7 +14,7 @@ protocol and the agents offered on 15 November 2026, the design of the side chat
 host component (`src/host/builder/side_chat.h`) with its capture tool `caliper-chat-shot`, on the app's spec page and
 live page (`src/host/builder/chat_pane.h`, [The side chat in the app](#the-side-chat-in-the-app)). **Planned:**
 everything listed under [what waits](#what-is-built-and-what-waits).
-The earlier proposal is the "Agent integration" section of the [applet builder](applet-builder.md) page.
+The earlier proposal is the "Agent integration" section of the [instrument builder](instrument-builder.md) page.
 
 ## The protocol on 15 November 2026
 
@@ -318,7 +318,7 @@ side chat                    agent ── starts ──► caliper-mcp ── Ca
   frame at the same point where the app calls the command queue's `drain()`. Everything that changes the workspace
   travels through the command queue: the agent calls `caliper-mcp`, which calls Caliper API, which submits commands
   with the origin `agent`.
-- **Decision:** chat events do not go through the command queue themselves, although the applet builder page proposed
+- **Decision:** chat events do not go through the command queue themselves, although the instrument builder page proposed
   that. They change no workspace state, so journaling them as commands would fill the journal with chat. The side chat reads
   them on the same thread and at the same point, which is what the proposal needed.
 
@@ -335,7 +335,7 @@ side chat; command approvals are cards on the approval cards' strip, which the s
 2. **Command approvals** come from the command layer (contracts section 7). The app installs the approval policy for the
    origins `agent` and `mcp`, which covers both roles: it asks for every destructive command, and, when the user has
    "review changes" on, for every command that changes the open spec (`spec.set_text`, `source.*`, `panel.*`,
-   `layout.*`, `applet.save`). A command that needs approval gets an approval id; the side chat shows a card and calls
+   `layout.*`, `instrument.save`). A command that needs approval gets an approval id; the side chat shows a card and calls
    `approve(id)` or `deny(id)`.
 
 A spec change is shown as a diff before it is applied. For a command, the command layer renders the canonical TOML of
@@ -412,12 +412,12 @@ the origin, says:
 - who asks, the origin as a noun: MCP agent, Side chat (the `agent` origin), Widget agent (the `agent` origin with a
   stacked preview, which only the widget agent sends) or API;
 - what, the command and its target: "panel.patch · Loss and accuracy", with a panel's title, a source's, loader's or
-  applet's id, "layout", a file's name or a number of steps;
+  instrument's id, "layout", a file's name or a number of steps;
 - for a spec edit, its review: the compact diff of the inline surface, one line per changed key with the old value
   struck through and the new one, folding into "+N" past four lines, a new panel's keys with its primitive and title
   first, the validator's warnings on a line of their own, and the full unified diff behind Diff, in a popup above
   the card;
-- for a destructive command, what it loses, as a noun phrase: "Applet run42-dashboard overwritten", "Loader rows and
+- for a destructive command, what it loses, as a noun phrase: "Instrument run42-dashboard overwritten", "Loader rows and
   its tables deleted", "Tables of loader rows replaced", "2 steps undone";
 - the time left before the held call times out, from the queue (`CommandQueue::approval_time_left()`); an `api` call
   waits without a limit and shows none;
@@ -457,7 +457,7 @@ Decided while building them:
   strip of cards side by side shows several requests at once without narrowing every panel, and the side chat's own
   column will show its cards in place.
 - **A test decides through a file only a hidden app reads.** With `--hidden`, `CALIPER_TEST_APPROVALS` names a file of
-  lines such as `approve panel.create mcp` or `deny applet.save`, applied to the oldest waiting card that matches
+  lines such as `approve panel.create mcp` or `deny instrument.save`, applied to the oldest waiting card that matches
   through the same path as the buttons. The app ignores the variable when it is not hidden, and nothing over Caliper
   API or MCP decides, so an agent still cannot approve its own request.
 

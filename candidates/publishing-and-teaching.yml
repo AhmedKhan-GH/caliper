@@ -66,7 +66,7 @@ candidates:
     depends_on: [STR-12, STR-13]
   - key: classroom-demo-packs
     title: "Classroom Demo Packs"
-    summary: "Folders of applets, data, tours and exercises prepared for one lesson and runnable offline."
+    summary: "Folders of instruments, data, tours and exercises prepared for one lesson and runnable offline."
     serves: "Lets an instructor run a lesson on any lab machine."
     origin: field
     depends_on: [COR-19, SPC-18]
@@ -150,7 +150,7 @@ candidates:
     depends_on: [STR-06, STR-05]
   - key: course-assignment-tooling
     title: "Course and Assignment Tooling"
-    summary: "Templates for assignments with starter applets, hidden checks and a local grader that collects results."
+    summary: "Templates for assignments with starter instruments, hidden checks and a local grader that collects results."
     serves: "Lets instructors set and mark visual machine learning assignments on their own machines."
     origin: field
     depends_on: [SPC-18, COR-52]

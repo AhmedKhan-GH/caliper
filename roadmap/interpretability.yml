@@ -17,7 +17,7 @@ features:
     title: Inspector
     status: built
     scope: peripheral
-    summary: The inspector is an applet that attaches to a running script and shows its model in docked panes for inference, the list of tensors, a single tensor and the J-space trace.
+    summary: The inspector is an instrument that attaches to a running script and shows its model in docked panes for inference, the list of tensors, a single tensor and the J-space trace.
     depends_on: [INT-08]
     branches: [inspector]
     issue: null
@@ -158,10 +158,10 @@ features:
     issue: null
 
   - id: INT-24
-    title: OpenGLlama Applet
+    title: OpenGLlama Instrument
     status: idea
     scope: peripheral
-    summary: OpenGLlama could return as an applet of its own beside the inspector.
+    summary: OpenGLlama could return as an instrument of its own beside the inspector.
     depends_on: [INT-05]
     issue: null
 
@@ -187,7 +187,7 @@ features:
     title: GrokScope
     status: built
     scope: peripheral
-    summary: GrokScope is an applet in which a small network learns modular addition, memorising first and generalising thousands of steps later, shown as a tower of rings of its token embedding.
+    summary: GrokScope is an instrument in which a small network learns modular addition, memorising first and generalising thousands of steps later, shown as a tower of rings of its token embedding.
     depends_on: [COR-04]
     branches: [inspector]
     issue: null

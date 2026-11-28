@@ -114,7 +114,7 @@ candidates:
   - key: unlit-and-strip-draws
     title: "Unlit Triangles, Triangle Strips and per-Draw State"
     summary: "A scene primitive may state its own unlit shading, triangle-strip topology, depth test and blend mode."
-    serves: "An applet that draws a field-specific picture can choose how each draw is shaded and blended."
+    serves: "An instrument that draws a field-specific picture can choose how each draw is shaded and blended."
     origin: cut
     depends_on: [REN-34, REN-35]
   - key: render-to-tensor-path

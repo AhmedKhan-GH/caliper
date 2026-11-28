@@ -1,13 +1,13 @@
 # yaml-language-server: $schema=schema.json
-title: Applet registry plan page
+title: Instrument registry plan page
 kind: page
 source: design/registry.md
 ref: main
 summary: The plan page design/registry.md on main, read heading by heading; each plan heading has an entry
   or is listed as holding no feature.
 entries:
-- heading: Applet registry
-  item: 'Nothing is built: the host has no Browse tab, registry client, download or index format; applets
+- heading: Instrument registry
+  item: 'Nothing is built: the host has no Browse tab, registry client, download or index format; instruments
     install from a local folder.'
   ids:
   - COR-18
@@ -22,7 +22,7 @@ entries:
   ids:
   - COR-18
 - heading: What the host would do
-  item: 'Install by id and version: download, sha256 check, place in the user applets folder.'
+  item: 'Install by id and version: download, sha256 check, place in the user instruments folder.'
   ids:
   - COR-18
 - heading: What the host would do
@@ -35,7 +35,7 @@ entries:
   - COR-18
 - heading: Metadata for each release
   item: 'Release entry fields: version, abi_epoch, min_host and per-platform artifacts with url and sha256,
-    plus applet id, name, summary, tags and source location.'
+    plus instrument id, name, summary, tags and source location.'
   ids:
   - COR-18
 - heading: Publishing
@@ -58,7 +58,7 @@ entries:
   - COR-18
   - COR-33
 - heading: Open questions
-  item: Whether the installed layout stays the flat sidecar folder or follows the plan in Applets outside
+  item: Whether the installed layout stays the flat sidecar folder or follows the plan in Instruments outside
     the core.
   ids:
   - COR-16

@@ -1,6 +1,6 @@
-# Applet builder
+# Instrument builder
 
-This page explores how an agent inside Caliper could build applets on the spot: widgets, visuals and connections to
+This page explores how an agent inside Caliper could build instruments on the spot: widgets, visuals and connections to
 data, made by asking for them rather than by writing C++. It records what the current architecture already provides,
 what stands in the way, a proposed design and the changes it needs. Nothing here is built yet, and the open decisions
 are listed at the end.
@@ -8,40 +8,40 @@ are listed at the end.
 !!! note "Status"
     This proposal is being built. [Builder overview](builder-overview.md) maps the parts, says what is built and what waits, and links to the page of each part. Two things changed since this page was written: a WYSIWYG builder pane and agents inside the app are now part of the plan, and the app has two agent roles, a side chat that runs the user's own agent ([ACP integration](acp-integration.md)) and an inline widget agent ([Widget agent](widget-agent.md)). Where this page and those pages differ, those pages hold.
 
-The proposal in one sentence: the agent builds applets as **data**, a declarative panel spec that one host-side
+The proposal in one sentence: the agent builds instruments as **data**, a declarative panel spec that one host-side
 runtime draws, and it edits them through a **command layer** that an in-app agent and outside agents share. Compiled
-applets remain the path for panels that outgrow the spec.
+instruments remain the path for panels that outgrow the spec.
 
 ## What already exists
 
 | Piece | Where | Why it matters for a builder |
 |---|---|---|
-| A service registry | `sdk/include/caliper/abi.h` (`get_service`) | New services, such as a catalog or commands, are added beside the old ones without breaking any applet (see `docs/development/compatibility-and-epochs.md`). |
-| SQL over the embedded store | `caliper.data.v1` (`docs/applets/services/caliper-data-v1.md`) | The agent can query and bind tabular data on the spot; results come back as Arrow streams. |
-| Live telemetry | `caliper.feed.v1` (`docs/applets/services/caliper-feed-v1.md`) | Enumerable channels with timestamps, read without blocking. |
-| Metrics | `caliper.metrics.v1` (`docs/applets/services/caliper-metrics-v1.md`) | Runs, tags and steps in TensorBoard's vocabulary. |
-| Live views | `python/caliper` (`show`, `points`, `series`, `histogram`), drawn by `src/host/live/live_views_draw.cpp` | Visuals that need no applet code already exist: the host draws them by type and name. |
-| A guarded loader | `src/host/applet_loader.h` | Manifest-first checks, guarded calls, quarantine and restart. |
+| A service registry | `sdk/include/caliper/abi.h` (`get_service`) | New services, such as a catalog or commands, are added beside the old ones without breaking any instrument (see `docs/development/compatibility-and-epochs.md`). |
+| SQL over the embedded store | `caliper.data.v1` (`docs/instruments/services/caliper-data-v1.md`) | The agent can query and bind tabular data on the spot; results come back as Arrow streams. |
+| Live telemetry | `caliper.feed.v1` (`docs/instruments/services/caliper-feed-v1.md`) | Enumerable channels with timestamps, read without blocking. |
+| Metrics | `caliper.metrics.v1` (`docs/instruments/services/caliper-metrics-v1.md`) | Runs, tags and steps in TensorBoard's vocabulary. |
+| Live views | `python/caliper` (`show`, `points`, `series`, `histogram`), drawn by `src/host/live/live_views_draw.cpp` | Visuals that need no instrument code already exist: the host draws them by type and name. |
+| A guarded loader | `src/host/instrument_loader.h` | Manifest-first checks, guarded calls, quarantine and restart. |
 | A frame watchdog | `src/host/frame_watchdog.h` | A bound on panels that take too long. |
 
 ## What stands in the way
 
-- **Applets are compiled C++.** The loader keeps every library image mapped and never unloads it, so new code cannot
+- **Instruments are compiled C++.** The loader keeps every library image mapped and never unloads it, so new code cannot
   be hot-reloaded under the same name.
-- **In-process code is trusted code.** The Trust model (`docs/applets/trust-model.md`) says so plainly, and real
-  isolation would need applets that run out of process, which do not exist. Loading native code that an agent wrote into the app's process is therefore risky.
+- **In-process code is trusted code.** The Trust model (`docs/instruments/trust-model.md`) says so plainly, and real
+  isolation would need instruments that run out of process, which do not exist. Loading native code that an agent wrote into the app's process is therefore risky.
 - **No command layer.** UI actions are not typed, scriptable commands, so there is nothing for an agent to call.
 - **No catalog.** Each service lists its own data, but nothing gives the agent one view of every source with its
   schema, shape and rate.
 - **No capture.** The agent cannot render a panel to an image to check its own work. A host automation and capture
   service is already a [platform candidate](platform-candidates.md).
-- **Layout only by role.** Applets dock their windows by the roles they give through
-  `caliper.ui.v1_1` (`docs/applets/services/caliper-ui-v1-1.md`), and nothing places a window by command, so an agent cannot
+- **Layout only by role.** Instruments dock their windows by the roles they give through
+  `caliper.ui.v1_1` (`docs/instruments/services/caliper-ui-v1-1.md`), and nothing places a window by command, so an agent cannot
   place panels.
 
-## Three ways an agent could build an applet
+## Three ways an agent could build an instrument
 
-| | Declarative spec | Embedded script (Lua or WASM) | Generated native applet |
+| | Declarative spec | Embedded script (Lua or WASM) | Generated native instrument |
 |---|---|---|---|
 | Iteration speed | Instant | Instant | Seconds to minutes per build |
 | Expressiveness | Limited to the primitives | High | Full |
@@ -50,7 +50,7 @@ applets remain the path for panels that outgrow the spec.
 
 The proposal layers them. Specs come first and should cover most needs. Scripts can follow for custom logic. Native
 generation becomes an "eject to C++" step for a panel that needs raw performance, built outside the app and loaded like
-any other applet.
+any other instrument.
 
 For tabular data, DuckDB's SQL can serve as the transform language, so a general scripting language is not needed
 early. Tensors get a small fixed set of operations that run on the GPU: slice, reduce and normalise.
@@ -62,9 +62,9 @@ early. Tensors get a small fixed set of operations that run on the GPU: slice, r
         │
  Agent loop ──tools──► Command layer ◄── MCP / control server (Claude Code, Codex)
         │                  │  catalog.list/describe/sample, data.query,
-        │                  │  panel.create/patch/render, layout.place, applet.save
+        │                  │  panel.create/patch/render, layout.place, instrument.save
         ▼                  ▼
-   Spec files ──────► Spec runtime (one host-side "composer" applet)
+   Spec files ──────► Spec runtime (one host-side "composer" instrument)
    (TOML in the          primitives with typed input slots:
     workspace)           series · heatmap · scatter · histogram · table · 3-D · controls
                            │
@@ -74,18 +74,18 @@ early. Tensors get a small fixed set of operations that run on the GPU: slice, r
 - **The command layer** is the one surface everything acts through: the builder pane, the agent and outside agents.
 - **The spec** names the sources, any transforms, the primitives with their slots bound to sources, and the layout.
   It is a text file, so it can be read, diffed and versioned.
-- **The spec runtime** is a host-owned applet that draws any spec. It reads data through the existing services, so a
+- **The spec runtime** is a host-owned instrument that draws any spec. It reads data through the existing services, so a
   spec never touches memory directly.
-- **A saved applet** becomes a manifest plus a spec, with no library file. The loader learns this second kind of
-  applet.
-- **The browser.** Spec applets are designed to run in the web viewer unchanged
-  ([Streaming and embedding](streaming-and-embedding.md#spec-applets)). Their primitives are the live view types, and
+- **A saved instrument** becomes a manifest plus a spec, with no library file. The loader learns this second kind of
+  instrument.
+- **The browser.** Spec-based instruments are designed to run in the web viewer unchanged
+  ([Streaming and embedding](streaming-and-embedding.md#spec-based-instruments)). Their primitives are the live view types, and
   a spec binds only to sources that have a wire form.
 
 An illustrative spec, not a settled format:
 
 ```toml
-[applet]
+[instrument]
 id = "attention-entropy"
 title = "Attention entropy"
 
@@ -131,14 +131,14 @@ panels = ["heat", { split = "vertical", panels = ["mean", "loss"] }]
 3. **A primitive library.** The drawing in `live_views_draw.cpp` and in the scopes moves into the `caliper::viz` layer
    that [Platform candidates](platform-candidates.md) already proposes, with declared input
    slots.
-4. **A data-driven dock layout,** so that panels can be placed by command and not only by the roles applets declare.
+4. **A data-driven dock layout,** so that panels can be placed by command and not only by the roles instruments declare.
 5. **A capture service** that renders a panel offscreen to an image and its state, so the agent can see its result.
 6. **The agent.** The command layer is exposed over MCP first, so Claude Code or Codex can build panels from outside.
    That proves the tool surface before the app gets its own chat pane. [Agent integration](#agent-integration) describes
    the order: MCP, then an ACP client, then a built-in agent only if needed.
-7. **A second applet kind in the loader:** a manifest that points to a spec instead of a library.
+7. **A second instrument kind in the loader:** a manifest that points to a spec instead of a library.
 8. **Limits.** SQL runs on a read-only connection with row and time limits, and the frame watchdog bounds slow panels.
-   Scripts, when they come, run in a sandbox. Native generation stays outside the process until applets can run out of process.
+   Scripts, when they come, run in a sandbox. Native generation stays outside the process until instruments can run out of process.
 
 ## How a session would feel
 
@@ -146,7 +146,7 @@ panels = ["heat", { split = "vertical", panels = ["mean", "loss"] }]
 2. The agent searches the catalog, finds the live view and samples it to learn its shape.
 3. It writes a spec with a heatmap and a series, renders a preview through the capture service and checks it.
 4. You adjust the result by dragging, by chat or in the inspector. Every change is a command, so it can be undone.
-5. Saving the result makes it an applet that you can reopen, version and share.
+5. Saving the result makes it an instrument that you can reopen, version and share.
 
 ## A first slice
 
@@ -162,7 +162,7 @@ The in-app chat pane comes after that.
 
 ## Agent integration
 
-Three protocols answer three different questions, and the applet builder needs the first in every case.
+Three protocols answer three different questions, and the instrument builder needs the first in every case.
 
 - **MCP** is how an agent reaches Caliper's tools: the catalog, data, panel, layout and capture commands.
 - **ACP**, the [Agent Client Protocol](https://agentclientprotocol.com), lets Caliper host an agent the user already
@@ -215,14 +215,14 @@ Caliper ── spawns ──► claude-agent-acp / codex-acp / gemini …
 - The protocol is still changing: it has a v2 with migration notes
   ([v2 migration](https://agentclientprotocol.com/protocol/v2/migration.md)).
 - Coding agents expect file and terminal access. Caliper can decline both capabilities, or scope the working folder to
-  the applet workspace.
+  the instrument workspace.
 - A design proposal would let the client serve its MCP tools over the ACP connection itself, which would remove the
   bridge process ([MCP over ACP](https://agentclientprotocol.com/rfds/mcp-over-acp)).
 
 ### Order
 
 1. **MCP first.** The command layer and an MCP server over a localhost control port, as in the first slice above.
-   Every later option reuses them, and applets can be built from Claude Code straight away.
+   Every later option reuses them, and instruments can be built from Claude Code straight away.
 2. **ACP second, as the main in-app path.** The pane hosts whichever agent the user already has. Caliper builds only the
    UI and the approvals, the users' own plans pay for the models, and one protocol covers Claude, Codex and Gemini.
 3. **A built-in BYOK agent only if needed,** for users with no command-line agent, or for prompts tuned to Caliper. A
@@ -238,7 +238,7 @@ Caliper ── spawns ──► claude-agent-acp / codex-acp / gemini …
 ## Open decisions
 
 - **Which agents to support first** through ACP. Decided: Caliper detects Claude Code, Codex, Gemini CLI and opencode, and any other ACP agent can be added by its command, as [ACP integration](acp-integration.md) describes; the built-in agent became the widget agent ([Widget agent](widget-agent.md)).
-- **Sharing.** Whether spec-built applets can be shared and installed like compiled ones, and through which registry.
+- **Sharing.** Whether spec-based instruments can be shared and installed like compiled ones, and through which registry.
 - **The first primitives.** Which visuals and controls the spec supports first, and which stay compiled-only.
 - **Scripting.** Whether custom logic should eventually come from Lua, WASM or a Python sidecar, or wait until specs
   prove too limited.

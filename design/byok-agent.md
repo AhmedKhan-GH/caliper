@@ -235,8 +235,8 @@ A tool runs by calling Caliper API (contracts sections 8 and 15):
 | Command | Request |
 |---|---|
 | `app.info` | `GET /v0/info` |
-| `app.applets` | `GET /v0/applets` |
-| `app.launch` | `POST /v0/applets/{id}/launch`, without a body |
+| `app.instruments` | `GET /v0/instruments` |
+| `app.launch` | `POST /v0/instruments/{id}/launch`, without a body |
 | `capture.frame` | `GET /v0/capture.png` |
 | every other command | `POST /v0/commands/{name}` with the arguments as the JSON body, `X-Caliper-Origin: agent` and `X-Caliper-Group: <session>-t<turn>` |
 
@@ -311,14 +311,14 @@ an app without `review.status`, or one that answers without those fields, the si
 
 The sidecar asks with `session/request_permission` before:
 
-- **every destructive command** (`loader.update`, `loader.run`, `loader.delete`, `applet.save` in the current
+- **every destructive command** (`loader.update`, `loader.run`, `loader.delete`, `instrument.save` in the current
   table), with the options Allow (`allow_once`) and Deny (`reject_once`);
 - **every command that can preview its change**, while the session's `review` option is `spec_changes`. A command
   can preview when its arguments schema has a boolean `dry_run`; the sidecar reads that from the table, which today
   gives every edit of the open spec (`spec.set_text`, `source.add`, `source.patch`, `source.remove`, `panel.create`,
   `panel.patch`, `panel.remove`, `layout.place` and `layout.set`). The options are Allow, Allow spec changes for this
   session (`allow_always`, which sets `review` to `destructive_only`) and Deny. Commands that replace the open spec
-  rather than edit it (`spec.new`, `spec.open`, `applet.open`) take no `dry_run` and are not reviewed.
+  rather than edit it (`spec.new`, `spec.open`, `instrument.open`) take no `dry_run` and are not reviewed.
 
 **A diff before every spec change.** Before a reviewed edit runs, the sidecar sends the same command with
 `dry_run: true`. The session checks the change and returns it as a unified diff of the spec's canonical TOML, without
@@ -329,7 +329,7 @@ applying it and without any effect on the undo history or the journal (see the b
 - a preview whose diff is empty changes nothing, so the edit runs without asking;
 - otherwise the permission request carries the change as an ACP `diff`: the old text is the open spec's canonical TOML
   from `spec.get`, the new text is that text with the command's diff applied, and the path is the spec's file under
-  the session's folder (`applets/<id>/<id>.spec.toml` when the spec has not been saved). The edit runs only after
+  the session's folder (`instruments/<id>/<id>.spec.toml` when the spec has not been saved). The edit runs only after
   Allow. If the diff cannot be applied to the text (the spec changed in between), the request shows the unified diff
   as text instead.
 
@@ -340,8 +340,8 @@ no diff, the sidecar compares `spec.get` before and after the call. The request 
 arguments as `rawInput` and as readable text.
 
 Deny gives the model an error result that tells it not to try the same thing in another form. A cancelled request
-cancels the turn. `applet.save` is destructive in the table, so the sidecar asks before every save, while the session
-asks an agent only before a save that overwrites an applet.
+cancels the turn. `instrument.save` is destructive in the table, so the sidecar asks before every save, while the session
+asks an agent only before a save that overwrites an instrument.
 
 **One approval for one command.** Caliper API holds a destructive command from the origin `agent` for the app's own
 approval (contracts section 15), and with review on it holds each spec edit too, so the sidecar used to ask a second
@@ -355,7 +355,7 @@ session id, no setting), because it is cached with the tools at the front of eve
 
 1. **Role.** The agent of Caliper's agent pane, acting through tools that are the commands of Caliper's command layer.
 2. **How Caliper is organised.** Workspace, catalog, loader, spec, source with transforms, panel with a primitive and
-   bindings, applet, in the terms of the contracts.
+   bindings, instrument, in the terms of the contracts.
 3. **How to work.** Look before changing anything and never invent a catalog id, a column or a shape; change in small
    steps with the specific commands rather than replacing the spec text; check a change by validating and by
    rendering or capturing; read an error's code and retry at most twice; respect a denial; save only when asked.
@@ -695,7 +695,7 @@ During the spike the dashboard prompt of the acceptance test ran once against a 
 `caliper-acp-harness` with the sidecar on the OpenAI-compatible route. The model was Qwen 3.8 27B (Q4_K_M) on Ollama,
 which reports tool support; it was already running, and nothing was installed or downloaded for the check. In 135
 seconds the model imported both files, looked up the two catalog entries, created the spec, added the two sources
-with the three transforms and the three panels, set the layout, validated the spec and saved the applet, over fifteen
+with the three transforms and the three panels, set the layout, validated the spec and saved the instrument, over fifteen
 tool calls and seven permission requests (six spec edits shown as diffs, and the save); its three calls to
 `panel.render` failed because the stand-in host has no renderer. The
 saved spec had the requested sources, transforms, panels, bindings and layout, with titles and options of its own
@@ -829,7 +829,7 @@ A fake Caliper API runs on loopback in the test process, and a fake OpenAI-compa
   the rule (an edit without `dry_run`, a destructive edit, a read that mutates, a missing command); the scope file as
   hostile input; `_meta.caliper.widget` for each kind of target and twenty unusable fields; the widget tools without
   `dry_run`; prompt blocks with and without vision; and widget sessions through the protocol: the answer of
-  `session/new` and the widget defaults, a scripted model that calls `preview_commit`, `applet_save`, `loader_delete`
+  `session/new` and the widget defaults, a scripted model that calls `preview_commit`, `instrument_save`, `loader_delete`
   and `spec_set_text` and reaches nothing, edits that carry the preview and no `dry_run` and a follow-up that continues
   them, the render tool and the image block with and without vision, Claude Haiku 5.5 at `low` with 8,000 tokens on the
   wire, the request and tool-call limits, the handoff, cancel and `session/close` during a turn, and the call path's
@@ -855,11 +855,11 @@ A fake Caliper API runs on loopback in the test process, and a fake OpenAI-compa
   `caliper-acp-harness` drives the sidecar with the scripted model and a fake key, and its tools call a running
   `caliper-builder-host` over a fresh workspace holding a Parquet file (written through DuckDB) and a safetensors file.
   The scripted conversation imports both files, runs their loaders, creates the spec, adds the sources and the three
-  panels of the fixture `dashboard.spec.toml`, sets the layout and saves the applet. The host runs with
+  panels of the fixture `dashboard.spec.toml`, sets the layout and saves the instrument. The host runs with
   `--review agent,mcp --approve allow`, as the app reviews by default, and prints each approval. The test checks that
   the host held each spec edit once with its diff and each loader run, and approved them, that the sidecar sent no
   permission request of its own, that the completed edits' diffs chain from the new spec to the fixture's canonical
-  text, that the applet saved on disk equals the fixture, that every journal line comes from the origin `agent` and
+  text, that the instrument saved on disk equals the fixture, that every journal line comes from the origin `agent` and
   that no dry run was journaled, that each step was one model request, and that the key appears nowhere.
 - `tests/test_key_store.cpp` (doctest): the memory store with one key per provider, the presets table, the Custom
   account, the checks of providers and keys, the placement of each provider's key in a child's environment and of none
@@ -902,7 +902,7 @@ command; a local server needs no key, and `tests/manual_local_model.py` runs the
 2. Install the sidecar into its environment: `uv pip install --python src/builder/agent/.venv/bin/python -e src/builder/agent`.
 3. Start Caliper with its API on, for example `caliper --hidden --api --api-port 0` with `CALIPER_DATA_DIR` on a
    folder of the check, and note the path of `api.json` in that folder. Until the command layer is wired into the app,
-   only the tools `app_info`, `app_applets`, `app_launch` and `capture_frame` work; the others answer that the app has
+   only the tools `app_info`, `app_instruments`, `app_launch` and `capture_frame` work; the others answer that the app has
    no command layer. To try the whole command layer before then, start the stand-in instead,
    `caliper-builder-host --workspace ~/byok-check --api-dir ~/byok-check/api --approve allow`, put a Parquet file in
    `~/byok-check/data`, and in step 5 ask the agent to import it and build a panel from it; the stand-in has no

@@ -16,7 +16,7 @@ entries:
 - heading: Where things stand
   item: 'The graphics change keeps no backwards compatibility: each migration step replaces what it moves
     and deletes the old code, OpenGL is retired at the start of increment 2, one ABI epoch bump in increment
-    6, applets draw in 3-D through a scene service that replaces the geometry service.'
+    6, instruments draw in 3-D through a scene service that replaces the geometry service.'
   ids:
   - REN-16
   - REN-17
@@ -236,43 +236,43 @@ entries:
     offset (3 days).'
   ids:
   - REN-34
-- heading: 5. Picking, events and the scene service for applets
+- heading: 5. Picking, events and the scene service for instruments
   item: 'Increment 5 as a whole: hover, click, rectangle and lasso natively and in a browser, picks and
     selections to the script, linked selection, then the scene service with field_scope, flow_scope and
     sculpt_scope on it (18.5 days). The text log and bar chart moved to sprint 5.'
   ids:
   - REN-15
-- heading: 5. Picking, events and the scene service for applets
+- heading: 5. Picking, events and the scene service for instruments
   item: Picking and events natively (4 days).
   ids:
   - REN-15
   - REN-46
-- heading: 5. Picking, events and the scene service for applets
+- heading: 5. Picking, events and the scene service for instruments
   item: Picking in the browser (2 days).
   ids:
   - REN-15
   - REN-46
-- heading: 5. Picking, events and the scene service for applets
+- heading: 5. Picking, events and the scene service for instruments
   item: Step 11, the scene service, with field_scope, flow_scope and sculpt_scope on it (12.5 days).
   ids:
   - REN-35
-- heading: 6. Every applet on the scene service, one version of each graphics service and the final seam
-  item: 'Increment 6 as a whole (16.5 days): every applet of the repository on the scene service, geometry
+- heading: 6. Every instrument on the scene service, one version of each graphics service and the final seam
+  item: 'Increment 6 as a whole (16.5 days): every instrument of the repository on the scene service, geometry
     service gone, one epoch bump, HostRenderer reduced. The Dawn fallback moved to Windows parity and
-    the outside applet''s port out of the sprint.'
+    the outside instrument''s port out of the sprint.'
   ids:
   - REN-16
-- heading: 6. Every applet on the scene service, one version of each graphics service and the final seam
+- heading: 6. Every instrument on the scene service, one version of each graphics service and the final seam
   item: Step 12, embed_scope, gpt_scope and instance_scope on the scene service (4 days).
   ids:
   - REN-16
-- heading: 6. Every applet on the scene service, one version of each graphics service and the final seam
+- heading: 6. Every instrument on the scene service, one version of each graphics service and the final seam
   item: Step 13, mesh_scope and twin_scope on the scene service, export drawing scenes, the geometry service
     deleted, one version of each graphics service, the one epoch bump (11 days).
   ids:
   - REN-16
   - COR-25
-- heading: 6. Every applet on the scene service, one version of each graphics service and the final seam
+- heading: 6. Every instrument on the scene service, one version of each graphics service and the final seam
   item: Step 14, HostRenderer at its final shape, and the docs (1.5 days).
   ids:
   - REN-36
@@ -309,7 +309,7 @@ entries:
   - STR-30
 - heading: 8. Recordings in the workspace
   item: 'Increment 8 as a whole (5 days): Record in the app''s session toolbar writing into the workspace,
-    recordings in the catalog and through caliper open; recording in the hub, spec panels and applet scenes
+    recordings in the catalog and through caliper open; recording in the hub, spec panels and instrument scenes
     moved to sprint 5.'
   ids:
   - STR-14
@@ -350,8 +350,8 @@ entries:
   - REN-25
   - PLT-11
 - heading: Moved out
-  item: Step 16, one applet outside this repository ported (3 days) moved out of the sprint, to be done
-    when that applet needs it.
+  item: Step 16, one instrument outside this repository ported (3 days) moved out of the sprint, to be done
+    when that instrument needs it.
   ids:
   - REN-35
 - heading: Moved out
@@ -377,7 +377,7 @@ entries:
   - SPC-11
   - SPC-22
 - heading: Moved out
-  item: Applet scenes in recordings and through the hub (3 days) moved to sprint 5.
+  item: Instrument scenes in recordings and through the hub (3 days) moved to sprint 5.
   ids:
   - STR-31
 - heading: Dependencies on sprints 2 and 3
@@ -389,7 +389,7 @@ entries:
   - STR-14
 - heading: Decisions
   item: 'Windows and Vulkan wait for the Windows machine: from step 8, Windows draws ImGui pages and refuses
-    bridge textures, geometry views, applet scenes, exports and embedding views with a reason until the
+    bridge textures, geometry views, instrument scenes, exports and embedding views with a reason until the
     Vulkan backend lands with Windows parity.'
   ids:
   - PLT-11
@@ -401,7 +401,7 @@ entries:
   ids:
   - REN-14
 - heading: Decisions
-  item: The graphics change with no backwards compatibility, a scene service for applets replacing the
+  item: The graphics change with no backwards compatibility, a scene service for instruments replacing the
     geometry service, and the trim of the sprint, each decided by the user.
   ids:
   - REN-16
@@ -416,7 +416,7 @@ entries:
   - STR-12
 - heading: Risks
   item: 'Risks: the cost of the landscape''s surface, its changing plane, a slower fast path with no switch
-    back, Windows and GPU-less machines, applets outside the repository, applet pictures that change,
+    back, Windows and GPU-less machines, instruments outside the repository, instrument pictures that change,
     ids under review and one browser, MCAP with no size margin, scope of 162 days.'
   ids:
   - REN-17

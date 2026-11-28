@@ -22,11 +22,11 @@ Both fail with a configuration error when run from inside `design/` or with an a
 | Page | Proposal |
 |---|---|
 | [Roadmap](roadmap.md) | The phases of work, smaller work, open questions and the ideas still undecided |
-| [Applets outside the core](applets-outside-the-core.md) | Build, store and install applets outside this repository, so the host ships with none and names none |
-| [Platform candidates](platform-candidates.md) | Pieces that applets built for themselves and that belong in the host or the SDK |
-| [Applet builder](applet-builder.md) | Panels that an agent builds from a declarative spec, through a command layer shared with outside agents |
+| [Instruments outside the core](instruments-outside-the-core.md) | Build, store and install instruments outside this repository, so the host ships with none and names none |
+| [Platform candidates](platform-candidates.md) | Pieces that instruments built for themselves and that belong in the host or the SDK |
+| [Instrument builder](instrument-builder.md) | Panels that an agent builds from a declarative spec, through a command layer shared with outside agents |
 | [Builder overview](builder-overview.md) | The map of the builder: its parts, what is built, the integration order and the acceptance criteria |
-| [Spec format](spec-format.md) | The versioned TOML format of a spec applet, with its canonical JSON form and JSON Schema |
+| [Spec format](spec-format.md) | The versioned TOML format of a spec-based instrument, with its canonical JSON form and JSON Schema |
 | [Loaders](loaders.md) | Declarative recipes that turn dropped files into sources, the readers, the pickle policy and the Python loader |
 | [Catalog](catalog.md) | The list of every source with its schema, shape and rate, and its three commands |
 | [Command layer](command-layer.md) | The typed commands that everything acts through, with undo, the journal and approvals |
@@ -36,12 +36,12 @@ Both fail with a configuration error when run from inside `design/` or with an a
 | [ACP integration](acp-integration.md) | The side chat, which runs the user's own agent over the Agent Client Protocol |
 | [Widget agent](widget-agent.md) | The inline agent that changes one panel, selection, file or property from a ⌘K prompt, with a preview in place |
 | [Widget agent sidecar](byok-agent.md) | `caliper-agent`, the process that runs the widget agent's loop with the user's own key or a local model |
-| [Applet registry](registry.md) | A registry at caliperapp.ai, a Browse tab and install by id and version |
+| [Instrument registry](registry.md) | A registry at caliperapp.ai, a Browse tab and install by id and version |
 | [Data and Cloud](data-and-cloud.md) | Run history, run comparison and session recording in the desktop app's local database, and Caliper Cloud and Caliper Web, which offer them online |
-| [Windows parity](windows-parity.md) | The steps that bring Windows level with macOS: the applet platform, Caliper LIB, streaming and Caliper API, the web viewer, Caliper Embed, the renderer fallbacks and distribution |
-| [Streaming and embedding](streaming-and-embedding.md) | What remains of using Caliper from other programs: the rest of the web viewer, applets in a browser, WebTransport, the security review and the rest of C++ embedding |
-| [Renderer Core](renderer-core.md) | The rest of the renderer core's migration: the texture path on the graphics layer, a scene service for applets, one version of each graphics service, the final renderer seam and the Vulkan backend |
-| [Scenes](scenes.md) | What remains of scenes: the scene model's additions, the text log and the bar chart, stamps, scenes through shared memory with their data views, and the scene service for applets |
+| [Windows parity](windows-parity.md) | The steps that bring Windows level with macOS: the instrument platform, Caliper LIB, streaming and Caliper API, the web viewer, Caliper Embed, the renderer fallbacks and distribution |
+| [Streaming and embedding](streaming-and-embedding.md) | What remains of using Caliper from other programs: the rest of the web viewer, instruments in a browser, WebTransport, the security review and the rest of C++ embedding |
+| [Renderer Core](renderer-core.md) | The rest of the renderer core's migration: the texture path on the graphics layer, a scene service for instruments, one version of each graphics service, the final renderer seam and the Vulkan backend |
+| [Scenes](scenes.md) | What remains of scenes: the scene model's additions, the text log and the bar chart, stamps, scenes through shared memory with their data views, and the scene service for instruments |
 | [Wire Protocol 3.2 Draft](wire-protocol-3-2.md) | What producers, the hub and servers still do with timelines, text logs, bar charts and recordings, and the numbers of 3.2 to confirm |
 | [Instruments](instruments.md) | The interfaces of the first instrument slice: spec version 1 with scene panels and controls, the run commands, the event ring of `events.wait` and `caliper.watch(model, optimizer)` |
 | [Hosted Runs](hosted-runs.md) | The model runner: the commands that start, fork, stop and list managed runs, the review card, the child processes and the run sources |

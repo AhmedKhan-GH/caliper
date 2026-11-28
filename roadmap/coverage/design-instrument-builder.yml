@@ -1,14 +1,14 @@
 # yaml-language-server: $schema=schema.json
-title: Applet builder plan page
+title: Instrument builder plan page
 kind: page
-source: design/applet-builder.md
+source: design/instrument-builder.md
 ref: main
-summary: The plan page design/applet-builder.md on main, read heading by heading; each plan heading has
+summary: The plan page design/instrument-builder.md on main, read heading by heading; each plan heading has
   an entry or is listed as holding no feature.
 entries:
-- heading: Applet builder
-  item: 'Earlier proposal: an agent builds applets as data, a declarative panel spec drawn by one host
-    runtime, edited through a command layer; compiled applets remain for panels that outgrow the spec.'
+- heading: Instrument builder
+  item: 'Earlier proposal: an agent builds instruments as data, a declarative panel spec drawn by one host
+    runtime, edited through a command layer; library instruments remain for panels that outgrow the spec.'
   ids:
   - SPC-01
   - SPC-05
@@ -20,29 +20,29 @@ entries:
   - COR-03
   - STR-01
 - heading: What stands in the way
-  item: Applets are compiled C++ and never unload; in-process code is trusted code; no command layer,
+  item: Instruments are compiled C++ and never unload; in-process code is trusted code; no command layer,
     catalog, capture; layout only by role.
   ids:
   - SPC-05
   - SPC-04
   - SPC-16
-- heading: Three ways an agent could build an applet
-  item: Declarative spec first, embedded script (Lua or WASM) for custom logic, generated native applet
+- heading: Three ways an agent could build an instrument
+  item: Declarative spec first, embedded script (Lua or WASM) for custom logic, generated native instrument
     as an eject to C++ step.
   ids:
   - SPC-01
   - SPC-21
-- heading: Three ways an agent could build an applet
+- heading: Three ways an agent could build an instrument
   item: Embedded script runtime (Lua, WASM or a Python sidecar) for custom logic.
   ids:
   - SPC-21
   - SPC-19
   - SPC-26
-- heading: Three ways an agent could build an applet
-  item: 'Eject to C++: a panel that needs raw performance becomes a native applet built outside the app.'
+- heading: Three ways an agent could build an instrument
+  item: 'Eject to C++: a panel that needs raw performance becomes a native instrument built outside the app.'
   ids:
   - SPC-27
-- heading: Three ways an agent could build an applet
+- heading: Three ways an agent could build an instrument
   item: 'Tabular transforms use DuckDB SQL; tensors get a small fixed set of GPU operations: slice, reduce
     and normalise.'
   ids:
@@ -56,7 +56,7 @@ entries:
   - SPC-07
   - AGT-02
 - heading: Proposed design
-  item: The command layer, the spec, the spec runtime, the saved applet as manifest plus spec, and the
+  item: The command layer, the spec, the spec runtime, the saved instrument as manifest plus spec, and the
     browser.
   ids:
   - SPC-05
@@ -95,7 +95,7 @@ entries:
   - AGT-03
   - AGT-05
 - heading: What would need to change
-  item: '7. A second applet kind in the loader: a manifest that points to a spec.'
+  item: '7. A second instrument kind in the loader: a manifest that points to a spec.'
   ids:
   - SPC-08
 - heading: What would need to change
@@ -104,7 +104,7 @@ entries:
   ids:
   - SPC-05
 - heading: How a session would feel
-  item: 'Five-step walk-through: ask, catalog search, spec and preview, adjust, save as an applet.'
+  item: 'Five-step walk-through: ask, catalog search, spec and preview, adjust, save as an instrument.'
   ids:
   - SPC-07
   - AGT-03
@@ -158,7 +158,7 @@ entries:
   ids:
   - AGT-03
 - heading: Open decisions
-  item: 'Sharing: whether spec-built applets are shared and installed like compiled ones, through which
+  item: 'Sharing: whether spec-based instruments are shared and installed like compiled ones, through which
     registry.'
   ids:
   - COR-18

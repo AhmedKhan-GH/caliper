@@ -130,7 +130,7 @@ entries:
   ids:
   - REN-41
 - heading: Primitives
-  item: Additive blend for points and lines, and instanced meshes, added to the scene model for the applets.
+  item: Additive blend for points and lines, and instanced meshes, added to the scene model for the instruments.
   ids:
   - REN-34
 - heading: Primitives
@@ -226,7 +226,7 @@ entries:
   - STR-10
 - heading: Copies per Route
   item: A scene snapshot is one device-side copy per route (in-process window, shared-memory session,
-    network) and drawn in place from the slot; applet routes are zero-copy.
+    network) and drawn in place from the slot; instrument routes are zero-copy.
   ids:
   - STR-10
 - heading: Shared-Memory Session Growth
@@ -267,8 +267,8 @@ entries:
   ids:
   - REN-09
   - REN-11
-- heading: Applets
-  item: Applets draw scenes through the scene service, which replaces the geometry service.
+- heading: Instruments
+  item: Instruments draw scenes through the scene service, which replaces the geometry service.
   ids:
   - REN-35
 - heading: Picking, hover and selection
@@ -293,8 +293,8 @@ entries:
     and the widget's selection.
   ids:
   - REN-46
-- heading: Scene Service for Applets
-  item: The scene service caliper.scene.v1 offers the scene model to applets and replaces the geometry
+- heading: Scene Service for Instruments
+  item: The scene service caliper.scene.v1 offers the scene model to instruments and replaces the geometry
     service, with four differences.
   ids:
   - REN-35
@@ -303,7 +303,7 @@ entries:
   ids:
   - REN-35
 - heading: Array Names
-  item: CaliperSceneArray names an imported allocation, a tensor or no array, so applets draw their own
+  item: CaliperSceneArray names an imported allocation, a tensor or no array, so instruments draw their own
     memory in place.
   ids:
   - REN-35
@@ -316,31 +316,31 @@ entries:
   item: Updates only on the frame thread, per-part refusal, tokens that retire when bytes may be rewritten.
   ids:
   - REN-35
-- heading: View in the Applet Window
-  item: view() draws the scene view as one ImGui item in the applet's window, owned by the host with camera,
+- heading: View in the Instrument Window
+  item: view() draws the scene view as one ImGui item in the instrument's window, owned by the host with camera,
     switch, picking and overlays.
   ids:
   - REN-35
 - heading: Events
-  item: poll_event returns hover, pick and select events to the applet.
+  item: poll_event returns hover, pick and select events to the instrument.
   ids:
   - REN-35
 - heading: Capabilities and Refusals
   item: Two capability bits, CAP_DRAW and CAP_IN_PLACE, and refusals read from host metadata.
   ids:
   - REN-35
-- heading: Applet Scene Features
-  item: An applet gains the shared camera, the up-axis switch, picking, depth, scale bar, labels, export
+- heading: Instrument Scene Features
+  item: An instrument gains the shared camera, the up-axis switch, picking, depth, scale bar, labels, export
     and recordings from the host.
   ids:
   - REN-35
 - heading: Export
-  item: The applet-facing caliper.export.v1 and v1_1 service was deleted in epoch 3; future scene export
+  item: The instrument-facing caliper.export.v1 and v1_1 service was deleted in epoch 3; future scene export
     would render a scene offscreen through the scene core.
   ids:
   - REN-16
 - heading: Wire-Capable Scenes
-  item: An applet's scene is wire-capable when every array is host-readable and fits the wire, so it can
+  item: An instrument's scene is wire-capable when every array is host-readable and fits the wire, so it can
     be sent like a script's scene.
   ids:
   - STR-31
@@ -355,7 +355,7 @@ entries:
   - REN-35
 - heading: Mapping from the Geometry Service
   item: Each geometry service capability is covered, added to the scene model, or dropped (triangle strips,
-    unlit triangles, per-draw state, applet cameras, the rigidity gate).
+    unlit triangles, per-draw state, instrument cameras, the rigidity gate).
   ids:
   - REN-16
   - REN-35
@@ -450,7 +450,7 @@ entries:
   - REN-26
   - REN-27
 - heading: Later Scene Work
-  item: Drawing of the text log and bar chart natively, in DOM and in Canvas 2D, and applet scenes in
+  item: Drawing of the text log and bar chart natively, in DOM and in Canvas 2D, and instrument scenes in
     recordings and through the hub.
   ids:
   - REN-51
