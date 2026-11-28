@@ -171,7 +171,7 @@ execute_process(
         "CALIPER_EMBED_INSTRUMENTS=${instruments}"
         "CALIPER_USER_INSTRUMENTS_DIR=${WORK_DIR}/user-instruments"
         "HOME=${WORK_DIR}/home"
-        "${host_exe}" dev.caliper.hello-world
+        "${host_exe}" ai.caliperapp.hello-world
     RESULT_VARIABLE rc OUTPUT_VARIABLE out ERROR_VARIABLE out TIMEOUT 120)
 message(STATUS "embed_host output:\n${out}")
 if(rc EQUAL 0)
@@ -184,7 +184,7 @@ if(rc EQUAL 0)
             message(FATAL_ERROR "embed_host: the output lacks \"${expect}\"")
         endif()
     endforeach()
-    if(NOT out MATCHES "offscreen: [1-9][0-9]* frames of dev\\.caliper\\.hello-world at 1280x800 in [0-9.]+ s, [1-9][0-9]* drawn pixels")
+    if(NOT out MATCHES "offscreen: [1-9][0-9]* frames of ai\\.caliperapp\\.hello-world at 1280x800 in [0-9.]+ s, [1-9][0-9]* drawn pixels")
         message(FATAL_ERROR "embed_host: the offscreen run did not report drawn frames")
     endif()
 elseif(out MATCHES "attach_canvas failed" AND NOT "$ENV{CALIPER_REQUIRE_GPU}" STREQUAL "1")

@@ -328,8 +328,8 @@ struct FakeApp {
                             server->reply(c.ticket, 200, "{\"instruments\":[]}");
                         } else if (c.kind == K::Launch) {
                             ++launches;
-                            if (c.instrument_id == "dev.caliper.hello-world")
-                                server->reply(c.ticket, 200, "{\"id\":\"dev.caliper.hello-world\"}");
+                            if (c.instrument_id == "ai.caliperapp.hello-world")
+                                server->reply(c.ticket, 200, "{\"id\":\"ai.caliperapp.hello-world\"}");
                             else
                                 server->reply(c.ticket, 404, caliper_api::error_json("no instrument " + c.instrument_id));
                         } else {
@@ -372,10 +372,10 @@ TEST_CASE("api: the routes of v0 and the method each takes") {
     CHECK(caliper_api::route("GET", "/v0/capture.png").route == Route::Capture);
     CHECK(caliper_api::route("GET", "/v3/stream").route == Route::Stream);
     CHECK(caliper_api::route("GET", "/v0/stream").route == Route::Stream);
-    auto launch = caliper_api::route("POST", "/v0/instruments/dev.caliper.hello-world/launch");
+    auto launch = caliper_api::route("POST", "/v0/instruments/ai.caliperapp.hello-world/launch");
     CHECK(launch.route == Route::Launch);
     CHECK(launch.method_ok);
-    CHECK(launch.instrument_id == "dev.caliper.hello-world");
+    CHECK(launch.instrument_id == "ai.caliperapp.hello-world");
     auto wrong = caliper_api::route("GET", "/v0/instruments/x/launch");
     CHECK(wrong.route == Route::Launch);
     CHECK_FALSE(wrong.method_ok);
@@ -392,7 +392,7 @@ TEST_CASE("api: the routes of v0 and the method each takes") {
 }
 
 TEST_CASE("api: an instrument id in the path is 1 to 128 characters of [A-Za-z0-9._-]") {
-    CHECK(caliper_api::plausible_instrument_id("dev.caliper.hello-world"));
+    CHECK(caliper_api::plausible_instrument_id("ai.caliperapp.hello-world"));
     CHECK(caliper_api::plausible_instrument_id("com.example.my-viewer_2"));
     CHECK(caliper_api::plausible_instrument_id(std::string(128, 'a')));
     for (const std::string bad : {std::string(), std::string(129, 'a'), std::string("a%2Fb"),
@@ -462,9 +462,9 @@ TEST_CASE("api: the server answers every endpoint, through the frame thread wher
     CHECK(instruments.status == 200);
     CHECK(instruments.body == "{\"instruments\":[]}");
 
-    Response launch = http(port, "POST", "/v0/instruments/dev.caliper.hello-world/launch", bearer());
+    Response launch = http(port, "POST", "/v0/instruments/ai.caliperapp.hello-world/launch", bearer());
     CHECK(launch.status == 200);
-    CHECK(launch.body == "{\"id\":\"dev.caliper.hello-world\"}");
+    CHECK(launch.body == "{\"id\":\"ai.caliperapp.hello-world\"}");
     CHECK(http(port, "POST", "/v0/instruments/no.such/launch", bearer()).status == 404);
     CHECK(app.launches.load() == 2);
 
@@ -478,7 +478,7 @@ TEST_CASE("api: the server answers every endpoint, through the frame thread wher
     CHECK(anon.status == 401);
     CHECK(anon.headers["www-authenticate"].rfind("Bearer", 0) == 0);
     CHECK(http(port, "GET", "/v0/info", bearer("api_test_token-0123456789abcdeX")).status == 401);
-    Response post_query = http(port, "POST", "/v0/instruments/dev.caliper.hello-world/launch?token=" + kToken);
+    Response post_query = http(port, "POST", "/v0/instruments/ai.caliperapp.hello-world/launch?token=" + kToken);
     CHECK(post_query.status == 401);
     Response method = http(port, "DELETE", "/v0/instruments", bearer());
     CHECK(method.status == 405);
@@ -486,7 +486,7 @@ TEST_CASE("api: the server answers every endpoint, through the frame thread wher
     CHECK(http(port, "GET", "/", bearer()).status == 404);
     CHECK(http(port, "GET", "/index.html", bearer()).status == 404);
     CHECK(http(port, "GET", "/v3/info?token=" + kToken).status == 404);
-    CHECK(http(port, "POST", "/v0/instruments/dev.caliper.hello-world/launch", bearer() + "Content-Length: 2\r\n").status == 413);
+    CHECK(http(port, "POST", "/v0/instruments/ai.caliperapp.hello-world/launch", bearer() + "Content-Length: 2\r\n").status == 413);
     CHECK(app.launches.load() == 2);   // refused requests never reached the app
 
     const caliper_api::Stats st = app.server->stats();
@@ -995,7 +995,7 @@ TEST_CASE("api: the command endpoints hand requests to the gateway on the frame 
     REQUIRE(gw->submitted() == 6);
     CHECK(gw->requests[5].args == mib);
     // Other endpoints still refuse a body.
-    CHECK(http(port, "POST", "/v0/instruments/dev.caliper.hello-world/launch", bearer() + "Content-Length: 2\r\n", {}, body)
+    CHECK(http(port, "POST", "/v0/instruments/ai.caliperapp.hello-world/launch", bearer() + "Content-Length: 2\r\n", {}, body)
               .status == 413);
 
     // Clearing the gateway makes the endpoints 404 again.
@@ -1179,7 +1179,7 @@ TEST_CASE("api: caliper shot --api serves every endpoint as a process and stops 
     const std::string out_png = t.str("shot.png");
     Proc p;
     REQUIRE(p.start(exe,
-                    {"shot", "--instruments", instruments, "--launch", "dev.caliper.hello-world", "--size", "640x400",
+                    {"shot", "--instruments", instruments, "--launch", "ai.caliperapp.hello-world", "--size", "640x400",
                      "--frames", "36000", "--out", out_png, "--api", "--api-port", "0"},
                     {"CALIPER_DATA_DIR=" + data}));
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(60);
@@ -1243,9 +1243,9 @@ TEST_CASE("api: caliper shot --api serves every endpoint as a process and stops 
             if (e.find("id")->as_string() == id) return e.find("status")->as_string();
         return std::string("absent");
     };
-    CHECK(status_of("dev.caliper.hello-world") == "ACTIVE");
+    CHECK(status_of("ai.caliperapp.hello-world") == "ACTIVE");
 #ifndef CALIPER_TESTS_NO_TORCH_INSTRUMENTS
-    CHECK(status_of("dev.caliper.mnist") == "READY");
+    CHECK(status_of("ai.caliperapp.mnist") == "READY");
 #endif
 
     // capture: a PNG of the shot's size that is not one flat colour.
@@ -1271,24 +1271,24 @@ TEST_CASE("api: caliper shot --api serves every endpoint as a process and stops 
 
     // launch: another instrument, the same one again, an unknown one.
 #ifndef CALIPER_TESTS_NO_TORCH_INSTRUMENTS
-    Response launched = http(port, "POST", "/v0/instruments/dev.caliper.mnist/launch", bearer(token));
+    Response launched = http(port, "POST", "/v0/instruments/ai.caliperapp.mnist/launch", bearer(token));
     REQUIRE_MESSAGE(launched.status == 200, launched.body);
     const Json lj = parse_json(launched.body);
-    CHECK(lj.find("id")->as_string() == "dev.caliper.mnist");
+    CHECK(lj.find("id")->as_string() == "ai.caliperapp.mnist");
     CHECK_FALSE(lj.find("already_open")->as_bool());
-    CHECK(status_of("dev.caliper.mnist") == "ACTIVE");
-    CHECK(status_of("dev.caliper.hello-world") == "READY");
-    Response again = http(port, "POST", "/v0/instruments/dev.caliper.mnist/launch", bearer(token));
+    CHECK(status_of("ai.caliperapp.mnist") == "ACTIVE");
+    CHECK(status_of("ai.caliperapp.hello-world") == "READY");
+    Response again = http(port, "POST", "/v0/instruments/ai.caliperapp.mnist/launch", bearer(token));
     CHECK(again.status == 200);
     CHECK(parse_json(again.body).find("already_open")->as_bool());
 #else
-    Response again = http(port, "POST", "/v0/instruments/dev.caliper.hello-world/launch", bearer(token));
+    Response again = http(port, "POST", "/v0/instruments/ai.caliperapp.hello-world/launch", bearer(token));
     CHECK(again.status == 200);
     CHECK(parse_json(again.body).find("already_open")->as_bool());
 #endif
     CHECK(http(port, "POST", "/v0/instruments/dev.example.nowhere/launch", bearer(token)).status == 404);
-    CHECK(http(port, "POST", "/v0/instruments/dev.caliper.hello-world/launch?token=" + token).status == 401);
-    CHECK(http(port, "GET", "/v0/instruments/dev.caliper.hello-world/launch", bearer(token)).status == 405);
+    CHECK(http(port, "POST", "/v0/instruments/ai.caliperapp.hello-world/launch?token=" + token).status == 401);
+    CHECK(http(port, "GET", "/v0/instruments/ai.caliperapp.hello-world/launch", bearer(token)).status == 405);
     capture();
 
     // The stream's handshake on both paths: the app answers as the hub, to
@@ -1357,9 +1357,9 @@ TEST_CASE("api: caliper shot --api serves every endpoint as a process and stops 
     ::kill(p.pid, SIGTERM);
     CHECK(p.wait(15000) == 0);
 #ifndef CALIPER_TESTS_NO_TORCH_INSTRUMENTS
-    const std::string expected_shot_id = "dev.caliper.mnist";
+    const std::string expected_shot_id = "ai.caliperapp.mnist";
 #else
-    const std::string expected_shot_id = "dev.caliper.hello-world";
+    const std::string expected_shot_id = "ai.caliperapp.hello-world";
 #endif
     CHECK_MESSAGE(p.text.find("wrote " + out_png + ": " + expected_shot_id + " at 640x400 after ") != std::string::npos, p.text);
     CHECK(fs::exists(out_png));
@@ -1443,7 +1443,7 @@ TEST_CASE("api: the hidden app serves every endpoint through its window and stop
             if (e.find("id")->as_string() == id) return e.find("status")->as_string();
         return std::string("absent");
     };
-    CHECK(status_of("dev.caliper.hello-world") == "READY");
+    CHECK(status_of("ai.caliperapp.hello-world") == "READY");
 
     // A capture: the frame the hidden window presents, at its framebuffer's
     // size (640 x 400 points, one or two pixels per point), not one colour.
@@ -1466,10 +1466,10 @@ TEST_CASE("api: the hidden app serves every endpoint through its window and stop
     capture(&landing);
 
     // Launch the hello_world fixture: the window then shows its page.
-    Response launched = http(port, "POST", "/v0/instruments/dev.caliper.hello-world/launch", bearer(token));
+    Response launched = http(port, "POST", "/v0/instruments/ai.caliperapp.hello-world/launch", bearer(token));
     REQUIRE_MESSAGE(launched.status == 200, launched.body);
-    CHECK(parse_json(launched.body).find("id")->as_string() == "dev.caliper.hello-world");
-    CHECK(status_of("dev.caliper.hello-world") == "ACTIVE");
+    CHECK(parse_json(launched.body).find("id")->as_string() == "ai.caliperapp.hello-world");
+    CHECK(status_of("ai.caliperapp.hello-world") == "ACTIVE");
     capture(&page);
     CHECK(page.size() == landing.size());
     CHECK(page != landing);

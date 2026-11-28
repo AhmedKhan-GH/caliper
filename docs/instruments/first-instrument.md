@@ -114,7 +114,7 @@ First check the build. `caliper check` runs the checks that the host makes befor
 ```
 
 ```text
-READY  dev.caliper.hello-world  0.1.0  <your folder>/build/instruments
+READY  ai.caliperapp.hello-world  0.1.0  <your folder>/build/instruments
 1 of 1 instruments pass the checks
 ```
 

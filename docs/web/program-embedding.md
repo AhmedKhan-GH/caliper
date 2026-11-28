@@ -103,7 +103,7 @@ canvas.width = 1280; canvas.height = 800; canvas.content_scale = 1.0f;
 if (!caliper_core_attach_canvas(core, NULL, &canvas))
     fprintf(stderr, "%s\n", caliper_core_last_error(core));
 
-caliper_core_load_instrument(core, "dev.caliper.hello-world");
+caliper_core_load_instrument(core, "ai.caliperapp.hello-world");
 for (int i = 0; i < 60; ++i)
     caliper_core_frame(core);                  /* one frame per call */
 caliper_core_shutdown(core);
@@ -138,7 +138,7 @@ cp -R examples/embed_host <work>/embed_host
 cmake -S <work>/embed_host -B <work>/embed_host-build -DCMAKE_PREFIX_PATH=<prefix>
 cmake --build <work>/embed_host-build
 CALIPER_EMBED_OFFSCREEN=1 CALIPER_EMBED_INSTRUMENTS=<instruments> \
-    <work>/embed_host-build/embed_host dev.caliper.hello-world
+    <work>/embed_host-build/embed_host ai.caliperapp.hello-world
 ```
 
 It prints the version of the library, the log lines of the core and the log

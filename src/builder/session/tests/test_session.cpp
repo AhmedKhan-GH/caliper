@@ -432,6 +432,35 @@ TEST_CASE("instruments are saved atomically, listed, opened, and overwritten onl
     CHECK(err(*f.s, "spec.open", {{"path", "big.spec.toml"}}) == "spec.too_large");
 }
 
+TEST_CASE("instrument.save writes the manifest id the caller names, and an overwrite keeps it") {
+    Fixture f("manifest-id");
+    auto manifest_id = [&](const std::string& id) {
+        const std::string text = read_text(f.ws + "/instruments/" + id + "/" + id + ".caliper.toml");
+        const std::size_t at = text.find("id = \"");
+        return at == std::string::npos ? std::string() : text.substr(at + 6, text.find('"', at + 6) - at - 6);
+    };
+    ok(*f.s, "spec.new", {{"id", "circuit_trace"}, {"title", "Circuit Trace"}});
+    ok(*f.s, "instrument.save", {{"manifest_id", "ai.caliperapp.circuit-trace"}});
+    CHECK(manifest_id("circuit_trace") == "ai.caliperapp.circuit-trace");
+    // An overwrite without manifest_id, as the app's Save sends, keeps it.
+    ok(*f.s, "instrument.save", {{"overwrite", true}});
+    CHECK(manifest_id("circuit_trace") == "ai.caliperapp.circuit-trace");
+
+    // The manifest's grammar: [a-z0-9.-], dot-separated segments, none empty, at most 128 characters.
+    for (const std::string& bad : std::vector<std::string>{"Ai.Caliperapp.x", "ai.caliperapp.circuit_trace", "a..b", ".lead",
+                                                          "trail.", "../x", "a/b", "", std::string(129, 'a')})
+        CHECK(err(*f.s, "instrument.save", {{"overwrite", true}, {"manifest_id", bad}}) == "command.invalid_args");
+    ok(*f.s, "instrument.save", {{"overwrite", true}, {"manifest_id", std::string(128, 'a')}});
+    CHECK(manifest_id("circuit_trace") == std::string(128, 'a'));
+    ok(*f.s, "instrument.save", {{"overwrite", true}, {"manifest_id", "ai.caliperapp.circuit-trace"}});
+
+    // Another instrument may not take a manifest id in use; without one, a new instrument is local.<id>.
+    ok(*f.s, "spec.new", {{"id", "other_view"}});
+    CHECK(err(*f.s, "instrument.save", {{"manifest_id", "ai.caliperapp.circuit-trace"}}) == "instrument.exists");
+    ok(*f.s, "instrument.save");
+    CHECK(manifest_id("other_view") == "local.other-view");
+}
+
 TEST_CASE("a SessionHost serves the app's commands, and panel.render draws resolved data") {
     Fixture f("host");
     auto host = std::make_shared<FakeHost>();

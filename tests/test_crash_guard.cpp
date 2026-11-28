@@ -154,7 +154,7 @@ TEST_CASE("guard: exception thrown by an instrument quarantines it, host survive
     const HostCaps caps{4, "0.6.0", {"caliper.ui.v1", "caliper.log.v1"}};
     auto find_throwing = [](InstrumentLoader& L) {
         for (int k = 0; k < L.count(); k++)
-            if (L.at(k).manifest.id == "dev.caliper.throwing") return k;
+            if (L.at(k).manifest.id == "ai.caliperapp.test.throwing") return k;
         return -1;
     };
 
@@ -233,7 +233,7 @@ TEST_CASE("guard: a fault in an instrument's background job quarantines the inst
         L.scan(CALIPER_TEST_FIXTURES_DIR);
         int i = -1;
         for (int k = 0; k < L.count(); k++)
-            if (L.at(k).manifest.id == "dev.caliper.throwing") i = k;
+            if (L.at(k).manifest.id == "ai.caliperapp.test.throwing") i = k;
         REQUIRE(i >= 0);
         REQUIRE(L.launch(i, *fx.host()));
         CHECK(L.frame(i, fi));                       // submits; frame is fine
@@ -301,7 +301,7 @@ TEST_CASE("loader: restart is offered after a C++ exception, refused after a sig
         L.scan(CALIPER_TEST_FIXTURES_DIR);
         int i = -1;
         for (int k = 0; k < L.count(); k++)
-            if (L.at(k).manifest.id == "dev.caliper.throwing") i = k;
+            if (L.at(k).manifest.id == "ai.caliperapp.test.throwing") i = k;
         REQUIRE(i >= 0);
         return i;
     };

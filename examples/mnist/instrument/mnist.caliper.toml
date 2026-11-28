@@ -1,5 +1,5 @@
 [instrument]
-id      = "dev.caliper.mnist"
+id      = "ai.caliperapp.mnist"
 name    = "MNIST Example"
 version = "0.1.0"
 summary = "Canonical ML instrument: the PyTorch C++ MNIST CNN trained live with LibTorch."

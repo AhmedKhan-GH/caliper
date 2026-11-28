@@ -8,8 +8,8 @@
 // gates it); it drew the Vulkan WINDOW canvas live with an instrument. This
 // mirrors the macOS half (main.mm) structure so the two hosts stay in step.
 //
-// Run:  embed_host.exe [manifest-id]      (default: dev.caliper.hello-world;
-//                                         pass dev.caliper.mnist in a torch build)
+// Run:  embed_host.exe [manifest-id]      (default: ai.caliperapp.hello-world;
+//                                         pass ai.caliperapp.mnist in a torch build)
 // ===========================================================================
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
@@ -84,9 +84,9 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 }
 
 int main(int argc, char** argv) {
-    // Loads dev.caliper.hello-world by default, or dev.caliper.mnist when passed
+    // Loads ai.caliperapp.hello-world by default, or ai.caliperapp.mnist when passed
     // on the command line in a torch build.
-    const char* instrument_id = (argc > 1) ? argv[1] : "dev.caliper.hello-world";
+    const char* instrument_id = (argc > 1) ? argv[1] : "ai.caliperapp.hello-world";
     if (!embed_version_ok()) return 1;
     // CALIPER_EMBED_OFFSCREEN=1: an offscreen canvas and no window class or
     // window at all (embed_host.h).

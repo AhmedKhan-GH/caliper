@@ -3,7 +3,7 @@
 using namespace caliper_host;
 
 static const char* kGolden = R"([instrument]
-id = "dev.ahmed.circuitnet"
+id = "ai.caliperapp.test.circuitnet"
 name = "CircuitNet 3.0"
 version = "1.0.0"
 summary = "Gate-level circuit explorer"
@@ -21,7 +21,7 @@ optional = ["caliper.log.v1"]
 TEST_CASE("manifest: golden parses fully") {
     auto r = parse_manifest_text(kGolden);
     REQUIRE(r.ok);
-    CHECK(r.manifest.id == "dev.ahmed.circuitnet");
+    CHECK(r.manifest.id == "ai.caliperapp.test.circuitnet");
     CHECK(r.manifest.name == "CircuitNet 3.0");
     CHECK(r.manifest.version == "1.0.0");
     CHECK(r.manifest.summary == "Gate-level circuit explorer");
@@ -86,8 +86,10 @@ TEST_CASE("semver validation") {
 }
 
 TEST_CASE("instrument id validation") {
-    CHECK(is_valid_instrument_id("dev.caliper.hello-world"));
-    CHECK(is_valid_instrument_id("dev.caliper.mnist"));
+    CHECK(is_valid_instrument_id("ai.caliperapp.hello-world"));
+    CHECK(is_valid_instrument_id("ai.caliperapp.mnist"));
+    CHECK(is_valid_instrument_id("ai.caliperapp.circuit-trace"));
+    CHECK(is_valid_instrument_id("ai.caliperapp.test.does-not-exist"));
     CHECK(is_valid_instrument_id("a.b"));
     CHECK(is_valid_instrument_id("x9"));
     CHECK_FALSE(is_valid_instrument_id(""));

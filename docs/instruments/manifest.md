@@ -31,7 +31,7 @@ To install an instrument with a library, put its manifest and library in the use
 
 | Section        | Key         | Type              | Required | Meaning                                                                 |
 |----------------|-------------|-------------------|----------|-------------------------------------------------------------------------|
-| `[instrument]` | `id`        | string            | Yes      | Lowercase reverse-DNS identity, e.g. `dev.caliper.mnist`. See [Instrument IDs](#instrument-ids). |
+| `[instrument]` | `id`        | string            | Yes      | Lowercase reverse-DNS identity, e.g. `ai.caliperapp.mnist`. See [Instrument IDs](#instrument-ids). |
 | `[instrument]` | `name`      | string            | Yes      | Human-readable display name. Must be non-empty.                         |
 | `[instrument]` | `version`   | string            | Yes      | Instrument version, strict semver `x.y.z` (three numeric parts).        |
 | `[instrument]` | `summary`   | string            | No       | Short one-line description shown in the landing screen's Inspector.     |
@@ -92,6 +92,8 @@ A spec names the version of the spec format that it needs with the key `caliper_
 
 A workspace names its instruments with workspace ids, `[a-z][a-z0-9_-]{0,63}`, which name their folders and files. A manifest id has no `_`. Thus `instrument.save` writes the manifest id `local.<id>`, with each `_` of the workspace id replaced by `-`. For example, the workspace instrument `loss_view` is the instrument `local.loss-view` in its folder `instruments/loss_view/`. The loader never compares the folder name with the manifest id.
 
+A caller can name another manifest id with the `manifest_id` argument of `instrument.save`, for example `ai.caliperapp.circuit-trace`. The argument follows the rules of [Instrument IDs](#instrument-ids), and `instrument.save` refuses a manifest id that another instrument of the workspace has. An overwrite without `manifest_id` keeps the manifest id that the saved instrument has.
+
 ### Spec Search Order
 
 The loader looks for spec-based instruments in the folders of the [search order](../reference/cli.md#search-order), in two places:
@@ -113,7 +115,7 @@ The `id` names the instrument's data folder (`data/<id>/` under the app-data roo
 - Dot-separated segments, none empty: no leading or trailing dot, no `..`.
 - At most 128 characters.
 
-`dev.caliper.mnist` is valid. `Dev.Example.App` (uppercase), `dev.example.my_app` (underscore), `dev/app`, `a..b` and `../../escape` are not. A manifest with an invalid id is listed as `FAILED` with the message `instrument.id is not a valid instrument id (lowercase reverse-DNS, [a-z0-9.-]): <id>` (see [Refusal Messages](../reference/refusal-messages.md#failed-messages)). The host creates no data folder for it.
+`ai.caliperapp.mnist` is valid. `Dev.Example.App` (uppercase), `dev.example.my_app` (underscore), `dev/app`, `a..b` and `../../escape` are not. A manifest with an invalid id is listed as `FAILED` with the message `instrument.id is not a valid instrument id (lowercase reverse-DNS, [a-z0-9.-]): <id>` (see [Refusal Messages](../reference/refusal-messages.md#failed-messages)). The host creates no data folder for it.
 
 ## Worked Example
 

@@ -208,9 +208,9 @@ TEST_CASE("embed/offscreen: load hello_world, pump, read non-blank pixels, clean
     // With a canvas attached, an unknown manifest id is an honest refusal
     // (this is where the unknown-id path is genuinely reached — before a canvas
     // the W1 gate below refuses first).
-    CHECK(caliper_core_load_instrument(core, "dev.caliper.does-not-exist") == 0);
+    CHECK(caliper_core_load_instrument(core, "ai.caliperapp.test.does-not-exist") == 0);
 
-    REQUIRE(caliper_core_load_instrument(core, "dev.caliper.hello-world") == 1);
+    REQUIRE(caliper_core_load_instrument(core, "ai.caliperapp.hello-world") == 1);
 
     // Pump a few frames: window position settles (FirstUseEver) and the font
     // atlas uploads on the first composite.
@@ -235,7 +235,7 @@ TEST_CASE("embed/gate: load before a canvas refuses (W1); read_pixels needs a ca
     // (the instrument's launch + first frame touch the renderer's ImGui backend,
     // which canvas_init wires). No canvas here — even the fixture id refuses,
     // and the reason names the canvas so the embedder knows the fix.
-    CHECK(caliper_core_load_instrument(core, "dev.caliper.hello-world") == 0);
+    CHECK(caliper_core_load_instrument(core, "ai.caliperapp.hello-world") == 0);
     CHECK(std::string(caliper_core_last_error(core)).find("canvas") !=
           std::string::npos);
 
@@ -274,7 +274,7 @@ TEST_CASE("embed/reload: same-id load is a clean restart (on_cleanup then on_ini
         return;
     }
 
-    REQUIRE(caliper_core_load_instrument(core, "dev.caliper.hello-world") == 1);
+    REQUIRE(caliper_core_load_instrument(core, "ai.caliperapp.hello-world") == 1);
     caliper_core_frame(core);
 
     // Reload the SAME id: the running instance is torn down (on_cleanup) and a
@@ -283,7 +283,7 @@ TEST_CASE("embed/reload: same-id load is a clean restart (on_cleanup then on_ini
     std::string log;
     {
         StderrTap tap;
-        REQUIRE(caliper_core_load_instrument(core, "dev.caliper.hello-world") == 1);
+        REQUIRE(caliper_core_load_instrument(core, "ai.caliperapp.hello-world") == 1);
         log = tap.drain();
     }
     auto cleanup_at = log.find("hello_world.on_cleanup");
@@ -312,7 +312,7 @@ TEST_CASE("embed/reload: load a different id after active swaps instruments") {
         return;
     }
 
-    REQUIRE(caliper_core_load_instrument(core, "dev.caliper.hello-world") == 1);
+    REQUIRE(caliper_core_load_instrument(core, "ai.caliperapp.hello-world") == 1);
     caliper_core_frame(core);
 
     // Swap to a DIFFERENT instrument: hello_world is torn down (on_cleanup) and
@@ -321,7 +321,7 @@ TEST_CASE("embed/reload: load a different id after active swaps instruments") {
     std::string log;
     {
         StderrTap tap;
-        REQUIRE(caliper_core_load_instrument(core, "dev.caliper.mnist") == 1);
+        REQUIRE(caliper_core_load_instrument(core, "ai.caliperapp.mnist") == 1);
         log = tap.drain();
     }
     CHECK(log.find("hello_world.on_cleanup") != std::string::npos);   // old torn down
@@ -354,14 +354,14 @@ TEST_CASE("embed/reload: a failed load after an active instrument leaves NO inst
         return;
     }
 
-    REQUIRE(caliper_core_load_instrument(core, "dev.caliper.hello-world") == 1);
+    REQUIRE(caliper_core_load_instrument(core, "ai.caliperapp.hello-world") == 1);
     caliper_core_frame(core);
 
     // Force the NEXT launch to fail cleanly (initialize() returns false). Per
     // teardown-first semantics the active hello_world is destroyed BEFORE that
     // launch, so the refusal leaves NO instrument — not the old one, not a phantom index.
     setenv("CALIPER_HELLO_WORLD_INIT_FAIL", "1", 1);
-    CHECK(caliper_core_load_instrument(core, "dev.caliper.hello-world") == 0);
+    CHECK(caliper_core_load_instrument(core, "ai.caliperapp.hello-world") == 0);
     unsetenv("CALIPER_HELLO_WORLD_INIT_FAIL");
 
     // No instrument loaded: a frame draws only the clear (no bright pixels) and
@@ -378,7 +378,7 @@ TEST_CASE("embed/reload: a failed load after an active instrument leaves NO inst
     // succeeds and renders. (The init-failed hello_world entry is itself now marked
     // Failed by the loader and can't be relaunched — existing loader policy,
     // orthogonal to the embed teardown-order fix under test here.)
-    REQUIRE(caliper_core_load_instrument(core, "dev.caliper.mnist") == 1);
+    REQUIRE(caliper_core_load_instrument(core, "ai.caliperapp.mnist") == 1);
     for (int i = 0; i < 8; ++i) caliper_core_frame(core);
     REQUIRE(caliper_core_read_pixels(core, px.data(), 128 * 4) == 1);
     CHECK(bright_pixels(px) > 50);
@@ -813,7 +813,7 @@ TEST_CASE("embed/log: a live instrument's log.v1 line routes to the embedder sin
     std::string err;
     {
         StderrTap tap;
-        int loaded = caliper_core_load_instrument(core, "dev.caliper.hello-world");
+        int loaded = caliper_core_load_instrument(core, "ai.caliperapp.hello-world");
         REQUIRE(loaded == 1);
         caliper_core_frame(core);
         err = tap.drain();

@@ -57,7 +57,7 @@ void hello_world_instrument(const fs::path& dir, const std::string& stem) {
     fs::copy_file(fs::path(CALIPER_TEST_INSTRUMENTS_DIR) / lib_name("hello_world"),
                   dir / lib_name(stem), fs::copy_options::overwrite_existing);
     std::ofstream(dir / (stem + ".caliper.toml")) <<
-        "[instrument]\nid=\"dev.caliper.hello-world\"\nname=\"Hello World\"\nversion=\"0.1.0\"\n"
+        "[instrument]\nid=\"ai.caliperapp.hello-world\"\nname=\"Hello World\"\nversion=\"0.1.0\"\n"
         "[compat]\nabi_epoch=4\n[services]\nrequired=[\"caliper.ui.v1\"]\n";
 }
 
@@ -262,18 +262,18 @@ TEST_CASE("copies: a later scan can take over, and only the chosen copy launches
     hello_world_instrument(t.path / "second", "hello_world_copy");
     InstrumentLoader L(caps(), t.str("data"));
     L.scan(t.str("first"));
-    CHECK(L.at(L.find("dev.caliper.hello-world")).status == InstrumentStatus::Ready);
+    CHECK(L.at(L.find("ai.caliperapp.hello-world")).status == InstrumentStatus::Ready);
     L.scan(t.str("second"));   // equal version, searched later: shadowed
     REQUIRE(L.count() == 2);
-    const int first = entry_in(L, "dev.caliper.hello-world", t.path / "first");
-    const int second = entry_in(L, "dev.caliper.hello-world", t.path / "second");
-    CHECK(L.find("dev.caliper.hello-world") == first);
+    const int first = entry_in(L, "ai.caliperapp.hello-world", t.path / "first");
+    const int second = entry_in(L, "ai.caliperapp.hello-world", t.path / "second");
+    CHECK(L.find("ai.caliperapp.hello-world") == first);
     CHECK(L.at(second).status == InstrumentStatus::Shadowed);
     CHECK_FALSE(L.launch(second, *fx.host()));      // a shadowed copy never runs
     CHECK(L.at(second).handle == nullptr);
     REQUIRE(L.launch(first, *fx.host()));
     CHECK(L.at(first).status == InstrumentStatus::Active);
-    CHECK(L.find("dev.caliper.hello-world") == first);    // a running copy is the one
+    CHECK(L.find("ai.caliperapp.hello-world") == first);    // a running copy is the one
     L.close_all();
 }
 
@@ -282,17 +282,17 @@ TEST_CASE("copies: probe opens, checks and creates without initializing") {
     TempDir t("probe");
     hello_world_instrument(t.path / "a", "hello_world");
     std::ofstream(t.path / "a" / "liar.caliper.toml") <<   // descriptor disagrees
-        "[instrument]\nid=\"dev.caliper.liar\"\nname=\"Liar\"\nversion=\"0.1.0\"\n"
+        "[instrument]\nid=\"ai.caliperapp.test.liar\"\nname=\"Liar\"\nversion=\"0.1.0\"\n"
         "[compat]\nabi_epoch=4\n";
     fs::copy_file(t.path / "a" / lib_name("hello_world"), t.path / "a" / lib_name("liar"));
     InstrumentLoader L(caps(), t.str("data"));
     L.scan(t.str("a"));
-    const int hello = L.find("dev.caliper.hello-world");
-    const int liar = L.find("dev.caliper.liar");
+    const int hello = L.find("ai.caliperapp.hello-world");
+    const int liar = L.find("ai.caliperapp.test.liar");
     CHECK(L.probe(hello));
     CHECK(L.at(hello).status == InstrumentStatus::Ready);
     CHECK_FALSE(fx.log_contains("hello_world.on_init"));
-    CHECK_FALSE(fs::exists(t.path / "data" / "dev.caliper.hello-world"));   // no data folder
+    CHECK_FALSE(fs::exists(t.path / "data" / "ai.caliperapp.hello-world"));   // no data folder
     CHECK_FALSE(L.probe(liar));
     CHECK(L.at(liar).status == InstrumentStatus::Failed);
     CHECK(L.at(liar).status_text == "descriptor id disagrees with manifest");

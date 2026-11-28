@@ -270,7 +270,7 @@ A stacked preview is a scratch copy of the open spec on which edits stack withou
 
 | Command | Arguments | Result | Errors |
 |---|---|---|---|
-| `instrument.save` | `id` (default: the spec's instrument id), `overwrite` (default false) | `id`, `manifest`, `spec` (paths relative to the workspace) | `spec.no_open_spec`, `instrument.exists`, `instrument.write_failed`, validator codes |
+| `instrument.save` | `id` (default: the spec's instrument id), `manifest_id` (default: the saved manifest's id for an overwrite, `local.<id>` otherwise), `overwrite` (default false) | `id`, `manifest`, `spec` (paths relative to the workspace) | `spec.no_open_spec`, `instrument.exists`, `instrument.write_failed`, validator codes |
 | `instrument.open` | `id` | `id`, `title`, `warnings` | `instrument.not_found`, `instrument.not_spec`, validator codes |
 | `instrument.list` | none | `instruments`: `id`, `title`, `path`, `updated_at` for each | |
 | `capture.frame` | none | `png_base64`, `width`, `height` | `capture.unavailable` |

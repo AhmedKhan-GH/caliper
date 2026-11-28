@@ -1045,7 +1045,7 @@ private:
 } // namespace mnist_instrument
 
 CALIPER_INSTRUMENT(mnist_instrument::MnistInstrument,
-    .id       = "dev.caliper.mnist",
+    .id       = "ai.caliperapp.mnist",
     .version  = "0.1.0",
     .name     = "MNIST Example",
     .summary  = "Canonical ML instrument: the PyTorch C++ MNIST CNN trained live with LibTorch.",
