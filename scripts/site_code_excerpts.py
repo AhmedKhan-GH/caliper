@@ -20,7 +20,7 @@ PAGE = Path(__file__).resolve().parents[1] / "site/index.html"
 PANELS = {
     "call": [
         ("The descriptor", "sdk/include/caliper/tensor.h", [(33, 52)], ["CaliperTensor", "data", "device", "stream"]),
-        ("The call, from an applet", "examples/mnist/applet/mnist_applet.cpp", [(637, 637), (639, 639), (644, 644), (951, 952)],
+        ("The call, from an instrument", "examples/mnist/instrument/mnist_instrument.cpp", [(637, 637), (639, 639), (644, 644), (951, 952)],
          ["to_tensor", "texture_from_tensor_mapped", "update_texture", "ImGui::Image"]),
     ],
     "metal": [

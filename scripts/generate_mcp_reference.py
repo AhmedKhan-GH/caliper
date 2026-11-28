@@ -22,7 +22,7 @@ TABLE_REL = "src/builder/commands/command_table.json"
 OUTPUT_REL = "docs/reference/mcp-commands.md"
 
 GROUP_INFO = {
-    "app": ("Application Commands", "Application commands inspect host versions, list applets, and switch the active applet."),
+    "app": ("Application Commands", "Application commands inspect host versions, list instruments, and switch the active instrument."),
     "catalog": ("Catalog Commands", "Catalog commands list, describe, and sample data sources across workspace stores and live feeds."),
     "data": ("Data Store Commands", "Data store commands run read-only SQL queries and import tabular files into the workspace store."),
     "loader": ("Loader Commands", "Loader commands manage and execute workspace file and Python data loaders."),
@@ -31,7 +31,7 @@ GROUP_INFO = {
     "panel": ("Panel Commands", "Panel commands create, patch, remove, render, and read data from spec panels."),
     "layout": ("Layout Commands", "Layout commands place panels, set split trees and shares, and lock or unlock the layout."),
     "preview": ("Preview Commands", "Preview commands stage, diff, commit, or discard multi-step spec edits before workspace mutation."),
-    "applet": ("Workspace Applet Commands", "Workspace applet commands save, open, and list spec applets in the builder workspace."),
+    "instrument": ("Workspace Instrument Commands", "Workspace instrument commands save, open, and list spec-based instruments in the builder workspace."),
     "review": ("Provenance Review Commands", "Provenance review commands report foreign spec review status for custom GPU programs."),
     "capture": ("Frame Capture Commands", "Frame capture commands render the current application view to a PNG image."),
     "control": ("Spec Control Commands", "Spec control commands create, patch, remove, and set interactive controls on the active spec."),

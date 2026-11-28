@@ -5,7 +5,7 @@ import sys
 def test_import_and_views():
     import caliper
     assert caliper.HAVE_VIEWS is True, "built without the embed v1.2 views"
-    assert caliper.EMBED_API_VERSION >= 1
+    assert caliper.EMBED_API_VERSION >= 2
     assert caliper.VIEW_FLAG_WAIT_GPU and caliper.VIEW_FLAG_RAW
 
 

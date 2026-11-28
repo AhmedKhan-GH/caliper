@@ -1,20 +1,20 @@
 #!/usr/bin/env bash
 # Installs the SDK from a configured and built core build folder and builds
-# applets against it, each in its own build folder, the way a developer
+# instruments against it, each in its own build folder, the way a developer
 # outside this repository would: the only link to the core is
 # -DCMAKE_PREFIX_PATH=<prefix>.
 #
-#   scripts/build_applets_against_sdk.sh <core build folder> <work folder> [applet folder...]
+#   scripts/build_instruments_against_sdk.sh <core build folder> <work folder> [instrument folder...]
 #
-# Without applet folders it builds examples/hello_world and, when torch is
-# enabled in the installed SDK, examples/mnist/applet. The SDK goes to
+# Without instrument folders it builds examples/hello_world and, when torch is
+# enabled in the installed SDK, examples/mnist/instrument. The SDK goes to
 # <work folder>/caliper-sdk and the builds to <work folder>/build/<name>.
 # CMAKE_GENERATOR and CMAKE_BUILD_TYPE from the environment are honoured
 # (the build type defaults to Release).
 set -euo pipefail
 
 if [ $# -lt 2 ]; then
-    echo "usage: $0 <core build folder> <work folder> [applet folder...]" >&2
+    echo "usage: $0 <core build folder> <work folder> [instrument folder...]" >&2
     exit 2
 fi
 core_build="$1"
@@ -33,21 +33,21 @@ if [ $# -eq 0 ]; then
     set -- "$root/examples/hello_world"
     sdk_info="$prefix/lib/cmake/caliper-sdk/caliper-sdk-info.cmake"
     if [ -f "$sdk_info" ] && grep -qE '^set\(CALIPER_TORCH_VERSION "[^"]+"\)' "$sdk_info"; then
-        if [ -f "$root/examples/mnist/applet/CMakeLists.txt" ]; then
-            set -- "$@" "$root/examples/mnist/applet"
+        if [ -f "$root/examples/mnist/instrument/CMakeLists.txt" ]; then
+            set -- "$@" "$root/examples/mnist/instrument"
         fi
     fi
 fi
 
 for dir in "$@"; do
     name="$(basename "$dir")"
-    if [ "$name" = "applet" ]; then
-        name="$(basename "$(dirname "$dir")")_applet"
+    if [ "$name" = "instrument" ]; then
+        name="$(basename "$(dirname "$dir")")_instrument"
     fi
     echo "== $name"
     cmake -S "$dir" -B "$work/build/$name" \
         -DCMAKE_PREFIX_PATH="$prefix" \
         -DCMAKE_BUILD_TYPE="${CMAKE_BUILD_TYPE:-Release}"
     cmake --build "$work/build/$name" --parallel
-    ls "$work/build/$name/applets"
+    ls "$work/build/$name/instruments"
 done

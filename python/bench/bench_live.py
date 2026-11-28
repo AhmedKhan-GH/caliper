@@ -42,7 +42,7 @@ statistics. Each viewer row then also reports, over the 2 s stats windows that
 lie inside the measured window: the frame time p50, p99 and maximum, the GPU
 time of an update and of a view draw (p50 and p99, from the command buffers'
 start and end times), and the copies per frame and bytes copied of the viewer
-(docs/applets/rendering.md, "Copy Counters and Frame Statistics").
+(docs/instruments/rendering.md, "Copy Counters and Frame Statistics").
 """
 from __future__ import annotations
 

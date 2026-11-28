@@ -1,20 +1,20 @@
 #!/usr/bin/env python3
-"""Fail when the host names an applet.
+"""Fail when the host names an instrument.
 
-The host must work with any applet and name none. This check collects, from
-the example applets in this repository:
+The host must work with any instrument and name none. This check collects, from
+the example instruments in this repository:
 
-  * the [applet] id and name of every *.caliper.toml under examples/;
+  * the [instrument] id and name of every *.caliper.toml under examples/;
   * every window title passed as a string literal to ImGui::Begin(...) in the
     sources under examples/;
 
 and fails if any of them appears as a whole C or C++ string literal in the
 code of a source file under src/ or include/. Matching whole literals, not
 substrings, keeps ordinary words in host strings from matching, and comments
-are skipped, so a header may still cite an applet id as an example.
+are skipped, so a header may still cite an instrument id as an example.
 
-Usage: check_host_names_no_applet.py [--root <repository root>]
-Exit status: 0 when the host names no applet, 1 when it does, 2 on bad input.
+Usage: check_host_names_no_instrument.py [--root <repository root>]
+Exit status: 0 when the host names no instrument, 1 when it does, 2 on bad input.
 """
 
 import argparse
@@ -36,14 +36,14 @@ BEGIN_TITLE = re.compile(r'\bImGui::Begin\s*\(\s*"((?:[^"\\\n]|\\.)*)"')
 
 
 def manifest_names(path):
-    """Returns the [applet] id and name of one manifest."""
+    """Returns the [instrument] id and name of one manifest."""
     text = path.read_text(encoding="utf-8")
     if tomllib is not None:
         try:
-            applet = tomllib.loads(text).get("applet", {})
+            instrument = tomllib.loads(text).get("instrument", {})
         except tomllib.TOMLDecodeError as error:
             raise SystemExit(f"error: {path}: {error}") from None
-        values = [applet.get("id"), applet.get("name")]
+        values = [instrument.get("id"), instrument.get("name")]
     else:
         values = []
         table = None
@@ -54,7 +54,7 @@ def manifest_names(path):
                 table = header.group(1)
                 continue
             pair = re.match(r'(id|name)\s*=\s*"([^"]*)"', line)
-            if table == "applet" and pair:
+            if table == "instrument" and pair:
                 values.append(pair.group(2))
     return [v for v in values if isinstance(v, str) and v.strip()]
 
@@ -95,7 +95,7 @@ def source_files(folder):
 
 
 def collect_needles(root):
-    """Maps each applet id, name and window title to where it came from."""
+    """Maps each instrument id, name and window title to where it came from."""
     needles = {}
     for top in ("examples",):
         folder = root / top
@@ -141,11 +141,11 @@ def main():
     needles = collect_needles(root)
     hits = find_hits(root, needles)
     if hits:
-        print(f"The host names {len(hits)} applet string(s); it must name none:")
+        print(f"The host names {len(hits)} instrument string(s); it must name none:")
         for path, number, literal, origin in hits:
             print(f'  {path}:{number}: "{literal}" (from {origin})')
         return 1
-    print(f"The host names no applet ({len(needles)} applet ids, names and window titles checked).")
+    print(f"The host names no instrument ({len(needles)} instrument ids, names and window titles checked).")
     return 0
 
 

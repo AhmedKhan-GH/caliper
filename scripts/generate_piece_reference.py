@@ -5,7 +5,7 @@ Reads:
   - src/builder/include/caliper_builder/spec/piece.h
   - src/builder/include/caliper_builder/programs/pieces.h
   - src/builder/programs/piece_checks.cpp
-  - src/builder/spec/schema/caliper-spec-v1.schema.json
+  - src/builder/spec/schema/caliper-spec-v2.schema.json
 
 In --check mode (the default), fails when any source cannot be parsed, when
 piece_checks.cpp emits an undocumented check code, or when
@@ -27,7 +27,7 @@ import sys
 PIECE_H_REL = "src/builder/include/caliper_builder/spec/piece.h"
 PIECES_H_REL = "src/builder/include/caliper_builder/programs/pieces.h"
 CHECKS_CPP_REL = "src/builder/programs/piece_checks.cpp"
-SCHEMA_REL = "src/builder/spec/schema/caliper-spec-v1.schema.json"
+SCHEMA_REL = "src/builder/spec/schema/caliper-spec-v2.schema.json"
 OUTPUT_REL = "docs/reference/piece-format.md"
 
 LIMIT_RE = re.compile(
@@ -273,13 +273,13 @@ def render_markdown(parsed: dict) -> str:
         "",
         "A piece defines a portable unit of programmable graphics with `piece.toml` and up to three WGSL files (%s)." % piece_files,
         "Library pieces, workspace pieces, and inline `[[piece]]` entries in a spec share one schema, one manifest validator, and one SHA-256 content hash.",
-        "The script `scripts/generate_piece_reference.py` generates this page from `piece.h`, `pieces.h`, `piece_checks.cpp`, and `caliper-spec-v1.schema.json`.",
+        "The script `scripts/generate_piece_reference.py` generates this page from `piece.h`, `pieces.h`, `piece_checks.cpp`, and `caliper-spec-v2.schema.json`.",
         "Continuous integration runs `python scripts/generate_piece_reference.py --check` and fails when this page drifts from those sources.",
         "Run `python3 scripts/generate_piece_reference.py --write` after any change to piece limits, manifest schema keys, or check codes.",
         "",
         "## Schema Definitions",
         "",
-        "The canonical JSON Schema in `src/builder/spec/schema/caliper-spec-v1.schema.json` validates piece keys, types, patterns, and array bounds.",
+        "The canonical JSON Schema in `src/builder/spec/schema/caliper-spec-v2.schema.json` validates piece keys, types, patterns, and array bounds.",
         "Tensor inputs accept element types %s, or distinct combinations joined by `|`." % tensor_dtypes,
         "Texture resources accept formats %s." % tex_formats,
         "See [Pieces](../agents/pieces.md) for authoring workflows and [MCP Command Reference](mcp-commands.md#piece-library-commands) for `piece.*` tools.",

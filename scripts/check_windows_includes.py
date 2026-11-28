@@ -32,8 +32,8 @@ __atomic_*).
 
 The translation units are those of the macOS build's compile_commands.json,
 minus the macOS-only ones and plus the Windows-only ones, as CMakeLists.txt,
-tests/CMakeLists.txt and the applet folders choose them (WINDOWS_ONLY and
-MACOS_ONLY below), and the applets that scripts/build_applets_against_sdk.sh
+tests/CMakeLists.txt and the instrument folders choose them (WINDOWS_ONLY and
+MACOS_ONLY below), and the instruments that scripts/build_instruments_against_sdk.sh
 builds in the Windows lane. It needs a macOS build configured with libtorch
 and the tests (the release preset). It cannot see a type error, an overload that
 differs, a missing declaration in a Windows header, a link error or anything
@@ -86,7 +86,7 @@ OFF_ON_WINDOWS = (
     "tests/test_app_live.cpp",
     "tests/test_app_route.cpp",
     "tests/test_app_session.cpp",
-    "tests/test_spec_applet_session.cpp",
+    "tests/test_spec_instrument_session.cpp",
 )
 
 
@@ -97,20 +97,20 @@ def off_on_windows(rel: str) -> bool:
 # Windows-only translation units, each with the macOS translation unit whose
 # include paths and definitions it shares (its target's).
 WINDOWS_ONLY = {
-    "src/host/feed_provider_win.cpp": "src/host/applet_loader.cpp",
-    "src/host/device_query_cuda.cpp": "src/host/applet_loader.cpp",
-    "src/host/renderer/cuda_driver.cpp": "src/host/applet_loader.cpp",
+    "src/host/feed_provider_win.cpp": "src/host/instrument_loader.cpp",
+    "src/host/device_query_cuda.cpp": "src/host/instrument_loader.cpp",
+    "src/host/renderer/cuda_driver.cpp": "src/host/instrument_loader.cpp",
     "src/host/live/live_unsupported.cpp": "src/host/live/live_controls.cpp",
     "src/host/renderer/vulkan_renderer.cpp": "src/host/core_lifecycle.cpp",
     "examples/embed_host/main_win32.cpp": "tests/test_embed.cpp",
     "tests/sdk_install_probe/probe.cpp": "tests/test_sugar.cpp",
 }
 # tests/sdk_install_probe/no_embed/no_embed.cpp is left out: it is built to fail
-# (an applet that includes <caliper/embed.h> must not compile).
-# An applet gets the SDK, UI-stack and export definitions of examples/hello_world.
-APPLET_DONORS = ["examples/hello_world/hello_world.cpp"]
-# Standalone example applets checked in addition to any already in compile_commands.json.
-EXAMPLE_APPLETS = ("examples/hello_world", "examples/mnist/applet")
+# (an instrument that includes <caliper/embed.h> must not compile).
+# An instrument gets the SDK, UI-stack and export definitions of examples/hello_world.
+INSTRUMENT_DONORS = ["examples/hello_world/hello_world.cpp"]
+# Standalone example instruments checked in addition to any already in compile_commands.json.
+EXAMPLE_INSTRUMENTS = ("examples/hello_world", "examples/mnist/instrument")
 EXTRA_DEFINES = ["WIN32", "_WINDOWS", "_MBCS", "VK_USE_PLATFORM_WIN32_KHR", "IMGUI_IMPL_VULKAN_USE_VOLK"]
 MACOS_DEFINES = {"CALIPER_HAVE_METAL"}
 
@@ -314,7 +314,7 @@ def translation_units(build: str) -> list[tuple[str, list[str], str]]:
         fl, std = flags_of(by_rel[donor])
         units.append((rel, fl, std))
     afl, astd = [], "c++17"
-    for donor in APPLET_DONORS:
+    for donor in INSTRUMENT_DONORS:
         if donor not in by_rel:
             sys.exit(f"{donor} is not in compile_commands.json (a build with the tests is needed)")
         fl, astd = flags_of(by_rel[donor])
@@ -324,8 +324,8 @@ def translation_units(build: str) -> list[tuple[str, list[str], str]]:
             k += len(item)
             if not any(afl[m:m + len(item)] == item for m in range(len(afl))):
                 afl += item
-    for app_rel in EXAMPLE_APPLETS:
-        d = os.path.join(ROOT, app_rel)
+    for inst_rel in EXAMPLE_INSTRUMENTS:
+        d = os.path.join(ROOT, inst_rel)
         if not os.path.exists(os.path.join(d, "CMakeLists.txt")):
             continue
         for dirpath, _, files in os.walk(d):

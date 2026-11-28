@@ -52,13 +52,18 @@ PEP508_URL_RE = re.compile(r"^([A-Za-z0-9_.-]+(?:\[[A-Za-z0-9_,.-]+\])?)\s*@\s*(
 PEP508_SPEC_RE = re.compile(r"^([A-Za-z0-9_.-]+(?:\[[A-Za-z0-9_,.-]+\])?)\s*([=<>!~].+)$")
 PEP508_BARE_RE = re.compile(r"^([A-Za-z0-9_.-]+(?:\[[A-Za-z0-9_,.-]+\])?)$")
 
-EXTRA_ORDER = ("torch", "notebook", "interp", "agent", "test", "docs")
+EXTRA_ORDER = ("torch", "examples", "notebook", "interp", "agent", "test", "docs")
 
 EXTRA_INFO = {
     "torch": (
         "Users",
         "PyTorch (`torch`) for tensor views and model hooks.",
         "Install when a script streams PyTorch tensors and does not already install PyTorch.",
+    ),
+    "examples": (
+        "Users",
+        "PyTorch (`torch`) and `torchvision` for the shipped training examples.",
+        "Install when you run `examples/mnist/train.py` or any other shipped example.",
     ),
     "notebook": (
         "Users",
@@ -104,7 +109,7 @@ SUBMODULE_ROLES = {
 FETCHCONTENT_META = {
     "tomlplusplus": (
         "All builds (host, `src/builder`, `web/wasm`)",
-        "TOML parser for applet manifests, piece manifests, and spec documents.",
+        "TOML parser for instrument manifests, piece manifests, and spec documents.",
     ),
     "nlohmann_json": (
         "`CALIPER_WITH_BUILDER=ON` and `web/wasm`",
@@ -120,11 +125,11 @@ FETCHCONTENT_META = {
     ),
     "zlib": (
         "Windows only (`WIN32`)",
-        "Static compression library for Windows applets (macOS uses the system library).",
+        "Static compression library for Windows instruments (macOS uses the system library).",
     ),
     "curl": (
         "Windows only (`WIN32`)",
-        "Static HTTP client with Windows Schannel TLS for applets (macOS uses the system library).",
+        "Static HTTP client with Windows Schannel TLS for instruments (macOS uses the system library).",
     ),
     "vulkan-headers": (
         "Windows only (`WIN32`)",
@@ -871,9 +876,9 @@ def render_markdown(parsed: dict) -> str:
         "",
         "## Shipped Packages",
         "",
-        "Caliper builds five deliverables from this repository for desktop users, Python developers, browser pages, native hosts, and applet authors.",
+        "Caliper builds five deliverables from this repository for desktop users, Python developers, browser pages, native hosts, and instrument authors.",
         "The **Caliper Application** builds the native `caliper` desktop host and the `caliper-mcp` server from the C++ core.",
-        "The `caliper` executable opens the desktop workspace, runs [Caliper CLI](cli.md) subcommands, and loads compiled and spec applets.",
+        "The `caliper` executable opens the desktop workspace, runs [Caliper CLI](cli.md) subcommands, and opens instruments.",
         "The `caliper-mcp` executable ships beside `caliper` and exposes the tools in [MCP Command Reference](mcp-commands.md) over stdio.",
         "",
         "The **Python Package** (%s %s, Python %s) ships Caliper LIB and the `caliper_agent` package from `pyproject.toml`."
@@ -887,8 +892,8 @@ def render_markdown(parsed: dict) -> str:
         "When a browser provides WebGPU, those elements render with `caliper-views.wasm`, compiled with Emscripten %s from `web/wasm/emscripten-version.txt`."
         % md_code(emsdk_ver),
         "**Caliper Embed** (`caliper-embed`) installs the shared library (`libcaliper_embed.dylib` on macOS and `caliper_embed.dll` on Windows) behind the C interface in `include/caliper/embed.h`.",
-        "**Applet SDK** (`caliper-sdk`) installs `sdk/include/caliper/abi.h`, `sdk/include/caliper/caliper.hpp`, `caliper_add_applet()`, the fixture host, and the pinned UI stack for out-of-tree native applets.",
-        "See [Browser Elements](../web/browser-elements.md), [Program Embedding](../web/program-embedding.md), and [SDK Package](../applets/sdk-package.md) for integration details.",
+        "**Instrument SDK** (`caliper-sdk`) installs `sdk/include/caliper/abi.h`, `sdk/include/caliper/caliper.hpp`, `caliper_add_instrument()`, the fixture host, and the pinned UI stack for out-of-tree C++ instruments.",
+        "See [Browser Elements](../web/browser-elements.md), [Program Embedding](../web/program-embedding.md), and [SDK Package](../instruments/sdk-package.md) for integration details.",
         "",
         "### Shipped Package Summary",
         "",
@@ -902,12 +907,12 @@ def render_markdown(parsed: dict) -> str:
         "| Browser Module | %s, `caliper-views.wasm` | %s (Emscripten %s) | `<caliper-view>`, `<caliper-controls>`, `<caliper-replay>` |"
         % (md_code(web_name), md_code(web_ver), md_code(emsdk_ver)),
         "| Caliper Embed | `caliper-embed` (`libcaliper_embed.dylib`, `caliper_embed.dll`) | CMake package `caliper::embed` | `include/caliper/embed.h` |",
-        "| Applet SDK | `caliper-sdk` | CMake package `caliper::sdk` | `sdk/include/caliper/abi.h`, `sdk/include/caliper/caliper.hpp`, `caliper_add_applet()`, pinned UI stack |",
+        "| Instrument SDK | `caliper-sdk` | CMake package `caliper::sdk` | `sdk/include/caliper/abi.h`, `sdk/include/caliper/caliper.hpp`, `caliper_add_instrument()`, pinned UI stack |",
         "",
         "### Python Package Extras",
         "",
         "The `[project.optional-dependencies]` table in `pyproject.toml` splits optional Python packages by workflow.",
-        "User extras add PyTorch, notebooks, interpretability tooling, or the side chat agent.",
+        "User extras add PyTorch, the shipped examples, notebooks, interpretability tooling, or the side chat agent.",
         "The `[test]` and `[docs]` extras are for contributors only and never ship as user runtime requirements.",
         "",
         "| Extra | Audience | What It Adds | When to Install |",
@@ -971,7 +976,7 @@ def render_markdown(parsed: dict) -> str:
             "",
             "Caliper tracks third-party C++ source trees as Git submodules in `.gitmodules` under `third_party/`.",
             "Each submodule pins an exact 40-character Git commit in the repository index.",
-            "The UI stack submodules (`imgui`, `implot`, `implot3d`, and `ImGuiFileDialog`) form part of the frozen applet ABI epoch.",
+            "The UI stack submodules (`imgui`, `implot`, `implot3d`, and `ImGuiFileDialog`) form part of the frozen instrument ABI epoch.",
             "",
             "| Submodule | Pinned Commit | Repository | Role |",
             "|---|---|---|---|",
@@ -1019,7 +1024,7 @@ def render_markdown(parsed: dict) -> str:
 
     lines.extend(
         [
-            "When `CALIPER_WITH_TORCH=ON`, `cmake/Dependencies.cmake` downloads pre-built LibTorch %s archives for applet and torch test targets."
+            "When `CALIPER_WITH_TORCH=ON`, `cmake/Dependencies.cmake` downloads pre-built LibTorch %s archives for instrument and torch test targets."
             % md_code(cmake["pytorch_version"]),
             "`libcaliper`, `caliper`, `caliper-embed`, and the Python wheel never link LibTorch.",
             variants_sentence,
