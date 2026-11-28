@@ -1,8 +1,7 @@
-// The two worked examples of design/programmable-graphics.md as test fixtures: the pieces
-// attention_field (a fragment-only field) and attention_arcs (arcs drawn instanced with
-// additive blending, again into a half-size target, and a bloom of that target), their files
-// as the plan writes them, and one recorded version of each published resource, computed on
-// the CPU from a fixed attention pattern, thus no training runs.
+// Two worked piece examples as test fixtures: attention_field (a fragment-only field)
+// and ring_arcs (arcs drawn instanced with additive blending, again into a half-size
+// target, and a bloom of that target), their files, and one recorded version of each
+// published resource, computed on the CPU from a fixed pattern, thus no training runs.
 //
 // The draw tests reach the render graph through these pieces. Where the checks of pieces
 // (programs/pieces.h) answer program.not_built in the tree, the stand-ins below take their
@@ -135,7 +134,7 @@ inline cs::Piece attention_field() {
     return p;
 }
 
-// ---- attention_arcs --------------------------------------------------------------------------
+// ---- ring_arcs --------------------------------------------------------------------------
 
 inline const char* kArcsCommon = R"(// common.wgsl
 const L: u32 = 2u;     // layers
@@ -270,9 +269,9 @@ fn bloom(in: CaliperFullscreen) -> @location(0) vec4<f32> {
 }
 )";
 
-inline cs::Piece attention_arcs() {
+inline cs::Piece ring_arcs() {
     cs::Piece p;
-    p.name = "attention_arcs";
+    p.name = "ring_arcs";
     p.version = 1;
     p.description = "Arcs between the tokens of one sentence, one ring for each layer, from the attention weights";
     p.imports = {"colormap@1", "pick@1", "camera@1"};
@@ -466,7 +465,7 @@ struct Label {
 };
 static_assert(sizeof(Label) == 32, "Label is 32 bytes, as the composer's layout");
 
-// attention_arcs' resources as its derive passes compute them, in the order of `build`.
+// ring_arcs' resources as its derive passes compute them, in the order of `build`.
 struct ArcResources {
     std::vector<float> heads;
     std::vector<Arc> arcs;

@@ -77,16 +77,14 @@ target_sources(caliper_view_layer PRIVATE
 
 # The draw half of pieces (design/programmable-graphics.md): the same render
 # graph, composer, prelude and lib modules as the app, from one source each.
-# The runtime reads a PROGRAM's declaration with nlohmann/json, the release
-# that the builder takes (src/builder/CMakeLists.txt).
-include(FetchContent)
-if(NOT TARGET nlohmann_json::nlohmann_json)
-    set(JSON_BuildTests OFF CACHE INTERNAL "")
-    FetchContent_Declare(nlohmann_json
-        URL https://github.com/nlohmann/json/releases/download/v3.11.3/json.tar.xz
-        URL_HASH SHA256=d6c65aca6b1ed68e7a182f4757257b107ae403032760ed6ef121c9d55e81757d)
-    FetchContent_MakeAvailable(nlohmann_json)
+# The runtime reads a PROGRAM's declaration with nlohmann/json, declared in
+# cmake/Dependencies.cmake.
+if(NOT COMMAND caliper_fetch_nlohmann_json)
+    set(CALIPER_DEPENDENCIES_DECLARATIONS_ONLY ON)
+    include("${CALIPER_ROOT}/cmake/Dependencies.cmake")
+    unset(CALIPER_DEPENDENCIES_DECLARATIONS_ONLY)
 endif()
+caliper_fetch_nlohmann_json()
 target_link_libraries(caliper_view_layer PUBLIC nlohmann_json::nlohmann_json)
 # The theme and the fonts read the design tokens (generated header and font files) that the
 # native build uses, from the one declaration in cmake/SternbildTokens.cmake.
@@ -117,12 +115,7 @@ set_property(SOURCE ${CALIPER_ROOT}/src/host/live/live_scene.cpp ${CALIPER_ROOT}
 # The converter reads each library piece from its piece.toml with the spec library's reader
 # (piece_from_toml), thus the module compiles the sources of the spec library that the reader needs,
 # with toml++ at the native build's pin. The linker keeps only what the reader reaches.
-if(NOT TARGET tomlplusplus::tomlplusplus)
-    FetchContent_Declare(tomlplusplus
-        GIT_REPOSITORY https://github.com/marzer/tomlplusplus.git
-        GIT_TAG v3.4.0 GIT_SHALLOW TRUE)
-    FetchContent_MakeAvailable(tomlplusplus)
-endif()
+caliper_fetch_tomlplusplus()
 set(_spec "${CALIPER_ROOT}/src/builder/spec")
 add_library(caliper_spec_reader STATIC
     ${_spec}/annotation.cpp

@@ -86,7 +86,7 @@ features:
     title: ImPlot3D in the Browser
     status: planned
     scope: peripheral
-    summary: ImPlot3D, which EmbedScope and GPTScope use for 3-D plots, is part of the browser module so that its views draw in a browser.
+    summary: ImPlot3D, which C++ applets use for 3-D plots, is part of the browser module so that its views draw in a browser.
     depends_on: [EMB-02]
     design: design/streaming-and-embedding.md#the-web-viewer
     issue: null

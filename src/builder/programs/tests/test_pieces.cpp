@@ -86,14 +86,14 @@ TEST_CASE("a program that pins a piece is an instance with its pin, bindings and
     cs::Program a;
     a.id = "tower_arcs";
     CHECK(!cs::is_piece_instance(a));
-    a.piece = cs::PieceRef{"attention_arcs", 1, "sha256:00", cs::PieceFrom::workspace};
+    a.piece = cs::PieceRef{"ring_arcs", 1, "sha256:00", cs::PieceFrom::workspace};
     a.bind["attn0"] = "live:blocks.0.attn.weights.act";
     a.panel = "tower";
     CHECK(cs::is_piece_instance(a));
     const cs::Program b = a;
     CHECK(b.piece == a.piece);
     CHECK(b.bind == a.bind);
-    CHECK(!(cs::PieceRef{"attention_arcs", 2, "sha256:00", cs::PieceFrom::workspace} == *a.piece));
+    CHECK(!(cs::PieceRef{"ring_arcs", 2, "sha256:00", cs::PieceFrom::workspace} == *a.piece));
 }
 
 TEST_CASE("the names of the piece values round-trip") {
@@ -145,12 +145,12 @@ cs::Layout struct_layout(const char* name, std::vector<cs::Field> fields) {
     return l;
 }
 
-// A piece shaped like attention_arcs of the plan: a derive half that
+// A piece shaped like ring_arcs of the plan: a derive half that
 // publishes scores, counted arcs and label anchors, and a draw half with an
 // instanced pick pass, a pass into a half-size target and a bloom that reads it.
 cs::Piece arcs_piece() {
     cs::Piece p;
-    p.name = "attention_arcs";
+    p.name = "ring_arcs";
     p.description = "Arcs between the tokens of one sentence";
     p.imports = {"colormap@1", "pick@1", "camera@1"};
     cs::PieceInput a0;
@@ -320,7 +320,7 @@ TEST_CASE("published buffers hold 128 MiB, textures 256 MiB, and all resources 5
 }
 
 TEST_CASE("a piece name is a lowercase name of at most 32 bytes and a version from 1 to 1000000") {
-    CHECK(cp::check_piece_name("attention_arcs", 1).ok());
+    CHECK(cp::check_piece_name("ring_arcs", 1).ok());
     CHECK(cp::check_piece_name("a", 1000000).ok());
     for (const char* bad : {"", "Arcs", "_arcs", "1arcs", "arcs-2", "arcs/../x", "a b", "..", "arcs.toml",
                             "abcdefghijabcdefghijabcdefghijabc"})
@@ -674,7 +674,7 @@ TEST_CASE("the manifest check refuses each breach with its code") {
     p.hash = "sha256:XYZ";
     CHECK(code_of(p) == cp::kPieceBadManifest);
     p = arcs_piece();
-    p.depends = {cs::PieceDependency{"attention_arcs", 1}};
+    p.depends = {cs::PieceDependency{"ring_arcs", 1}};
     CHECK(code_of(p) == cp::kPieceCycle);
     p = arcs_piece();
     p.sample["attn0"] = cs::SampleInput{"sample/attn0.bin", {1, 4, 512, 512}};  // 4 MiB

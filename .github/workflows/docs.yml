@@ -8,7 +8,9 @@ on:
     # and the command table, piece definitions, and root docs checked here.
     paths: ['docs/**', 'design/**', 'docs-theme/**', 'mkdocs.yml',
             'sdk/include/**', 'include/caliper/**', 'python/caliper/**', 'examples/**', 'roadmap/**',
-            'candidates/**', 'requirements-docs.txt', 'CONTRIBUTING.md', 'README.md',
+            'candidates/**', 'pyproject.toml', '.gitmodules',
+            'cmake/Dependencies.cmake', 'web/package.json',
+            'web/wasm/emscripten-version.txt', 'CONTRIBUTING.md', 'README.md',
             'src/builder/commands/command_table.json',
             'src/builder/include/caliper_builder/spec/piece.h',
             'src/builder/include/caliper_builder/programs/pieces.h',
@@ -16,8 +18,9 @@ on:
             'src/builder/spec/schema/caliper-spec-v1.schema.json',
             'src/host/host_cli.h',
             'scripts/check_api_reference.py', 'scripts/test_check_api_reference.py',
-            'scripts/generate_feature_index.py', 'scripts/generate_mcp_reference.py',
-            'scripts/generate_piece_reference.py', 'scripts/check_doc_references.py',
+            'scripts/generate_mcp_reference.py',
+            'scripts/generate_piece_reference.py',
+            'scripts/generate_packages_reference.py', 'scripts/check_doc_references.py',
             'scripts/test_doc_generators.py', 'scripts/test_check_doc_references.py',
             '.github/pull_request_template.md', '.github/workflows/docs.yml']
   workflow_dispatch:
@@ -37,10 +40,17 @@ jobs:
       - uses: actions/setup-python@v7
         with:
           python-version: '3.12'
-      # The versions are pinned in requirements-docs.txt, which a local build reads too. The design
-      # build also depends on MkDocs accepting design/mkdocs.yml inside its own docs folder when the
-      # file is named by a relative path, as here.
-      - run: pip install -r requirements-docs.txt
+      # The versions are pinned in [project.optional-dependencies].docs in pyproject.toml, which a
+      # local build reads too. The design build also depends on MkDocs accepting design/mkdocs.yml
+      # inside its own docs folder when the file is named by a relative path, as here.
+      - name: Install documentation dependencies
+        run: |
+          python - <<'PY'
+          import subprocess, sys, tomllib
+          with open("pyproject.toml", "rb") as f:
+              deps = tomllib.load(f)["project"]["optional-dependencies"]["docs"]
+          subprocess.check_call([sys.executable, "-m", "pip", "install", *deps])
+          PY
       # Validates the roadmap registry, its coverage ledger and the candidates against their schemas
       # and rules.
       - run: sternbild-docs check-roadmap
@@ -51,11 +61,10 @@ jobs:
       # docstring or no ::: directive, or when a service table entry or an embed, live or live_views
       # function has no doc comment or no generated table.
       - run: python scripts/check_api_reference.py
-      # Fails when any shipped feature lacks docs, code or tests, or when any generated reference
-      # page drifts from its source definitions.
-      - run: python scripts/generate_feature_index.py --check
+      # Fails when any generated reference page drifts from its source definitions.
       - run: python scripts/generate_mcp_reference.py --check
       - run: python scripts/generate_piece_reference.py --check
+      - run: python scripts/generate_packages_reference.py --check
       # Fails on broken links/anchors, stale repository paths, or unknown commands, CLI subcommands,
       # or Python symbols across docs, CONTRIBUTING.md and README.md.
       - run: python scripts/check_doc_references.py

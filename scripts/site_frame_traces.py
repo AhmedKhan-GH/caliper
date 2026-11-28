@@ -19,7 +19,7 @@ from pathlib import Path
 REPO = "https://github.com/AhmedKhan-GH/caliper"
 PAGE = Path(__file__).resolve().parents[1] / "site/index.html"
 
-GS = "applets/gpt_scope/gpt_scope.cpp"
+MN = "examples/mnist/applet/mnist_applet.cpp"
 TORCH = "sdk/include/caliper/adapters/torch.hpp"
 MR = "src/host/renderer/metal_renderer.mm"
 VR = "src/host/renderer/vulkan_renderer.cpp"
@@ -27,28 +27,28 @@ KERNEL = "src/host/renderer/kernels/cmap_direct.cu"
 
 # A ref is (path, text) or (path, text, anchor): the line holding text, the first one after the anchor's line when
 # an anchor is given. Without an anchor the text must occur once in the file.
-STEP = "// ---- the optimizer step ----"
-FORWARD = (GS, "auto logits = model->forward(xb);", STEP)
-BACKWARD = (GS, "loss.backward();", STEP)
-GRAD_NORMS = (GS, "auto gn = acc.sqrt().to(torch::kCPU).contiguous();")
-OPT_STEP = (GS, "opt.step();", STEP)
-LOSS = (GS, "const float l = loss.item<float>();")
-HANDOFF = (GS, "return caliper::adapters::stream_to_tensor(dev_t, bridge.caps());")
-UPDATE = (GS, "if (id != 0) { bridge.update_texture(id, &*ct); return id; }")
-WIDGETS = (GS, 'ImGui::Text("selected: layer %d, head %d')
-IMAGE = (GS, "ImGui::Image(caliper::Bridge::imtex(st->head_tex), ImVec2(side, side));")
+STEP = "for (auto& batch : *train_loader) {"
+FORWARD = (MN, "auto output = model->forward(data);", STEP)
+BACKWARD = (MN, "loss.backward();", STEP)
+OPT_STEP = (MN, "optimizer.step();", STEP)
+LOSS = (MN, "const float loss_val = loss.item<float>();", STEP)
+ACC_READ = (MN, "output.argmax(1).eq(targets).to(torch::kFloat32).mean().item<float>();", STEP)
+HANDOFF = (MN, "auto ct = caliper::adapters::to_tensor(cpu_f32);")
+UPDATE = (MN, "if (tex && bridge.update_texture(tex, &*ct)) return;")
+WIDGETS = (MN, 'ImGui::SeparatorText("conv1 filters (10 x 5x5, RdBu)");')
+IMAGE = (MN, "ImGui::Image(caliper::Bridge::imtex(st->filter_tex),")
 
 # The training thread is the same code on both backends; only how long torch takes to encode or launch differs.
-def training(fw, bw, gn, st, lo, fw2, bw2):
+def training(fw, bw, st, lo, ac, fw2, bw2):
     return [
         (0, 0.0, fw, "torch", "forward", "forward: torch queues the kernels", [FORWARD]),
         (0, fw, bw, "torch", "backward", "backward: torch queues the kernels", [BACKWARD]),
-        (0, bw, gn, "wait", "waits: grad norms", "blocks until the GPU is done: grad norms copied to the CPU", [GRAD_NORMS]),
-        (0, gn, st, "torch", "step", "optimizer step: torch queues the kernels", [OPT_STEP]),
+        (0, bw, st, "torch", "step", "optimizer step: torch queues the kernels", [OPT_STEP]),
         (0, st, lo, "wait", "waits: loss", "blocks until the GPU is done: the loss read back", [LOSS]),
-        (0, lo, fw2, "torch", "forward", "next step: forward", [FORWARD]),
+        (0, lo, ac, "wait", "waits: acc", "blocks until the GPU is done: batch accuracy read back", [ACC_READ]),
+        (0, ac, fw2, "torch", "forward", "next step: forward", [FORWARD]),
         (0, fw2, bw2, "torch", "backward", "next step: backward", [BACKWARD]),
-        (0, bw2, 20.0, "wait", "waits: grad norms", "next step: blocks until the GPU is done", [GRAD_NORMS]),
+        (0, bw2, 20.0, "wait", "waits: loss", "next step: blocks until the GPU is done", [LOSS]),
     ]
 
 
@@ -71,7 +71,7 @@ METAL = {
     "label": "Metal, one frame: the frame thread hands torch's tensor to Caliper's command queue, which waits on a "
              "shared event torch's queue signals, colormaps the buffer in place, and draws the frame that the display "
              "shows at the next vsync; the training thread blocks only on its own reads",
-    "lanes": [("TRAINING THREAD", "CPU · gpt_scope train_job"), ("FRAME THREAD", "CPU · Caliper host"),
+    "lanes": [("TRAINING THREAD", "CPU · mnist_applet train_job"), ("FRAME THREAD", "CPU · Caliper host"),
               ("TORCH'S QUEUE", "GPU · MTLCommandQueue"), ("CALIPER'S QUEUE", "GPU · MTLCommandQueue"),
               ("DISPLAY", "scan-out")],
     "segs": training(2.2, 4.6, 8.9, 9.9, 12.1, 14.3, 16.7) + [
@@ -148,7 +148,7 @@ NVIDIA = {
     "label": "NVIDIA, one frame: the frame thread enqueues a colormap kernel and a timeline signal on torch's CUDA "
              "stream; the kernel reads the tensor in place and writes the back VkImage, which swaps with the front "
              "one; the frame waits for that signal, samples the image and is presented at the next vsync",
-    "lanes": [("TRAINING THREAD", "CPU · gpt_scope train_job"), ("FRAME THREAD", "CPU · Caliper host"),
+    "lanes": [("TRAINING THREAD", "CPU · mnist_applet train_job"), ("FRAME THREAD", "CPU · Caliper host"),
               ("TORCH'S STREAM", "GPU · CUDA stream"), ("CALIPER'S QUEUE", "GPU · VkQueue"),
               ("DISPLAY", "swapchain")],
     "segs": training(1.8, 3.9, 8.3, 9.0, 10.6, 12.4, 14.5) + [

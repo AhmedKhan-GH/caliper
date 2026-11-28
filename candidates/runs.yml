@@ -116,7 +116,7 @@ candidates:
     summary: "GPU use, memory, power, temperature, CPU, disk and network are recorded on the run's own timeline."
     serves: "Slowdowns are related to hardware behaviour."
     origin: field
-    depends_on: [STR-42, RUN-03]
+    depends_on: [STR-41, RUN-03]
   - key: code-capture
     title: "Code and Git Capture"
     summary: "Each run records its commit, uncommitted changes and entry script."

@@ -49,7 +49,7 @@ CALIPER_COMMAND_SCRIPT=build.jsonl caliper shot --workspace ws --launch run42-da
 wrote /home/me/board.png: Run 42 at 2560x1440 after 60 frames
 ```
 
-The applet runs as it runs in the app: its `on_init`, its frames and any jobs it starts. Its own variables, such as `CALIPER_EMBED_AUTOTRAIN`, apply as usual. Leave them unset for an image of the applet's first state.
+The applet runs as it runs in the app: its `on_init`, its frames and any jobs it starts. Its own environment variables apply as usual. Leave them unset for an image of the applet's first state.
 
 `shot` exits with 0 when it has written the image, and with 2 for a wrong command line. It exits with 1 in these cases:
 

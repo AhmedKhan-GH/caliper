@@ -38,34 +38,34 @@ The CMake build wires the project dependencies together. Install the platform to
 An applet is three files in one folder:
 
 ```
-examples/hello/
-├── hello.caliper.toml    the manifest, checked before your code loads
-├── hello.cpp             your applet class and the CALIPER_APPLET macro
-└── CMakeLists.txt        find_package(caliper-sdk) and caliper_add_applet()
+examples/hello_world/
+├── hello_world.caliper.toml    the manifest, checked before your code loads
+├── hello_world.cpp             your applet class and the CALIPER_APPLET macro
+└── CMakeLists.txt              find_package(caliper-sdk) and caliper_add_applet()
 ```
 
 - **Manifest**: It holds the reverse-DNS `id`, the name, the version, a summary and the lists of required and optional services. The `id` and `version` must be byte-identical to the descriptor in the `CALIPER_APPLET` call. If they differ, the loader refuses the applet and lists it with the reason. See [Manifest](../applets/manifest.md).
 - **Macro**: `CALIPER_APPLET(...)` at the bottom of the `.cpp` generates the epoch-3 C ABI glue. This is the descriptor and an exception wall on every entry point. You never write `extern "C"`.
 - **Class**: It has three lifecycle methods. `on_init(Host&)` probes the services. Assert the required ones and let the optional ones degrade. `on_frame(const Frame&)` runs on the frame thread every frame. It submits ImGui windows and reads state that workers publish. `on_cleanup()` cancels jobs, waits for them with a bound, releases textures and returns.
-- **CMakeLists**: Copy the one from `examples/hello/` for a UI-only applet, and add `TORCH` to `caliper_add_applet()` for an ML applet. Edit only the project and target name, the source files and the manifest filename.
+- **CMakeLists**: Copy the one from `examples/hello_world/` for a UI-only applet, and add `TORCH` to `caliper_add_applet()` for an ML applet. Edit only the project and target name, the source files and the manifest filename.
 
 ### Smallest Complete Applet
 
-These listings are the files of `examples/hello/`, embedded verbatim. The folder builds alone against the installed SDK, and the core build uses it as the loader-test fixture. [Your first applet](../applets/first-applet.md) walks through the file line by line.
+These listings are the files of `examples/hello_world/`, embedded verbatim. The folder builds alone against the installed SDK, and the core build uses it as the loader-test fixture. [First Applet](../applets/first-applet.md) walks through the file line by line.
 
-```cpp title="examples/hello/hello.cpp"
---8<-- "examples/hello/hello.cpp"
+```cpp title="examples/hello_world/hello_world.cpp"
+--8<-- "examples/hello_world/hello_world.cpp"
 ```
 
-```toml title="examples/hello/hello.caliper.toml"
---8<-- "examples/hello/hello.caliper.toml"
+```toml title="examples/hello_world/hello_world.caliper.toml"
+--8<-- "examples/hello_world/hello_world.caliper.toml"
 ```
 
-```cmake title="examples/hello/CMakeLists.txt"
---8<-- "examples/hello/CMakeLists.txt"
+```cmake title="examples/hello_world/CMakeLists.txt"
+--8<-- "examples/hello_world/CMakeLists.txt"
 ```
 
-The applet has no `main`, no window, no GL or Metal code, no ImGui context and no event loop. The macro and the host supply them. To add ML, add a `jobs.v1` training job and the bridge, as [In-Tree Applets](../applets/in-tree-applets.md) shows.
+The applet has no `main`, no window, no GL or Metal code, no ImGui context and no event loop. The macro and the host supply them. To add ML, add a `jobs.v1` training job and the tensor bridge, as `examples/mnist/applet/` and [Torch per Platform](../applets/torch-per-platform.md) show.
 
 ## Development Loop
 
@@ -192,9 +192,9 @@ A suite that uses them ends with `CALIPER_GPU_TEST_MAIN()` in place of `DOCTEST_
 
 ## Applets in This Repository
 
-`caliper_add_applet()` is the same file in the core build and in the SDK package. The core build compiles no applets unless `CALIPER_BUILD_APPLETS=ON`. `examples/hello` and `applets/pulse_scope` build with the tests as the loader and swap fixtures.
+`caliper_add_applet()` is the same file in the core build and in the SDK package. The core build compiles no applets unless `CALIPER_BUILD_APPLETS=ON` or `BUILD_TESTS=ON`. With tests enabled, `examples/hello_world` builds as the loader fixture, and `examples/mnist/applet` builds when `CALIPER_WITH_TORCH=ON`.
 
-Each applet folder under `applets/` and `examples/` also builds alone against the installed SDK. `scripts/build_applets_against_sdk.sh <core build folder> <work folder> [applet folder...]` installs the SDK and builds them that way, as CI does.
+Each example applet folder under `examples/` also builds alone against the installed SDK. `scripts/build_applets_against_sdk.sh <core build folder> <work folder> [applet folder...]` installs the SDK and builds them that way, as CI does.
 
 An older build folder can keep libraries from in-tree builds that predate `caliper_add_applet()`. Their manifests have no `[build]` table, so the host does not check them against the UI-stack hash. Delete the `applets/` folder of the build after you turn `CALIPER_BUILD_APPLETS` off, and when you reuse such a build folder.
 
@@ -210,10 +210,10 @@ Some environment variables exist only for tests, and the user page Folders and E
 
 ## Docs Preview
 
-The docs site renders the Python API reference from the docstrings of Caliper LIB. To see the docs while you change them, serve the site from the repository root with the versions of `requirements-docs.txt`:
+The docs site renders the Python API reference from the docstrings of Caliper LIB. To see the docs while you change them, serve the site from the repository root with the pinned `docs` extra in `pyproject.toml` (see `CONTRIBUTING.md` for creating `.docs-venv`):
 
 ```sh
-uv run --no-project --with-requirements requirements-docs.txt mkdocs serve -a 127.0.0.1:8000
+.docs-venv/bin/mkdocs serve -a 127.0.0.1:8000
 ```
 
 The server builds the site again when a page, a docstring under `python/caliper/` or a C header changes. `CONTRIBUTING.md` gives the strict build that the Docs workflow runs.

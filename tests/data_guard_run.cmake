@@ -4,7 +4,7 @@
 # the ctest entry caliper_test_data_guard. Arguments (-D before -P):
 #   EXE          the caliper executable
 #   EMBED_TESTS  caliper_embed_tests, a test binary that opens the stores
-#   APPLETS      the build's applets folder (dev.caliper.hello)
+#   APPLETS      the build's applets folder (dev.caliper.hello-world)
 #   PYTHON       an interpreter for the Python package, "" for none
 #   PYTHON_DIR   the package's folder (python/ in the source tree)
 #   WORK_DIR     a work folder; each run makes run-<random> in it, removed after
@@ -109,13 +109,13 @@ expect_refusal(embed_tests_refused "a test binary")
 
 # 4. caliper shot in a test run.
 step(shot_test_run_refused EXIT 1 ENV CALIPER_TEST_RUN=1
-     ARGS "${EXE}" shot --applets "${APPLETS}" --launch dev.caliper.hello --size 320x200 --frames 3
+     ARGS "${EXE}" shot --applets "${APPLETS}" --launch dev.caliper.hello-world --size 320x200 --frames 3
           --out "${WORK_DIR}/refused.png")
 expect_refusal(shot_test_run_refused "a test run \\(CALIPER_TEST_RUN is set\\)")
 
 # 5. caliper shot --api as a person runs it.
 step(shot_api
-     ARGS "${EXE}" shot --applets "${APPLETS}" --launch dev.caliper.hello --size 320x200 --frames 3
+     ARGS "${EXE}" shot --applets "${APPLETS}" --launch dev.caliper.hello-world --size 320x200 --frames 3
           --out "${WORK_DIR}/shot.png" --api --api-port 0)
 if(step_code EQUAL 0)
     if(NOT step_out MATCHES "agents read .*caliper-shot-[^/]*/api\\.json")

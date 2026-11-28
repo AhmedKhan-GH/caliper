@@ -5,6 +5,7 @@ nav:
   - shot-and-serve-commands.md
   - mcp-commands.md
   - piece-format.md
+  - packages-and-dependencies.md
   - wire-protocol.md
   - wire-frames.md
   - session-messages.md

@@ -103,7 +103,7 @@ DRAW = "// the draw half: the viewer runs it\n"
 
 ARC_FIELDS = ["from_token: u32", "to_token: u32", "layer: u32", "head: u32", "weight: f32", "score: f32"]
 MANIFEST = {
-    "name": "attention_arcs", "version": 1,
+    "name": "ring_arcs", "version": 1,
     "description": "Arcs between the tokens of one sentence, one ring for each layer",
     "imports": [],
     "inputs": [{"name": "attn0", "kind": "tensor", "rank_min": 4, "rank_max": 4},
@@ -120,7 +120,7 @@ MANIFEST = {
                           {"entry": "place_labels"}]},
     "draw": {"camera": "orbit", "passes": [{"kind": "render", "fragment": "f"}]},
 }
-PIN = {"name": "attention_arcs", "version": 1, "hash": "sha256:" + "0" * 64, "from": "workspace"}
+PIN = {"name": "ring_arcs", "version": 1, "hash": "sha256:" + "0" * 64, "from": "workspace"}
 BIND = {"attn0": "live:attn0", "attn1": "live:weights.act"}
 ARC = np.dtype([("from_token", "<u4"), ("to_token", "<u4"), ("layer", "<u4"), ("head", "<u4"),
                 ("weight", "<f4"), ("score", "<f4")])
@@ -234,7 +234,7 @@ def test_a_bad_manifest_is_refused_before_the_runtime(change, code):
     try:
         assert item["state"] == "refused"
         assert item["error"]["code"] == code
-        assert item["kind"] == "piece" and item["piece"]["name"] == "attention_arcs"
+        assert item["kind"] == "piece" and item["piece"]["name"] == "ring_arcs"
     finally:
         P.remove("bad")
     assert "bad" not in {x["id"] for x in P.status()}
@@ -437,7 +437,7 @@ def test_the_arcs_piece_publishes_its_resources_in_the_cadence(attached):
     # The draw half goes first, with all three sections.
     first = ctl.posts[0][1]
     assert first.type == w.MsgType.PROGRAM
-    assert first.meta["manifest"]["name"] == "attention_arcs" and first.meta["bind"] == BIND
+    assert first.meta["manifest"]["name"] == "ring_arcs" and first.meta["bind"] == BIND
     assert {s.name for s in first.sections} == {w.SECTION_COMMON, w.SECTION_DERIVE, w.SECTION_DRAW}
     assert bytes(first.section(w.SECTION_DERIVE).data).decode() == DERIVE
     assert bytes(first.section(w.SECTION_DRAW).data).decode() == DRAW

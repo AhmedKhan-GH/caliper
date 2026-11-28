@@ -1283,7 +1283,7 @@ TEST_CASE("app live: attention entropy per layer, from a live stream, on the spe
     // Launching another applet keeps the stream attached: only Detach on the
     // live page ends it. The catalog keeps the live sources, which keep
     // arriving, and the spec opened again draws live data.
-    CHECK(ok(port, token, "app.launch", {{"id", "dev.caliper.hello"}})["status"] == "ACTIVE");
+    CHECK(ok(port, token, "app.launch", {{"id", "dev.caliper.hello-world"}})["status"] == "ACTIVE");
     CHECK(eventually(app, [&] {
         const auto e = live_entries(port, token);
         return e.count("live:attn.entropy") && e.at("live:attn.entropy").value("updated_at", std::string()) != updated_b;

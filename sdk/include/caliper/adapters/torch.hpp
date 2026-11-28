@@ -78,7 +78,7 @@ inline void* mtl_command_queue_of(void* command_buffer) {
 // documented purpose is exactly this synchronization). Touching the stream
 // from a frame thread while a training thread encodes therefore corrupts the
 // MPSCommandBuffer/encoder state — MPS aborts with 'command buffer already
-// committed' / AGX encoder-coalescing crashes (the EmbedScope SIGABRT). The
+// committed' / AGX encoder-coalescing crashes. The
 // same disassembly is what makes nesting commit() inside our block safe: it
 // cannot deadlock, because it never dispatches. Plain C dispatch API — no
 // ObjC blocks — keeps the header .cpp-compilable.

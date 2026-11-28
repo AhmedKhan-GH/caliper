@@ -94,16 +94,6 @@ features:
     docs: docs/python/scene-calls.md#primitives
     issue: null
 
-  - id: STR-11
-    title: Loss Landscape Demo
-    status: built
-    scope: core
-    summary: Demo 0 is a notebook that streams the loss surface around a model's current weights as a mesh, with the optimizer's path across it, recomputed on the device while the model trains.
-    depends_on: [REN-12, STR-07, STR-10]
-    sprint: 4
-    branches: [sprint4-integ3, sprint4-pr1-main2]
-    issue: null
-
   - id: STR-12
     title: Recordings on MCAP
     status: built
@@ -369,15 +359,6 @@ features:
     summary: caliper.feed.v1 gives applets telemetry channels of the machine from ring buffers that the host owns, read without blocking and with every lost sample counted.
     depends_on: [COR-03]
     docs: docs/applets/services/caliper-feed-v1.md
-    issue: null
-
-  - id: STR-42
-    title: PulseScope
-    status: shipped
-    scope: peripheral
-    summary: PulseScope draws one strip chart per telemetry channel of the machine from the feed service, with the current value, a stale marker and a count of lost samples.
-    depends_on: [STR-41]
-    docs: docs/applets/in-tree-applets.md#pulsescope
     issue: null
 
   - id: STR-43

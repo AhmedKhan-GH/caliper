@@ -97,3 +97,10 @@ if(TARGET caliper_viewer)
     set_target_properties(caliper_viewer PROPERTIES OUTPUT_NAME caliper-viewer)
     install(TARGETS caliper_viewer RUNTIME DESTINATION caliper/bin COMPONENT python)
 endif()
+
+# The widget agent sidecar (caliper[agent]) ships the command table and widget scope
+# definitions beside caliper_agent/cli.py so installed wheels need no source checkout.
+install(FILES
+    ${CMAKE_SOURCE_DIR}/src/builder/commands/command_table.json
+    ${CMAKE_SOURCE_DIR}/src/builder/commands/widget_scopes.json
+    DESTINATION caliper_agent COMPONENT python)

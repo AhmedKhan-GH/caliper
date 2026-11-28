@@ -28,26 +28,27 @@ else()
     set(CALIPER_BUILDER_STANDALONE OFF)
 endif()
 
-# doctest v2.4.11 declares cmake_minimum_required 2.8, which CMake >= 4.0 rejects.
-set(CMAKE_POLICY_VERSION_MINIMUM 3.5)
-include(FetchContent)
-
-if(NOT TARGET tomlplusplus::tomlplusplus)
-    FetchContent_Declare(tomlplusplus
-        GIT_REPOSITORY https://github.com/marzer/tomlplusplus.git
-        GIT_TAG v3.4.0 GIT_SHALLOW TRUE)
-    FetchContent_MakeAvailable(tomlplusplus)
+get_filename_component(_caliper_repo_root "${CMAKE_CURRENT_LIST_DIR}/../.." ABSOLUTE)
+if(NOT COMMAND caliper_fetch_tomlplusplus)
+    set(_caliper_saved_decl_only "${CALIPER_DEPENDENCIES_DECLARATIONS_ONLY}")
+    set(_caliper_had_decl_only FALSE)
+    if(DEFINED CALIPER_DEPENDENCIES_DECLARATIONS_ONLY)
+        set(_caliper_had_decl_only TRUE)
+    endif()
+    set(CALIPER_DEPENDENCIES_DECLARATIONS_ONLY ON)
+    include("${_caliper_repo_root}/cmake/Dependencies.cmake")
+    if(_caliper_had_decl_only)
+        set(CALIPER_DEPENDENCIES_DECLARATIONS_ONLY "${_caliper_saved_decl_only}")
+    else()
+        unset(CALIPER_DEPENDENCIES_DECLARATIONS_ONLY)
+    endif()
 endif()
+
+caliper_fetch_tomlplusplus()
 
 # nlohmann/json (MIT) carries every JSON value of the builder: the JSON form of
 # a spec, command arguments, the journal, MCP and ACP messages.
-if(NOT TARGET nlohmann_json::nlohmann_json)
-    set(JSON_BuildTests OFF CACHE INTERNAL "")
-    FetchContent_Declare(nlohmann_json
-        URL https://github.com/nlohmann/json/releases/download/v3.11.3/json.tar.xz
-        URL_HASH SHA256=d6c65aca6b1ed68e7a182f4757257b107ae403032760ed6ef121c9d55e81757d)
-    FetchContent_MakeAvailable(nlohmann_json)
-endif()
+caliper_fetch_nlohmann_json()
 
 # DuckDB, as one target the modules link: caliper_builder_duckdb.
 add_library(caliper_builder_duckdb INTERFACE)
@@ -80,12 +81,7 @@ endif()
 #   caliper_builder_add_tests(<module> SOURCES <files> LIBS <targets>)
 # and gets the ctest test builder_<module>.
 if(BUILD_TESTS)
-    if(NOT TARGET doctest::doctest)
-        FetchContent_Declare(doctest
-            GIT_REPOSITORY https://github.com/doctest/doctest.git
-            GIT_TAG v2.4.11 GIT_SHALLOW TRUE)
-        FetchContent_MakeAvailable(doctest)
-    endif()
+    caliper_fetch_doctest()
     add_library(caliper_builder_test_main OBJECT tests/test_main.cpp)
     target_link_libraries(caliper_builder_test_main PUBLIC doctest::doctest)
 endif()
@@ -114,7 +110,7 @@ set(CALIPER_BUILDER_INCLUDE_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/include")
 # dependencies at configure time so test_context_bundle and builder_agent_py
 # cannot fail later with a missing pydantic_ai import.
 set(CALIPER_BUILDER_TEST_PYTHON "" CACHE FILEPATH
-    "A Python interpreter with numpy, pyarrow, and caliper-agent[test] dependencies for the builder tests")
+    "A Python interpreter with numpy, pyarrow, and agent/test dependencies from pyproject.toml for the builder tests")
 if(BUILD_TESTS)
     function(_caliper_probe_builder_python py_exe out_ok out_err)
         execute_process(
@@ -149,7 +145,7 @@ if(BUILD_TESTS)
                 _caliper_probe_builder_python("${_cand}" _cand_ok _cand_err)
                 if(_cand_ok)
                     set(CALIPER_BUILDER_TEST_PYTHON "${_cand}" CACHE FILEPATH
-                        "A Python interpreter with numpy, pyarrow, and caliper-agent[test] dependencies for the builder tests"
+                        "A Python interpreter with numpy, pyarrow, and agent/test dependencies from pyproject.toml for the builder tests"
                         FORCE)
                     message(STATUS "caliper_builder: auto-selected CALIPER_BUILDER_TEST_PYTHON=${CALIPER_BUILDER_TEST_PYTHON}")
                     break()
@@ -159,14 +155,14 @@ if(BUILD_TESTS)
         if(NOT CALIPER_BUILDER_TEST_PYTHON)
             message(STATUS
                 "caliper_builder: CALIPER_BUILDER_TEST_PYTHON is not set and no local venv with "
-                "caliper-agent[test] dependencies was found; Python loader and agent tests will skip")
+                "agent/test dependencies from pyproject.toml was found; Python loader and agent tests will skip")
         endif()
     else()
         if(NOT IS_ABSOLUTE "${CALIPER_BUILDER_TEST_PYTHON}")
             get_filename_component(_builder_py_abs "${CALIPER_BUILDER_TEST_PYTHON}" ABSOLUTE BASE_DIR "${CMAKE_SOURCE_DIR}")
             if(EXISTS "${_builder_py_abs}")
                 set(CALIPER_BUILDER_TEST_PYTHON "${_builder_py_abs}" CACHE FILEPATH
-                    "A Python interpreter with numpy, pyarrow, and caliper-agent[test] dependencies for the builder tests"
+                    "A Python interpreter with numpy, pyarrow, and agent/test dependencies from pyproject.toml for the builder tests"
                     FORCE)
             endif()
         endif()
@@ -180,9 +176,10 @@ if(BUILD_TESTS)
                 "caliper_builder: CALIPER_BUILDER_TEST_PYTHON (${CALIPER_BUILDER_TEST_PYTHON}) "
                 "lacks required builder/agent test dependencies "
                 "(numpy, pydantic_ai, anthropic, openai, pytest, acp.schema): ${_builder_py_err}\n"
-                "Install them into that interpreter:\n"
+                "Install the agent and test dependencies from pyproject.toml into that interpreter:\n"
                 "  uv pip install --python \"${CALIPER_BUILDER_TEST_PYTHON}\" "
-                "-e \"${CMAKE_CURRENT_SOURCE_DIR}/agent[test]\" numpy pyarrow")
+                "\"pydantic-ai-slim[anthropic]>=2.68,<3\" \"anthropic>=2.8,<3\" "
+                "\"openai>=3.51,<4\" \"pytest>=8\" \"agent-client-protocol>=1.0,<2\" numpy pyarrow")
         endif()
     endif()
     if(CALIPER_BUILDER_TEST_PYTHON)

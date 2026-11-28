@@ -15,9 +15,9 @@ flowchart LR
 
 The settings choose the provider, and a ⌘K request on a panel returns a preview that you accept or reject.
 
-Caliper finds the agent through the environment variable `CALIPER_AGENT_PYTHON`. Set it to an interpreter that has the
-dependencies of `caliper-agent`, for example a virtual environment where you ran `pip install ./src/builder/agent` in a
-checkout of Caliper. The agent reaches your workspace through the Caliper API, so start Caliper with `--api`.
+Caliper finds the agent through the environment variable `CALIPER_AGENT_PYTHON`. Set it to an interpreter with
+`caliper[agent]` installed, for example a virtual environment where you ran `pip install ".[agent]"` in a checkout of
+Caliper. The agent reaches your workspace through the Caliper API, so start Caliper with `--api`.
 
 ## Settings Access
 

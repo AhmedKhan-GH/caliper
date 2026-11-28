@@ -171,32 +171,6 @@ entries:
   item: The macOS and Windows telemetry providers and their channels; Linux has none.
   ids:
   - STR-41
-- page: docs/applets/in-tree-applets.md#embedscope
-  item: EmbedScope trains a small MNIST network with a learned 3-D bottleneck and draws the test-set embeddings
-    as a live ImPlot3D scatter, with SQL panels.
-  ids:
-  - COR-13
-  - INT-27
-- page: docs/applets/in-tree-applets.md#gptscope
-  item: GPTScope trains a character-level GPT live and shows it in seven windows, with ThoughtSpace as
-    a 3-D residual-stream constellation.
-  ids:
-  - INT-01
-  - INT-02
-  - INT-03
-- page: docs/applets/in-tree-applets.md#pulsescope
-  item: PulseScope draws one strip chart per telemetry channel of this machine from caliper.feed.v1.
-  ids:
-  - COR-13
-  - STR-42
-- page: docs/applets/in-tree-applets.md#tutorial-applets
-  item: Hello is the tutorial applet under examples/.
-  ids:
-  - COR-13
-- page: docs/applets/in-tree-applets.md#embedding-example
-  item: examples/embed_host is a second host of the core in a bare native window, with an offscreen mode.
-  ids:
-  - EMB-07
 - page: docs/python/routes-and-inspection.md#routing
   item: 'A view call is offered to every open route: the live session, the in-process core and the network
     server.'
@@ -804,10 +778,6 @@ entries:
   item: The UI-stack hash pins the ImGui stack.
   ids:
   - COR-04
-- page: docs/applets/in-tree-applets.md#in-tree-applets
-  item: Applets in this repository build against the installed SDK.
-  ids:
-  - COR-13
 - page: docs/applets/adapters.md#torchhpp
   item: torch.hpp turns a torch tensor into a CaliperTensor, rejects rather than copies, and applies the
     MPS and CUDA rules.
@@ -866,8 +836,7 @@ entries:
   - PLT-02
 - page: docs/reference/folders-and-environment.md#applet-and-example-variables
   item: The applet and example variables.
-  ids:
-  - COR-13
+  reason: superseded
 - page: docs/reference/folders-and-environment.md#test-variables
   item: The test variables.
   ids:
@@ -1039,27 +1008,6 @@ entries:
   item: 'Embed Caliper in a program: install the package, link it from CMake and drive the core.'
   ids:
   - EMB-07
-- page: docs/applets/ml-applet-cookbook.md#1-threading-spine
-  item: The threading spine for ML applets.
-  ids:
-  - COR-46
-- page: docs/applets/ml-applet-cookbook.md#3-device-resident-pull
-  item: The device-resident pull of a tensor into a texture.
-  ids:
-  - REN-08
-  - REN-64
-- page: docs/applets/ml-applet-cookbook.md#9-checkpoints-via-artifactsv1
-  item: Checkpoints through caliper.artifacts.v1.
-  ids:
-  - RUN-02
-- page: docs/applets/ml-applet-cookbook.md#10-sql-over-live-data
-  item: SQL over live data through caliper.data.v1.
-  ids:
-  - COR-48
-- page: docs/applets/ml-applet-cookbook.md#2-three-cadences
-  item: Three cadences match the update rate to the data.
-  ids:
-  - COR-13
 - page: docs/python/hub-setup.md
   item: Run a hub with caliper serve, connect scripts and choose a session in a viewer.
   ids:
@@ -1278,9 +1226,6 @@ entries:
 - page: docs/agents/pieces.md#program-instances
   item: "A worked fragment-only piece over a live tensor."
   reason: docs
-- page: docs/agents/pieces.md#attention-arc-tower
-  item: "A worked piece with compute into a buffer and an instanced draw with a glow."
-  reason: docs
 - page: docs/agents/pieces.md#resources-and-step-history
   item: "Named, typed resources replace the output shapes of one-pass programs."
   ids:
@@ -1415,24 +1360,6 @@ entries:
 - page: docs/development/testing.md#draw-parity
   item: "A test compares the app's frame with the browser module's frame."
   reason: test
-- page: docs/agents/pieces.md#attention-arc-tower
-  item: "The demo that an agent builds through caliper-mcp alone."
-  reason: test
-- page: docs/agents/pieces.md#attention-arc-tower
-  item: "A small transformer whose induction heads form at a loss bump."
-  reason: test
-- page: docs/agents/pieces.md#attention-arc-tower
-  item: "The steps of the agent and the person in the demo."
-  reason: test
-- page: docs/agents/pieces.md#attention-arc-tower
-  item: "The gaps of the demo and the work that closes each."
-  reason: test
-- page: docs/agents/pieces.md#attention-arc-tower
-  item: "The derive halves keep to the shared cadence's budget."
-  reason: test
-- page: docs/agents/pieces.md#attention-arc-tower
-  item: "A fragment-only field on the same contract."
-  reason: test
 - page: docs/development/testing.md#programmable-graphics-acceptance
   item: "A test through caliper-mcp builds the tower on a managed run."
   reason: test
@@ -1444,14 +1371,6 @@ entries:
   item: "No command writes provenance and the app has no review card for pieces yet."
   ids:
   - SPC-53
-- page: docs/agents/pieces.md#attention-arc-tower
-  item: "The training script ablates the strongest head of layer 1 through a toggle, and the loss rises."
-  ids:
-  - INT-23
-- page: docs/agents/pieces.md#attention-arc-tower
-  item: "The Attention Arc Tower as the demo of programmable graphics."
-  ids:
-  - REN-83
 - page: docs/agents/pieces.md#piece-commands
   item: "The commands piece.check, piece.list, piece.show, piece.save, piece.copy, piece.update, piece.remove and program.read."
   ids:
@@ -1623,7 +1542,6 @@ entries:
   - REN-70
   - REN-71
   - REN-72
-  - REN-73
   - REN-74
   - REN-75
 

@@ -231,7 +231,7 @@ TEST_CASE("stream_to_tensor: cuda tensor carries the producer stream when honore
 
 TEST_CASE("stream_to_tensor: handoff survives a concurrently-encoding training thread") {
     if (!mps_ok()) CALIPER_SKIP_NO_GPU("no MPS device");
-    // Regression for the EmbedScope SIGABRT (MPSCore MPSPredicate.mm 'command
+    // Regression for the concurrent-MPS SIGABRT (MPSCore MPSPredicate.mm 'command
     // buffer already committed. State: 4'): the frame thread performs stream
     // handoffs while a worker thread — the training loop — continuously
     // enqueues MPS kernels. torch::mps::get_command_buffer() is a bare,

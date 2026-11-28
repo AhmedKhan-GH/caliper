@@ -164,19 +164,19 @@ candidates:
     summary: "Every projected view states its projection method and how much variance it keeps."
     serves: "A person knows how far to trust distances in a picture."
     origin: adjacent-work
-    depends_on: [INT-27]
+    depends_on: [REN-12]
   - key: role-colour-convention
     title: "Role Colour Convention"
     summary: "Queries, keys, values and outputs each keep one colour in every view, with a legend wherever they appear."
     serves: "A reader follows one vector through several attention views without relearning the colours."
     origin: adjacent-work
-    depends_on: [INT-03, SPC-20]
+    depends_on: [INT-35, SPC-20]
   - key: process-animations
     title: "Process Animations with Scrub"
     summary: "A view animates a process such as softmax sharpening, causal generation, rotary rotation or head splitting, with play, pause and scrub."
     serves: "A person watches a step-by-step process unfold instead of reading its end state."
     origin: adjacent-work
-    depends_on: [STR-13, INT-03]
+    depends_on: [STR-13, INT-35]
   - key: spectrogram-view
     title: "Spectrogram View"
     summary: "A time-frequency image of audio or other signals with selectable window, scale and colour mapping."

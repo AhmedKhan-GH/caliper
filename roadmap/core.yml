@@ -112,15 +112,6 @@ features:
     docs: docs/reference/applet-commands.md#caliper-install
     issue: null
 
-  - id: COR-13
-    title: In-Tree Applets
-    status: shipped
-    scope: supporting
-    summary: The in-tree applets are three applets under applets/ and the tutorial examples, and each builds on its own against the installed SDK rather than in the core build.
-    depends_on: [COR-04]
-    docs: docs/applets/in-tree-applets.md
-    issue: null
-
   - id: COR-14
     title: Inspector Parts as Core Services
     status: planned
@@ -153,7 +144,7 @@ features:
     status: planned
     scope: peripheral
     summary: Shipped applets sit in the app bundle's PlugIns folder and are signed with the app, so that the bundle is never written after it ships.
-    depends_on: [COR-13, PLT-04]
+    depends_on: [COR-04, PLT-04]
     design: design/applets-outside-the-core.md#where-applets-are-stored
     issue: null
 
@@ -314,7 +305,7 @@ features:
     status: idea
     scope: peripheral
     summary: A population twin and a machine thermal twin fed by the feed service could become applets.
-    depends_on: [COR-13]
+    depends_on: [STR-41]
     issue: null
 
   - id: COR-37
@@ -322,7 +313,7 @@ features:
     status: idea
     scope: peripheral
     summary: An actor-critic policy that steers a plasma simulation could become an applet of its own.
-    depends_on: [COR-13]
+    depends_on: [COR-04]
     issue: null
 
   - id: COR-38

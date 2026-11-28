@@ -56,15 +56,15 @@ if(APPLE)
 endif()
 set_target_properties(_netio PROPERTIES LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/out)
 
-# The caliper_net tests (doctest, fetched as tests/CMakeLists.txt does) for an
+# The caliper_net tests (doctest, declared in cmake/Dependencies.cmake) for an
 # AddressSanitizer run.
 if(NETIO_ASAN AND EXISTS ${REPO}/tests/test_net_wire.cpp)
-    set(CMAKE_POLICY_VERSION_MINIMUM 3.5)
-    include(FetchContent)
-    FetchContent_Declare(doctest
-        GIT_REPOSITORY https://github.com/doctest/doctest.git
-        GIT_TAG v2.4.11 GIT_SHALLOW TRUE)
-    FetchContent_MakeAvailable(doctest)
+    if(NOT COMMAND caliper_fetch_doctest)
+        set(CALIPER_DEPENDENCIES_DECLARATIONS_ONLY ON)
+        include(${REPO}/cmake/Dependencies.cmake)
+        unset(CALIPER_DEPENDENCIES_DECLARATIONS_ONLY)
+    endif()
+    caliper_fetch_doctest()
     add_executable(netio_net_tests ${REPO}/tests/test_main.cpp ${REPO}/tests/test_net_wire.cpp
                    ${REPO}/tests/test_net_ws.cpp ${REPO}/tests/test_net_wire_32.cpp)
     target_compile_definitions(netio_net_tests PRIVATE CALIPER_TEST_SOURCE_ROOT="${REPO}")

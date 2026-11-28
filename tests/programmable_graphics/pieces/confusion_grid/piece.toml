@@ -1,0 +1,78 @@
+name = "confusion_grid"
+version = 1
+description = "Row-normalized 10x10 MNIST confusion matrix with selected-digit highlight and row labels"
+imports = ["colormap@1"]
+
+[[inputs]]
+name = "logits"
+kind = "tensor"
+dtype = "f32"
+rank_min = 2
+rank_max = 2
+title = "Probe Logits (N, 10)"
+
+[[inputs]]
+name = "targets"
+kind = "tensor"
+dtype = "i32"
+rank_min = 1
+rank_max = 1
+title = "Probe Labels (N)"
+
+[[params]]
+name = "digit"
+type = "i32"
+default = 0
+min = 0
+max = 9
+title = "Selected Digit"
+
+[[params]]
+name = "picked"
+type = "i32"
+default = 0
+min = 0
+max = 9
+title = "Picked Digit"
+
+[[params]]
+name = "gain"
+type = "f32"
+default = 1.0
+min = 0.1
+max = 4.0
+title = "Gain"
+
+[[resources]]
+id = "matrix"
+kind = "buffer"
+element = "f32"
+count = 100
+
+[[resources]]
+id = "labels"
+kind = "buffer"
+struct = "Label"
+fields = ["position: vec4<f32>", "string: u32"]
+count = 10
+
+[[derive.passes]]
+entry = "compute_confusion"
+workgroups = [10, 1, 1]
+writes = ["matrix"]
+
+[[derive.passes]]
+entry = "place_labels"
+workgroups = [1, 1, 1]
+writes = ["labels"]
+
+[draw]
+camera = "none"
+
+[draw.text]
+anchors = "labels"
+strings = ["True 0", "True 1", "True 2", "True 3", "True 4", "True 5", "True 6", "True 7", "True 8", "True 9"]
+
+[[draw.passes]]
+kind = "render"
+fragment = "grid"

@@ -21,7 +21,7 @@ Arrows point down only, from each layer to the layer that it depends on or that 
 
 ## Components
 
-The top layer holds the applets. An applet is a shared library that stands beside a `<stem>.caliper.toml` manifest, and the host loads it at run time. The repository holds three scope applets and two tutorial applets, which [In-Tree Applets](../applets/in-tree-applets.md) lists.
+The top layer holds the applets. An applet is a shared library that stands beside a `<stem>.caliper.toml` manifest, and the host loads it at run time. The repository holds two example applets under `examples/`: `examples/hello_world/` and `examples/mnist/applet/`.
 
 The SDK is the `caliper-sdk` package. It holds the frozen C entry ABI in `abi.h`, which an epoch versions, and the `CaliperTensor` interchange type in `tensor.h`. It also holds the Arrow C Data Interface in `arrow_c.h`, the named C service tables in `services/*.h` and the header-only C++ sugar in `caliper.hpp`. Header-only adapters for torch and allocations, the fixture host and the CMake package with `caliper_add_applet()` complete it. [Applet Contract](../applets/applet-contract.md), [Tensor and Arrow Headers](../applets/tensor-and-arrow-headers.md) and [SDK Package](../applets/sdk-package.md) describe these parts.
 

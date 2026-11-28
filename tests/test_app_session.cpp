@@ -928,7 +928,7 @@ TEST_CASE("app session: the hidden app runs a command script on its workspace an
         {{"name", "applet.save"}, {"args", json::object()}},
         {{"name", "app.info"}},
         {{"name", "app.applets"}},
-        {{"name", "app.launch"}, {"args", {{"id", "dev.caliper.hello"}}}},
+        {{"name", "app.launch"}, {"args", {{"id", "dev.caliper.hello-world"}}}},
         {{"name", "capture.frame"}},
         {{"name", "panel.render"}, {"args", {{"id", "curve"}}}},
     };
@@ -959,7 +959,7 @@ TEST_CASE("app session: the hidden app runs a command script on its workspace an
     CHECK(results[8]["ok"] == true);
     // app.launch opens the fixture's page, as POST /v0/applets/{id}/launch does.
     REQUIRE_MESSAGE(results[9]["ok"] == true, results[9].dump());
-    CHECK(results[9]["result"]["id"] == "dev.caliper.hello");
+    CHECK(results[9]["result"]["id"] == "dev.caliper.hello-world");
     CHECK(results[9]["result"]["status"] == "ACTIVE");
     if (metal) {
         REQUIRE_MESSAGE(results[10]["ok"] == true, results[10].dump());

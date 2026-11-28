@@ -29,7 +29,7 @@ cmake --preset release -DCALIPER_BUILD_APPLETS=ON
 cmake --build --preset release
 ```
 
-The `release` preset builds into `cmake-build-release` with tests enabled. The core build compiles no applets by default. `CALIPER_BUILD_APPLETS=ON` builds the scopes into `cmake-build-release\applets\`, which the host scans. On Windows this is how `embed_scope` and `gpt_scope` build, because they need the curl and zlib that the core build provides. The first configure downloads libtorch and fetches the Vulkan headers, volk and glslang, which is why no SDK is needed. The build compiles the shaders to SPIR-V and embeds them, so a shader error or a parameter block layout error shows up as a build error.
+The `release` preset builds into `cmake-build-release` with tests enabled. The core build compiles no applets by default. `CALIPER_BUILD_APPLETS=ON` builds the example applets into `cmake-build-release\applets\`, which the host scans. The first configure downloads libtorch and fetches the Vulkan headers, volk and glslang, which is why no SDK is needed. The build compiles the shaders to SPIR-V and embeds them, so a shader error or a parameter block layout error shows up as a build error.
 
 ## Test Runs
 
@@ -70,7 +70,7 @@ Run the application from a terminal so its standard error is visible:
 .\cmake-build-release\caliper.exe
 ```
 
-Open an applet that trains on CUDA. For repeatable runs, set `CALIPER_EMBED_AUTOTRAIN=1`, and `embed_scope` starts training on its first frame. The host and the Vulkan backend print these lines.
+Open an applet that trains on CUDA, such as `dev.caliper.mnist`. The host and the Vulkan backend print these lines.
 
 | Line | Meaning |
 |---|---|

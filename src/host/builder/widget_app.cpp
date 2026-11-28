@@ -58,12 +58,17 @@ std::string env_text(const char* name) {
 }  // namespace
 
 AppWidgetEnv app_widget_env(bool hidden, const std::string& workspace, const std::string& api_file) {
+    namespace fs = std::filesystem;
     AppWidgetEnv e;
     e.hidden = hidden;
     e.workspace = workspace;
     e.python = env_text("CALIPER_AGENT_PYTHON");
     e.source = env_text("CALIPER_AGENT_SOURCE");
-    if (e.source.empty()) e.source = CALIPER_WIDGET_AGENT_SOURCE;
+    if (e.source.empty()) {
+        const fs::path built(CALIPER_WIDGET_AGENT_SOURCE);
+        std::error_code ec;
+        if (!built.empty() && fs::is_directory(built / "agent" / "caliper_agent", ec)) e.source = built.string();
+    }
     if (hidden) e.test_script = env_text("CALIPER_AGENT_TEST_SCRIPT");
     e.settings_path = caliper::app_data_path("widget-agent.json");
     e.cache_dir = caliper::app_data_dir();
@@ -80,17 +85,23 @@ bool app_widget_agent_options(const AppWidgetEnv& env, AcpWidgetAgentOptions* o,
     namespace fs = std::filesystem;
     std::error_code ec;
     if (env.python.empty()) return none("caliper-agent is not set up (CALIPER_AGENT_PYTHON)");
+    const bool has_source = !env.source.empty();
     const fs::path source(env.source);
-    if (env.source.empty() || !fs::is_directory(source / "agent" / "caliper_agent", ec))
+    if (has_source && !fs::is_directory(source / "agent" / "caliper_agent", ec))
         return none("caliper-agent's package is not found");
     if (env.api_file.empty()) return none("Caliper API is not running (--api)");
     AgentSettingsData settings;
     if (!env.settings_path.empty()) read_agent_settings(env.settings_path, &settings);
 
     *o = AcpWidgetAgentOptions{};
-    o->argv = {env.python, "-P", "-m", "caliper_agent", "--command-table",
-               (source / "commands" / "command_table.json").string(), "--api-file", env.api_file};
-    o->env = {{"PYTHONPATH", (source / "agent").string()}, {"PYTHONDONTWRITEBYTECODE", "1"}};
+    if (has_source) {
+        o->argv = {env.python, "-P", "-m", "caliper_agent", "--command-table",
+                   (source / "commands" / "command_table.json").string(), "--api-file", env.api_file};
+        o->env = {{"PYTHONPATH", (source / "agent").string()}, {"PYTHONDONTWRITEBYTECODE", "1"}};
+    } else {
+        o->argv = {env.python, "-P", "-m", "caliper_agent", "--api-file", env.api_file};
+        o->env = {{"PYTHONDONTWRITEBYTECODE", "1"}};
+    }
     o->cwd = env.workspace;
     if (env.hidden && settings.preset.empty()) {
         if (env.test_script.empty()) return none("no provider in a hidden app without a test script");

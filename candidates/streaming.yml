@@ -69,12 +69,6 @@ candidates:
     serves: "A person analyses recorded geometry, such as point sets and meshes, in a dataframe tool."
     origin: cut
     depends_on: [STR-28, STR-10]
-  - key: landscape-options
-    title: "Loss Landscape Options"
-    summary: "The loss landscape demo may switch what the height shows, project the optimiser's path onto the surface, tie the span to the recent path and evaluate the surface in evaluation mode."
-    serves: "A person studies how an optimiser moves across the surface of a model that has batch normalisation or dropout."
-    origin: cut
-    depends_on: [STR-11]
   - key: compressed-recording-chunks
     title: "Compressed Recording Chunks"
     summary: "The recording reader opens recordings whose chunks another tool rewrote with LZ4 or Zstandard compression."

@@ -1578,7 +1578,7 @@ namespace {
 
 // Whether a scene panel draws a scene of its own, in a view of its own: its
 // entities, or nothing but its programs when it binds no live scene
-// (design/programmable-graphics.md, Attention Arc Tower). Two panels of one
+// (design/programmable-graphics.md, program-only scene panels). Two panels of one
 // live scene share that scene's view, so a panel of programs alone must not.
 bool own_scene(const spec::Panel& p) {
     if (p.primitive != spec::Primitive::scene) return false;

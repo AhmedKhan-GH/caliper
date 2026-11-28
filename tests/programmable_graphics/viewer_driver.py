@@ -1,12 +1,12 @@
-"""The browser's dashboard viewer end to end: the real spec page of the hidden app draws the programs of a live run.
+"""The browser's dashboard viewer end to end: the real spec page of the hidden app draws the programs of a live MNIST run.
 
-The hidden app and caliper-mcp start as in driver.py, the model runner starts tests/acceptance/arc_tower_train.py, and a
-dashboard gets two scene panels that hold programs alone: the arcs of attention_arcs@1 pinned from the WORKSPACE, and
-the attention grid of attention_grid@1 written INLINE into the spec. The dashboard is saved, the run trains until the
-arcs are published, and tests/programmable_graphics/viewer_page.mjs opens the viewer link of the app's API file, which
-carries the viewer token, in headless Chromium, with a WebGPU adapter and with SwiftShader. In the page, in the same task
-as each frame of the module, it counts the pixels of each program panel that differ from the panel's background, and
-reads the page's list of programs. Each program must be running, and each panel must hold pixels of its program.
+The hidden app and caliper-mcp start as in driver.py, the model runner starts examples/mnist/train.py, and a
+dashboard gets two scene panels that hold programs alone: digit_ring@1 pinned from the WORKSPACE, and
+confusion_grid@1 written INLINE into the spec. The dashboard is saved, the run trains until metrics are
+published, and tests/programmable_graphics/viewer_page.mjs opens the viewer link of the app's API file, which
+carries the viewer token, in headless Chromium, with a WebGPU adapter and with SwiftShader. In the page, in the same
+task as each frame of the module, it counts the pixels of each program panel that differ from the panel's background,
+and reads the page's list of programs. Each program must be running, and each panel must hold pixels of its program.
 
 Then the app opens another spec, and the page of the saved dashboard must say that the app does not have it open: the
 banner, and the state of each panel.
@@ -34,7 +34,7 @@ d = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(d)
 gp, Fail, Skip = d.gp, d.Fail, d.Skip
 
-# The pixels that a panel's program draws at least: the arcs and their labels, the grid's cells and labels.
+# The pixels that a panel's program draws at least: the digit ring columns and labels, the confusion grid cells and labels.
 MIN_PIXELS = 500
 NOT_OPEN = "The app does not have this dashboard open. It shows data when the dashboard is open in the app."
 
@@ -49,40 +49,52 @@ def page(url, project, mode):
 
 
 def build(r, c):
-    r.step("start the run and pause it")
+    r.step("start the MNIST run and pause it")
     r.call("spec_new", {"id": "viewer_check", "title": "Viewer Check"})
-    r.call("run_start", {"script": d.SCRIPT})
+    r.call("run_start", {
+        "script": d.SCRIPT,
+        "args": ["--probe-every", "1", "--probe-size", "512", "--seed", "1", "--pace", "0.015"],
+    })
     c.run = c.until("a run", lambda: next(iter(c.runs()), None), 60)
     c.until("the run is running and attached",
             lambda: (lambda x: x and x["state"] == "running" and x.get("attached"))(c.runs().get(c.run)), 120)
     c.pids.update(gp.pids_of(c.ws / d.SCRIPT))
-    c.until("the first step of the run", lambda: r.run_step(c.run) >= 1, 60)
+    c.until("the first step of the run", lambda: r.run_step(c.run) >= 1, 90)
     r.call("run_pause", {"op": "pause", "run": c.run})
+    c.until("the run paused", lambda: (c.runs().get(c.run) or {}).get("state") == "paused", 60)
+
     r.step("a workspace piece and an inline piece in two scene panels, saved")
-    arcs = d.piece_args(ROOT / "tests" / "acceptance" / "arc_tower" / "attention_arcs")
-    grid = d.piece_args(ROOT / "tests" / "acceptance" / "arc_tower" / "attention_grid")
-    r.call("piece_update", {"piece": arcs})
-    for pid, title in (("tower", "Arcs"), ("pattern", "Grid")):
+    ring = d.piece_args(d.PIECES_DIR / "digit_ring")
+    grid = d.piece_args(d.PIECES_DIR / "confusion_grid")
+    r.call("piece_update", {"piece": ring})
+    for pid, title in (("digits", "Digit Ring"), ("matrix", "Confusion Matrix")):
         r.call("panel_create", {"id": pid, "primitive": "scene", "title": title, "bind": {"scene": "live:model"},
                                 "options": {"exclude": ["**"]}})
-    binds = {"attn0": "live:blocks.0.attn.weights.act", "attn1": "live:blocks.1.attn.weights.act"}
-    r.call("program_create", {"id": "tower_arcs", "title": "Arcs", "piece": {"name": "attention_arcs", "version": 1,
-           "from": "workspace"}, "panel": "tower", "bind": binds, "params": {"threshold": 0.05}})
-    r.call("program_create", {"id": "head_pattern", "title": "Grid", "inline": grid, "panel": "pattern", "bind": binds,
-           "params": {"layer": 1, "head": 0, "gain": 2.0}})
-    for pid in ("tower", "pattern"):
+    binds = {"logits": "live:probe.logits", "targets": "live:probe.labels"}
+    r.call("program_create", {
+        "id": "digit_bars", "title": "Digit Ring",
+        "piece": {"name": "digit_ring", "version": 1, "from": "workspace"},
+        "panel": "digits", "bind": binds, "params": {"scale": 1.0},
+    })
+    r.call("program_create", {
+        "id": "confusion_view", "title": "Confusion Matrix",
+        "inline": grid, "panel": "matrix", "bind": binds,
+        "params": {"digit": 0, "picked": 0, "gain": 1.0},
+    })
+    for pid in ("digits", "matrix"):
         r.call("panel_patch", {"id": pid, "patch": {"bind": {"scene": None}, "options": {"exclude": None}}})
     spec = r.call("spec_get", {})["json"]
     froms = {p["id"]: p["piece"]["from"] for p in spec.get("program", [])}
-    if froms != {"tower_arcs": "workspace", "head_pattern": "inline"}:
+    if froms != {"digit_bars": "workspace", "confusion_view": "inline"}:
         raise Fail(f"the programs pin {froms}, not a workspace piece and an inline piece")
     r.call("applet_save", {})
+
     r.step("both programs compile, the run goes on")
     r.call("run_pause", {"op": "resume", "run": c.run})
-    for prog in ("tower_arcs", "head_pattern"):
+    for prog in ("digit_bars", "confusion_view"):
         for half in ("derive", "draw"):
             c.event(f"{prog} {half} compiled", {"kind": "program", "program": prog, "change": "compiled", "half": half}, 120)
-    c.until("an arc version", lambda: (lambda b: b if b.get("count") else None)(r.read("arcs", 1024)), 90)
+    c.until("a metrics version", lambda: (lambda b: b if b.get("count") == 10 else None)(r.read("metrics", 10)), 90)
 
 
 def run(a):
@@ -99,10 +111,10 @@ def run(a):
            if k not in ("CALIPER_API", "CALIPER_AUTOLAUNCH", "CALIPER_EXIT_AFTER", "CALIPER_APPLET_PATH")
            and not k.startswith("CALIPER_RUN_")}
     env["PYTHONPATH"] = str(ROOT / "python") + os.pathsep + env.get("PYTHONPATH", "")
-    pre = subprocess.run([a.python, "-c", "import numpy, torch, caliper, caliper._netio, caliper._producer"],
+    pre = subprocess.run([a.python, "-c", "import numpy, torch, torchvision, caliper, caliper._netio, caliper._producer"],
                          env=env, capture_output=True, text=True)
     if pre.returncode != 0:
-        raise Skip("torch, numpy, the native network sender or the producer module is missing")
+        raise Skip("torch, torchvision, numpy, the native network sender or the producer module is missing")
     gpu = subprocess.run([a.python, "-c", "import torch; raise SystemExit(0 if torch.backends.mps.is_available() else 3)"],
                          env=env, capture_output=True, text=True)
     if gpu.returncode != 0:
@@ -113,10 +125,13 @@ def run(a):
     (work / "user").mkdir()
     ws = work / "workspace"
     ws.mkdir()
-    (ws / d.SCRIPT).write_text((ROOT / "tests" / "acceptance" / d.SCRIPT).read_text())
-    env.update({"CALIPER_AGENT_OFFLINE": "1", "CALIPER_HIDDEN": "1", "CALIPER_DATA_DIR": str(work / "data"),
-                "CALIPER_USER_APPLETS_DIR": str(work / "user"), "CALIPER_WINDOW_SIZE": "1280x800",
-                "CALIPER_WORKSPACE": str(ws), "CALIPER_RUN_PYTHON": a.python})
+    (ws / d.SCRIPT).write_text((ROOT / "examples" / "mnist" / "train.py").read_text())
+    env.update({
+        "CALIPER_AGENT_OFFLINE": "1", "CALIPER_HIDDEN": "1", "CALIPER_DATA_DIR": str(work / "data"),
+        "CALIPER_USER_APPLETS_DIR": str(work / "user"), "CALIPER_WINDOW_SIZE": "1280x800",
+        "CALIPER_WORKSPACE": str(ws), "CALIPER_RUN_PYTHON": a.python,
+        "CALIPER_MNIST_DATA_DIR": str(d.mnist_data_dir()),
+    })
     approvals = work / "approvals.txt"
     approvals.write_text("")
     procs, c, result = [], None, {}
@@ -148,9 +163,9 @@ def run(a):
             if got.get("error"):
                 raise Fail(f"{project}: {got['error']}; console {got.get('console')}")
             states = {p["id"]: p["module"] for m in got["programs"].values() for p in m["programs"]}
-            if states != {"tower_arcs": "running", "head_pattern": "running"}:
+            if states != {"digit_bars": "running", "confusion_view": "running"}:
                 raise Fail(f"{project}: the page's programs are {got['programs']}, not both running; console {got.get('console')}")
-            for panel in ("tower", "pattern"):
+            for panel in ("digits", "matrix"):
                 n = (got.get("counts") or {}).get(panel, 0)
                 if n < MIN_PIXELS:
                     raise Fail(f"{project}: the panel {panel} holds {n} pixels of its program, under {MIN_PIXELS}")

@@ -42,7 +42,7 @@ std::string line_at(const std::string& text, std::uint32_t line) {
 }  // namespace
 
 TEST_CASE("the draw header of the arcs' first pass is the plan's, with every target declared") {
-    const cs::Piece piece = ex::attention_arcs();
+    const cs::Piece piece = ex::ring_arcs();
     const cp::Composed c = cp::compose_draw(piece, ex::resolve(piece), 0);
     REQUIRE(c.verdict.ok());
     CHECK(header_of(c) ==
@@ -63,7 +63,7 @@ TEST_CASE("the draw header of the arcs' first pass is the plan's, with every tar
 }
 
 TEST_CASE("each pass keeps only its own entry points, with every line in its place") {
-    const cs::Piece piece = ex::attention_arcs();
+    const cs::Piece piece = ex::ring_arcs();
     const cp::Resolved r = ex::resolve(piece);
     const cp::Composed arcs = cp::compose_draw(piece, r, 0), bloom = cp::compose_draw(piece, r, 2);
     REQUIRE(arcs.verdict.ok());
@@ -90,7 +90,7 @@ TEST_CASE("each pass keeps only its own entry points, with every line in its pla
 }
 
 TEST_CASE("a composed pass is the prelude, the header, the lib modules, common.wgsl and draw.wgsl") {
-    const cs::Piece piece = ex::attention_arcs();
+    const cs::Piece piece = ex::ring_arcs();
     const cp::Resolved r = ex::resolve(piece);
     const cp::Composed c = cp::compose_draw(piece, r, 0);
     REQUIRE(c.verdict.ok());
@@ -127,7 +127,7 @@ TEST_CASE("the field's header has its three params and one counted resource") {
 }
 
 TEST_CASE("draw buffers are read_write only in a compute pass that writes them; buffer inputs follow the resources") {
-    cs::Piece piece = ex::attention_arcs();
+    cs::Piece piece = ex::ring_arcs();
     cs::PieceInput in;
     in.name = "other";
     in.kind = cs::InputKind::buffer;
@@ -162,7 +162,7 @@ TEST_CASE("draw buffers are read_write only in a compute pass that writes them; 
 }
 
 TEST_CASE("the composer refuses what it cannot compose") {
-    const cs::Piece arcs = ex::attention_arcs();
+    const cs::Piece arcs = ex::ring_arcs();
     const cp::Resolved r = ex::resolve(arcs);
     SUBCASE("a pass past the last") {
         const cp::Composed c = cp::compose_draw(arcs, r, 3);
@@ -240,7 +240,7 @@ std::vector<cp::ReflectedEntry> arcs_entries() {
 }  // namespace
 
 TEST_CASE("the reflection check takes the right entries and refuses the rest") {
-    const cs::Piece arcs = ex::attention_arcs();
+    const cs::Piece arcs = ex::ring_arcs();
     cp::Reflection r;
     r.entries = arcs_entries();
     cp::ReflectedBinding counts;
@@ -282,7 +282,7 @@ TEST_CASE("the reflection check takes the right entries and refuses the rest") {
 }
 
 TEST_CASE("the reflection check refuses stage interfaces that disagree, before any pipeline") {
-    const cs::Piece arcs = ex::attention_arcs();
+    const cs::Piece arcs = ex::ring_arcs();
     cp::Reflection r;
     r.entries = arcs_entries();
     for (std::size_t k = 0; k < 3; ++k) CHECK(cp::check_piece_reflection(arcs, cp::Half::draw, k, r).ok());
@@ -354,7 +354,7 @@ TEST_CASE("the reflection check refuses stage interfaces that disagree, before a
 }
 
 TEST_CASE("the reflection check holds compute entries to WebGPU's workgroup limits") {
-    cs::Piece p = ex::attention_arcs();
+    cs::Piece p = ex::ring_arcs();
     cs::DrawBuffer age;
     age.id = "age";
     age.layout = ex::element("u32");
@@ -384,7 +384,7 @@ TEST_CASE("the reflection check holds compute entries to WebGPU's workgroup limi
 }
 
 TEST_CASE("the reflection check of a derive pass keeps the tensor inputs read-only") {
-    const cs::Piece arcs = ex::attention_arcs();
+    const cs::Piece arcs = ex::ring_arcs();
     cp::Reflection r;
     r.entries = {{"scores", cp::EntryStage::compute, {8, 1, 1}}, {"build", cp::EntryStage::compute, {64, 1, 1}}};
     cp::ReflectedBinding attn0;
@@ -437,7 +437,7 @@ TEST_CASE("every composed pass of both examples compiles with the bounds-checked
         MESSAGE("this build has no WGSL compiler");
         return;
     }
-    for (const cs::Piece& piece : {ex::attention_field(), ex::attention_arcs()}) {
+    for (const cs::Piece& piece : {ex::attention_field(), ex::ring_arcs()}) {
         for (std::size_t k = 0; k < piece.draw->passes.size(); ++k) {
             CAPTURE(piece.name);
             CAPTURE(k);

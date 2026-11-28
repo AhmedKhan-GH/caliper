@@ -1,12 +1,5 @@
-# doctest v2.4.11 declares cmake_minimum_required 2.8, which CMake >= 4.0
-# rejects; this floor lets FetchContent configure it without a manual flag.
-set(CMAKE_POLICY_VERSION_MINIMUM 3.5)
-
-include(FetchContent)
-FetchContent_Declare(doctest
-    GIT_REPOSITORY https://github.com/doctest/doctest.git
-    GIT_TAG v2.4.11 GIT_SHALLOW TRUE)
-FetchContent_MakeAvailable(doctest)
+# doctest is declared and fetched in cmake/Dependencies.cmake.
+caliper_fetch_doctest()
 
 # The app-data guard's marker (src/app_paths.h, THE GUARD): every test binary
 # that can open the stores links it, so a run without CALIPER_DATA_DIR, from a
@@ -14,6 +7,32 @@ FetchContent_MakeAvailable(doctest)
 # library, so its static initializer is always linked in.
 add_library(caliper_test_run_marker OBJECT test_run_marker.cpp)
 target_link_libraries(caliper_test_run_marker PRIVATE caliper_app_paths)
+
+# Windows has no rpath: a test binary that links libtorch (or dlopens a torch
+# applet) finds c10.dll / torch_cpu.dll only beside itself or on PATH. Without
+# them it dies 0xc0000135 before main, and on a desktop session (a CI runner
+# included) the loader's "DLL was not found" dialog holds the process open until
+# ctest's timeout. One copy into the tests' output dir serves every torch-linked
+# test binary (and the torch applets caliper_tests and caliper_embed_tests load),
+# mirroring the caliper exe's "Copying PyTorch DLLs" step in the root CMakeLists.
+if(CALIPER_WITH_TORCH AND MSVC)
+    file(GLOB _caliper_test_torch_dlls "${LIBTORCH_DIR}/lib/*.dll")
+    set(_caliper_test_torch_dlls_stamp "${CMAKE_CURRENT_BINARY_DIR}/torch_dlls.stamp")
+    add_custom_command(OUTPUT "${_caliper_test_torch_dlls_stamp}"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            ${_caliper_test_torch_dlls} "${CMAKE_CURRENT_BINARY_DIR}"
+        COMMAND ${CMAKE_COMMAND} -E touch "${_caliper_test_torch_dlls_stamp}"
+        DEPENDS ${_caliper_test_torch_dlls}
+        COMMENT "Copying PyTorch DLLs next to the test executables")
+    add_custom_target(caliper_test_torch_dlls DEPENDS "${_caliper_test_torch_dlls_stamp}")
+endif()
+# Each test target that links libtorch or dlopens a torch applet calls this,
+# so the DLLs land before it runs.
+function(caliper_test_needs_torch_dlls target)
+    if(TARGET caliper_test_torch_dlls)
+        add_dependencies(${target} caliper_test_torch_dlls)
+    endif()
+endfunction()
 
 add_executable(caliper_tests
     test_main.cpp
@@ -27,7 +46,6 @@ add_executable(caliper_tests
     test_jobs.cpp
     test_device.cpp
     test_sugar_services.cpp
-    test_mnist_idx.cpp
     test_metrics_store.cpp
     test_feed_store.cpp
     test_feed_provider.cpp
@@ -36,7 +54,6 @@ add_executable(caliper_tests
     test_tensor_bridge.cpp
     test_alloc_registry.cpp
     test_obj.cpp
-    test_pulse_ring.cpp
 )
 # On Windows the host build provides ZLIB::ZLIB in-tree (Dependencies.cmake).
 if(NOT TARGET ZLIB::ZLIB)
@@ -55,11 +72,6 @@ if(NOT WIN32)
     target_sources(caliper_tests PRIVATE test_net_hub_32.cpp)   # the scenes of the 3.2 draft
 endif()
 target_link_libraries(caliper_tests PRIVATE caliper_net)
-# mnist_idx.h now lives with EmbedScope (the sole exemplar is self-contained).
-target_include_directories(caliper_tests PRIVATE ${CMAKE_SOURCE_DIR}/applets/embed_scope)
-# PulseScope's pure ring-copy/gap logic (pulse_ring.h) is torch-free + UI-free,
-# so its unit test rides the fast caliper_tests suite (feed spec §5).
-target_include_directories(caliper_tests PRIVATE ${CMAKE_SOURCE_DIR}/applets/pulse_scope)
 set_target_properties(caliper_tests PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
 
 # The graphics layer's core on its recording backend, with no GPU (src/host/gfx).
@@ -155,7 +167,17 @@ endif()
 # The throwing fixture (a raw descriptor that throws across the ABI) backs the
 # crash guard's exception case; it builds into test-applets, not applets.
 add_subdirectory(fixtures/throwing_applet)
-add_dependencies(caliper_tests hello_applet pulse_scope throwing_applet)
+add_dependencies(caliper_tests hello_world_applet throwing_applet)
+if(CALIPER_WITH_TORCH)
+    add_dependencies(caliper_tests mnist_applet)
+    caliper_test_needs_torch_dlls(caliper_tests)
+    if(APPLE)
+        set_target_properties(caliper_tests PROPERTIES
+            BUILD_RPATH "${CMAKE_SOURCE_DIR}/third_party/libtorch/lib")
+    endif()
+else()
+    target_compile_definitions(caliper_tests PRIVATE CALIPER_TESTS_NO_TORCH_APPLETS=1)
+endif()
 target_compile_definitions(caliper_tests PRIVATE
     CALIPER_TEST_APPLETS_DIR="${CMAKE_BINARY_DIR}/applets"
     CALIPER_TEST_FIXTURES_DIR="${CMAKE_BINARY_DIR}/test-applets"
@@ -275,7 +297,7 @@ if(TARGET caliper)
     caliper_cli_test(info ARGS "info" EXIT 0
         MATCH "abi_epoch 3.*service caliper\\.ui\\.v1_1")
     caliper_cli_test(list ARGS "list|--applets|${CMAKE_BINARY_DIR}/applets" EXIT 0
-        MATCH "READY +dev\\.caliper\\.hello +0\\.1\\.0 ")
+        MATCH "READY +dev\\.caliper\\.hello-world +0\\.1\\.0 ")
     caliper_cli_test(check ARGS "check|${CMAKE_BINARY_DIR}/test-applets" EXIT 0
         MATCH "1 of 1 applets pass the checks")
     # An applet's build folder, its manifests only in build/applets as
@@ -340,7 +362,7 @@ if(TARGET caliper)
     caliper_cli_test(shot_needs_launch ARGS "shot|--out|${_cli_work}/x.png" EXIT 2
         ERROR "shot needs --launch <id>")
     caliper_cli_test(shot_bad_size
-        ARGS "shot|--launch|dev.caliper.hello|--size|0x10|--out|${_cli_work}/x.png" EXIT 2
+        ARGS "shot|--launch|dev.caliper.hello-world|--size|0x10|--out|${_cli_work}/x.png" EXIT 2
         ERROR "--size takes <W>x<H>")
     caliper_cli_test(shot_option_elsewhere ARGS "list|--frames|3" EXIT 2
         ERROR "--frames applies only to shot")
@@ -367,29 +389,29 @@ if(TARGET caliper)
     caliper_cli_test(app_renderer_gl ARGS "--hidden" EXIT 1 EMPTY_DATA_DIR
         ENV "CALIPER_RENDERER=gl|CALIPER_EXIT_AFTER=2" ERROR "caliper: ${_gl_removed}")
     caliper_cli_test(shot_no_renderer
-        ARGS "shot|--applets|${CMAKE_BINARY_DIR}/applets|--launch|dev.caliper.hello|--out|${CMAKE_CURRENT_BINARY_DIR}/x.png"
+        ARGS "shot|--applets|${CMAKE_BINARY_DIR}/applets|--launch|dev.caliper.hello-world|--out|${CMAKE_CURRENT_BINARY_DIR}/x.png"
         EXIT 1 EMPTY_DATA_DIR ENV "--unset=CALIPER_RENDERER|CALIPER_TEST_RENDERER_FAIL=1"
         ERROR "caliper: shot cannot draw offscreen: ${_no_renderer}")
     caliper_cli_test(shot_renderer_gl
-        ARGS "shot|--applets|${CMAKE_BINARY_DIR}/applets|--launch|dev.caliper.hello|--out|${CMAKE_CURRENT_BINARY_DIR}/x.png"
+        ARGS "shot|--applets|${CMAKE_BINARY_DIR}/applets|--launch|dev.caliper.hello-world|--out|${CMAKE_CURRENT_BINARY_DIR}/x.png"
         EXIT 1 EMPTY_DATA_DIR ENV "CALIPER_RENDERER=gl"
         ERROR "caliper: shot cannot draw offscreen: ${_gl_removed}")
 
-    # Then real shots of the hello fixture: the image has the requested size
+    # Then real shots of the hello_world fixture: the image has the requested size
     # and is not one flat colour (caliper_png_check), and the run leaves
     # nothing behind (tests/shot_run.cmake). Without a GPU the run is
     # reported as skipped, as the GPU suites do.
     add_executable(caliper_png_check png_check.cpp)
     target_include_directories(caliper_png_check PRIVATE ${CMAKE_SOURCE_DIR}/third_party/stb)
     set_target_properties(caliper_png_check PROPERTIES CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON)
-    add_dependencies(caliper_png_check hello_applet)
+    add_dependencies(caliper_png_check hello_world_applet)
     foreach(mode temp data_dir)
         set(name caliper_cli_shot_${mode})
         add_test(NAME ${name} COMMAND "${CMAKE_COMMAND}"
             "-DEXE=$<TARGET_FILE:caliper>"
             "-DCHECK=$<TARGET_FILE:caliper_png_check>"
             "-DAPPLETS=${CMAKE_BINARY_DIR}/applets"
-            "-DID=dev.caliper.hello" "-DSIZE=640x400" "-DFRAMES=10"
+            "-DID=dev.caliper.hello-world" "-DSIZE=640x400" "-DFRAMES=10"
             "-DWORK_DIR=${CMAKE_CURRENT_BINARY_DIR}/shot-work-${mode}" "-DMODE=${mode}"
             -P "${CMAKE_CURRENT_SOURCE_DIR}/shot_run.cmake")
         set_tests_properties(${name} PROPERTIES LABELS "cli;shot" TIMEOUT 180
@@ -436,7 +458,7 @@ if(TARGET caliper)
     endif()
 
     # Caliper API as a process (tests/test_api.cpp): `caliper shot --api` on the
-    # hello fixture, every endpoint, the capture as a PNG of the shot's size,
+    # hello_world fixture, every endpoint, the capture as a PNG of the shot's size,
     # the stream's handshake on /v3/stream and /v0/stream, the native viewer
     # attached through /v3/stream, and a clean stop on SIGTERM. No window: shot
     # draws offscreen. Without a GPU the run is reported as skipped, as the
@@ -458,7 +480,7 @@ if(TARGET caliper)
         caliper_cli_test(windows_api ARGS "--api|--api-port|0" EXIT 1
             ERROR "Caliper API \\(--api\\) is not available on Windows yet")
         caliper_cli_test(windows_shot_api
-            ARGS "shot|--launch|dev.caliper.hello|--out|${_cli_work}/x.png|--api" EXIT 1
+            ARGS "shot|--launch|dev.caliper.hello-world|--out|${_cli_work}/x.png|--api" EXIT 1
             ERROR "Caliper API \\(--api\\) is not available on Windows yet")
         caliper_cli_test(windows_url ARGS "--url|ws://127.0.0.1:9/v3/stream?token=x" EXIT 1
             ERROR "attaching to a stream \\(--url\\) is not available on Windows yet")
@@ -637,31 +659,6 @@ set_tests_properties(caliper_export_tests PROPERTIES LABELS "export"
 # when no MPS device is present (counted; exit 77 -> ctest "Skipped").
 # ---------------------------------------------------------------------------
 if(CALIPER_WITH_TORCH)   # torch-linking test binaries; closed below
-# Windows has no rpath: a test binary that links libtorch finds c10.dll /
-# torch_cpu.dll only beside itself or on PATH. Without them it dies 0xc0000135
-# before main, and on a desktop session (a CI runner included) the loader's
-# "DLL was not found" dialog holds the process open until ctest's timeout.
-# One copy into the tests' output dir serves every torch-linked test binary
-# (and the torch applets caliper_embed_tests loads), mirroring the caliper
-# exe's "Copying PyTorch DLLs" step in the root CMakeLists.
-if(MSVC)
-    file(GLOB _caliper_test_torch_dlls "${LIBTORCH_DIR}/lib/*.dll")
-    set(_caliper_test_torch_dlls_stamp "${CMAKE_CURRENT_BINARY_DIR}/torch_dlls.stamp")
-    add_custom_command(OUTPUT "${_caliper_test_torch_dlls_stamp}"
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            ${_caliper_test_torch_dlls} "${CMAKE_CURRENT_BINARY_DIR}"
-        COMMAND ${CMAKE_COMMAND} -E touch "${_caliper_test_torch_dlls_stamp}"
-        DEPENDS ${_caliper_test_torch_dlls}
-        COMMENT "Copying PyTorch DLLs next to the test executables")
-    add_custom_target(caliper_test_torch_dlls DEPENDS "${_caliper_test_torch_dlls_stamp}")
-endif()
-# Each torch-linked test target calls this, so the DLLs land before it runs.
-function(caliper_test_needs_torch_dlls target)
-    if(TARGET caliper_test_torch_dlls)
-        add_dependencies(${target} caliper_test_torch_dlls)
-    endif()
-endfunction()
-
 add_executable(caliper_torch_tests test_torch_adapter.cpp)
 caliper_test_needs_torch_dlls(caliper_torch_tests)
 target_link_libraries(caliper_torch_tests PRIVATE
@@ -689,7 +686,7 @@ endif()  # CALIPER_WITH_TORCH (caliper_torch_tests)
 # ---------------------------------------------------------------------------
 # caliper_embed_tests — the embed C ABI (caliper/embed.h) battery (R4 L2a).
 # Links libcaliper (the embeddable core) and drives it as an embedder would:
-# offscreen core -> load the hello fixture -> pump -> read_pixels -> shutdown,
+# offscreen core -> load the hello_world fixture -> pump -> read_pixels -> shutdown,
 # plus the refusal gates. Needs a live GPU for the pixel cases (skips like the
 # gfx suite when none is present: counted, exit 77 -> ctest "Skipped"); the
 # gate cases are GPU-free.
@@ -710,12 +707,20 @@ target_compile_definitions(caliper_embed_tests PRIVATE
     CALIPER_TEST_APPLETS_DIR="${CMAKE_BINARY_DIR}/applets")
 set_target_properties(caliper_embed_tests PROPERTIES
     CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
-# The offscreen case composites + reads back the hello fixture, so its dylib
-# and manifest must exist in build/applets before the test runs. pulse_scope is
-# the SECOND distinct applet the load-different-id-after-active case swaps to
-# (and, being jobs.v1/feed.v1-backed and torch-free, it exercises the "new
-# applet's init jobs survive the old one's teardown" reorder in every build).
-add_dependencies(caliper_embed_tests hello_applet pulse_scope)
+# The offscreen case composites + reads back the hello_world fixture, so its dylib
+# and manifest must exist in build/applets before the test runs. When libtorch is
+# enabled, mnist_applet is the second distinct applet the swap cases load.
+add_dependencies(caliper_embed_tests hello_world_applet)
+if(CALIPER_WITH_TORCH)
+    add_dependencies(caliper_embed_tests mnist_applet)
+    caliper_test_needs_torch_dlls(caliper_embed_tests)
+    if(APPLE)
+        set_target_properties(caliper_embed_tests PROPERTIES
+            BUILD_RPATH "${CMAKE_SOURCE_DIR}/third_party/libtorch/lib")
+    endif()
+else()
+    target_compile_definitions(caliper_embed_tests PRIVATE CALIPER_TESTS_NO_TORCH_APPLETS=1)
+endif()
 add_test(NAME caliper_embed_tests COMMAND caliper_embed_tests)
 # The stores this binary opens go to a work folder, never the user's app-data.
 set_tests_properties(caliper_embed_tests PROPERTIES ENVIRONMENT

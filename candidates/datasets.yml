@@ -94,7 +94,7 @@ candidates:
     summary: "Ranks samples whose given label disagrees with out-of-sample model confidence and shows the likeliest mistakes first."
     serves: "Reduces noisy-label damage by letting a researcher fix or drop the worst labels."
     origin: field
-    depends_on: [INT-27]
+    depends_on: [REN-12]
   - key: exact-duplicate-finder
     title: "Exact Duplicate Finder"
     summary: "Groups byte-identical or hash-identical samples and shows where they fall in each split."
@@ -106,7 +106,7 @@ candidates:
     summary: "Clusters samples that are almost identical by perceptual hash or embedding distance and lets a researcher step through each cluster."
     serves: "Finds near copies, crops and re-encodes that leak between splits."
     origin: field
-    depends_on: [INT-27]
+    depends_on: [REN-12]
   - key: cross-split-leakage-check
     title: "Cross-Split Leakage Check"
     summary: "Reports samples, authors, sessions or scenes shared between training, validation and test sets."
@@ -118,13 +118,13 @@ candidates:
     summary: "Scores each sample by distance to its neighbours in a chosen feature or embedding space and lists the most unusual ones."
     serves: "Surfaces corrupt, off-domain and rare samples worth a manual look."
     origin: field
-    depends_on: [INT-27]
+    depends_on: [REN-12]
   - key: similarity-search
     title: "Similarity Search over Samples"
     summary: "Finds the nearest samples to a chosen sample, an uploaded example or a text description using stored embeddings."
     serves: "Helps build targeted slices and find more examples of a failure case."
     origin: field
-    depends_on: [INT-27]
+    depends_on: [REN-12]
   - key: class-balance-view
     title: "Class Balance View"
     summary: "Bars and long-tail curves of samples per class, per split, with imbalance ratios."
@@ -238,7 +238,7 @@ candidates:
     summary: "Compares feature and embedding distributions of synthetic and real samples and shows the most distinct examples."
     serves: "Quantifies the domain gap before relying on synthetic training data."
     origin: field
-    depends_on: [INT-27]
+    depends_on: [REN-12]
   - key: large-table-viewer
     title: "Large Table Viewer"
     summary: "A virtualised table that scrolls through hundreds of millions of rows with sorting, filtering and column pinning."

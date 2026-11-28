@@ -652,7 +652,7 @@ namespace cp = caliper_builder::programs;
 
 // The attention arcs piece with its hash, as the spec holds it inline.
 spec::Piece hashed_arcs() {
-    spec::Piece p = ex::attention_arcs();
+    spec::Piece p = ex::ring_arcs();
     p.hash = cp::piece_hash(p);
     return p;
 }

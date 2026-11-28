@@ -28,8 +28,8 @@ lldb -p "$(pgrep -f 'cmake-build-debug/caliper')"
 At the `(lldb)` prompt, set a breakpoint by symbol or by file and line, then continue.
 
 ```
-(lldb) breakpoint set --name HelloApplet::on_frame
-(lldb) breakpoint set --file hello.cpp --line 39
+(lldb) breakpoint set --name HelloWorldApplet::on_frame
+(lldb) breakpoint set --file hello_world.cpp --line 39
 (lldb) continue
 ```
 
@@ -43,13 +43,13 @@ Do **not** use `printf` or `std::cout` for diagnostics. Log through the `caliper
 
 ```cpp
 bool on_init(caliper::Host& host) override {
-    host.log_info("hello.on_init");                 // caliper.log.v1
+    host.log_info("hello_world.on_init");           // caliper.log.v1
     // host.log_error("...") for failures
     ...
 }
 ```
 
-Host logging goes to the same sink as the host's own diagnostics, which are the launch console and the dev-mode tail. Each message carries the applet's identity. Logging keeps working when the dylib's stdio has no terminal, as in a bundled app. Declare `caliper.log.v1` in the `required` list of your manifest, as the hello applet does.
+Host logging goes to the same sink as the host's own diagnostics, which are the launch console and the dev-mode tail. Each message carries the applet's identity. Logging keeps working when the dylib's stdio has no terminal, as in a bundled app. Declare `caliper.log.v1` in the `required` list of your manifest, as the Hello World applet does.
 
 When the loader turns an applet away, the diagnostic is on the **landing screen** and not in the console. The applet's row in the Instruments pane shows its status: `REFUSED`, `FAILED` or `QUARANTINED`. When you select the row, the Inspector shows the reason under Status and beside the disabled `⏎ Launch` button (see [refusals](../reference/refusal-messages.md)). The reason is one of these:
 

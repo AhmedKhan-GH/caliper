@@ -328,8 +328,8 @@ struct FakeApp {
                             server->reply(c.ticket, 200, "{\"applets\":[]}");
                         } else if (c.kind == K::Launch) {
                             ++launches;
-                            if (c.applet_id == "dev.caliper.hello")
-                                server->reply(c.ticket, 200, "{\"id\":\"dev.caliper.hello\"}");
+                            if (c.applet_id == "dev.caliper.hello-world")
+                                server->reply(c.ticket, 200, "{\"id\":\"dev.caliper.hello-world\"}");
                             else
                                 server->reply(c.ticket, 404, caliper_api::error_json("no applet " + c.applet_id));
                         } else {
@@ -372,10 +372,10 @@ TEST_CASE("api: the routes of v0 and the method each takes") {
     CHECK(caliper_api::route("GET", "/v0/capture.png").route == Route::Capture);
     CHECK(caliper_api::route("GET", "/v3/stream").route == Route::Stream);
     CHECK(caliper_api::route("GET", "/v0/stream").route == Route::Stream);
-    auto launch = caliper_api::route("POST", "/v0/applets/dev.caliper.hello/launch");
+    auto launch = caliper_api::route("POST", "/v0/applets/dev.caliper.hello-world/launch");
     CHECK(launch.route == Route::Launch);
     CHECK(launch.method_ok);
-    CHECK(launch.applet_id == "dev.caliper.hello");
+    CHECK(launch.applet_id == "dev.caliper.hello-world");
     auto wrong = caliper_api::route("GET", "/v0/applets/x/launch");
     CHECK(wrong.route == Route::Launch);
     CHECK_FALSE(wrong.method_ok);
@@ -392,7 +392,7 @@ TEST_CASE("api: the routes of v0 and the method each takes") {
 }
 
 TEST_CASE("api: an applet id in the path is 1 to 128 characters of [A-Za-z0-9._-]") {
-    CHECK(caliper_api::plausible_applet_id("dev.caliper.hello"));
+    CHECK(caliper_api::plausible_applet_id("dev.caliper.hello-world"));
     CHECK(caliper_api::plausible_applet_id("com.example.my-viewer_2"));
     CHECK(caliper_api::plausible_applet_id(std::string(128, 'a')));
     for (const std::string bad : {std::string(), std::string(129, 'a'), std::string("a%2Fb"),
@@ -462,9 +462,9 @@ TEST_CASE("api: the server answers every endpoint, through the frame thread wher
     CHECK(applets.status == 200);
     CHECK(applets.body == "{\"applets\":[]}");
 
-    Response launch = http(port, "POST", "/v0/applets/dev.caliper.hello/launch", bearer());
+    Response launch = http(port, "POST", "/v0/applets/dev.caliper.hello-world/launch", bearer());
     CHECK(launch.status == 200);
-    CHECK(launch.body == "{\"id\":\"dev.caliper.hello\"}");
+    CHECK(launch.body == "{\"id\":\"dev.caliper.hello-world\"}");
     CHECK(http(port, "POST", "/v0/applets/no.such/launch", bearer()).status == 404);
     CHECK(app.launches.load() == 2);
 
@@ -478,7 +478,7 @@ TEST_CASE("api: the server answers every endpoint, through the frame thread wher
     CHECK(anon.status == 401);
     CHECK(anon.headers["www-authenticate"].rfind("Bearer", 0) == 0);
     CHECK(http(port, "GET", "/v0/info", bearer("api_test_token-0123456789abcdeX")).status == 401);
-    Response post_query = http(port, "POST", "/v0/applets/dev.caliper.hello/launch?token=" + kToken);
+    Response post_query = http(port, "POST", "/v0/applets/dev.caliper.hello-world/launch?token=" + kToken);
     CHECK(post_query.status == 401);
     Response method = http(port, "DELETE", "/v0/applets", bearer());
     CHECK(method.status == 405);
@@ -486,7 +486,7 @@ TEST_CASE("api: the server answers every endpoint, through the frame thread wher
     CHECK(http(port, "GET", "/", bearer()).status == 404);
     CHECK(http(port, "GET", "/index.html", bearer()).status == 404);
     CHECK(http(port, "GET", "/v3/info?token=" + kToken).status == 404);
-    CHECK(http(port, "POST", "/v0/applets/dev.caliper.hello/launch", bearer() + "Content-Length: 2\r\n").status == 413);
+    CHECK(http(port, "POST", "/v0/applets/dev.caliper.hello-world/launch", bearer() + "Content-Length: 2\r\n").status == 413);
     CHECK(app.launches.load() == 2);   // refused requests never reached the app
 
     const caliper_api::Stats st = app.server->stats();
@@ -995,7 +995,7 @@ TEST_CASE("api: the command endpoints hand requests to the gateway on the frame 
     REQUIRE(gw->submitted() == 6);
     CHECK(gw->requests[5].args == mib);
     // Other endpoints still refuse a body.
-    CHECK(http(port, "POST", "/v0/applets/dev.caliper.hello/launch", bearer() + "Content-Length: 2\r\n", {}, body)
+    CHECK(http(port, "POST", "/v0/applets/dev.caliper.hello-world/launch", bearer() + "Content-Length: 2\r\n", {}, body)
               .status == 413);
 
     // Clearing the gateway makes the endpoints 404 again.
@@ -1179,7 +1179,7 @@ TEST_CASE("api: caliper shot --api serves every endpoint as a process and stops 
     const std::string out_png = t.str("shot.png");
     Proc p;
     REQUIRE(p.start(exe,
-                    {"shot", "--applets", applets, "--launch", "dev.caliper.hello", "--size", "640x400",
+                    {"shot", "--applets", applets, "--launch", "dev.caliper.hello-world", "--size", "640x400",
                      "--frames", "36000", "--out", out_png, "--api", "--api-port", "0"},
                     {"CALIPER_DATA_DIR=" + data}));
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(60);
@@ -1243,8 +1243,10 @@ TEST_CASE("api: caliper shot --api serves every endpoint as a process and stops 
             if (e.find("id")->as_string() == id) return e.find("status")->as_string();
         return std::string("absent");
     };
-    CHECK(status_of("dev.caliper.hello") == "ACTIVE");
-    CHECK(status_of("dev.caliper.pulse-scope") == "READY");
+    CHECK(status_of("dev.caliper.hello-world") == "ACTIVE");
+#ifndef CALIPER_TESTS_NO_TORCH_APPLETS
+    CHECK(status_of("dev.caliper.mnist") == "READY");
+#endif
 
     // capture: a PNG of the shot's size that is not one flat colour.
     auto capture = [&] {
@@ -1268,19 +1270,25 @@ TEST_CASE("api: caliper shot --api serves every endpoint as a process and stops 
     capture();
 
     // launch: another applet, the same one again, an unknown one.
-    Response launched = http(port, "POST", "/v0/applets/dev.caliper.pulse-scope/launch", bearer(token));
+#ifndef CALIPER_TESTS_NO_TORCH_APPLETS
+    Response launched = http(port, "POST", "/v0/applets/dev.caliper.mnist/launch", bearer(token));
     REQUIRE_MESSAGE(launched.status == 200, launched.body);
     const Json lj = parse_json(launched.body);
-    CHECK(lj.find("id")->as_string() == "dev.caliper.pulse-scope");
+    CHECK(lj.find("id")->as_string() == "dev.caliper.mnist");
     CHECK_FALSE(lj.find("already_open")->as_bool());
-    CHECK(status_of("dev.caliper.pulse-scope") == "ACTIVE");
-    CHECK(status_of("dev.caliper.hello") == "READY");
-    Response again = http(port, "POST", "/v0/applets/dev.caliper.pulse-scope/launch", bearer(token));
+    CHECK(status_of("dev.caliper.mnist") == "ACTIVE");
+    CHECK(status_of("dev.caliper.hello-world") == "READY");
+    Response again = http(port, "POST", "/v0/applets/dev.caliper.mnist/launch", bearer(token));
     CHECK(again.status == 200);
     CHECK(parse_json(again.body).find("already_open")->as_bool());
+#else
+    Response again = http(port, "POST", "/v0/applets/dev.caliper.hello-world/launch", bearer(token));
+    CHECK(again.status == 200);
+    CHECK(parse_json(again.body).find("already_open")->as_bool());
+#endif
     CHECK(http(port, "POST", "/v0/applets/dev.example.nowhere/launch", bearer(token)).status == 404);
-    CHECK(http(port, "POST", "/v0/applets/dev.caliper.hello/launch?token=" + token).status == 401);
-    CHECK(http(port, "GET", "/v0/applets/dev.caliper.hello/launch", bearer(token)).status == 405);
+    CHECK(http(port, "POST", "/v0/applets/dev.caliper.hello-world/launch?token=" + token).status == 401);
+    CHECK(http(port, "GET", "/v0/applets/dev.caliper.hello-world/launch", bearer(token)).status == 405);
     capture();
 
     // The stream's handshake on both paths: the app answers as the hub, to
@@ -1348,7 +1356,12 @@ TEST_CASE("api: caliper shot --api serves every endpoint as a process and stops 
     REQUIRE(p.pid > 0);
     ::kill(p.pid, SIGTERM);
     CHECK(p.wait(15000) == 0);
-    CHECK_MESSAGE(p.text.find("wrote " + out_png + ": dev.caliper.pulse-scope at 640x400 after ") != std::string::npos, p.text);
+#ifndef CALIPER_TESTS_NO_TORCH_APPLETS
+    const std::string expected_shot_id = "dev.caliper.mnist";
+#else
+    const std::string expected_shot_id = "dev.caliper.hello-world";
+#endif
+    CHECK_MESSAGE(p.text.find("wrote " + out_png + ": " + expected_shot_id + " at 640x400 after ") != std::string::npos, p.text);
     CHECK(fs::exists(out_png));
     CHECK_FALSE(fs::exists(api_file));
     CHECK(open_socket(port) == (api_sock)-1);
@@ -1430,7 +1443,7 @@ TEST_CASE("api: the hidden app serves every endpoint through its window and stop
             if (e.find("id")->as_string() == id) return e.find("status")->as_string();
         return std::string("absent");
     };
-    CHECK(status_of("dev.caliper.hello") == "READY");
+    CHECK(status_of("dev.caliper.hello-world") == "READY");
 
     // A capture: the frame the hidden window presents, at its framebuffer's
     // size (640 x 400 points, one or two pixels per point), not one colour.
@@ -1452,11 +1465,11 @@ TEST_CASE("api: the hidden app serves every endpoint through its window and stop
     std::vector<uint8_t> landing, page;
     capture(&landing);
 
-    // Launch the hello fixture: the window then shows its page.
-    Response launched = http(port, "POST", "/v0/applets/dev.caliper.hello/launch", bearer(token));
+    // Launch the hello_world fixture: the window then shows its page.
+    Response launched = http(port, "POST", "/v0/applets/dev.caliper.hello-world/launch", bearer(token));
     REQUIRE_MESSAGE(launched.status == 200, launched.body);
-    CHECK(parse_json(launched.body).find("id")->as_string() == "dev.caliper.hello");
-    CHECK(status_of("dev.caliper.hello") == "ACTIVE");
+    CHECK(parse_json(launched.body).find("id")->as_string() == "dev.caliper.hello-world");
+    CHECK(status_of("dev.caliper.hello-world") == "ACTIVE");
     capture(&page);
     CHECK(page.size() == landing.size());
     CHECK(page != landing);

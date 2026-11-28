@@ -103,7 +103,7 @@ canvas.width = 1280; canvas.height = 800; canvas.content_scale = 1.0f;
 if (!caliper_core_attach_canvas(core, NULL, &canvas))
     fprintf(stderr, "%s\n", caliper_core_last_error(core));
 
-caliper_core_load_applet(core, "dev.caliper.hello");
+caliper_core_load_applet(core, "dev.caliper.hello-world");
 for (int i = 0; i < 60; ++i)
     caliper_core_frame(core);                  /* one frame per call */
 caliper_core_shutdown(core);
@@ -130,7 +130,7 @@ Caliper data folder of the operating system.
 ## Windowless Mode
 
 `embed_host` runs the whole path on a machine where no window may open. Build
-it against the package as above. Put the `hello` fixture (or any applet built
+it against the package as above. Put the `hello_world` fixture (or any applet built
 from the same core build) in a folder, and run its offscreen mode:
 
 ```sh
@@ -138,7 +138,7 @@ cp -R examples/embed_host <work>/embed_host
 cmake -S <work>/embed_host -B <work>/embed_host-build -DCMAKE_PREFIX_PATH=<prefix>
 cmake --build <work>/embed_host-build
 CALIPER_EMBED_OFFSCREEN=1 CALIPER_EMBED_APPLETS=<applets> \
-    <work>/embed_host-build/embed_host dev.caliper.hello
+    <work>/embed_host-build/embed_host dev.caliper.hello-world
 ```
 
 It prints the version of the library, the log lines of the core and the log

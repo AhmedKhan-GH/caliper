@@ -10,12 +10,12 @@
 #      -DCMAKE_PREFIX_PATH=<WORK_DIR>/prefix, and check that the build names
 #      nothing in the source tree;
 #   4. run the copy in its offscreen mode, which creates no window, on a copy
-#      of the hello fixture from APPLETS_DIR, and check that hello loaded and
+#      of the hello_world fixture from APPLETS_DIR, and check that hello_world loaded and
 #      drew. When the canvas cannot attach (no GPU) the run is reported as
 #      skipped, unless CALIPER_REQUIRE_GPU=1 makes that a failure.
 #
 #   cmake -DCALIPER_BUILD_DIR=<build> -DCALIPER_SOURCE_DIR=<source> -DWORK_DIR=<dir>
-#         -DEXPECT_VERSION=<major.minor.patch> -DAPPLETS_DIR=<dir with hello>
+#         -DEXPECT_VERSION=<major.minor.patch> -DAPPLETS_DIR=<dir with hello_world>
 #         [-DGENERATOR=<generator>] [-DMAKE_PROGRAM=<path>] [-DCXX_COMPILER=<path>]
 #         [-DOBJCXX_COMPILER=<path>] [-DBUILD_TYPE=<type>] [-DNM=<nm>]
 #         [-DCORE_LIBRARY=<libcaliper.a>] [-DLIB_PREFIX=lib] [-DLIB_SUFFIX=.dylib]
@@ -156,12 +156,12 @@ endif()
 # ---- 4. The offscreen run ----
 # HOME and CALIPER_USER_APPLETS_DIR keep the core's data folder and user
 # applets inside the work folder (macOS), so the run reads and writes nothing
-# of the user's own Caliper data and finds only the hello copy.
+# of the user's own Caliper data and finds only the hello_world copy.
 set(applets "${WORK_DIR}/applets")
 file(MAKE_DIRECTORY "${applets}")
-foreach(name "${LIB_PREFIX}hello${LIB_SUFFIX}" hello.caliper.toml)
+foreach(name "${LIB_PREFIX}hello_world${LIB_SUFFIX}" hello_world.caliper.toml)
     if(NOT EXISTS "${APPLETS_DIR}/${name}")
-        message(FATAL_ERROR "the hello fixture is not built: ${APPLETS_DIR}/${name}")
+        message(FATAL_ERROR "the hello_world fixture is not built: ${APPLETS_DIR}/${name}")
     endif()
     file(COPY "${APPLETS_DIR}/${name}" DESTINATION "${applets}")
 endforeach()
@@ -171,20 +171,20 @@ execute_process(
         "CALIPER_EMBED_APPLETS=${applets}"
         "CALIPER_USER_APPLETS_DIR=${WORK_DIR}/user-applets"
         "HOME=${WORK_DIR}/home"
-        "${host_exe}" dev.caliper.hello
+        "${host_exe}" dev.caliper.hello-world
     RESULT_VARIABLE rc OUTPUT_VARIABLE out ERROR_VARIABLE out TIMEOUT 120)
 message(STATUS "embed_host output:\n${out}")
 if(rc EQUAL 0)
     foreach(expect
             "offscreen mode, embed ${EXPECT_VERSION}"
-            "[applet] hello.on_init"
-            "[applet] hello.on_cleanup")
+            "[applet] hello_world.on_init"
+            "[applet] hello_world.on_cleanup")
         string(FIND "${out}" "${expect}" at)
         if(at EQUAL -1)
             message(FATAL_ERROR "embed_host: the output lacks \"${expect}\"")
         endif()
     endforeach()
-    if(NOT out MATCHES "offscreen: [1-9][0-9]* frames of dev\\.caliper\\.hello at 1280x800 in [0-9.]+ s, [1-9][0-9]* drawn pixels")
+    if(NOT out MATCHES "offscreen: [1-9][0-9]* frames of dev\\.caliper\\.hello-world at 1280x800 in [0-9.]+ s, [1-9][0-9]* drawn pixels")
         message(FATAL_ERROR "embed_host: the offscreen run did not report drawn frames")
     endif()
 elseif(out MATCHES "attach_canvas failed" AND NOT "$ENV{CALIPER_REQUIRE_GPU}" STREQUAL "1")

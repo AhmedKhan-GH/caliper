@@ -14,7 +14,7 @@ An embedder drives the core with five calls and pumps frames from its own event 
 
 1. `caliper_core_create` creates the core: renderer, services and loader.
 2. `caliper_core_attach_canvas` gives the core the native view (`NSView*` or `HWND`) to paint, or selects an offscreen target.
-3. `caliper_core_load_applet` launches one applet by manifest id, for example `dev.caliper.embed-scope`. Attach a canvas first, because the first frame of an applet touches the ImGui backend of the renderer. Loading before attach is a refusal, not a crash.
+3. `caliper_core_load_applet` launches one applet by manifest id, for example `dev.caliper.hello-world`. Attach a canvas first, because the first frame of an applet touches the ImGui backend of the renderer. Loading before attach is a refusal, not a crash.
 4. `caliper_core_frame` and `caliper_core_event` pump exactly one frame from your loop (a timer, a `CVDisplayLink` or a Win32 message loop) and forward your toolkit input as `CaliperInputEvent` values.
 5. `caliper_core_shutdown` tears everything down in the reverse order of create and clears the one-core-per-process lock.
 
@@ -28,7 +28,7 @@ canvas.mode = CALIPER_CANVAS_WINDOW;           /* native_view is an NSView* / HW
 canvas.width = w; canvas.height = h; canvas.content_scale = scale;
 caliper_core_attach_canvas(core, native_view, &canvas);
 
-caliper_core_load_applet(core, "dev.caliper.embed-scope");
+caliper_core_load_applet(core, "dev.caliper.hello-world");
 
 /* ... from YOUR event loop, once per frame: */
 caliper_core_frame(core);
@@ -273,7 +273,7 @@ cmake -S <work>/embed_host -B <work>/embed_host-build -DCMAKE_PREFIX_PATH=<prefi
 cmake --build <work>/embed_host-build
 ```
 
-The `CMakeLists.txt` of `examples/embed_host` calls `cmake_minimum_required`, `project` and `find_package(caliper-embed 1.4 CONFIG REQUIRED)` only when it is the top-level project, as `examples/hello` does with the SDK. It links the same target in both builds. The frameworks serve the window code of the host:
+The `CMakeLists.txt` of `examples/embed_host` calls `cmake_minimum_required`, `project` and `find_package(caliper-embed 1.4 CONFIG REQUIRED)` only when it is the top-level project, as `examples/hello_world` does with the SDK. It links the same target in both builds. The frameworks serve the window code of the host:
 
 ```cmake
 target_link_libraries(embed_host PRIVATE
@@ -287,7 +287,7 @@ With `CALIPER_EMBED_OFFSCREEN=1`, `embed_host` runs without a window. `main()` t
 
 ```sh
 CALIPER_EMBED_OFFSCREEN=1 CALIPER_EMBED_APPLETS=<applets> \
-    <work>/embed_host-build/embed_host dev.caliper.hello
+    <work>/embed_host-build/embed_host dev.caliper.hello-world
 ```
 
 The test `caliper_embed_install` (label `embed`) runs this whole path in a work folder, with `HOME` and the user applets folder inside it. When the canvas cannot attach, as on a machine without a GPU, the test reports Skipped, and `CALIPER_REQUIRE_GPU=1` makes that a failure. `CALIPER_EMBED_PROBE_DIR` sets the work folder.
@@ -302,14 +302,14 @@ In a torch-free build the core carries no libtorch at all. The libtorch row of t
 
 | Option | Default | Effect |
 |---|---|---|
-| `CALIPER_WITH_TORCH` | ON | OFF skips the PyTorch dependency block (no download, no `find_package(Torch)`) and every target that links torch: the `applets/*` tree (forces `CALIPER_BUILD_APPLETS` OFF), `caliper_torch_tests`, the applet learning-core tests and the MSVC torch-DLL copy. No binary carries a libtorch rpath. |
-| `CALIPER_BUILD_APPLETS` | OFF | Also builds the `applets/*` folders inside the core build. Each also builds on its own against the installed SDK. Forced OFF when torch is OFF, because most applets link libtorch. |
+| `CALIPER_WITH_TORCH` | ON | OFF skips the PyTorch dependency block (no download, no `find_package(Torch)`) and every target that links torch: `examples/mnist/applet`, `caliper_torch_tests` and the MSVC torch-DLL copy. No binary carries a libtorch rpath. |
+| `CALIPER_BUILD_APPLETS` | OFF | Also builds the example applets (`examples/hello_world` and, when torch is ON, `examples/mnist/applet`) inside the core build. Each also builds on its own against the installed SDK. |
 | `CALIPER_BUILD_PYTHON` | OFF | Adds the nanobind extensions `caliper._native` and `caliper._live`. The wheel build sets it ON. |
 | `CALIPER_WITH_SLANG` | OFF | Configure the vendored slang (SystemVerilog) library. |
 | `CALIPER_BUILD_VIEWER` | ON | Builds `caliper_viewer`, the live-viewer process (Apple only). The wheel ships it as `caliper/bin/caliper-viewer`. |
 | `CALIPER_WITH_BUILDER` | ON, but OFF on Windows | Builds the builder, which `libcaliper` does not link and no package installs. It also links the DuckDB json extension into the host DuckDB, so `libcaliper`, the embedding library and the `caliper` exe carry that extension. The wheel sets it OFF. |
 
-slang is configured `EXCLUDE_FROM_ALL`, and nothing that `libcaliper`, the `caliper` exe or the tests need links it. At configure time slang clones boost_regex and mimalloc over the network, which a pip build should not do. `CALIPER_WITH_SLANG` thus defaults to OFF, and the configure presets and the Python build keep it OFF, so a fresh configure clones neither. Two FetchContent clones remain: tomlplusplus (`caliper_host_lib`) and doctest (tests only). With `CALIPER_WITH_BUILDER` on, the configure also downloads the nlohmann/json archive.
+slang is configured `EXCLUDE_FROM_ALL`, and nothing that `libcaliper`, the `caliper` exe or the tests need links it. At configure time slang clones boost_regex and mimalloc over the network, which a pip build should not do. `CALIPER_WITH_SLANG` thus defaults to OFF, and the configure presets and the Python build keep it OFF, so a fresh configure clones neither. Three FetchContent downloads remain in `cmake/Dependencies.cmake`: sternbild_tokens (`sternbild::tokens`), tomlplusplus (`caliper_host_lib`) and doctest (`caliper::sdk_testing` and tests). With `CALIPER_WITH_BUILDER` on, `cmake/Dependencies.cmake` also downloads the nlohmann/json archive.
 
 The wheel build sets `CALIPER_BUILD_PYTHON` ON. It sets `CALIPER_WITH_TORCH`, `CALIPER_BUILD_APPLETS`, `CALIPER_BUILD_EXAMPLES`, `BUILD_TESTS`, `USE_CUDA`, `CALIPER_WITH_SLANG` and `CALIPER_WITH_BUILDER` OFF. It builds only the `_native`, `_live`, `_netio` and `caliper_viewer` targets.
 

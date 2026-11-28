@@ -40,7 +40,7 @@ The [`caliper::Artifacts`](../cpp-sugar.md) wrapper does nothing and tests false
 
 ```cpp
 caliper::Artifacts art(host);           // falsy if the host doesn't vend it
-std::string digest = art.put("embedscope-model", bytes.data(), bytes.size(), run);
-if (art.exists("embedscope-model"))     // digest OR name
-    const char* path = art.path_of("embedscope-model");   // copy before next call
+std::string digest = art.put("mnist-model", bytes.data(), bytes.size(), run);
+if (art.exists("mnist-model"))          // digest OR name
+    const char* path = art.path_of("mnist-model");   // copy before next call
 ```

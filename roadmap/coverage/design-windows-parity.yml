@@ -277,7 +277,6 @@ entries:
   item: 'Scenes reach a browser on Windows before the native app: the loss-landscape demo in Chrome and
     Edge through caliper.serve().'
   ids:
-  - STR-11
   - STR-10
   - PLT-09
 - heading: 5. The web viewer and notebooks
@@ -298,7 +297,6 @@ entries:
   ids:
   - PLT-09
   - REN-12
-  - STR-11
 - heading: 6. Caliper Embed
   item: Run the installed caliper-embed package on Windows hardware, including the Win32 embed_host in
     a window and offscreen.
@@ -481,8 +479,7 @@ entries:
 - heading: 10. Scenes and recordings
   ref: sprint4-pr1-main2
   item: The loss-landscape demo and the four demos on CUDA, written for MPS (2 days).
-  ids:
-  - STR-11
+  reason: superseded
 - heading: 10. Scenes and recordings
   ref: sprint4-pr1-main2
   item: 'Slice planes and isosurfaces on CUDA: the device-side slice and the marching-cubes kernel (3
@@ -495,5 +492,4 @@ entries:
   item: Done when the training-run demo runs on a Windows machine with CUDA, its scene draws in place,
     and its recording reopens and scrubs in the app and a browser.
   ids:
-  - STR-11
   - STR-13

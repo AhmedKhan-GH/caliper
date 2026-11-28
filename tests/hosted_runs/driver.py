@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """The driver of the hosted runs acceptance test and its check script.
 
-It starts the hidden app with no script and caliper-mcp as a child over stdio, copies tests/hosted_runs/train.py
+It starts the hidden app with no script and caliper-mcp as a child over stdio, copies examples/mnist/train.py
 and tests/hosted_runs/infer.py into a throwaway workspace, and sends tests/hosted_runs/transcript.jsonl through the MCP
 tools. The model runner of the app starts, forks and stops the scripts. The driver waits on events and on
 published state, never for a fixed time. Without a window and without the network. Exit code 0 passes,
@@ -335,22 +335,26 @@ def run(a):
     (work / "user").mkdir()
     ws = work / "workspace"
     ws.mkdir()
-    for f in ("train.py", "infer.py"):
-        (ws / f).write_text((HERE / f).read_text())
+    (ws / "train.py").write_text((ROOT / "examples" / "mnist" / "train.py").read_text())
+    (ws / "infer.py").write_text((HERE / "infer.py").read_text())
+    mnist_data = Path(
+        os.environ.get("CALIPER_MNIST_DATA_DIR", str(Path.home() / ".cache" / "caliper" / "mnist"))
+    ).expanduser()
     env = {k: v for k, v in os.environ.items()
            if k not in ("CALIPER_API", "CALIPER_AUTOLAUNCH", "CALIPER_EXIT_AFTER", "CALIPER_APPLET_PATH")
            and not k.startswith("CALIPER_RUN_")}
     env.update({"CALIPER_AGENT_OFFLINE": "1", "CALIPER_HIDDEN": "1", "CALIPER_DATA_DIR": str(work / "data"),
                 "CALIPER_USER_APPLETS_DIR": str(work / "user"), "CALIPER_WINDOW_SIZE": "1280x800",
                 "CALIPER_WORKSPACE": str(ws), "CALIPER_RUN_PYTHON": a.python,
+                "CALIPER_MNIST_DATA_DIR": str(mnist_data),
                 "PYTHONPATH": str(ROOT / "python") + os.pathsep + env.get("PYTHONPATH", "")})
     for exe in (a.app, a.mcp):
         if not exe or not Path(exe).exists():
             raise Skip(f"{exe or 'a program'} is not built")
-    pre = subprocess.run([a.python, "-c", "import torch, caliper, caliper._netio"], env=env,
+    pre = subprocess.run([a.python, "-c", "import torch, torchvision, caliper, caliper._netio"], env=env,
                          capture_output=True, text=True)
     if pre.returncode != 0:
-        raise Skip("torch or the native network sender is missing")
+        raise Skip("torch, torchvision or the native network sender is missing")
     decisions = work / "approvals.txt"
     decisions.write_text("\n".join(APPROVALS) + "\n")
     steps = [json.loads(l) for l in Path(a.transcript).read_text().splitlines() if l.strip()]

@@ -6,13 +6,13 @@ The key `[applet].kind` sets one of two kinds of applet. A compiled applet, the 
 
 ## Search Order
 
-The manifest is a sidecar file in the same folder as the applet's library, and the two share a stem. For an applet with the stem `sine_scope`, the folder holds:
+The manifest is a sidecar file in the same folder as the applet's library, and the two share a stem. For an applet with the stem `mnist`, the folder holds:
 
 ```text
-sine_scope.caliper.toml
-libsine_scope.dylib      (macOS; the library prefix is `lib`)
-sine_scope.dll           (Windows)
-libsine_scope.so         (Linux)
+mnist.caliper.toml
+libmnist.dylib           (macOS; the library prefix is `lib`)
+mnist.dll                (Windows)
+libmnist.so              (Linux)
 ```
 
 The layout is flat. One folder holds any number of applets, and there are no subfolders or bundles. The loader parses each file that ends in `.caliper.toml` and looks beside it for the library, with or without the `lib` prefix. The host shows a manifest without its library as a failed applet.
@@ -31,7 +31,7 @@ To install an applet, put its manifest and library in the user applets folder or
 
 | Section     | Key        | Type              | Required | Meaning                                                                 |
 |-------------|------------|-------------------|----------|-------------------------------------------------------------------------|
-| `[applet]`  | `id`       | string            | Yes      | Lowercase reverse-DNS identity, e.g. `dev.example.sine-scope`. See [Applet ids](#applet-ids). |
+| `[applet]`  | `id`       | string            | Yes      | Lowercase reverse-DNS identity, e.g. `dev.caliper.mnist`. See [Applet ids](#applet-ids). |
 | `[applet]`  | `name`     | string            | Yes      | Human-readable display name. Must be non-empty.                          |
 | `[applet]`  | `version`  | string            | Yes      | Applet version, strict semver `x.y.z` (three numeric parts).            |
 | `[applet]`  | `summary`  | string            | No       | Short one-line description shown in the landing screen's Inspector.      |
@@ -113,14 +113,14 @@ The `id` names the applet's data folder (`data/<id>/` under the app-data root). 
 - Dot-separated segments, none empty: no leading or trailing dot, no `..`.
 - At most 128 characters.
 
-`dev.example.sine-scope` is valid. `Dev.Example.App` (uppercase), `dev.example.my_app` (underscore), `dev/app`, `a..b` and `../../escape` are not. A manifest with an invalid id is listed as `FAILED` with the message `applet.id is not a valid applet id (lowercase reverse-DNS, [a-z0-9.-]): <id>` (see [Refusal messages](../reference/refusal-messages.md#failed-messages)). The host creates no data folder for it.
+`dev.caliper.mnist` is valid. `Dev.Example.App` (uppercase), `dev.example.my_app` (underscore), `dev/app`, `a..b` and `../../escape` are not. A manifest with an invalid id is listed as `FAILED` with the message `applet.id is not a valid applet id (lowercase reverse-DNS, [a-z0-9.-]): <id>` (see [Refusal messages](../reference/refusal-messages.md#failed-messages)). The host creates no data folder for it.
 
 ## Worked Example
 
-The minimal manifest below is the one that the **hello** fixture applet ships. The page embeds it from the source, so it cannot drift:
+The minimal manifest below is the one that the **Hello World** fixture applet ships. The page embeds it from the source, so it cannot drift:
 
 ```toml
---8<-- "examples/hello/hello.caliper.toml"
+--8<-- "examples/hello_world/hello_world.caliper.toml"
 ```
 
 See [First Applet](first-applet.md) for a full walk of the applet that this manifest belongs to.

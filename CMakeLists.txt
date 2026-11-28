@@ -86,9 +86,10 @@ option(BUILD_TESTS "Build tests" OFF)
 # every torch-linking target, so one process can host libcaliper next to a
 # DIFFERENT torch (Python's torch 2.14.1 vs the vendored libtorch 2.5.1).
 option(CALIPER_WITH_TORCH   "Download/link the vendored libtorch for torch applets + adapter tests" ON)
-# The core build compiles no applets. ON also builds the applets/* tree here,
+# The core build compiles no applets. ON also builds the example applets
+# (examples/hello_world and, with libtorch, examples/mnist/applet) here,
 # through the same caliper_add_applet() that builds them against the installed SDK.
-option(CALIPER_BUILD_APPLETS "Also build the applets/* tree in the core build" OFF)
+option(CALIPER_BUILD_APPLETS "Also build the example applets in the core build" OFF)
 option(CALIPER_BUILD_VIEWER "Build the caliper_viewer live-viewer process" ON)
 option(CALIPER_BUILD_EXAMPLES "Build the embedder example (examples/embed_host)" ON)
 option(CALIPER_BUILD_PYTHON  "Build the caliper Python extension (python/, nanobind)" OFF)
@@ -111,8 +112,7 @@ else()
 endif()
 option(CALIPER_WITH_BUILDER "Build the builder libraries, tools and tests (src/builder)" ${_caliper_builder_default})
 if(CALIPER_BUILD_APPLETS AND NOT CALIPER_WITH_TORCH)
-    message(STATUS "CALIPER_WITH_TORCH=OFF: most of applets/* need libtorch, forcing CALIPER_BUILD_APPLETS=OFF")
-    set(CALIPER_BUILD_APPLETS OFF)
+    message(STATUS "CALIPER_WITH_TORCH=OFF: skipping examples/mnist/applet; building torch-free example applets only")
 endif()
 
 # ============================================================================
@@ -190,15 +190,8 @@ target_include_directories(caliper_app_paths PUBLIC ${CMAKE_SOURCE_DIR}/src)
 set_target_properties(caliper_app_paths PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
 # doctest backs the tests here and ships in the package for an applet's own
-# tests. doctest v2.4.11 declares cmake_minimum_required 2.8, which CMake 4
-# rejects without this floor.
-include(FetchContent)
-set(CMAKE_POLICY_VERSION_MINIMUM 3.5)
-FetchContent_Declare(doctest
-    GIT_REPOSITORY https://github.com/doctest/doctest.git
-    GIT_TAG v2.4.11 GIT_SHALLOW TRUE)
-FetchContent_MakeAvailable(doctest)
-unset(CMAKE_POLICY_VERSION_MINIMUM)
+# tests (declared and fetched in cmake/Dependencies.cmake).
+caliper_fetch_doctest()
 
 # Fixture host for TDD of applets and the sugar, plus doctest.
 add_library(caliper_sdk_testing INTERFACE)
@@ -243,10 +236,8 @@ install(FILES
     DESTINATION lib/cmake/caliper-sdk COMPONENT sdk)
 
 # Host library: loader/negotiation logic, unit-testable without a renderer.
-FetchContent_Declare(tomlplusplus
-    GIT_REPOSITORY https://github.com/marzer/tomlplusplus.git
-    GIT_TAG v3.4.0 GIT_SHALLOW TRUE)
-FetchContent_MakeAvailable(tomlplusplus)
+# tomlplusplus::tomlplusplus is declared and fetched in cmake/Dependencies.cmake.
+caliper_fetch_tomlplusplus()
 
 add_library(caliper_host_lib STATIC
     src/host/applet_manifest.cpp
@@ -761,26 +752,15 @@ endif()
 # ============================================================================
 # The core build compiles no applets, and the caliper target depends on none.
 # Applets build in their own repositories against the installed SDK with
-# caliper_add_applet(), and every folder under applets/ and examples/ builds
+# caliper_add_applet(), and the example applets under examples/ build
 # standalone the same way (cmake -S <folder> -DCMAKE_PREFIX_PATH=<sdk prefix>).
-# CALIPER_BUILD_APPLETS=ON also builds the applets/* tree here.
-if(CALIPER_BUILD_APPLETS)
-    foreach(applet_name IN ITEMS embed_scope gpt_scope pulse_scope)
-        set(dir "${CMAKE_SOURCE_DIR}/applets/${applet_name}")
-        if(IS_DIRECTORY "${dir}" AND EXISTS "${dir}/CMakeLists.txt")
-            message(STATUS "  Found applet: ${applet_name}")
-            add_subdirectory("${dir}")
-        endif()
-    endforeach()
-endif()
-
-# hello is the loader-test fixture (the tests dlopen it), and pulse_scope is the
-# second applet caliper_embed_tests and caliper_cli_api swap to, so they build
-# with the tests. Neither links libtorch.
+# BUILD_TESTS=ON or CALIPER_BUILD_APPLETS=ON also builds them here:
+# examples/hello_world is the loader-test fixture (torch-free), and
+# examples/mnist/applet is the canonical ML applet (requires CALIPER_WITH_TORCH=ON).
 if(BUILD_TESTS OR CALIPER_BUILD_APPLETS)
-    add_subdirectory(examples/hello)
-    if(NOT TARGET pulse_scope)
-        add_subdirectory(applets/pulse_scope)
+    add_subdirectory(examples/hello_world)
+    if(CALIPER_WITH_TORCH)
+        add_subdirectory(examples/mnist/applet)
     endif()
 endif()
 
@@ -818,7 +798,7 @@ if(BUILD_TESTS)
     add_subdirectory(tests)
 
     # caliper_sdk_install: install the SDK component and build the probe and a
-    # copy of examples/hello against it, using only find_package(caliper-sdk),
+    # copy of examples/hello_world against it, using only find_package(caliper-sdk),
     # then check that an applet source cannot include caliper/embed.h even with
     # the embed package in the same prefix (tests/sdk_install_probe/run.cmake).
     # The work folder holds those copies and builds; CI points it outside the
@@ -852,7 +832,7 @@ if(BUILD_TESTS)
     # exactly the C functions of libcaliper.a; then build a copy of
     # examples/embed_host against the package with only find_package(caliper-embed)
     # and run it in its offscreen mode, which creates no window, on a copy of
-    # the hello fixture (tests/embed_install/run.cmake). Without a GPU the run
+    # the hello_world fixture (tests/embed_install/run.cmake). Without a GPU the run
     # is reported as skipped, as the GPU suites do. CI points the work folder
     # outside the checkout.
     if(TARGET caliper_embed)
@@ -883,7 +863,7 @@ if(BUILD_TESTS)
     endif()
 
     # caliper_host_names_no_applet: no applet id, name or window title from
-    # applets/ or examples/ may appear as a string literal in src/ or include/.
+    # examples/ may appear as a string literal in src/ or include/.
     find_package(Python3 COMPONENTS Interpreter)
     if(Python3_Interpreter_FOUND)
         add_test(NAME caliper_host_names_no_applet COMMAND "${Python3_EXECUTABLE}"
@@ -1006,8 +986,8 @@ if(TARGET caliper_builder_session)
         target_include_directories(caliper_app_session_tests PRIVATE
             ${CMAKE_SOURCE_DIR}/src/host ${CMAKE_SOURCE_DIR}/tests ${CMAKE_SOURCE_DIR}/third_party/stb)
         set_target_properties(caliper_app_session_tests PROPERTIES CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON)
-        if(TARGET hello_applet)
-            add_dependencies(caliper_app_session_tests hello_applet)   # app.launch in the process test
+        if(TARGET hello_world_applet)
+            add_dependencies(caliper_app_session_tests hello_world_applet)   # app.launch in the process test
         endif()
         add_test(NAME caliper_app_session COMMAND caliper_app_session_tests "--test-case-exclude=*hidden app*")
         set_tests_properties(caliper_app_session PROPERTIES LABELS "builder" TIMEOUT 120)
@@ -1047,8 +1027,8 @@ if(TARGET caliper_builder_session)
                 ${CMAKE_SOURCE_DIR}/third_party/stb)
             set_target_properties(caliper_app_live_tests PROPERTIES CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON)
             add_dependencies(caliper_app_live_tests caliper caliper_attention_producer)
-            if(TARGET hello_applet)
-                add_dependencies(caliper_app_live_tests hello_applet)
+            if(TARGET hello_world_applet)
+                add_dependencies(caliper_app_live_tests hello_world_applet)
             endif()
             # One entry per case: the acceptance case, F4 listing a stream of
             # caliper.serve() from its stream file, the attachment kept across

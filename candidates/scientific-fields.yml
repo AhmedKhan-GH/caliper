@@ -40,7 +40,7 @@ candidates:
     summary: "Shows cell and vertex fields on triangle, tetrahedron and mixed meshes with clipped and cut views."
     serves: "Helps inspect results of finite-element and finite-volume solvers and mesh-based networks."
     origin: field
-    depends_on: [REN-73, REN-26]
+    depends_on: [REN-12, REN-26]
   - key: adaptive-mesh-refinement
     title: "Adaptive Mesh Refinement View"
     summary: "Shows nested refinement levels of block-structured grids with level outlines and per-level fields."
@@ -64,13 +64,13 @@ candidates:
     summary: "Shows wall shear, pressure coefficient and y-plus on surfaces and as curves along them."
     serves: "Helps judge boundary-layer accuracy of solvers and learned surrogates."
     origin: field
-    depends_on: [REN-73]
+    depends_on: [REN-12]
   - key: deforming-mesh-view
     title: "Deforming Meshes"
     summary: "Plays meshes whose vertices move each step, such as moving bodies and free surfaces, with quality metrics."
     serves: "Helps check mesh quality in fluid-structure and moving-boundary runs."
     origin: field
-    depends_on: [REN-73, STR-13]
+    depends_on: [REN-12, STR-13]
   - key: insitu-solver-adaptor
     title: "In-Situ Adaptor for Running Solvers"
     summary: "Lets a running solver hand its fields to the viewer through shared memory or a socket without writing files."
@@ -724,7 +724,7 @@ candidates:
     summary: "Draws surfaces and curves from formulas with parameter sliders and curvature colouring."
     serves: "Helps teach geometry and inspect learned shapes."
     origin: field
-    depends_on: [REN-73]
+    depends_on: [REN-12]
   - key: hdl-waveform-viewer
     title: "HDL Waveform Viewer"
     summary: "Shows digital signals over time with buses, radix choices, markers and searchable names."

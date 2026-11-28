@@ -1,5 +1,5 @@
 // parity_fixture.h: the fixture of the pixel comparison (design/programmable-graphics.md, Pixel
-// Comparison): two instances, attention_field and attention_arcs, as the app sends them in the
+// Comparison): two instances, attention_field and ring_arcs, as the app sends them in the
 // instance form of PROGRAM set, and one recorded version of each published resource as RESOURCE,
 // from the worked examples of tests/gfx/example_pieces.h, thus no training runs. Two more
 // programs are ones that a viewer must refuse: a copy of the field whose draw.wgsl WebGPU does not
@@ -168,7 +168,7 @@ inline Fixture make_fixture(std::uint32_t size = 512) {
     fx.plan.programs.push_back(fp);
 
     // The arcs: threshold 0.05 and glow 1, under the graphics suite's fixed camera at a pixel ratio of 2.
-    const cs::Piece arcs = ex::attention_arcs();
+    const cs::Piece arcs = ex::ring_arcs();
     Json arc_values = Json::object();
     arc_values.set("threshold", 0.05);
     arc_values.set("glow", 1.0);

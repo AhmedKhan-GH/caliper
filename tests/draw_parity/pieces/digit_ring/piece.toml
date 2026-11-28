@@ -1,0 +1,82 @@
+name = "digit_ring"
+version = 1
+description = "Per-digit MNIST probe accuracy as 3-D columns on a ring, with picking and digit labels"
+imports = ["colormap@1", "pick@1", "camera@1"]
+
+[[inputs]]
+name = "logits"
+kind = "tensor"
+dtype = "f32"
+rank_min = 2
+rank_max = 2
+title = "Probe Logits (N, 10)"
+
+[[inputs]]
+name = "targets"
+kind = "tensor"
+dtype = "i32"
+rank_min = 1
+rank_max = 1
+title = "Probe Labels (N)"
+
+[[params]]
+name = "scale"
+type = "f32"
+default = 1.0
+min = 0.2
+max = 4.0
+title = "Height Scale"
+
+[[resources]]
+id = "metrics"
+kind = "buffer"
+struct = "DigitMetric"
+fields = [
+  "digit: u32",
+  "total: u32",
+  "correct: u32",
+  "errors: u32",
+  "has_errors: u32",
+  "accuracy: f32",
+  "mean_conf: f32",
+]
+count = 10
+
+[[resources]]
+id = "labels"
+kind = "buffer"
+struct = "Label"
+fields = ["position: vec4<f32>", "string: u32"]
+count = 10
+
+[[derive.passes]]
+entry = "compute_metrics"
+workgroups = [1, 1, 1]
+writes = ["metrics"]
+
+[[derive.passes]]
+entry = "place_labels"
+workgroups = [1, 1, 1]
+writes = ["labels"]
+
+[draw]
+camera = "orbit"
+
+[draw.pick]
+resource = "metrics"
+fields = ["digit", "total", "correct", "errors", "has_errors", "accuracy", "mean_conf"]
+
+[draw.text]
+anchors = "labels"
+strings = ["Digit 0", "Digit 1", "Digit 2", "Digit 3", "Digit 4", "Digit 5", "Digit 6", "Digit 7", "Digit 8", "Digit 9"]
+
+[[draw.passes]]
+kind = "render"
+vertex = "bar_vs"
+fragment = "bar_fs"
+instances = "metrics"
+vertices = 36
+topology = "triangle_list"
+blend = "opaque"
+depth = "write"
+pick = true

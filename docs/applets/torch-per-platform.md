@@ -29,7 +29,7 @@ what each step is on macOS and on Windows. Applet code is the same on both platf
 6. **`Bridge::texture_from_tensor_mapped`: what is drawn.** The GPU colormaps the tensor into a Metal texture or a
    Vulkan image. See [caliper.tensor_bridge.v1](services/caliper-tensor-bridge-v1.md).
 
-Most applets call steps 1, 3 and 6 directly, and the SDK does steps 4 and 5. In-tree ML applets such as EmbedScope (`applets/embed_scope/`) and GPTScope (`applets/gpt_scope/`) use these calls.
+Most applets call steps 1, 3 and 6 directly, and the SDK does steps 4 and 5. The MNIST applet (`examples/mnist/applet/`) uses these calls.
 
 ## Windows Memory Sharing
 

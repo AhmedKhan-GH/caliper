@@ -22,7 +22,7 @@
   <a href="https://ahmedkhan-gh.github.io/caliper/"><b>Website</b></a> ·
   <a href="https://ahmedkhan-gh.github.io/caliper/docs/">Documentation</a> ·
   <a href="design/roadmap.md">Roadmap</a> ·
-  <a href="docs/applets/in-tree-applets.md">Applets</a>
+  <a href="docs/applets/index.md">Applets</a>
 </p>
 
 <br>
@@ -92,12 +92,12 @@ The `release-notorch` preset builds the host without LibTorch in `cmake-build-no
 | `USE_MPS` | ON on macOS when the Metal compiler is found, otherwise OFF | Build the Metal Performance Shaders support |
 | `BUILD_TESTS` | OFF | Build the test suites. The `release`, `debug` and `release-notorch` presets set it ON. |
 | `CALIPER_WITH_TORCH` | ON | Download LibTorch for the adapter tests and for the SDK, which names it for the applets that link it |
-| `CALIPER_BUILD_APPLETS` | OFF | Also build `applets/` inside the core build; forced OFF without LibTorch |
+| `CALIPER_BUILD_APPLETS` | OFF | Also build the example applets (`examples/hello_world` and, with LibTorch, `examples/mnist/applet`) inside the core build |
 | `CALIPER_BUILD_PYTHON` | OFF | Build the `caliper` Python extension (nanobind) |
 | `CALIPER_WITH_SLANG` | OFF | Configure the vendored slang library |
 | `CALIPER_WGSL_FROM_SOURCE` | OFF | Build the runtime WGSL compiler from source with cargo. The `release`, `debug`, and `release-notorch` presets set it ON unless `CALIPER_WGSL_LIBRARY` is set. |
 | `CALIPER_BUILD_VIEWER` | ON | Build `caliper_viewer`, the live viewer process (macOS) |
-| `CALIPER_BUILD_EXAMPLES` | ON | Build the embedding example, `examples/embed_host`. The tutorial applet `hello` builds with the tests instead. |
+| `CALIPER_BUILD_EXAMPLES` | ON | Build the embedding example, `examples/embed_host`. The example applets build with the tests instead. |
 | `CALIPER_WITH_BUILDER` | ON, but OFF on Windows | Build the builder under `src/builder/` (its libraries, `caliper-mcp`, `caliper-acp-harness`, `caliper-builder-host` and their tests) and link DuckDB's json extension into the host's DuckDB. The Python wheel sets it OFF. |
 | `CALIPER_STATIC_CRT` | OFF | Use the static MSVC runtime (`/MT`) instead of the dynamic one |
 
@@ -156,8 +156,7 @@ caliper/
 ├── src/                        # The caliper executable (main.cpp) and the host (src/host/)
 ├── sdk/                        # The applet SDK: headers, CMake package, test fixtures
 ├── include/caliper/            # The embedding and live-session C headers
-├── applets/                    # First-party applets, each built against the SDK
-├── examples/                   # hello, embed_host and the MNIST example
+├── examples/                   # hello_world, embed_host and the MNIST examples
 ├── python/                     # The caliper Python package and its extension
 ├── tests/                      # Test suites
 ├── scripts/                    # Helper scripts

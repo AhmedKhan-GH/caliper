@@ -86,8 +86,8 @@ TEST_CASE("semver validation") {
 }
 
 TEST_CASE("applet id validation") {
-    CHECK(is_valid_applet_id("dev.caliper.hello"));
-    CHECK(is_valid_applet_id("dev.caliper.embed-scope"));
+    CHECK(is_valid_applet_id("dev.caliper.hello-world"));
+    CHECK(is_valid_applet_id("dev.caliper.mnist"));
     CHECK(is_valid_applet_id("a.b"));
     CHECK(is_valid_applet_id("x9"));
     CHECK_FALSE(is_valid_applet_id(""));

@@ -24,7 +24,7 @@ format and the entry points for hot reload under [Undecided](roadmap.md#undecide
   `git filter-repo` rather than copied as a fresh start, because it is the
   record of how each applet was built.
 - `CALIPER_BUILD_APPLETS` goes away with them.
-- `examples/hello` and `examples/sine_scope` stay, because the tutorials embed
+- `examples/hello_world` and `examples/mnist/applet` stay, because the tutorials embed
   them and the tests load them.
 
 ### Shipping the SDK
