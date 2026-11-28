@@ -561,13 +561,14 @@ TEST_CASE("hostile input over the pipe and a closed stdin") {
 
     // stdin closes while a call is held: the server stops within its grace
     // period and answers the call with mcp.cancelled.
+    const auto t0 = Clock::now();
     child.send({{"jsonrpc", "2.0"}, {"id", "held"}, {"method", "tools/call"},
                 {"params", {{"name", command_tool_name(held->name)}, {"arguments", held->examples[0]}, {"_meta", modern_meta()}}}});
     std::this_thread::sleep_for(std::chrono::milliseconds(300));
-    const auto t0 = Clock::now();
     const ExitStatus st = child.finish(10000);
     CHECK(st.success());
-    // A server that waited for the held call would last the whole hold.
+    // The API holds the call hold_ms after it arrives, which came after t0:
+    // a server that waited for the held call would end after the whole hold.
     CHECK(Clock::now() - t0 < std::chrono::milliseconds(api.hold_ms.load()));
     bool answered = false;
     for (const auto& n : child.notes)

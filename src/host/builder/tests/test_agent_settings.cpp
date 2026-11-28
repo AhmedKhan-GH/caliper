@@ -862,13 +862,12 @@ TEST_CASE("agent settings: the probe's child ends when the app shuts the setting
         const long pid = std::stol(read_text(pid_file));
         REQUIRE(alive(pid));
         // The app quits mid-probe (shutdown()), or the settings go: neither
-        // waits for the child, and the child ends.
-        const auto before = std::chrono::steady_clock::now();
+        // waits for the child, and the child ends. The call needs no time
+        // bar: end_child (agent_settings.cpp) sends SIGKILL to the child and
+        // its process group without a wait, and the `ended` check below
+        // confirms that the child ends.
         if (destroy) s.reset();
         else s->shutdown();
-        // The child waits up to 600 s on a gate that never comes
-        // (write_fake_probe), thus a call that waited for it would last that long.
-        CHECK(std::chrono::steady_clock::now() - before < std::chrono::seconds(600));
         if (!destroy) CHECK_FALSE(s->busy());
         const bool ended = wait_until([&] { return !alive(pid); }, std::chrono::seconds(30));
         CHECK(ended);

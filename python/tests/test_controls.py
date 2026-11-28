@@ -415,7 +415,7 @@ def test_a_flood_of_values_from_several_threads(ctl):
         while not stop.is_set():
             caliper.step()
 
-    lt = threading.Thread(target=loop)
+    lt = threading.Thread(target=loop, daemon=True)
     lt.start()
     start = time.perf_counter()
 
@@ -423,17 +423,23 @@ def test_a_flood_of_values_from_several_threads(ctl):
         for i in range(5000):
             control(r, "set", conn=f"c{base}", name="p", value=base * 10 ** 5 + i)
 
-    threads = [threading.Thread(target=flood, args=(k,)) for k in range(4)]
+    # Hang guard, not a timing bar: a deadlock fails the test instead of hanging it. On Apple
+    # silicon on 2026-11-28 the flood took 0.73, 1.05 and 1.09 s in 3 runs, and 10 times the
+    # slowest is 11 s. A hosted 3-core CI runner took more than 20 s, which failed an earlier
+    # 20 s bar, thus the guard is 120 s.
+    guard_s = 120.0
+    threads = [threading.Thread(target=flood, args=(k,), daemon=True) for k in range(4)]
     for th in threads:
         th.start()
     for th in threads:
-        th.join()
+        th.join(timeout=guard_s)
     seconds = time.perf_counter() - start
     stop.set()
-    lt.join()
+    lt.join(timeout=guard_s)
+    assert not any(th.is_alive() for th in threads + [lt]), "hang guard: a thread did not end"
     caliper.step()
     print(f"20,000 set requests from 4 threads in {seconds:.2f} s while the loop stepped")
-    # The final state proves that every request was handled, and a deadlock would hang at join.
+    # The final state proves that every request was handled.
     assert p.value in {k * 10 ** 5 + 4999 for k in range(4)} and p.pending is None
     assert ctl._npending == 0 and not ctl.busy
 

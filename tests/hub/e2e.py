@@ -251,16 +251,22 @@ def main() -> int:
         r = asyncio.run(viewer.watch(url, ida, 30.0, until=lambda snaps, vals: snaps.get("fc1.weight", 0) > 0))
         check(r["state"] == "live" and r["snapshots"].get("fc1.weight", 0) > 0, "the other session goes on")
 
-        # 6. the hub's memory: a sample now, after a window of 6 s and after the window of 12 s
-        # that follows it. A leak of r MiB/s grows the second window by 6 r more than the first,
-        # and memory that settles grows the first window only. What may still differ between the
-        # windows is what the hub holds and frees, and what it retains by design: a second copy
-        # of each session's two heatmaps while a newer one replaces them (64 x 32 and 2 x 64
-        # floats), and 6 s more of the loss series it keeps, one float a step at no more than
-        # 250 steps a second (the 4 ms sleep of each step of both producers). The resident size
-        # counts whole pages, and an allocation can touch one page more than its size fills.
-        # Measured on 2026-11-28 on Apple silicon over 5 runs: the 6 s window grew 0 to
-        # 0.031 MiB and the 12 s window 0 to 0.016 MiB.
+        # 6. the hub's memory: a sample now (m0), after a short window of 6 s (m1) and after the
+        # long window of 12 s that follows it (m2). The scaling rule in its high-water form: the
+        # short window grew max(m1 - m0, 0), the long window grew m2 - max(m0, m1), and the check
+        # fails only when the long growth exceeds the short one by more than what is in flight. A
+        # leak of r MiB/s grows the long window by 6 r more than the short one, and fails. Memory
+        # that settles grows the short window only, and memory that the short window released and
+        # the long window used again gives a long growth of at most zero. What may still differ
+        # between the windows is what the hub holds and frees, and what it retains by design: a
+        # second copy of each session's two heatmaps while a newer one replaces them (64 x 32 and
+        # 2 x 64 floats), and 6 s more of the loss series it keeps, one float a step at no more
+        # than 250 steps a second (the 4 ms sleep of each step of both producers). The resident
+        # size counts whole pages, and an allocation can touch one page more than its size fills.
+        # Measured on 2026-11-28 on Apple silicon over 5 runs, with each window taken from the
+        # sample just before it: the 6 s window grew 0 to 0.031 MiB and the 12 s window 0 to
+        # 0.016 MiB. One more run with the high-water form: the 6 s window grew 0.031 MiB and the
+        # 12 s window 0.000 MiB.
         page = os.sysconf("SC_PAGE_SIZE")
         pages = lambda n: (-(-n // page) + 1) * page  # noqa: E731  (the bytes of the pages n bytes can touch)
         in_flight = 2 * (pages(64 * 32 * 4) + pages(2 * 64 * 4) + pages(6 * 250 * 4)) / 2**20
@@ -269,11 +275,11 @@ def main() -> int:
         m1 = rss_mib(hub.pid)
         time.sleep(12.0)
         m2 = rss_mib(hub.pid)
-        grow_short, grow_long = m1 - m0, m2 - m1
+        grow_short, grow_long = max(m1 - m0, 0.0), m2 - max(m0, m1)
         if m0 > 0:
             check(grow_long - grow_short <= in_flight,
                   f"the hub's resident memory does not grow with time: {grow_short:+.3f} MiB in 6 s, then "
-                  f"{grow_long:+.3f} MiB in 12 s ({m0:.1f} MiB at the first sample, "
+                  f"{grow_long:+.3f} MiB in 12 s (samples {m0:.3f}, {m1:.3f}, {m2:.3f} MiB, "
                   f"{rss[0][1]:.1f} MiB at start; at most {in_flight:.3f} MiB in flight)")
 
         # optional: the relay at 60 Hz to four viewers in other processes

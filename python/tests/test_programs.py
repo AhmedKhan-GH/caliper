@@ -385,8 +385,10 @@ def test_one_slow_pass_does_not_move_the_cadence(sim):
         k += 1
     st = P.stats()
     assert st["every"] == before["every"]
-    # D is the mean of the last cycles without the largest and the smallest, thus the one slow
-    # pass leaves it exactly as it was.
+    # D is the mean of the last COST_SAMPLES cycles without the largest and the smallest
+    # (_Cadence.cost_s). On the fake clock every normal cycle gives the same D, bit for bit, with
+    # the same rounding of the clock's sums. The slow pass's cycle is the largest, thus the mean
+    # drops it, and before and after the slow pass the mean is the same sum of the same six values.
     assert st["cost_ms"] == before["cost_ms"]
 
 
@@ -885,6 +887,9 @@ def test_training_keeps_its_step_rate_after_a_pass_times_out(run):
     assert st["state"] == "running" and st["last_pass_ms"]
     target_ms = 10000.0                              # 20 times the timeout of max(100, 10 x 50) ms
     net.spin[0] = min(2e9, 1e5 * target_ms / st["last_pass_ms"])
+    # The long pass's length in seconds, from the spin actually set (a float32, capped at 2e9) and
+    # the measured pass of 100,000 iterations (last_pass_ms, in milliseconds).
+    pass_s = net.spin[0].item() / 1e5 * st["last_pass_ms"] / 1e3
     torch.mps.synchronize()
 
     before = timed(20, 1)                            # the long pass, with the timeout
@@ -894,7 +899,7 @@ def test_training_keeps_its_step_rate_after_a_pass_times_out(run):
     assert st["state"] == "stopped" and st["error"]["code"] == "program.timeout", st
     assert "cannot be stopped" in st["error"]["message"]
     assert reaping == 1, "the step returned only after the GPU ended the pass"
-    assert before[0] < target_ms / 1e3, before       # a step that waited would last the whole pass
+    assert before[0] < pass_s, (before, pass_s)      # a step that waited would last the whole pass
     assert sorted(after)[5] < 10 * sorted(baseline)[2] + 0.1, (after, baseline)
     deadline = time.monotonic() + 30
     while _producer.reaping() and time.monotonic() < deadline:

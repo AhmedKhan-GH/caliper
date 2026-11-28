@@ -470,11 +470,9 @@ TEST_CASE("app session: a long loader runs on the job system and never holds a f
     bool labelled = false;
     for (const auto& v : loop.jobs.views()) labelled = labelled || (v.running && v.label == "loader.run slow");
     CHECK(labelled);
-    size_t first;
     uint64_t frames_before;
     {
         std::lock_guard<std::mutex> lock(loop.m);
-        first = loop.frame_ms.size();
         frames_before = loop.frames.load();
     }
     REQUIRE(ran.wait_for(10s) == std::future_status::ready);
@@ -488,11 +486,9 @@ TEST_CASE("app session: a long loader runs on the job system and never holds a f
     CHECK(loader_thread != loop.frame_id);
     CHECK(mark_thread == loop.frame_id);
     CHECK_FALSE(mark_ran_during_loader);   // the later command waited, in order
-    CHECK(frames_during > 0);              // frames came while the loader ran
-    // A frame that waited for the loader would last as long as the loader runs.
-    double longest = 0.0;
-    for (size_t i = first; i < loop.frame_ms.size(); ++i) longest = std::max(longest, loop.frame_ms[i]);
-    CHECK(longest < std::chrono::duration<double, std::milli>(loader_time).count());
+    // A frame thread that waited for the loader could finish at most one frame
+    // while the loader runs.
+    CHECK(frames_during >= 2);
 }
 
 TEST_CASE("app session: shutdown answers waiting commands and closes the journal and the database") {

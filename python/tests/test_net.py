@@ -785,18 +785,20 @@ def _held_mb(frame_bytes, views=1):
 
 
 def _growth_check(rss, held_mb):
-    """The scaling rule of the memory checks. ``rss`` holds the RSS in MB after the warm-up, after
-    a first window and after a second window twice as long. A leak at rate r grows the second
-    window by r times the first window's length more than the first, and settling or a plateau
-    does not. The rule fails only when that difference exceeds what can be in flight at once,
-    ``held_mb``. A first window that released memory counts as no growth: a release is not a
-    leak, and a leak still grows the second window by twice the first window's length. Returns
-    the growth of both windows."""
-    g1, g2 = rss[1] - rss[0], rss[2] - rss[1]
-    print(f"\nRSS growth: {g1:+.2f} MB in the first window, {g2:+.2f} MB in the second "
-          f"(bound on the difference {held_mb:.1f} MB)")
-    assert g2 - max(g1, 0.0) <= held_mb, (g1, g2, held_mb)
-    return g1, g2
+    """The scaling rule of the memory checks, in its high-water form. ``rss`` holds the RSS in MB
+    after the warm-up (r0), after a short window (r1) and after a long window twice as long (r2).
+    The short window grew max(r1 - r0, 0), and the long window grew r2 - max(r0, r1), from the
+    highest sample before it. The rule fails only when the long window grew more than the short
+    one by more than ``held_mb``, what can be in flight at once. A leak at rate r grows the long
+    window by r times the short window's length more, and fails. Memory that the short window
+    released and the long window used again gives a long growth of at most zero, and passes.
+    Returns the growth of both windows."""
+    short, long = max(rss[1] - rss[0], 0.0), rss[2] - max(rss[0], rss[1])
+    print(f"\nRSS samples {rss[0]:.2f}, {rss[1]:.2f}, {rss[2]:.2f} MB: the short window grew "
+          f"{short:+.2f} MB, the long window {long:+.2f} MB (bound on the difference "
+          f"{held_mb:.1f} MB)")
+    assert long - short <= held_mb, (rss, short, long, held_mb)
+    return short, long
 
 
 @pytest.mark.parametrize("device", DEVICES)
@@ -847,10 +849,13 @@ def test_slow_viewer_latest_wins(server, device):
     slow, rss, st, sent, last = run(go(), 60)
     assert slow < stall_s, slow                     # no call waits for the stalled socket
     assert st["superseded"] > 0 and sent < 20      # stalled sends; newer snapshots replaced older
-    # Nothing queues up. The frame is the whole 1024 x 1024 float32 tensor (max_extent 1024), thus
-    # the bound is 16.1 MB. Measured on Apple silicon on 2026-11-28 in 5 runs of each case: the
-    # first window grew 0.00 to 15.83 MB, the second -56.69 to 11.14 MB, and the second grew at
-    # most 3.55 MB more than the first.
+    # Nothing queues up: the long window grows no more than the short one, but for what can be in
+    # flight (_growth_check). The frame is the whole 1024 x 1024 float32 tensor (max_extent 1024),
+    # thus the bound is 16.1 MB. Measured on Apple silicon on 2026-11-28 in 5 runs of each case,
+    # with each window taken from the sample just before it: the first window grew 0.00 to
+    # 15.83 MB, the second -56.69 to 11.14 MB, and the second grew at most 3.55 MB more than the
+    # first. In 3 more runs of each case with the high-water form, the short window grew 0.00 to
+    # 10.61 MB, the long -0.02 to 2.78 MB, and the long grew at most 0.30 MB more than the short.
     _growth_check(rss, _held_mb(W.numel() * 4))
     assert last.view == "big"
 
@@ -1155,11 +1160,16 @@ def test_memory_flat_long_run(server):
             reader.cancel()
             return rss, largest[0]
     rss, largest = run(go(), 90)
-    # What can be in flight: the frames of the three views, none larger than the largest frame
-    # that the viewer received, and the retained values of the series, which grow by design up
-    # to SERIES_RETAIN float32 values: 22.5 MB here. Measured on Apple silicon on 2026-11-28 in 5
-    # runs of each sender: the first window grew -0.02 to 1.70 MB, the second -94.73 to 3.88 MB,
-    # and the second grew at most 3.77 MB more than the first.
+    # The long window grows no more than the short one, but for what can be in flight
+    # (_growth_check). The frames of the three views take at most _held_mb of the largest frame
+    # that the viewer received, which is the 1.6 MB frame of the 100,000 points and their labels:
+    # 18.5 MB. The series takes at most 4 MiB more, because the producer retains up to
+    # SERIES_RETAIN (1 << 20) of its float32 values by design. Thus the bound is 22.5 MB here.
+    # Measured on Apple silicon on 2026-11-28 in 5 runs of each sender, with each window taken
+    # from the sample just before it: the first window grew -0.02 to 1.70 MB, the second -94.73 to
+    # 3.88 MB, and the second grew at most 3.77 MB more than the first. In 3 more runs of each
+    # sender with the high-water form, the short window grew 0.00 to 5.06 MB, the long -93.19 to
+    # 0.80 MB, and the long grew at most 0.78 MB more than the short.
     _growth_check(rss, _held_mb(largest, len(views)) + 4 * _net.SERIES_RETAIN / 2**20)
 
 

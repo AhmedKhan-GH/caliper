@@ -1306,21 +1306,29 @@ TEST_CASE("net/hub: retained memory stays bounded over a long run") {
     const auto st = h.stats();
     CHECK(st.retained_series_bytes <= 50000 * 4);
     CHECK(max_retained <= o.max_retained_bytes);
-    // A leak of r bytes a step grows the second window by 1200 r and the first
-    // by 600 r, thus the difference is 600 r. Memory that settles grows the
-    // first window only. What a sample can hold and free later is the hub's
-    // retained data (max_retained_bytes) and the snapshots that the viewer's
-    // inbox holds between two clears (50 steps of 256 x 256 floats), which the
-    // last sample holds and the allocator can keep resident after a clear.
-    const int64_t grow_short = int64_t(rss_t1) - int64_t(rss_t0);
-    const int64_t grow_long = int64_t(rss_t2) - int64_t(rss_t1);
+    // The scaling rule of the memory checks in its high-water form. The short
+    // window grew max(t1 - t0, 0), and the long window grew t2 - max(t0, t1),
+    // from the highest sample before it. A leak of r bytes a step grows the
+    // long window by 1200 r and the short one by 600 r, thus the difference
+    // is 600 r and fails. Memory that settles grows the short window only, and
+    // memory that the short window released and the long window used again
+    // gives a long growth of at most zero. What a sample can hold and free
+    // later is the hub's retained data (max_retained_bytes) and the snapshots
+    // that the viewer's inbox holds between two clears (50 steps of 256 x 256
+    // floats), which the last sample holds and the allocator can keep
+    // resident after a clear.
+    const int64_t grow_short = std::max<int64_t>(int64_t(rss_t1) - int64_t(rss_t0), 0);
+    const int64_t grow_long = int64_t(rss_t2) - int64_t(std::max(rss_t0, rss_t1));
     const int64_t in_flight = int64_t(o.max_retained_bytes) + 50 * 256 * 256 * int64_t(sizeof(float));
-    MESSAGE("retained bytes peaked at " << max_retained << "; process RSS grew " << grow_short
-                                        << " bytes over steps 300 to 900 and " << grow_long
-                                        << " bytes over steps 900 to 2100");
-    // Measured on 2026-11-28 on Apple silicon over 10 runs: the first window
-    // grew 32 KiB to 384 KiB and the second 32 KiB to 1.7 MiB, against the
-    // 14 MiB in flight.
+    MESSAGE("retained bytes peaked at " << max_retained << "; process RSS " << rss_t0 << ", " << rss_t1
+                                        << ", " << rss_t2 << " bytes: the short window (steps 300 to 900) grew "
+                                        << grow_short << " bytes and the long window (steps 900 to 2100) "
+                                        << grow_long << " bytes");
+    // Measured on 2026-11-28 on Apple silicon over 10 runs, with each window
+    // taken from the sample just before it: the first window grew 32 KiB to
+    // 384 KiB and the second 32 KiB to 1.7 MiB, against the 14 MiB in flight.
+    // In 3 more runs with the high-water form, the short window grew 64 KiB
+    // to 96 KiB and the long window 144 KiB to 160 KiB.
     if (rss_t0) CHECK(grow_long - grow_short <= in_flight);
 }
 

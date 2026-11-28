@@ -759,9 +759,10 @@ test('data view changes and resizes do not grow what the module holds', async ({
   const before = await held();
   await churn(300);
   const after = await held();
-  const grew = [before.heap - start.heap, after.heap - before.heap];
+  // The short window's growth, and the long window's growth from the highest sample before it.
+  const grew = [Math.max(before.heap - start.heap, 0), after.heap - Math.max(start.heap, before.heap)];
   console.log(`${info.project.name} after 300 data view changes and resizes: heap ${before.heap} -> ${after.heap} bytes, textures ${before.textures} -> ${after.textures}, buffers ${before.allocations} -> ${after.allocations}, released views waiting ${after.retired}, textures made ${before.creates} -> ${after.creates}`);
-  console.log(`${info.project.name} heap growth over 150 changes ${grew[0]} bytes, over the next 300 changes ${grew[1]} bytes`);
+  console.log(`${info.project.name} heap samples ${start.heap}, ${before.heap}, ${after.heap} bytes: growth over 150 changes ${grew[0]} bytes, over the next 300 changes ${grew[1]} bytes`);
   // Each change waits until the heatmap's header shows the new shape, which the header takes
   // from the module's texture (facts() in web/wasm/src/main.cpp): one texture at least per change.
   expect(after.creates[0] - before.creates[0]).toBeGreaterThanOrEqual(300);
@@ -769,12 +770,18 @@ test('data view changes and resizes do not grow what the module holds', async ({
   expect(after.textures).toBe(before.textures);
   expect(after.allocations).toBeLessThanOrEqual(before.allocations + 4);
   expect(after.retired).toBe(0);
-  // A leak of r bytes a change grows the long window by 150 r more than the short one, and
-  // settling or a plateau grows them alike. A sample can hold one snapshot more of each view
-  // than another: the 32 x 32 floats of the heatmap and the 4,000 points of the embedding with
-  // their labels, mock_server.py's default (4 bytes each). Six runs on 2026-11-28 (Apple
-  // silicon, M5 Max, webgpu project) grew the heap 3,856 to 4,536 bytes over the 150 changes and
-  // -704 to 784 bytes over the 300 changes.
+  // The scaling rule of the memory checks in its high-water form: the short window grew
+  // max(before - start, 0), the long window grew after - max(start, before), and the check fails
+  // only when the long growth exceeds the short one by more than what is in flight. A leak of
+  // r bytes a change grows the long window by 150 r more than the short one, and fails. Settling
+  // or a plateau grows them alike, and heap that the short window released and the long window
+  // used again gives a long growth of at most zero. A sample can hold one snapshot more of each
+  // view than another: the 32 x 32 floats of the heatmap and the 4,000 points of the embedding
+  // with their labels, mock_server.py's default (4 bytes each). Six runs on 2026-11-28 (Apple
+  // silicon, M5 Max, webgpu project), with each window taken from the sample just before it,
+  // grew the heap 3,856 to 4,536 bytes over the 150 changes and -704 to 784 bytes over the 300
+  // changes. Three more runs with the high-water form grew it 3,344 to 4,864 bytes over the 150
+  // changes and -480 to 32 bytes over the 300 changes.
   const inFlight = 32 * 32 * 4 + 4000 * (3 + 1) * 4;
   expect(grew[1] - grew[0]).toBeLessThanOrEqual(inFlight);
 });

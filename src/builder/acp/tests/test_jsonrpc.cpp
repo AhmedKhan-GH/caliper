@@ -186,11 +186,14 @@ TEST_CASE("calls time out, deadlines move and late answers are reported") {
         done = true;
     });
     REQUIRE(id > 0);
-    // The peer has the call, and the call is still pending.
+    // The peer has the call, and the call is still pending. The reader loop
+    // sweeps expired calls once a poll, thus a wait of two polls gives the
+    // sweep the time to run before the check.
     CHECK(eventually([&] {
         std::lock_guard<std::mutex> lock(m);
         return ids.size() == 2;
     }));
+    std::this_thread::sleep_for(std::chrono::milliseconds(2 * JsonRpcOptions{}.poll_ms));
     CHECK_FALSE(done.load());
     CHECK(a.set_call_timeout(id, 100));
     CHECK(eventually([&] { return done.load(); }));

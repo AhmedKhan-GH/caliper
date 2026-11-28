@@ -112,24 +112,29 @@ def test_no_host_copy_for_mps(win):
             wait_drawn(win)
             return torch.mps.current_allocated_memory(), rss_mb()
 
-        # The scaling rule of the memory checks: the growth over 200 calls against the growth
-        # over the 100 calls before them. A host copy kept per call grows with the calls (4 MB a
-        # call: 400 MB more in the longer window), and settling does not.
+        # The scaling rule of the memory checks in its high-water form (test_net.py,
+        # _growth_check): the 100 calls grew max(r1 - r0, 0), the 200 calls after them grew
+        # r2 - max(r0, r1), and the check fails only when the second growth exceeds the first by
+        # more than what can be in flight. A host copy kept per call grows with the calls (4 MB a
+        # call: 400 MB more in the longer window). Settling does not, and memory that the first
+        # window released and the second used again gives a second growth of at most zero.
         m0, r0 = torch.mps.current_allocated_memory(), rss_mb()
         m1, r1 = calls(100)
         m2, r2 = calls(200)
         taken = win.ring.counters["taken"] - taken0
         info = caliper.view_info(name)
+        short, long = max(r1 - r0, 0.0), r2 - max(r0, r1)
         print(f"{name}: {taken} snapshots, d device mem {(m2 - m0) / 2**20:+.2f} MB, "
-              f"d RSS {r1 - r0:+.2f} MB over 100 calls, {r2 - r1:+.2f} MB over 200, {info['path']}")
+              f"d RSS {short:+.2f} MB over 100 calls, {long:+.2f} MB over 200, {info['path']}")
         assert taken >= 50
         assert m1 == m0 and m2 == m0
         # The frames in flight are the slots of the view's ring (caliper._ring.SnapshotRing),
         # each one frame of the 1024 x 1024 float32 tensor: 12 MB. Measured on Apple silicon on
-        # 2026-11-28 in 5 runs: 0.00 to 0.11 MB over the 100 calls, 0.00 to 0.02 MB over the 200.
+        # 2026-11-28 in 5 runs, with each window taken from the sample just before it: 0.00 to
+        # 0.11 MB over the 100 calls, 0.00 to 0.02 MB over the 200. In 3 more runs with the
+        # high-water form: 0.02 to 0.25 MB over the 100 calls, 0.00 to 0.02 MB over the 200.
         held_mb = win.ring.nslots * x.numel() * x.element_size() / 2**20
-        # A first window that released memory counts as no growth (test_net.py, _growth_check).
-        assert (r2 - r1) - max(r1 - r0, 0.0) <= held_mb, (r1 - r0, r2 - r1, held_mb)
+        assert long - short <= held_mb, (r0, r1, r2, short, long, held_mb)
         assert info["path"] == "compute-imported" and info["imported"] is True
 
 
