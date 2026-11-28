@@ -195,7 +195,7 @@ This pillar covers how a running script's tensors reach a viewer, over shared me
 | [`STR-04`](../roadmap/str-04.md) Live Streaming | Shipped | [Live Streaming](../python/live-streaming.md) | `src/host/live/live_session.mm`, `python/caliper/_ring.py` | `tests/test_live.cpp`, `python/tests/test_live_session.py`, `python/tests/test_ring.py` |
 | [`STR-05`](../roadmap/str-05.md) Network Streaming | Shipped | [Network Streaming](../python/network-streaming.md) | `python/caliper/_net.py`, `python/caliper/_net_native.py`, `src/host/live/live_net_source.mm` | `tests/test_live_net.cpp`, `python/tests/test_net.py` |
 | [`STR-06`](../roadmap/str-06.md) Hub | Shipped | [Hub Setup](../python/hub-setup.md) | `src/host/net/hub.cpp`, `src/host/net/hub_producer.cpp`, `src/host/net/hub_viewer.cpp` | `tests/test_net_hub.cpp`, `tests/hub` |
-| [`STR-07`](../roadmap/str-07.md) Notebooks | Shipped | [Notebook Training Runs](../python/notebook-training-runs.md) | `python/caliper/_widget.py`, `web/src/element.ts` | `python/tests/test_widget.py`, `python/tests/test_live_training_notebook.py` |
+| [`STR-07`](../roadmap/str-07.md) Notebooks | Shipped | [Notebook Training Runs](../python/notebook-training-runs.md) | `python/caliper/_widget.py`, `web/src/element.ts` | `python/tests/test_widget.py` |
 | [`STR-08`](../roadmap/str-08.md) Data Views | Shipped | [Data Views](../python/data-views.md) | `python/caliper/_dataview.py`, `src/host/live/live_views.cpp` | `python/tests/test_dataview.py`, `python/tests/test_net_dataview.py` |
 | [`STR-09`](../roadmap/str-09.md) Wire Protocol 3.2 | Shipped | [Wire Protocol 3.2 (Implementation Status)](../reference/wire-protocol-3-2.md#implementation-status) | `src/host/net/wire_scene.cpp`, `src/host/net/wire_programs.cpp`, `web/src/protocol/scenes.ts` | `tests/test_net_wire_32.cpp`, `python/tests/test_wire_32.py`, `web/test/codec32.spec.ts` |
 | [`STR-10`](../roadmap/str-10.md) caliper.scene | Shipped | [Scene Calls (Primitives)](../python/scene-calls.md#primitives) | `python/caliper/_scene.py`, `python/caliper/_scene_pieces.py` | `python/tests/test_scene_app.py`, `python/tests/test_net_scene.py` |
@@ -398,7 +398,7 @@ This pillar covers the tools for looking inside a model while it runs, GPTScope 
 | [`INT-20`](../roadmap/int-20.md) Interventions and the Inspector | Decision | None | None | None |
 | [`INT-21`](../roadmap/int-21.md) Interventions from the Viewer | Planned | None | None | None |
 | [`INT-22`](../roadmap/int-22.md) nnsight and TransformerLens Adapters | Planned | None | None | None |
-| [`INT-23`](../roadmap/int-23.md) Head Ablation Demo | Shipped | [Pieces (Attention Arc Tower)](../agents/pieces.md#attention-arc-tower) | `src/builder/programs/library/pieces`, `examples` | `tests/demos/test_loss_landscape.py`, `tests/programmable_graphics` |
+| [`INT-23`](../roadmap/int-23.md) Head Ablation Demo | Shipped | [Pieces (Attention Arc Tower)](../agents/pieces.md#attention-arc-tower) | `src/builder/programs/library/pieces`, `examples` | `tests/programmable_graphics` |
 | [`INT-24`](../roadmap/int-24.md) OpenGLlama Applet | Idea | None | None | None |
 | [`INT-25`](../roadmap/int-25.md) Point Picking in ThoughtSpace | Idea | None | None | None |
 | [`INT-26`](../roadmap/int-26.md) Learned Projection in ThoughtSpace | Idea | None | None | None |
@@ -417,7 +417,7 @@ This pillar covers the tools for looking inside a model while it runs, GPTScope 
 | [`INT-39`](../roadmap/int-39.md) Graph Pieces | Shipped | [Model Interpretation (Graph Pieces)](../python/interpretability.md#graph-pieces) | `src/builder/programs/library/pieces/attribution_graph`, `src/builder/programs/library/pieces/token_strip`, `src/builder/programs/library/pieces/logit_bars`, `src/builder/programs/library/pieces/heat_grid` | `tests/interp_pieces/test_contracts.cpp`, `tests/interp_pieces/test_layout.cpp`, `web/test/interp_pieces.spec.ts` |
 | [`INT-40`](../roadmap/int-40.md) Feature Steering | Shipped | [Model Interpretation (Feature Steering)](../python/interpretability.md#feature-steering) | `python/caliper/interp/_output.py`, `python/caliper/interp/_backend.py` | `tests/interp/test_output.py`, `tests/interp/test_service.py` |
 | [`INT-41`](../roadmap/int-41.md) Activation Patching | Shipped | [Model Interpretation (Activation Patching)](../python/interpretability.md#activation-patching) | `python/caliper/interp/_sweep.py` | `tests/interp/test_sweep.py` |
-| [`INT-42`](../roadmap/int-42.md) Inference Runs | Shipped | [Interpretation Tools (Inference Runs)](../agents/interpretation.md#inference-runs) | `python/caliper/interp/_hosted.py`, `python/caliper/interp/_hosted_service.py`, `src/host/runner/model_runner.cpp` | `tests/interp/test_hosted.py`, `src/host/runner/tests/test_inference_entry.py`, `tests/demos/test_circuit_trace.py` |
+| [`INT-42`](../roadmap/int-42.md) Inference Runs | Shipped | [Interpretation Tools (Inference Runs)](../agents/interpretation.md#inference-runs) | `python/caliper/interp/_hosted.py`, `python/caliper/interp/_hosted_service.py`, `src/host/runner/model_runner.cpp` | `tests/interp/test_hosted.py`, `src/host/runner/tests/test_inference_entry.py` |
 
 ## Web and Embedding
 

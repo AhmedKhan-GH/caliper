@@ -155,7 +155,7 @@ endif()
 # The throwing fixture (a raw descriptor that throws across the ABI) backs the
 # crash guard's exception case; it builds into test-applets, not applets.
 add_subdirectory(fixtures/throwing_applet)
-add_dependencies(caliper_tests hello_applet throwing_applet)
+add_dependencies(caliper_tests hello_applet pulse_scope throwing_applet)
 target_compile_definitions(caliper_tests PRIVATE
     CALIPER_TEST_APPLETS_DIR="${CMAKE_BINARY_DIR}/applets"
     CALIPER_TEST_FIXTURES_DIR="${CMAKE_BINARY_DIR}/test-applets"
@@ -711,25 +711,11 @@ target_compile_definitions(caliper_embed_tests PRIVATE
 set_target_properties(caliper_embed_tests PROPERTIES
     CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
 # The offscreen case composites + reads back the hello fixture, so its dylib
-# and manifest must exist in build/applets before the test runs. sine_scope is
+# and manifest must exist in build/applets before the test runs. pulse_scope is
 # the SECOND distinct applet the load-different-id-after-active case swaps to
-# (and, being jobs.v1/device.v1-backed, it exercises the "new applet's init jobs
-# survive the old one's teardown" reorder).
-add_dependencies(caliper_embed_tests hello_applet)
-if(CALIPER_WITH_TORCH)
-    add_dependencies(caliper_embed_tests sine_scope)
-    caliper_test_needs_torch_dlls(caliper_embed_tests)   # sine_scope links libtorch
-else()
-    # Torch-free build: sine_scope (links libtorch) is not built, so the cases
-    # that swap to dev.example.sine-scope compile out (test_embed.cpp guards).
-    target_compile_definitions(caliper_embed_tests PRIVATE CALIPER_TESTS_NO_TORCH_APPLETS=1)
-endif()
-# libtorch rpath only for the torch applets it loads (sine_scope); a torch-free
-# binary carries no reference to the vendored libtorch at all.
-if(APPLE AND CALIPER_WITH_TORCH)
-    set_target_properties(caliper_embed_tests PROPERTIES
-        BUILD_RPATH "${CMAKE_SOURCE_DIR}/third_party/libtorch/lib")
-endif()
+# (and, being jobs.v1/feed.v1-backed and torch-free, it exercises the "new
+# applet's init jobs survive the old one's teardown" reorder in every build).
+add_dependencies(caliper_embed_tests hello_applet pulse_scope)
 add_test(NAME caliper_embed_tests COMMAND caliper_embed_tests)
 # The stores this binary opens go to a work folder, never the user's app-data.
 set_tests_properties(caliper_embed_tests PROPERTIES ENVIRONMENT
@@ -923,6 +909,22 @@ if(NOT WIN32 AND CALIPER_WITH_BUILDER AND _acceptance_python)
         --work "${CMAKE_CURRENT_BINARY_DIR}/piece-path-work"
         --capture-dir "${CMAKE_CURRENT_BINARY_DIR}/piece-path-captures")
     set_tests_properties(caliper_piece_path_acceptance PROPERTIES LABELS "pieces;acceptance" TIMEOUT 300
+        SKIP_RETURN_CODE 77)
+endif()
+
+# The MNIST agent instrument and first-layer filter intervention acceptance test: drives the hidden
+# app through caliper-mcp on examples/mnist/train.py, builds a GPU confusion matrix heatmap and a
+# paginated misclassified digits scene (image_grid@1), switches off one first-layer conv1 filter
+# through caliper.watch's published intervention points, verifies per-digit accuracy shifts and
+# recovers on clear, and saves visible-size before/after captures. Exits 77 when Metal or a
+# required runtime module is unavailable.
+if(NOT WIN32 AND CALIPER_WITH_BUILDER AND _acceptance_python)
+    add_test(NAME caliper_mnist_agent_acceptance COMMAND "${_acceptance_python}"
+        "${CMAKE_SOURCE_DIR}/examples/mnist/agent_instrument.py"
+        "${CMAKE_CURRENT_BINARY_DIR}/mnist-agent-captures"
+        --app "$<TARGET_FILE:caliper>" --mcp "$<TARGET_FILE:caliper-mcp>" --python "${_acceptance_python}"
+        --work "${CMAKE_CURRENT_BINARY_DIR}/mnist-agent-work" --ctest)
+    set_tests_properties(caliper_mnist_agent_acceptance PROPERTIES LABELS "mnist;acceptance" TIMEOUT 300
         SKIP_RETURN_CODE 77)
 endif()
 

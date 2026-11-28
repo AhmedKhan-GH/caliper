@@ -26,6 +26,6 @@ flowchart LR
 
 ## Applet Workflow
 
-A new applet starts from the SDK, which installs as a CMake package. The applet builds in its own folder with `caliper_add_applet()`. Then `caliper check` tests it against the host, and `caliper dev` runs it from the build folder. [First Applet](first-applet.md) walks through this path with the smallest complete example, and [First ML Applet](first-ml-applet.md) adds a small model.
+A new applet starts from the SDK, which installs as a CMake package. The applet builds in its own folder with `caliper_add_applet()`. Then `caliper check` tests it against the host, and `caliper dev` runs it from the build folder. [First Applet](first-applet.md) walks through this path with the smallest complete example.
 
 A compiled applet runs in the host process with the host's privileges, so the host treats it as trusted code. The host limits the harm of a fault. It guards every call into the applet and quarantines an applet that fails. [Trust Model](trust-model.md) describes these checks. When an applet misbehaves, you attach a debugger to the running host, as [Applet Debugging](applet-debugging.md) shows.

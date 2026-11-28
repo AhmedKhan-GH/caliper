@@ -98,6 +98,12 @@ void NetSource::set_state(const std::string& s) {
 }
 
 bool NetSource::connect() {
+    if (cb_.send_frame) {
+        last_rx_ms_ = now_ms();
+        set_state("connecting");
+        on_open();
+        return true;
+    }
     if (!emscripten_websocket_is_supported()) {
         set_state("this browser has no WebSocket");
         return false;
@@ -122,6 +128,10 @@ bool NetSource::connect() {
 }
 
 void NetSource::send(const std::vector<uint8_t>& frame) {
+    if (cb_.send_frame) {
+        if (!closed_) cb_.send_frame(frame.data(), (uint32_t)frame.size());
+        return;
+    }
     if (socket_ <= 0 || closed_) return;
     emscripten_websocket_send_binary(socket_, (void*)frame.data(), (uint32_t)frame.size());
 }
@@ -137,11 +147,11 @@ void NetSource::send_msg(const M& m) {
 }
 
 void NetSource::close(const char* reason) {
-    if (socket_ <= 0 || closed_) return;
+    if ((socket_ <= 0 && !cb_.send_frame) || closed_) return;
     wire::Bye bye;
     bye.reason = reason ? reason : CALIPER_NET_BYE_NORMAL;
     send_msg(bye);
-    emscripten_websocket_close(socket_, CALIPER_NET_CLOSE_NORMAL, "");
+    if (socket_ > 0) emscripten_websocket_close(socket_, CALIPER_NET_CLOSE_NORMAL, "");
     closed_ = true;
     set_state("closed");
 }
@@ -212,7 +222,7 @@ void NetSource::on_message(const uint8_t* data, uint32_t n, bool text) {
     ++messages_;
     bytes_ += n;
     if (text) {   // the protocol is binary only
-        emscripten_websocket_close(socket_, CALIPER_NET_CLOSE_UNSUPPORTED_DATA, "text message");
+        if (socket_ > 0) emscripten_websocket_close(socket_, CALIPER_NET_CLOSE_UNSUPPORTED_DATA, "text message");
         closed_ = true;
         set_state("closed: the server sent a text message");
         return;
@@ -231,7 +241,7 @@ void NetSource::on_message(const uint8_t* data, uint32_t n, bool text) {
     wire::Message msg;
     const wire::DecodeResult r = wire::decode(data, n, &msg);
     if (r.status == wire::DecodeResult::Status::BadFrame) {
-        emscripten_websocket_close(socket_, (unsigned short)r.close_code, r.reason.c_str());
+        if (socket_ > 0) emscripten_websocket_close(socket_, (unsigned short)r.close_code, r.reason.c_str());
         closed_ = true;
         set_state("closed: bad frame (" + r.reason + ")");
         return;
@@ -370,6 +380,11 @@ void NetSource::on_message(const uint8_t* data, uint32_t n, bool text) {
             View* v = by_sub(m.sub);
             if (!v || v->kind != CALIPER_LIVE_KIND_SERIES || v->ring.empty()) return;
             clock_.observe(m.stamp_ns, now_ns());
+            // A seek in a recording replaces the series window (cursor set, or start 0 with fewer points).
+            if (m.cursor || (m.start == 0 && m.total < v->series_end)) {
+                std::fill(v->ring.begin(), v->ring.end(), NAN);
+                v->series_end = 0;
+            }
             // Gaps read as NaN, overlaps replace values: the native source's rule.
             caliper_live::series_ring_apply(v->ring.data(), kSeriesCapacity, &v->series_end, m.start,
                                             (const float*)m.values.data, (uint64_t)m.values.count());

@@ -94,6 +94,7 @@ struct Config {
     bool header = true; // false: the page draws the view's header (no title bars)
     bool compat = false;// a compatibility-mode device
     bool page_feed = false;   // feed "page": no stream, the page feeds the programs
+    bool frame_feed = false;  // feed "frames": no WebSocket, the page feeds wire v3 frames
     std::string scene;        // feed "page": the scene view's description, JSON
 };
 
@@ -1037,7 +1038,7 @@ void start() {
             var f = Module["onReady"];
             if (f) f();
         });
-    } else if (g.cfg.src.empty()) {
+    } else if (g.cfg.src.empty() && !g.cfg.frame_feed) {
         fail("no stream: set caliperConfig.src to the ws:// URL of a Caliper stream");
     } else {
         NetSource::Options o;
@@ -1057,6 +1058,14 @@ void start() {
         cb.resource = [](const caliper_net::wire::Resource& r) {
             if (g.programs) g.programs->on_resource(r);
         };
+        if (g.cfg.frame_feed) {
+            cb.send_frame = [](const uint8_t* data, uint32_t n) {
+                EM_ASM({
+                    var f = Module["onFrame"];
+                    if (f) f(HEAPU8.slice($0, $0 + $1));
+                }, data, (int)n);
+            };
+        }
         g.net = std::make_unique<NetSource>(o, cb);
         g.poll.relative_stamps = true;   // live_clock.h: latency above the fastest message
         g.net->connect();
@@ -1393,6 +1402,13 @@ EMSCRIPTEN_KEEPALIVE int caliper_views_select(const char* json) {
     return 1;
 }
 
+// feed "frames": one wire protocol v3 binary frame from the page (no WebSocket).
+EMSCRIPTEN_KEEPALIVE int caliper_views_feed_frame(const uint8_t* bytes, int n) {
+    if (!g.cfg.frame_feed || !g.net || !bytes || n <= 0) return 0;
+    g.net->on_message(bytes, (uint32_t)n, false);
+    return 1;
+}
+
 EMSCRIPTEN_KEEPALIVE void caliper_views_destroy() {
     if (g.destroyed) return;
     g.destroyed = true;
@@ -1440,6 +1456,7 @@ int main() {
     g.cfg.header = config_string("header") != "false";
     g.cfg.compat = config_string("compat") == "true";
     g.cfg.page_feed = config_string("feed") == "page";
+    g.cfg.frame_feed = config_string("feed") == "frames";
     g.cfg.scene = config_string("scene");
 
     g.instance = wgpuCreateInstance(nullptr);

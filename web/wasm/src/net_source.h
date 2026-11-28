@@ -59,6 +59,8 @@ public:
         std::function<void(const caliper_net::wire::Program& m)> program;
         // RESOURCE: one version of a published resource; its section lives only during the call.
         std::function<void(const caliper_net::wire::Resource& r)> resource;
+        // feed "frames": outgoing wire v3 frames when fed by the page without a WebSocket.
+        std::function<void(const uint8_t* data, uint32_t n)> send_frame;
     };
 
     NetSource(Options opt, Callbacks cb);

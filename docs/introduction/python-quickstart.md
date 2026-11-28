@@ -25,7 +25,7 @@ Calls between the training script, its live session and a viewer, in the order o
 
 Apple Silicon, macOS 14 (Sonoma) or later, Python 3.12 and PyTorch with MPS are necessary. CMake and Ninja on `PATH` are also necessary.
 
-The worked example is `examples/python/train_show.py`. It trains a `TinyCNN` model on synthetic data, with no download, to tell which quadrant of a 28x28 image holds a Gaussian blob. The excerpts below are short versions of it, and the file itself has the full code.
+The canonical example is `examples/mnist/train.py` in `examples/mnist/`. The excerpts below show a minimal training loop with five live views.
 
 The training loop gets five kinds of live view. Two views show a weight matrix as a heatmap and the activations of a convolution as a channel mosaic. Three views show a hidden layer as a point cloud colored by class, the loss as a curve and a weight histogram.
 
@@ -51,7 +51,7 @@ With plain pip, the command `pip install dist/caliper-0.1.0-cp312-cp312-macosx_1
 The wheel contains the `caliper` package, its two native modules and the viewer process, which it installs as `caliper/bin/caliper-viewer`. The `none` mode of the example trains for a few seconds, prints the throughput and the cost of each call, and thus checks the installation.
 
 ```sh
-.venv/bin/python examples/python/train_show.py --mode none --seconds 5
+.venv/bin/python examples/mnist/train.py --mode none --steps 50
 ```
 
 ### Model Setup
@@ -110,7 +110,7 @@ handle.remove()          # takes the hooks off again
 The `app` mode of the example opens the live session before it trains. It waits two minutes by default for the Caliper app, and `--wait` changes the wait.
 
 ```sh
-.venv/bin/python examples/python/train_show.py --mode app --seconds 60
+.venv/bin/python examples/mnist/train.py --mode app
 ```
 
 Start the script, then attach from Caliper:
@@ -137,7 +137,7 @@ sess.wait_attached(15.0)                     # optional: wait for the first hear
 ```
 
 ```sh
-.venv/bin/python examples/python/train_show.py --mode attach --seconds 20
+.venv/bin/python examples/mnist/train.py --mode attach --steps 200
 ```
 
 ## Result

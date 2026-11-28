@@ -105,7 +105,7 @@ Standalone traces without `Output` also publish baseline-only `live:trace.probs`
 
 `run.start` accepts `kind: "inference"` with `model`, `dictionary`, and `prompt` to launch a managed `HostedInference` process (`caliper.interp._hosted`).
 Hosted inference registers parameters `prompt`, `show_more`, `selected_node`, `clamp`, `retrace`, and read-only parameters `clamp.status`, `output.baseline`, `output.steered`, and `output.status`.
-It also registers actions `run`, `apply_clamp`, `reset`, and `generate` (plus `dallas.cell14` through `dallas.cell29` on 26-layer Gemma Scope transcoders).
+It also registers actions `run`, `apply_clamp`, `reset`, and `generate`.
 
 `run.fork` checkpoints the active prompt, feature selection, and intervention specifications into `.json` metadata and starts a branched inference run without copying model weights.
 `trace.status` includes an `inference` dictionary with `prompt_hash`, `interventions_hash`, latest `comparison` top tokens, and `generation` token counts.

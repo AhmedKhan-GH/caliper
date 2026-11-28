@@ -774,13 +774,13 @@ if(CALIPER_BUILD_APPLETS)
     endforeach()
 endif()
 
-# hello is the loader-test fixture (the tests dlopen it), and sine_scope is the
-# second applet caliper_embed_tests swaps to, so they build with the tests. Both
-# are also the tutorial applets the docs embed.
+# hello is the loader-test fixture (the tests dlopen it), and pulse_scope is the
+# second applet caliper_embed_tests and caliper_cli_api swap to, so they build
+# with the tests. Neither links libtorch.
 if(BUILD_TESTS OR CALIPER_BUILD_APPLETS)
     add_subdirectory(examples/hello)
-    if(CALIPER_WITH_TORCH)
-        add_subdirectory(examples/sine_scope)
+    if(NOT TARGET pulse_scope)
+        add_subdirectory(applets/pulse_scope)
     endif()
 endif()
 
@@ -897,15 +897,6 @@ if(BUILD_TESTS)
         add_test(NAME caliper_theme_colors_script COMMAND "${Python3_EXECUTABLE}"
             "${CMAKE_SOURCE_DIR}/scripts/test_check_theme_colors.py")
         set_tests_properties(caliper_theme_colors caliper_theme_colors_script PROPERTIES LABELS "boundary")
-        # caliper_example_dry_run_cleanup: the build-a-dashboard walk-through's dry
-        # runs delete only the temporary folders they made, keep every folder the
-        # caller names on their failure and interrupt paths, and stop what they
-        # started. A stand-in program takes the app's place; it needs POSIX signals.
-        if(NOT WIN32)
-            add_test(NAME caliper_example_dry_run_cleanup COMMAND "${Python3_EXECUTABLE}"
-                "${CMAKE_SOURCE_DIR}/examples/build_a_dashboard/dry_run/test_cleanup.py")
-            set_tests_properties(caliper_example_dry_run_cleanup PROPERTIES LABELS "examples" TIMEOUT 300)
-        endif()
     else()
         message(STATUS "Python 3 not found: caliper_host_names_no_applet is not registered")
     endif()

@@ -1,6 +1,6 @@
 # In-Tree Applets
 
-Three applets live under `applets/`. Two tutorial applets and an embedding example live under `examples/`. Every applet requires `caliper.ui.v1` and `caliper.log.v1`, so the table leaves them out. The manifest format is in [Manifest](manifest.md), and the services are in the [catalog](services/service-catalog.md).
+Three applets live under `applets/`. One tutorial applet and an embedding example live under `examples/`. Every applet requires `caliper.ui.v1` and `caliper.log.v1`, so the table leaves them out. The manifest format is in [Manifest](manifest.md), and the services are in the [catalog](services/service-catalog.md).
 
 The core build compiles no applet. Each applet folder builds on its own against the installed SDK, as [SDK package](sdk-package.md) describes. `CALIPER_BUILD_APPLETS=ON` also builds the `applets/` folders inside the core build.
 
@@ -53,10 +53,9 @@ The applet uses the CPU and ImPlot only, with no tensors and no GPU. A host with
 
 ## Tutorial Applets
 
-These applets live in `examples/`. Each builds on its own against the installed SDK. The core build also builds them with the tests, because the tests load them: Hello always, and SineScope in a build with libtorch.
+This applet lives in `examples/`. It builds on its own against the installed SDK. The core build also builds it with the tests, because the tests load it.
 
 - **Hello** (`dev.caliper.hello`, `examples/hello`). A UI-only applet that shows the framebuffer size and DPI scale. It requires only `caliper.ui.v1` and `caliper.log.v1`, and it is the fixture the loader tests load. `CALIPER_HELLO_CRASH` makes it fault on purpose, to exercise the crash guard. The [first applet tutorial](first-applet.md) builds it.
-- **SineScope** (`dev.example.sine-scope`, `examples/sine_scope`). A two-layer MLP with 32 hidden units learns `sin(x)` live. It shows the loss curve, the prediction against the target and the first-layer weights as a heatmap. It requires `caliper.jobs.v1` and `caliper.device.v1`, and optionally `caliper.tensor_bridge.v1` and `caliper.metrics.v1`. It builds only in a configuration that links libtorch. The [first ML applet tutorial](first-ml-applet.md) builds it.
 
 ## Embedding Example
 

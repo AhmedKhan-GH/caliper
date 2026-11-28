@@ -3,10 +3,10 @@
 
 It starts the hidden app with no script and caliper-mcp as a child over stdio, then follows the steps of
 tests/programmable_graphics/transcript.jsonl in order, each step with its own checks. An agent that holds nothing but
-the MCP tools builds the Attention Arc Tower from the pieces of demos/arc_tower: the arcs of a two-layer model's
+the MCP tools builds the Attention Arc Tower from the pieces of tests/acceptance/arc_tower: the arcs of a two-layer model's
 attention in one scene panel, and a fragment-only attention grid of one head in another, with no built-in primitive
 in either frame, and a chart of the induction score of each head over training. The model runner starts
-examples/python/arc_tower_train.py, which calls `caliper.watch(model, optimizer)` and publishes the scores with
+tests/acceptance/arc_tower_train.py, which calls `caliper.watch(model, optimizer)` and publishes the scores with
 `caliper.series`. The driver then scrubs to the first kept step and the bump of the loss, picks an arc, ablates the
 head that formed, forks the run from a past step with the head ablated, stops a draw that is over its time while
 training goes on, and checks that a foreign spec's piece waits in review.
@@ -282,7 +282,7 @@ def steps(r):
 
     # 5. Check and write the pieces of the demo.
     r.step("check and write both pieces as version 1")
-    pieces = {n: piece_args(ROOT / "demos" / "arc_tower" / n) for n in ("attention_arcs", "attention_grid")}
+    pieces = {n: piece_args(ROOT / "tests" / "acceptance" / "arc_tower" / n) for n in ("attention_arcs", "attention_grid")}
     for n, p in pieces.items():
         ck = r.call("piece_check", {"piece": p})
         if not ck["ok"]:
@@ -623,7 +623,7 @@ def run(a):
     (work / "user").mkdir()
     ws = work / "workspace"
     ws.mkdir()
-    (ws / SCRIPT).write_text((ROOT / "examples" / "python" / SCRIPT).read_text())
+    (ws / SCRIPT).write_text((ROOT / "tests" / "acceptance" / SCRIPT).read_text())
     env.update({"CALIPER_AGENT_OFFLINE": "1", "CALIPER_HIDDEN": "1", "CALIPER_DATA_DIR": str(work / "data"),
                 "CALIPER_USER_APPLETS_DIR": str(work / "user"), "CALIPER_WINDOW_SIZE": "1280x800",
                 "CALIPER_WORKSPACE": str(ws), "CALIPER_RUN_PYTHON": a.python})

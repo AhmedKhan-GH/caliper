@@ -79,7 +79,7 @@ CMAKE_OSX_DEPLOYMENT_TARGET = "14.0"
 CALIPER_WITH_BUILDER = "OFF"
 
 [tool.pytest.ini_options]
-testpaths = ["python/tests", "tests/demos", "tests/interp"]
+testpaths = ["python/tests", "tests/interp"]
 markers = [
     "local_model: requires a downloaded model and never runs in CI",
     "gpu: requires an explicit accelerator test run",

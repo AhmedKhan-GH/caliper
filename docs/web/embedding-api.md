@@ -302,7 +302,7 @@ In a torch-free build the core carries no libtorch at all. The libtorch row of t
 
 | Option | Default | Effect |
 |---|---|---|
-| `CALIPER_WITH_TORCH` | ON | OFF skips the PyTorch dependency block (no download, no `find_package(Torch)`) and every target that links torch: the `applets/*` tree (forces `CALIPER_BUILD_APPLETS` OFF), `examples/sine_scope`, `caliper_torch_tests`, the applet learning-core tests and the MSVC torch-DLL copy. `caliper_embed_tests` then compiles with `CALIPER_TESTS_NO_TORCH_APPLETS=1`, so its sine-scope swap cases compile out, and no binary carries a libtorch rpath. |
+| `CALIPER_WITH_TORCH` | ON | OFF skips the PyTorch dependency block (no download, no `find_package(Torch)`) and every target that links torch: the `applets/*` tree (forces `CALIPER_BUILD_APPLETS` OFF), `caliper_torch_tests`, the applet learning-core tests and the MSVC torch-DLL copy. No binary carries a libtorch rpath. |
 | `CALIPER_BUILD_APPLETS` | OFF | Also builds the `applets/*` folders inside the core build. Each also builds on its own against the installed SDK. Forced OFF when torch is OFF, because most applets link libtorch. |
 | `CALIPER_BUILD_PYTHON` | OFF | Adds the nanobind extensions `caliper._native` and `caliper._live`. The wheel build sets it ON. |
 | `CALIPER_WITH_SLANG` | OFF | Configure the vendored slang (SystemVerilog) library. |

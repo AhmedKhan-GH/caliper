@@ -1,0 +1,148 @@
+# Library piece image_grid@1: a paginated grid of 2-D images with predicted and true labels.
+name = "image_grid"
+version = 1
+description = "A paginated grid of 2-D images with optional error filtering, predicted labels, and tile picks"
+imports = ["pick@1", "camera@1"]
+
+[[inputs]]
+name = "images"
+kind = "tensor"
+dtype = "f32"
+rank_min = 3
+rank_max = 4
+title = "Images (N, H, W) or (N, 1, H, W) in [0, 1] times scale"
+
+[[inputs]]
+name = "targets"
+kind = "tensor"
+dtype = "i32"
+rank_min = 1
+rank_max = 1
+title = "True Class Indices (N)"
+
+[[inputs]]
+name = "logits"
+kind = "tensor"
+dtype = "f32"
+rank_min = 2
+rank_max = 2
+title = "Model Logits or Probabilities (N, C)"
+
+[[params]]
+name = "only_errors"
+type = "u32"
+default = 1
+min = 0
+max = 1
+title = "Show Only Misclassified Samples (1 errors only, 0 all)"
+
+[[params]]
+name = "page"
+type = "u32"
+default = 0
+min = 0
+max = 64
+title = "Page Index"
+
+[[params]]
+name = "cols"
+type = "u32"
+default = 4
+min = 1
+max = 8
+title = "Columns Per Page"
+
+[[params]]
+name = "rows"
+type = "u32"
+default = 4
+min = 1
+max = 8
+title = "Rows Per Page"
+
+[[params]]
+name = "scale"
+type = "f32"
+default = 1.0
+min = 0.0001
+max = 1000.0
+title = "Pixel Intensity Scale"
+
+[[resources]]
+id = "tiles"
+kind = "buffer"
+struct = "Tile"
+fields = ["rect: vec4<f32>", "uv_rect: vec4<f32>", "sample_index: u32", "expected: i32", "predicted: i32", "wrong: u32"]
+count = 64
+counted = true
+
+[[resources]]
+id = "atlas"
+kind = "texture"
+format = "rgba8unorm"
+width = 512
+height = 512
+texels = 262144
+
+[[resources]]
+id = "labels"
+kind = "buffer"
+struct = "Label"
+fields = ["position: vec4<f32>", "string: u32"]
+count = 64
+counted = false
+
+[[resources]]
+id = "strings"
+kind = "buffer"
+struct = "Text"
+fields = ["a: vec4<u32>", "b: vec4<u32>", "c: vec4<u32>", "d: vec4<u32>"]
+count = 64
+counted = false
+
+[[resources]]
+id = "summary"
+kind = "buffer"
+struct = "Summary"
+fields = ["total: u32", "errors: u32", "shown: u32", "page: u32"]
+count = 1
+counted = false
+
+[[resources]]
+id = "selected"
+kind = "buffer"
+element = "u32"
+count = 64
+publish = false
+
+[derive]
+time_ms = 50
+memory_mb = 64
+
+[[derive.passes]]
+entry = "select_tiles"
+workgroups = [1, 1, 1]
+writes = ["tiles", "labels", "strings", "summary", "selected"]
+
+[[derive.passes]]
+entry = "copy_atlas"
+workgroups = [64, 1, 1]
+writes = ["atlas"]
+
+[draw]
+camera = "pan_zoom"
+frame_ms = 4
+memory_mb = 64
+pick = { resource = "tiles", fields = ["sample_index", "expected", "predicted", "wrong"] }
+text = { anchors = "labels", position = "position", string = "string", strings_from = "strings", align = "center" }
+
+[[draw.passes]]
+kind = "render"
+vertex = "tile_vs"
+fragment = "tile_fs"
+instances = "tiles"
+vertices = 6
+topology = "triangle_list"
+blend = "alpha"
+depth = "none"
+pick = true

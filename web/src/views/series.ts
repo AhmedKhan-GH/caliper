@@ -48,6 +48,11 @@ export class Ring {
     if (this.first < this.end - this.cap) this.first = this.end - this.cap;
   }
 
+  reset(): void {
+    this.end = 0;
+    this.first = Infinity;
+  }
+
   get(i: number): number {
     return i >= this.lo && i < this.end ? this.buf[i % this.cap] : NaN;
   }
@@ -151,6 +156,9 @@ export class SeriesView implements LiveView {
   series(d: SeriesMsg, curve: number): void {
     const ring = this.curves[curve];
     if (!ring) return;
+    if (d.cursor !== undefined || (d.start === 0 && d.total < ring.end)) {
+      ring.reset();
+    }
     ring.write(d.start, d.values);
     const last = ring.get(ring.end - 1);
     this.host.info(seriesInfo(ring.end, last));

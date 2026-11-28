@@ -566,7 +566,6 @@ INT-23:
   - src/builder/programs/library/pieces
   - examples
   tests:
-  - tests/demos/test_loss_landscape.py
   - tests/programmable_graphics
 INT-27:
   code:
@@ -640,7 +639,6 @@ INT-42:
   tests:
   - tests/interp/test_hosted.py
   - src/host/runner/tests/test_inference_entry.py
-  - tests/demos/test_circuit_trace.py
 PLT-01:
   code:
   - src/host/renderer/metal_renderer.mm
@@ -939,7 +937,6 @@ STR-07:
   - web/src/element.ts
   tests:
   - python/tests/test_widget.py
-  - python/tests/test_live_training_notebook.py
 STR-08:
   code:
   - python/caliper/_dataview.py

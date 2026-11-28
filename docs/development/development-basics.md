@@ -47,7 +47,7 @@ examples/hello/
 - **Manifest**: It holds the reverse-DNS `id`, the name, the version, a summary and the lists of required and optional services. The `id` and `version` must be byte-identical to the descriptor in the `CALIPER_APPLET` call. If they differ, the loader refuses the applet and lists it with the reason. See [Manifest](../applets/manifest.md).
 - **Macro**: `CALIPER_APPLET(...)` at the bottom of the `.cpp` generates the epoch-3 C ABI glue. This is the descriptor and an exception wall on every entry point. You never write `extern "C"`.
 - **Class**: It has three lifecycle methods. `on_init(Host&)` probes the services. Assert the required ones and let the optional ones degrade. `on_frame(const Frame&)` runs on the frame thread every frame. It submits ImGui windows and reads state that workers publish. `on_cleanup()` cancels jobs, waits for them with a bound, releases textures and returns.
-- **CMakeLists**: Copy the one from `examples/hello/` for a UI-only applet. Copy the one from `examples/sine_scope/` for an ML applet, which adds `TORCH`. Edit only the project and target name, the source files and the manifest filename.
+- **CMakeLists**: Copy the one from `examples/hello/` for a UI-only applet, and add `TORCH` to `caliper_add_applet()` for an ML applet. Edit only the project and target name, the source files and the manifest filename.
 
 ### Smallest Complete Applet
 
@@ -65,7 +65,7 @@ These listings are the files of `examples/hello/`, embedded verbatim. The folder
 --8<-- "examples/hello/CMakeLists.txt"
 ```
 
-The applet has no `main`, no window, no GL or Metal code, no ImGui context and no event loop. The macro and the host supply them. To add ML, add a `jobs.v1` training job and the bridge, as [Your first ML applet](../applets/first-ml-applet.md) shows.
+The applet has no `main`, no window, no GL or Metal code, no ImGui context and no event loop. The macro and the host supply them. To add ML, add a `jobs.v1` training job and the bridge, as [In-Tree Applets](../applets/in-tree-applets.md) shows.
 
 ## Development Loop
 
@@ -192,7 +192,7 @@ A suite that uses them ends with `CALIPER_GPU_TEST_MAIN()` in place of `DOCTEST_
 
 ## Applets in This Repository
 
-`caliper_add_applet()` is the same file in the core build and in the SDK package. The core build compiles no applets unless `CALIPER_BUILD_APPLETS=ON`. `examples/hello` builds with the tests as the loader-test fixture. `examples/sine_scope` builds with the tests in a build with libtorch.
+`caliper_add_applet()` is the same file in the core build and in the SDK package. The core build compiles no applets unless `CALIPER_BUILD_APPLETS=ON`. `examples/hello` and `applets/pulse_scope` build with the tests as the loader and swap fixtures.
 
 Each applet folder under `applets/` and `examples/` also builds alone against the installed SDK. `scripts/build_applets_against_sdk.sh <core build folder> <work folder> [applet folder...]` installs the SDK and builds them that way, as CI does.
 

@@ -2,7 +2,6 @@ nav:
   - index.md
   - Tutorials:
       - first-applet.md
-      - first-ml-applet.md
   - Guides:
       - applet-debugging.md
       - shader-authoring.md

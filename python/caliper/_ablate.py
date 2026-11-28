@@ -47,6 +47,7 @@ MAX_SOURCE_ENTRIES = 64
 
 _HEAD_COUNTS = ("num_heads", "n_heads", "n_head")
 _PROJECTIONS = ("out_proj", "o_proj", "c_proj", "proj")
+_MAX_CHANNELS = 256
 _TL_PROBES = (
     ("resid_pre", "hook_resid_pre"),
     ("attn_out", "hook_attn_out"),
@@ -183,6 +184,16 @@ def _tl_hook_z(module, heads: int):
     return None
 
 
+def _conv_channels(module) -> int:
+    """Return output channel count of a bounded ConvNd module, else 0."""
+    import torch
+    if isinstance(module, torch.nn.modules.conv._ConvNd):
+        channels = getattr(module, "out_channels", 0)
+        if isinstance(channels, int) and not isinstance(channels, bool) and 1 < channels <= _MAX_CHANNELS:
+            return channels
+    return 0
+
+
 def _type_name(module) -> str:
     return type(module).__name__[:63] or "Module"
 
@@ -237,6 +248,11 @@ def points(model) -> list:
         if _projection(mod, heads) is not None or _tl_hook_z(mod, heads) is not None:
             out += [{"point": f"{name}{HEAD_SEPARATOR}{h}", "kind": "head", "module": name, "head": h,
                      "type": _type_name(mod), "shape": None} for h in range(heads)]
+        else:
+            channels = _conv_channels(mod)
+            if channels > 0:
+                out += [{"point": f"{name}{HEAD_SEPARATOR}{c}", "kind": "module", "module": name, "head": None,
+                         "type": _type_name(mod), "shape": None} for c in range(channels)]
     return semantic + out
 
 
@@ -263,14 +279,16 @@ def _find(model, point: str):
     if not head.isdigit() or (len(head) > 1 and head[0] == "0"):
         raise KeyError(point)
     h, heads = int(head), _head_count(mod)
-    if h >= heads:
-        raise KeyError(point)
-    proj = _projection(mod, heads)
-    if proj is not None:
-        return proj, ("linear", h, proj.in_features // heads, proj.in_features)
-    hook_z = _tl_hook_z(mod, heads)
-    if hook_z is not None:
-        return hook_z, ("hook_z", h, heads)
+    if h < heads:
+        proj = _projection(mod, heads)
+        if proj is not None:
+            return proj, ("linear", h, proj.in_features // heads, proj.in_features)
+        hook_z = _tl_hook_z(mod, heads)
+        if hook_z is not None:
+            return hook_z, ("hook_z", h, heads)
+    channels = _conv_channels(mod)
+    if h < channels:
+        return mod, ("channel", h, channels)
     raise KeyError(point)
 
 
@@ -340,6 +358,14 @@ class Ablation:
             _, h, heads = mask_key
             mask = torch.zeros((heads, 1), dtype=torch.bool, device=device)
             mask[h, 0] = True
+        elif mask_key[0] == "channel":
+            _, c, channels, ndim, axis = mask_key
+            shape = [1] * ndim
+            shape[axis] = channels
+            mask = torch.zeros(shape, dtype=torch.bool, device=device)
+            idx = [0] * ndim
+            idx[axis] = c
+            mask[tuple(idx)] = True
         else:
             _, h, width, features = mask_key
             mask = torch.zeros(features, dtype=torch.bool, device=device)
@@ -395,6 +421,29 @@ class Ablation:
         return hook
 
 
+    def _channel_forward(self, c: int, channels: int):
+        def hook(module, args, output):
+            if self._suspended():
+                return None
+            self.calls += 1
+            try:
+                expected_batched = len(getattr(module, "kernel_size", (1, 1))) + 2
+                if output.ndim == expected_batched and output.shape[1] == channels:
+                    axis = 1
+                elif output.ndim == expected_batched - 1 and output.shape[0] == channels:
+                    axis = 0
+                else:
+                    raise ValueError(
+                        f"conv output has shape {tuple(output.shape)}, expected {channels} channels"
+                    )
+                return self._zero(output, ("channel", c, channels, output.ndim, axis))
+            except Exception as e:
+                self._failed(e)
+                return None
+
+        return hook
+
+
 def ablate(model, point: str):
     """Ablate one point of ``model`` and return the :class:`Ablation` remover."""
     target, head_spec = _find(model, point)
@@ -404,6 +453,9 @@ def ablate(model, point: str):
     elif head_spec[0] == "hook_z":
         _, h, heads = head_spec
         a._handle = target.register_forward_hook(a._hook_z_forward(h, heads))
+    elif head_spec[0] == "channel":
+        _, c, channels = head_spec
+        a._handle = target.register_forward_hook(a._channel_forward(c, channels))
     else:
         _, h, width, features = head_spec
         a._handle = target.register_forward_pre_hook(a._pre_hook(h, width, features))
@@ -664,6 +716,8 @@ class InterventionExecutor:
         except KeyError:
             raise InterventionError("unknown intervention point", "intervene.unknown_point") from None
         if head_spec is not None:
+            if head_spec[0] == "channel":
+                raise InterventionError("channel points support ablate only")
             raise InterventionError("head points support ablate only")
         shape = _shapes.get(self.model, {}).get(point)
         cfg = getattr(self.model, "cfg", None)

@@ -8,7 +8,7 @@
 // answer of every leaf of its layout (panels/<id>.json), as the app gave them to a viewer:
 // the series as their lines, the scene panels' instances of pieces with the newest version of
 // each published resource, and the control's state. <pieces> holds the workspace pieces that
-// the spec pins (demos/arc_tower). The tool draws the spec with the app's spec runtime into an
+// the spec pins (tests/acceptance/arc_tower). The tool draws the spec with the app's spec runtime into an
 // offscreen canvas on Metal, from that data only: the series through a panel source that gives
 // the recorded lines as the window sources' tensors, the programs through the app's draw host
 // with the recorded resources in a step history. No script runs and nothing trains.

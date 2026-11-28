@@ -115,7 +115,7 @@ from ipywidgets import VBox
 VBox([caliper.controls(), caliper.widget("loss"), caliper.widget("embedding")])
 ```
 
-The viewer page that the link of `caliper.serve()` opens shows the same panel above its views. The demo notebook `live_training.ipynb` uses every control in this guide.
+The viewer page that the link of `caliper.serve()` opens shows the same panel above its views. The canonical notebook `examples/mnist/train.ipynb` uses the controls in this guide.
 
 ## Security
 

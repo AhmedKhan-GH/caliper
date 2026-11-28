@@ -87,16 +87,8 @@ may wait for your approval.
 
 **Your own program** starts `caliper-mcp` as a child and writes one JSON-RPC message per line to its standard input.
 The messages are `initialize` (revision 2025-11-25 or 2025-06-18), `notifications/initialized`, then `tools/list` and
-`tools/call`. The server also serves revision 2026-07-28, which has no handshake.
-`examples/build_a_dashboard/outside_agent.py` does this in Python with the standard library only:
-
-```sh
-python3 examples/build_a_dashboard/outside_agent.py --mcp /path/to/caliper-mcp
-```
-
-The script lists the tools, lists the catalog, reads the open spec and adds a series panel of the learning rate beside
-the first panel. The call answers once you approve the card in the app. With `--model <name>`, a model that Ollama
-serves on this machine chooses the calls instead, through the chat API of Ollama with a capped context.
+`tools/call`. The server also serves revision 2026-07-28, which has no handshake. See `examples/mnist/` for the MNIST
+example and agent workflow.
 
 ## Tools
 

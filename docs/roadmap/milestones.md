@@ -14,7 +14,7 @@ This page lists the milestones of Caliper's current trajectory, Agent-Built Play
 | M5, Programmable Graphics | Pieces with a derive half in the run and a draw half in the viewer, written by the agent, in the app and the browser | Done | [#34](https://github.com/AhmedKhan-GH/caliper/pull/34) |
 | M6, Graphics Consolidation | Library scene pieces, typed resources, dashboard parity, and removal of the built-in draw route | Done | [#42](https://github.com/AhmedKhan-GH/caliper/pull/42) |
 | M7, Derivation Catalog | Model probes, SAELens and circuit-tracer dictionaries, example indexes, and attribution graphs as library pieces and commands | Done | [#45](https://github.com/AhmedKhan-GH/caliper/pull/45), [#51](https://github.com/AhmedKhan-GH/caliper/pull/51) |
-| M8, Steering and Intervention | Feature steering, scaling, clamping, and activation patching on TransformerLens models, with the Gemma 2 2B Circuit Trace instrument | Done | [#51](https://github.com/AhmedKhan-GH/caliper/pull/51) |
+| M8, Steering and Intervention | Feature steering, scaling, clamping, and activation patching on TransformerLens models, with an interactive circuit trace instrument | Done | [#51](https://github.com/AhmedKhan-GH/caliper/pull/51) |
 | M9, Saved and Editable Instruments | Saved instruments with their pieces, and the node editor | Planned | |
 | M10, Browser Parity | The rest of an instrument in the browser | Planned | |
 | M11, Training Debugger | First acceptance demo | Planned | |
