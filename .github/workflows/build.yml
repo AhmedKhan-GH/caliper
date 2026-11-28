@@ -466,7 +466,7 @@ jobs:
           name: macos-ctest-log
           path: cmake-build-release/Testing/Temporary/LastTest.log
           if-no-files-found: ignore
-      # Install the SDK and build hello, sine_scope and every scope against it
+      # Install the SDK and build hello and every scope against it
       # in their own build folders, as a developer outside this repository would.
       - run: scripts/build_applets_against_sdk.sh cmake-build-release "$RUNNER_TEMP/applets"
         env:
@@ -539,7 +539,7 @@ jobs:
       - run: >-
           scripts/build_applets_against_sdk.sh cmake-build-release
           "$(cygpath -m "$RUNNER_TEMP")/applets"
-          examples/hello examples/sine_scope applets/pulse_scope
+          examples/hello applets/pulse_scope
         env:
           CMAKE_GENERATOR: Ninja
           CMAKE_C_COMPILER_LAUNCHER: sccache

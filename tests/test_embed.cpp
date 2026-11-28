@@ -297,9 +297,6 @@ TEST_CASE("embed/reload: same-id load is a clean restart (on_cleanup then on_ini
     caliper_core_shutdown(core);
 }
 
-#ifndef CALIPER_TESTS_NO_TORCH_APPLETS
-// Needs dev.example.sine-scope, which links libtorch — compiled out of the
-// torch-free build (tests/CMakeLists.txt defines CALIPER_TESTS_NO_TORCH_APPLETS).
 TEST_CASE("embed/reload: load a different id after active swaps applets") {
     CaliperCoreDesc d = base_desc();
     CaliperCore* core = caliper_core_create(&d);
@@ -317,27 +314,26 @@ TEST_CASE("embed/reload: load a different id after active swaps applets") {
     REQUIRE(caliper_core_load_applet(core, "dev.caliper.hello") == 1);
     caliper_core_frame(core);
 
-    // Swap to a DIFFERENT applet: hello is torn down (on_cleanup) and sine-scope
-    // launched. sine-scope schedules init jobs — under the previous cancel-
-    // after-launch order those were killed at birth; teardown-first lets them
-    // survive.
+    // Swap to a DIFFERENT applet: hello is torn down (on_cleanup) and pulse-scope
+    // launched. pulse-scope schedules init jobs when channels exist — under the
+    // previous cancel-after-launch order those were killed at birth; teardown-first
+    // lets them survive.
     std::string log;
     {
         StderrTap tap;
-        REQUIRE(caliper_core_load_applet(core, "dev.example.sine-scope") == 1);
+        REQUIRE(caliper_core_load_applet(core, "dev.caliper.pulse-scope") == 1);
         log = tap.drain();
     }
     CHECK(log.find("hello.on_cleanup") != std::string::npos);   // old torn down
 
-    for (int i = 0; i < 8; ++i) caliper_core_frame(core);        // sine runs
+    for (int i = 0; i < 8; ++i) caliper_core_frame(core);        // pulse runs
     std::vector<uint8_t> px((size_t)256 * 256 * 4, 0);
     REQUIRE(caliper_core_read_pixels(core, px.data(), 256 * 4) == 1);
-    CHECK(bright_pixels(px) > 50);                               // sine rasterized
+    CHECK(bright_pixels(px) > 50);                               // pulse rasterized
 
     caliper_core_unload_applet(core);
     caliper_core_shutdown(core);
 }
-#endif  // CALIPER_TESTS_NO_TORCH_APPLETS
 
 TEST_CASE("embed/reload: a failed load after an active applet leaves NO applet") {
     g_fault_count = 0;
@@ -376,17 +372,14 @@ TEST_CASE("embed/reload: a failed load after an active applet leaves NO applet")
     CHECK(bright_pixels(px) < 10);
     CHECK(g_fault_count == 0);
 
-#ifndef CALIPER_TESTS_NO_TORCH_APPLETS
     // The core is still fully usable — a fresh load of a DIFFERENT applet
     // succeeds and renders. (The init-failed hello entry is itself now marked
     // Failed by the loader and can't be relaunched — existing loader policy,
-    // orthogonal to the embed teardown-order fix under test here.) sine-scope
-    // links libtorch, so this half is compiled out of the torch-free build.
-    REQUIRE(caliper_core_load_applet(core, "dev.example.sine-scope") == 1);
+    // orthogonal to the embed teardown-order fix under test here.)
+    REQUIRE(caliper_core_load_applet(core, "dev.caliper.pulse-scope") == 1);
     for (int i = 0; i < 8; ++i) caliper_core_frame(core);
     REQUIRE(caliper_core_read_pixels(core, px.data(), 128 * 4) == 1);
     CHECK(bright_pixels(px) > 50);
-#endif
 
     caliper_core_unload_applet(core);
     caliper_core_shutdown(core);

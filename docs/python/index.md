@@ -31,4 +31,4 @@ Data views let a viewer choose which slice or reduction of a tensor travels. The
 
 ## Usual Workflow
 
-A reader starts with [Notebook Training Runs](notebook-training-runs.md) or the [Python Quickstart](../introduction/python-quickstart.md). [Loss Landscape](loss-landscape.md) is a second notebook, which streams the loss surface around the weights of a model as a 3-D scene. Then the reader attaches a viewer to a running script, as [Script Attachment](script-attachment.md) describes. [Live Streaming](live-streaming.md) and [Network Streaming](network-streaming.md) explain why the script keeps its speed.
+A reader starts with [Notebook Training Runs](notebook-training-runs.md) or the [Python Quickstart](../introduction/python-quickstart.md). Then the reader attaches a viewer to a running script, as [Script Attachment](script-attachment.md) describes. [Live Streaming](live-streaming.md) and [Network Streaming](network-streaming.md) explain why the script keeps its speed.

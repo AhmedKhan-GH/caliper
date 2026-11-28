@@ -398,7 +398,7 @@ This pillar covers the tools for looking inside a model while it runs, GPTScope 
 | [`INT-20`](../roadmap/int-20.md) Interventions and the Inspector | Decision | None | None | None |
 | [`INT-21`](../roadmap/int-21.md) Interventions from the Viewer | Planned | None | None | None |
 | [`INT-22`](../roadmap/int-22.md) nnsight and TransformerLens Adapters | Planned | None | None | None |
-| [`INT-23`](../roadmap/int-23.md) Head Ablation Demo | Shipped | [Pieces (Attention Arc Tower)](../agents/pieces.md#attention-arc-tower) | `src/builder/programs/library/pieces`, `examples` | `tests/demos/test_loss_landscape.py`, `tests/programmable_graphics` |
+| [`INT-23`](../roadmap/int-23.md) Head Ablation Demo | Shipped | [Pieces (Attention Arc Tower)](../agents/pieces.md#attention-arc-tower) | `src/builder/programs/library/pieces`, `examples` | `tests/programmable_graphics` |
 | [`INT-24`](../roadmap/int-24.md) OpenGLlama Applet | Idea | None | None | None |
 | [`INT-25`](../roadmap/int-25.md) Point Picking in ThoughtSpace | Idea | None | None | None |
 | [`INT-26`](../roadmap/int-26.md) Learned Projection in ThoughtSpace | Idea | None | None | None |

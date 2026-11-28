@@ -2,7 +2,6 @@ nav:
   - index.md
   - Tutorials:
       - notebook-training-runs.md
-      - loss-landscape.md
   - Guides:
       - script-attachment.md
       - stream-links.md

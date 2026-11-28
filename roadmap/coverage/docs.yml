@@ -190,7 +190,7 @@ entries:
   - COR-13
   - STR-42
 - page: docs/applets/in-tree-applets.md#tutorial-applets
-  item: Hello and SineScope are the tutorial applets under examples/.
+  item: Hello is the tutorial applet under examples/.
   ids:
   - COR-13
 - page: docs/applets/in-tree-applets.md#embedding-example
@@ -961,12 +961,6 @@ entries:
   - COR-05
   - COR-04
   - COR-51
-- page: docs/applets/first-ml-applet.md
-  item: Your first ML applet builds SineScope from the state spine to a bridged tensor.
-  ids:
-  - COR-13
-  - COR-46
-  - REN-64
 - page: docs/introduction/python-quickstart.md
   item: Watch a PyTorch training run live with caliper.show, in the app, in caliper-viewer and in an own
     window.

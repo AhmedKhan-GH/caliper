@@ -2,7 +2,7 @@
 
 *(New here? [Development basics](../development/development-basics.md) explains what you write and what the host provides, and where every library comes from.)*
 
-This page walks through the **hello** applet, the smallest complete Caliper applet on ABI epoch 3. It has one manifest, one macro, and three lifecycle methods. For a small ML example, continue to `examples/sine_scope/`. No single example covers the whole service catalog.
+This page walks through the **hello** applet, the smallest complete Caliper applet on ABI epoch 3. It has one manifest, one macro, and three lifecycle methods. For in-tree ML applets, see [In-Tree Applets](in-tree-applets.md). No single example covers the whole service catalog.
 
 ```mermaid
 flowchart LR

@@ -6,7 +6,7 @@
 #
 #   scripts/build_applets_against_sdk.sh <core build folder> <work folder> [applet folder...]
 #
-# Without applet folders it builds examples/hello, examples/sine_scope and
+# Without applet folders it builds examples/hello and
 # every applets/* folder that has a CMakeLists.txt. The SDK goes to
 # <work folder>/caliper-sdk and the builds to <work folder>/build/<name>.
 # CMAKE_GENERATOR and CMAKE_BUILD_TYPE from the environment are honoured
@@ -26,7 +26,7 @@ shift 2
 root="$(cd "$(dirname "$0")/.." && { pwd -W 2>/dev/null || pwd; })"
 
 if [ $# -eq 0 ]; then
-    set -- "$root/examples/hello" "$root/examples/sine_scope"
+    set -- "$root/examples/hello"
     for dir in "$root"/applets/*/; do
         [ -f "$dir/CMakeLists.txt" ] && set -- "$@" "${dir%/}"
     done

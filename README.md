@@ -97,7 +97,7 @@ The `release-notorch` preset builds the host without LibTorch in `cmake-build-no
 | `CALIPER_WITH_SLANG` | OFF | Configure the vendored slang library |
 | `CALIPER_WGSL_FROM_SOURCE` | OFF | Build the runtime WGSL compiler from source with cargo. The `release`, `debug`, and `release-notorch` presets set it ON unless `CALIPER_WGSL_LIBRARY` is set. |
 | `CALIPER_BUILD_VIEWER` | ON | Build `caliper_viewer`, the live viewer process (macOS) |
-| `CALIPER_BUILD_EXAMPLES` | ON | Build the embedding example, `examples/embed_host`. The tutorial applets `hello` and `sine_scope` build with the tests instead. |
+| `CALIPER_BUILD_EXAMPLES` | ON | Build the embedding example, `examples/embed_host`. The tutorial applet `hello` builds with the tests instead. |
 | `CALIPER_WITH_BUILDER` | ON, but OFF on Windows | Build the builder under `src/builder/` (its libraries, `caliper-mcp`, `caliper-acp-harness`, `caliper-builder-host` and their tests) and link DuckDB's json extension into the host's DuckDB. The Python wheel sets it OFF. |
 | `CALIPER_STATIC_CRT` | OFF | Use the static MSVC runtime (`/MT`) instead of the dynamic one |
 
@@ -157,7 +157,7 @@ caliper/
 ├── sdk/                        # The applet SDK: headers, CMake package, test fixtures
 ├── include/caliper/            # The embedding and live-session C headers
 ├── applets/                    # First-party applets, each built against the SDK
-├── examples/                   # hello, sine_scope, embed_host and the Python example
+├── examples/                   # hello, embed_host and the MNIST example
 ├── python/                     # The caliper Python package and its extension
 ├── tests/                      # Test suites
 ├── scripts/                    # Helper scripts

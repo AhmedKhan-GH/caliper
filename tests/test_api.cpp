@@ -1244,7 +1244,7 @@ TEST_CASE("api: caliper shot --api serves every endpoint as a process and stops 
         return std::string("absent");
     };
     CHECK(status_of("dev.caliper.hello") == "ACTIVE");
-    CHECK(status_of("dev.example.sine-scope") == "READY");
+    CHECK(status_of("dev.caliper.pulse-scope") == "READY");
 
     // capture: a PNG of the shot's size that is not one flat colour.
     auto capture = [&] {
@@ -1268,14 +1268,14 @@ TEST_CASE("api: caliper shot --api serves every endpoint as a process and stops 
     capture();
 
     // launch: another applet, the same one again, an unknown one.
-    Response launched = http(port, "POST", "/v0/applets/dev.example.sine-scope/launch", bearer(token));
+    Response launched = http(port, "POST", "/v0/applets/dev.caliper.pulse-scope/launch", bearer(token));
     REQUIRE_MESSAGE(launched.status == 200, launched.body);
     const Json lj = parse_json(launched.body);
-    CHECK(lj.find("id")->as_string() == "dev.example.sine-scope");
+    CHECK(lj.find("id")->as_string() == "dev.caliper.pulse-scope");
     CHECK_FALSE(lj.find("already_open")->as_bool());
-    CHECK(status_of("dev.example.sine-scope") == "ACTIVE");
+    CHECK(status_of("dev.caliper.pulse-scope") == "ACTIVE");
     CHECK(status_of("dev.caliper.hello") == "READY");
-    Response again = http(port, "POST", "/v0/applets/dev.example.sine-scope/launch", bearer(token));
+    Response again = http(port, "POST", "/v0/applets/dev.caliper.pulse-scope/launch", bearer(token));
     CHECK(again.status == 200);
     CHECK(parse_json(again.body).find("already_open")->as_bool());
     CHECK(http(port, "POST", "/v0/applets/dev.example.nowhere/launch", bearer(token)).status == 404);
@@ -1348,7 +1348,7 @@ TEST_CASE("api: caliper shot --api serves every endpoint as a process and stops 
     REQUIRE(p.pid > 0);
     ::kill(p.pid, SIGTERM);
     CHECK(p.wait(15000) == 0);
-    CHECK_MESSAGE(p.text.find("wrote " + out_png + ": dev.example.sine-scope at 640x400 after ") != std::string::npos, p.text);
+    CHECK_MESSAGE(p.text.find("wrote " + out_png + ": dev.caliper.pulse-scope at 640x400 after ") != std::string::npos, p.text);
     CHECK(fs::exists(out_png));
     CHECK_FALSE(fs::exists(api_file));
     CHECK(open_socket(port) == (api_sock)-1);

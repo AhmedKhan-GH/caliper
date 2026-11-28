@@ -774,13 +774,13 @@ if(CALIPER_BUILD_APPLETS)
     endforeach()
 endif()
 
-# hello is the loader-test fixture (the tests dlopen it), and sine_scope is the
-# second applet caliper_embed_tests swaps to, so they build with the tests. Both
-# are also the tutorial applets the docs embed.
+# hello is the loader-test fixture (the tests dlopen it), and pulse_scope is the
+# second applet caliper_embed_tests and caliper_cli_api swap to, so they build
+# with the tests. Neither links libtorch.
 if(BUILD_TESTS OR CALIPER_BUILD_APPLETS)
     add_subdirectory(examples/hello)
-    if(CALIPER_WITH_TORCH)
-        add_subdirectory(examples/sine_scope)
+    if(NOT TARGET pulse_scope)
+        add_subdirectory(applets/pulse_scope)
     endif()
 endif()
 
