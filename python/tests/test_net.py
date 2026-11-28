@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import ast
 import asyncio
-import ctypes
 import gc
 import json
 import os
@@ -776,30 +775,10 @@ def _rss_now_mb() -> float:
     return int(out.strip()) / 1024
 
 
-class _RusageInfoV0(ctypes.Structure):
-    """rusage_info_v0 of <sys/resource.h>, which proc_pid_rusage fills for RUSAGE_INFO_V0."""
-    _fields_ = [("uuid", ctypes.c_uint8 * 16)] + [(name, ctypes.c_uint64) for name in (
-        "user_time", "system_time", "pkg_idle_wkups", "interrupt_wkups", "pageins", "wired_size",
-        "resident_size", "phys_footprint", "proc_start_abstime", "proc_exit_abstime")]
-
-
-_LIBSYSTEM = ctypes.CDLL("/usr/lib/libSystem.B.dylib") if sys.platform == "darwin" else None
-
-
-def _footprint_now_mb() -> float | None:
-    """The physical footprint in MB, the measure of macOS memory accounting. Unlike ps rss, it
-    leaves out the freed pages that libmalloc marked reusable and the kernel has not taken back."""
-    if _LIBSYSTEM is None:
-        return None
-    info = _RusageInfoV0()
-    if _LIBSYSTEM.proc_pid_rusage(os.getpid(), 0, ctypes.byref(info)) != 0:
-        return None
-    return info.phys_footprint / 2**20
-
-
 def _memory_now_mb():
     """The RSS and the physical footprint in MB, sampled together."""
-    return _rss_now_mb(), _footprint_now_mb()
+    from footprint import footprint_mb
+    return _rss_now_mb(), footprint_mb()
 
 
 def _held_mb(frame_bytes, views=1):
@@ -811,9 +790,11 @@ def _held_mb(frame_bytes, views=1):
     return views * (4 * frame_bytes + _net.WRITE_LIMIT) / 2**20
 
 
-def _growth_check(rss, held_mb):
-    """The scaling rule of the memory checks, in its high-water form. ``rss`` holds the RSS in MB
-    after the warm-up (r0), after a short window (r1) and after a long window twice as long (r2).
+def _growth_check(samples, held_mb):
+    """The scaling rule of the memory checks, in its high-water form. ``samples`` holds pairs of
+    RSS and physical footprint in MB, after the warm-up (r0), after a short window (r1) and after
+    a long window twice as long (r2). The rule judges the footprint where macOS gives one, because
+    RSS also counts reusable pages (footprint.py), and RSS elsewhere.
     The short window grew max(r1 - r0, 0), and the long window grew r2 - max(r0, r1), from the
     highest sample before it. The rule fails only when the long window grew more than the short
     one by more than ``held_mb``, what can be in flight at once. A leak at rate r grows the long
@@ -823,19 +804,18 @@ def _growth_check(rss, held_mb):
     def windows(r):
         return max(r[1] - r[0], 0.0), r[2] - max(r[0], r[1])
 
-    samples, rss = rss, [s[0] for s in rss]
-    short, long = windows(rss)
-    line = (f"RSS samples {rss[0]:.2f}, {rss[1]:.2f}, {rss[2]:.2f} MB: the short window grew "
-            f"{short:+.2f} MB, the long window {long:+.2f} MB (bound on the difference "
-            f"{held_mb:.1f} MB)")
+    rss = [s[0] for s in samples]
     footprint = [s[1] for s in samples]
-    if None not in footprint:
-        f_short, f_long = windows(footprint)
+    line = (f"RSS {rss[0]:.2f}, {rss[1]:.2f}, {rss[2]:.2f} MB: {windows(rss)[0]:+.2f} MB, then "
+            f"{windows(rss)[1]:+.2f} MB")
+    # The rule judges the physical footprint, because RSS also counts reusable pages (footprint.py).
+    judged = rss if None in footprint else footprint
+    if judged is footprint:
         line += (f"; physical footprint {footprint[0]:.2f}, {footprint[1]:.2f}, {footprint[2]:.2f} MB: "
-                 f"{f_short:+.2f} MB, then {f_long:+.2f} MB")
-    print("\n" + line)
-    print(line, file=sys.__stderr__)   # shown in a CI log also when the test passes
-    assert long - short <= held_mb, (line,)
+                 f"{windows(footprint)[0]:+.2f} MB, then {windows(footprint)[1]:+.2f} MB")
+    short, long = windows(judged)
+    print(f"\n{line} (bound on the difference {held_mb:.1f} MB)")
+    assert long - short <= held_mb, (line, held_mb)
     return short, long
 
 
@@ -894,6 +874,8 @@ def test_slow_viewer_latest_wins(server, device):
     # 15.83 MB, the second -56.69 to 11.14 MB, and the second grew at most 3.55 MB more than the
     # first. In 3 more runs of each case with the high-water form, the short window grew 0.00 to
     # 10.61 MB, the long -0.02 to 2.78 MB, and the long grew at most 0.30 MB more than the short.
+    # Judged by the physical footprint, three runs of both devices on 2026-11-28 (Apple silicon): the
+    # long window grew at most 4.03 MB more than the short one.
     _growth_check(rss, _held_mb(W.numel() * 4))
     assert last.view == "big"
 
@@ -1208,6 +1190,8 @@ def test_memory_flat_long_run(server):
     # 3.88 MB, and the second grew at most 3.77 MB more than the first. In 3 more runs of each
     # sender with the high-water form, the short window grew 0.00 to 5.06 MB, the long -93.19 to
     # 0.80 MB, and the long grew at most 0.78 MB more than the short.
+    # Judged by the physical footprint, three runs of both devices on 2026-11-28 (Apple silicon): the
+    # long window grew at most 4.03 MB more than the short one.
     _growth_check(rss, _held_mb(largest, len(views)) + 4 * _net.SERIES_RETAIN / 2**20)
 
 

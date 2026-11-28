@@ -2,8 +2,6 @@
 the real render thread on an offscreen canvas): the producer never blocks, MPS
 snapshots never touch the host, the slot rule never shows a torn frame."""
 import math
-import os
-import subprocess
 import time
 
 import numpy as np
@@ -22,10 +20,11 @@ def win():
     caliper.close()
 
 
-def rss_mb() -> float:
-    out = subprocess.run(["ps", "-o", "rss=", "-p", str(os.getpid())], capture_output=True,
-                         text=True).stdout
-    return int(out.strip()) / 1024.0
+def memory_mb() -> float:
+    """The physical footprint in MB, which leaves out the reusable pages that RSS counts
+    (footprint.py). These tests run only with MPS, thus on macOS, which gives it."""
+    from footprint import footprint_mb
+    return footprint_mb()
 
 
 def wait_drawn(w, name=None, timeout=3.0):
@@ -110,7 +109,7 @@ def test_no_host_copy_for_mps(win):
                 time.sleep(0.001)
             torch.mps.synchronize()
             wait_drawn(win)
-            return torch.mps.current_allocated_memory(), rss_mb()
+            return torch.mps.current_allocated_memory(), memory_mb()
 
         # The scaling rule of the memory checks in its high-water form (test_net.py,
         # _growth_check): the 100 calls grew max(r1 - r0, 0), the 200 calls after them grew
@@ -118,19 +117,19 @@ def test_no_host_copy_for_mps(win):
         # more than what can be in flight. A host copy kept per call grows with the calls (4 MB a
         # call: 400 MB more in the longer window). Settling does not, and memory that the first
         # window released and the second used again gives a second growth of at most zero.
-        m0, r0 = torch.mps.current_allocated_memory(), rss_mb()
+        m0, r0 = torch.mps.current_allocated_memory(), memory_mb()
         m1, r1 = calls(100)
         m2, r2 = calls(200)
         taken = win.ring.counters["taken"] - taken0
         info = caliper.view_info(name)
         short, long = max(r1 - r0, 0.0), r2 - max(r0, r1)
         print(f"{name}: {taken} snapshots, d device mem {(m2 - m0) / 2**20:+.2f} MB, "
-              f"d RSS {short:+.2f} MB over 100 calls, {long:+.2f} MB over 200, {info['path']}")
+              f"d footprint {short:+.2f} MB over 100 calls, {long:+.2f} MB over 200, {info['path']}")
         assert taken >= 50
         assert m1 == m0 and m2 == m0
         # The frames in flight are the slots of the view's ring (caliper._ring.SnapshotRing),
         # each one frame of the 1024 x 1024 float32 tensor: 12 MB. Measured on Apple silicon on
-        # 2026-11-28 in 5 runs, with each window taken from the sample just before it: 0.00 to
+        # 2026-11-28 as RSS in 5 runs, with each window taken from the sample just before it: 0.00 to
         # 0.11 MB over the 100 calls, 0.00 to 0.02 MB over the 200. In 3 more runs with the
         # high-water form: 0.02 to 0.25 MB over the 100 calls, 0.00 to 0.02 MB over the 200.
         held_mb = win.ring.nslots * x.numel() * x.element_size() / 2**20
