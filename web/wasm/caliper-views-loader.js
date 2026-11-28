@@ -18,7 +18,8 @@
 //     onDataView,   // (dataView) => {}, every data view the producer resolved
 //     compat,       // true: a WebGPU device in compatibility mode; default globalThis.caliperViewsCompat
 //                   // pieces, for a comparison; default globalThis.caliperViewsShapes, else 'pieces'
-//     feed,         // 'page': no stream; the page feeds the programs of one scene view named `view`
+//     feed,         // 'page': scene programs; 'frames': wire v3 frames from the page (no WebSocket)
+//     onFrame,      // feed 'frames': (bytes, handle) => {}, outgoing wire v3 frames from the viewer
 //     scene,        // feed 'page': the scene view's {space, up, units, labels, scale_bar, view_camera, views}
 //     assetQuery,   // a query such as '?token=<token>' for the module's two files, when their server needs one
 //   });
@@ -87,7 +88,7 @@ export function preloadCaliperViews(assetBase, assetQuery = '') {
 
 export async function mountCaliperViews(container, options = {}) {
   const { src = '', view = '', kind = '', height, header = true, assetBase, onSelect, onEvent, onInfo, onToggle, augment, onDataView,
-          compat = globalThis.caliperViewsCompat ?? false, feed = '', scene, assetQuery = '' } = options;
+          onFrame, compat = globalThis.caliperViewsCompat ?? false, feed = '', scene, assetQuery = '' } = options;
   if (!container) throw new Error('caliper-views: no container element');
   if (!navigator.gpu) throw new Error('caliper-views: this browser has no WebGPU');
 
@@ -101,6 +102,17 @@ export async function mountCaliperViews(container, options = {}) {
   const { factory, wasm } = await preloadCaliperViews(assetBase, assetQuery);
   let ready;
   const readyPromise = new Promise((resolve) => { ready = resolve; });
+  let handle = null;
+  let destroyed = false;
+  const queuedFrames = [];
+  const emitFrame = (bytes) => {
+    if (!onFrame || destroyed) return;
+    if (!handle) {
+      queuedFrames.push(bytes);
+      return;
+    }
+    queueMicrotask(() => { if (!destroyed) onFrame(bytes, handle); });
+  };
   let module;
   try {
     module = await factory({
@@ -120,6 +132,7 @@ export async function mountCaliperViews(container, options = {}) {
       onInfo: (v, facts) => { if (onInfo && (!view || v === view)) onInfo(facts, v); },
       onToggle: (v, name, on) => { if (onToggle && (!view || v === view)) onToggle(name, on, v); },
       onAugment: (v, detail) => (augment ? augment(detail, v) : null),
+      onFrame: emitFrame,
       print: () => {},
       printErr: (t) => console.warn('[caliper-views]', t),
     });
@@ -128,8 +141,7 @@ export async function mountCaliperViews(container, options = {}) {
     throw e;
   }
 
-  let destroyed = false;
-  return {
+  handle = {
     canvas,
     module,
     // Resolves once the first snapshot has been drawn.
@@ -220,6 +232,16 @@ export async function mountCaliperViews(container, options = {}) {
       module._free(p);
       return ok;
     },
+    // feed 'frames': one wire protocol v3 binary frame (Uint8Array) from the page.
+    feedFrame(bytes) {
+      if (destroyed || feed !== 'frames' || !(bytes instanceof Uint8Array) || !bytes.length) return false;
+      const at = module._malloc(bytes.length);
+      if (!at) return false;
+      module.HEAPU8.set(bytes, at);
+      const ok = module._caliper_views_feed_frame(at, bytes.length) === 1;
+      module._free(at);
+      return ok;
+    },
     // Says goodbye to the producer, releases the GPU and removes the canvas.
     destroy() {
       if (destroyed) return;
@@ -228,4 +250,14 @@ export async function mountCaliperViews(container, options = {}) {
       canvas.remove();
     },
   };
+  if (queuedFrames.length && onFrame) {
+    const pending = queuedFrames.splice(0);
+    queueMicrotask(() => {
+      for (const frame of pending) {
+        if (destroyed) break;
+        onFrame(frame, handle);
+      }
+    });
+  }
+  return handle;
 }
