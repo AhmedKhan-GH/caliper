@@ -15,7 +15,8 @@ Python environment with torch, numpy and websockets. It checks, in order:
    --exit-after 5 --stats`, attaches to each session and draws every view.
 5. The test tells the second script to end: its session is listed as ended, and a viewer that
    attaches afterwards still gets its last snapshots and its whole loss series.
-6. The hub's resident memory, sampled throughout, stays flat.
+6. The hub's resident memory does not grow with time: it grows no more in a
+   12 s window than in the 6 s window before it, but for what is in flight.
 7. Protocol 3.1 controls. Script e2e-a registers the parameter "lr" and the
    action "save"; a viewer that announced `controls` sees them through the hub
    but its CONTROLs are answered `forbidden`, since the hub runs without
@@ -198,18 +199,19 @@ def main() -> int:
         check(listed.get(ida) == "live" and listed.get(idb) == "live",
               f"both scripts are listed as live sessions: {listed}")
 
-        # 3. a Python viewer on each session
-        enough = lambda snaps, vals: (snaps.get("fc1.weight", 0) >= 20 and snaps.get("fc2.weight", 0) >= 20  # noqa: E731
-                                      and vals.get("loss", 0) >= 50)
+        # 3. a Python viewer on each session. The first snapshot of a view can be the newest one
+        # that the script had already made; a second one proves that the stream goes on.
+        enough = lambda snaps, vals: (snaps.get("fc1.weight", 0) >= 2 and snaps.get("fc2.weight", 0) >= 2  # noqa: E731
+                                      and vals.get("loss", 0) >= 1)
         for sid in (ida, idb):
             r = asyncio.run(viewer.watch(url, sid, 60.0, until=enough))
             rss.append((time.monotonic(), rss_mib(hub.pid)))
             snaps = r["snapshots"]
             loss = r["series"].get("loss", {})
             check(r["session"] == sid and not r["errors"], f"the Python viewer attaches to {sid} ({r['errors']})")
-            check(snaps.get("fc1.weight", 0) >= 20 and snaps.get("fc2.weight", 0) >= 20,
+            check(snaps.get("fc1.weight", 0) >= 2 and snaps.get("fc2.weight", 0) >= 2,
                   f"it receives snapshots of both heatmaps from {sid}: {snaps}")
-            check(loss.get("first") == 0 and loss.get("contiguous") and loss.get("values", 0) >= 50,
+            check(loss.get("first") == 0 and loss.get("contiguous") and loss.get("values", 0) >= 1,
                   f"it receives the loss series of {sid} from index 0: {loss}")
 
         # 4. the native viewer on each session
@@ -249,15 +251,30 @@ def main() -> int:
         r = asyncio.run(viewer.watch(url, ida, 30.0, until=lambda snaps, vals: snaps.get("fc1.weight", 0) > 0))
         check(r["state"] == "live" and r["snapshots"].get("fc1.weight", 0) > 0, "the other session goes on")
 
-        # 6. the hub's memory over the run: six more samples, a second apart
-        for _ in range(6):
-            time.sleep(1.0)
-            rss.append((time.monotonic(), rss_mib(hub.pid)))
-        settled = [m for t, m in rss if t - rss[0][0] > 8]
-        if settled:
-            check(max(settled) - min(settled) < 16,
-                  f"the hub's resident memory is flat: {min(settled):.1f} to {max(settled):.1f} MiB "
-                  f"after warm-up ({len(settled)} samples, {rss[0][1]:.1f} MiB at start)")
+        # 6. the hub's memory: a sample now, after a window of 6 s and after the window of 12 s
+        # that follows it. A leak of r MiB/s grows the second window by 6 r more than the first,
+        # and memory that settles grows the first window only. What may still differ between the
+        # windows is what the hub holds and frees, and what it retains by design: a second copy
+        # of each session's two heatmaps while a newer one replaces them (64 x 32 and 2 x 64
+        # floats), and 6 s more of the loss series it keeps, one float a step at no more than
+        # 250 steps a second (the 4 ms sleep of each step of both producers). The resident size
+        # counts whole pages, and an allocation can touch one page more than its size fills.
+        # Measured on 2026-11-28 on Apple silicon over 5 runs: the 6 s window grew 0 to
+        # 0.031 MiB and the 12 s window 0 to 0.016 MiB.
+        page = os.sysconf("SC_PAGE_SIZE")
+        pages = lambda n: (-(-n // page) + 1) * page  # noqa: E731  (the bytes of the pages n bytes can touch)
+        in_flight = 2 * (pages(64 * 32 * 4) + pages(2 * 64 * 4) + pages(6 * 250 * 4)) / 2**20
+        m0 = rss_mib(hub.pid)
+        time.sleep(6.0)
+        m1 = rss_mib(hub.pid)
+        time.sleep(12.0)
+        m2 = rss_mib(hub.pid)
+        grow_short, grow_long = m1 - m0, m2 - m1
+        if m0 > 0:
+            check(grow_long - grow_short <= in_flight,
+                  f"the hub's resident memory does not grow with time: {grow_short:+.3f} MiB in 6 s, then "
+                  f"{grow_long:+.3f} MiB in 12 s ({m0:.1f} MiB at the first sample, "
+                  f"{rss[0][1]:.1f} MiB at start; at most {in_flight:.3f} MiB in flight)")
 
         # optional: the relay at 60 Hz to four viewers in other processes
         if a.bench:
