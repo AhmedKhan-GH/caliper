@@ -38,7 +38,7 @@ EXPECT = json.loads((V32 / "invalid" / "expect.json").read_text())
 
 
 def test_the_frames_are_there():
-    assert len(VALID) >= 60
+    assert len(VALID) == 202                       # the golden frames of tests/fixtures/wire_v3/v3_2
     types = {w.decode_frame((FIXTURES / f"{n}.bin").read_bytes()).type for n in VALID}
     assert {0x70, 0x71, 0x72, 0x73, 0x74, 0x78, 0x79, 0x7A, 0x7B, 0x80, 0x81, 0x82} <= types
     msgs = [w.decode((FIXTURES / f"{n}.bin").read_bytes()) for n in VALID]
@@ -54,7 +54,7 @@ def test_the_frames_are_there():
                        "Series", "Controls", "Text"}
     assert any(s.dtype == w.DType.U16 for n in VALID
                for s in w.decode_frame((FIXTURES / f"{n}.bin").read_bytes()).sections)
-    assert len(EXPECT) >= 90
+    assert len(EXPECT) == 253                      # the cases of v3_2/invalid/expect.json
     assert {"error"} <= set().union(*EXPECT.values()) and {"reason"} <= set().union(*EXPECT.values())
 
 

@@ -1,6 +1,7 @@
 """The window transport with its render thread (caliper.window(offscreen=True):
 the real render thread on an offscreen canvas): the producer never blocks, MPS
 snapshots never touch the host, the slot rule never shows a torn frame."""
+import math
 import os
 import subprocess
 import time
@@ -10,6 +11,7 @@ import pytest
 import torch
 
 import caliper
+from caliper import _ring
 from conftest import live_views_or_skip, reference_heatmap, requires_mps
 
 
@@ -75,10 +77,11 @@ def test_calls_never_block_on_queued_gpu_work(win, monkeypatch):
             timings[name] += (bool(win.ring._views[name].pending),)
     del b
     print("call us while GPU busy (us, took, still pending):", timings)
+    # A call that waited would find its snapshot complete, and a host sync or readback raises
+    # through boom, thus the times above are a measurement and have no bar.
     for name, (us, took, pending) in timings.items():
         assert took is True, name
         assert pending, f"{name}: snapshot completed at once (was GPU work really queued?)"
-        assert us < 5000.0, (name, us)            # 5 ms; a call that waited would take tens of ms
     torch.mps.synchronize()
     wait_drawn(win)
     st = win.stats()
@@ -98,22 +101,35 @@ def test_no_host_copy_for_mps(win):
             time.sleep(0.002)
         torch.mps.synchronize()
         wait_drawn(win)
-        m0, r0 = torch.mps.current_allocated_memory(), rss_mb()
         taken0 = win.ring.counters["taken"]
-        for _ in range(200):
-            x.mul_(1.0)
-            caliper.show(x, name, rate=0, **kw)
-            time.sleep(0.001)
-        torch.mps.synchronize()
-        wait_drawn(win)
-        m1, r1 = torch.mps.current_allocated_memory(), rss_mb()
+
+        def calls(n):
+            for _ in range(n):
+                x.mul_(1.0)
+                caliper.show(x, name, rate=0, **kw)
+                time.sleep(0.001)
+            torch.mps.synchronize()
+            wait_drawn(win)
+            return torch.mps.current_allocated_memory(), rss_mb()
+
+        # The scaling rule of the memory checks: the growth over 200 calls against the growth
+        # over the 100 calls before them. A host copy kept per call grows with the calls (4 MB a
+        # call: 400 MB more in the longer window), and settling does not.
+        m0, r0 = torch.mps.current_allocated_memory(), rss_mb()
+        m1, r1 = calls(100)
+        m2, r2 = calls(200)
         taken = win.ring.counters["taken"] - taken0
         info = caliper.view_info(name)
-        print(f"{name}: {taken} snapshots, d device mem {(m1 - m0) / 2**20:+.2f} MB, "
-              f"d RSS {r1 - r0:+.2f} MB, {info['path']}")
+        print(f"{name}: {taken} snapshots, d device mem {(m2 - m0) / 2**20:+.2f} MB, "
+              f"d RSS {r1 - r0:+.2f} MB over 100 calls, {r2 - r1:+.2f} MB over 200, {info['path']}")
         assert taken >= 50
-        assert m1 == m0
-        assert r1 - r0 < 4.0                 # one 4 MB host copy per call would be 800 MB
+        assert m1 == m0 and m2 == m0
+        # The frames in flight are the slots of the view's ring (caliper._ring.SnapshotRing),
+        # each one frame of the 1024 x 1024 float32 tensor: 12 MB. Measured on Apple silicon on
+        # 2026-11-28 in 5 runs: 0.00 to 0.11 MB over the 100 calls, 0.00 to 0.02 MB over the 200.
+        held_mb = win.ring.nslots * x.numel() * x.element_size() / 2**20
+        # A first window that released memory counts as no growth (test_net.py, _growth_check).
+        assert (r2 - r1) - max(r1 - r0, 0.0) <= held_mb, (r1 - r0, r2 - r1, held_mb)
         assert info["path"] == "compute-imported" and info["imported"] is True
 
 
@@ -192,10 +208,17 @@ def test_default_rate_is_60hz(win, monkeypatch):
     clock = _Clock()
     monkeypatch.setattr(caliper, "time", clock)
     taken = 0
+    full0 = win.ring.counters["ring_full"]
     for _ in range(500):                         # 500 calls, 1 ms apart: 0.5 s
         taken += bool(caliper.show(x, "rate60"))
         clock.now += 0.001
-    assert 20 <= taken <= 32, taken
+    # At 60 Hz the test clock allows a take at call 0 and then at every 17th call (17 ms is the
+    # first whole millisecond past 1/60 s): 30 takes in 500 calls. A due call that finds every
+    # slot of the ring busy (the render thread's claims) is dropped and moves the later takes
+    # one call on, thus each drop can cost one take at the end of the window.
+    every = math.ceil(1e3 / _ring.DEFAULT_RATE_HZ)
+    dropped = win.ring.counters["ring_full"] - full0
+    assert 1 + (499 - dropped) // every <= taken <= 1 + 499 // every, (taken, dropped)
 
 
 @requires_mps

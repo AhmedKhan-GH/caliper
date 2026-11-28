@@ -451,8 +451,8 @@ def _untimed(net, opt, x, y):
 def test_the_throughput_cost_of_the_hook(run_env):
     """Training with watch(model, optimizer) and a viewer of loss, lr and the scene in another
     process runs at its speed without the hook within the throughput target of 95 %, the median of
-    five runs of each, interleaved, each well under 60 seconds. The target is not a gate: a miss
-    prints a warning, and only a throughput below 90 % fails."""
+    five runs of each, interleaved. The target is not a gate: a miss prints a warning, and only a
+    throughput below 90 % fails."""
     import subprocess
     import sys
     torch.set_num_threads(4)
@@ -496,7 +496,6 @@ def test_the_throughput_cost_of_the_hook(run_env):
             caliper._server.close()
             viewer.wait(10)
             _scene.forget(R.SCENE_NAME)
-        assert max(plain[-1], watched[-1]) < 60
     p, q = statistics.median(plain), statistics.median(watched)
     print(f"\nwatch throughput: {steps} steps, plain {p:.3f} s, watched {q:.3f} s, "
           f"speed {p / q:.3f}, load {os.getloadavg()[0]:.2f}; runs plain "

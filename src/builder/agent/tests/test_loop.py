@@ -16,7 +16,6 @@ from __future__ import annotations
 import base64
 import json
 import threading
-import time
 
 from pydantic_ai.models._anthropic_schema_limits import exceeded_limit
 
@@ -520,11 +519,11 @@ def test_cancel_in_the_middle_of_a_stream(run_agent):
             seen.set()
             agent.notify("session/cancel", {"sessionId": sid})
 
-    started = time.monotonic()
+    # The stream stalls for an hour after two chunks, thus a response within the request's
+    # timeout of 20 s at all proves that the cancel ended it.
     response, updates = agent.prompt(sid, "Tell me everything", on_update=on_update, timeout=20)
     assert seen.is_set()
     assert response["result"]["stopReason"] == "cancelled"
-    assert time.monotonic() - started < 10
     # The next turn works, and the interrupted reply is not in the history.
     response, updates = agent.prompt(sid, "Short answer please")
     assert response["result"]["stopReason"] == "end_turn"
@@ -535,10 +534,11 @@ def test_cancel_in_the_middle_of_a_stream(run_agent):
 
 
 def test_cancel_while_a_tool_runs_gives_every_call_a_result(run_agent, caliper):
-    release = threading.Event()
+    release, returned = threading.Event(), threading.Event()
 
     def slow(args):
         release.wait(10)
+        returned.set()
         return {"ok": True, "result": {"entries": []}}
 
     caliper.handlers["catalog.list"] = slow
@@ -551,11 +551,13 @@ def test_cancel_while_a_tool_runs_gives_every_call_a_result(run_agent, caliper):
         if update.get("sessionUpdate") == "tool_call_update" and update.get("status") == "in_progress":
             agent.notify("session/cancel", {"sessionId": sid})
 
-    started = time.monotonic()
     response, updates = agent.prompt(sid, "List", on_update=on_update, timeout=20)
+    # The handler returns only after the release below, or after its wait of 10 s: a cancel that
+    # waited for it would answer only after the handler returned.
+    waited = returned.is_set()
     release.set()
     assert response["result"]["stopReason"] == "cancelled"
-    assert time.monotonic() - started < 8
+    assert not waited
     assert {u["toolCallId"] for u in updates if u["sessionUpdate"] == "tool_call_update"
             and u.get("status") == "failed"} == {"t_slow", "t_after"}
     agent.prompt(sid, "Again")

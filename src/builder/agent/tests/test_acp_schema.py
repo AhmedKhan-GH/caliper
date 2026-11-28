@@ -110,7 +110,7 @@ def test_the_messages_of_many_turns_follow_the_protocol(tracked, caliper):
     response, _ = agent.prompt(sid, "Offline")
     assert response["error"]["data"]["code"] == "agent.retries_exhausted"
     agent.request("session/load", {"sessionId": sid})
-    assert _validate_all(agent) >= 25
+    assert _validate_all(agent) == 30                 # the scripted turns fix every message
 
 
 def test_the_models_reject_wrong_shapes():
@@ -137,7 +137,7 @@ def test_the_messages_without_a_key_and_of_a_wire_refusal_follow_the_protocol(tr
     sid = agent.start_session()
     response, _ = agent.prompt(sid, "Go", on_permission=allow)
     assert response["result"]["stopReason"] == "refusal"
-    assert _validate_all(agent) > 5
+    assert _validate_all(agent) == 7                  # the scripted turn fixes every message
 
 
 def test_the_messages_of_a_widget_session_follow_the_protocol(tracked, caliper):
@@ -173,4 +173,4 @@ def test_the_messages_of_a_widget_session_follow_the_protocol(tracked, caliper):
     assert response["result"] == {}
     for sent in agent.sent:
         REQUESTS[sent["method"]].model_validate(sent["params"])
-    assert _validate_all(agent) >= 15
+    assert _validate_all(agent) == 19                 # the scripted turns fix every message

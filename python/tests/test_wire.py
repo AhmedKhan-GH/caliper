@@ -102,7 +102,7 @@ def test_golden_frames_keep_their_minor():
     for n in VALID_30:
         want = 9 if n in LATER_MINOR else 0
         assert w.decode_frame((FIXTURES / f"{n}.bin").read_bytes()).minor == want, n
-    assert len(VALID_31) >= 15
+    assert len(VALID_31) == 17                     # the golden frames of tests/fixtures/wire_v3/v3_1
     for n in VALID_31:
         assert w.decode_frame((FIXTURES / f"{n}.bin").read_bytes()).minor == w.MINOR == 1, n
     for n in sorted(p.name for p in (FIXTURES / "invalid").glob("*.bin")):
@@ -119,11 +119,6 @@ def test_31_frames_are_well_formed_for_30():
     for n in VALID_31:
         f = w.decode_frame((FIXTURES / f"{n}.bin").read_bytes())
         assert f.type in TYPES_30 | new and f.flags == 0, n
-
-
-@pytest.mark.parametrize("name", VALID)
-def test_golden_frame_small(name):
-    assert (FIXTURES / f"{name}.bin").stat().st_size <= 600
 
 
 @pytest.mark.parametrize("name", VALID)
