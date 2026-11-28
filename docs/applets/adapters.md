@@ -97,7 +97,7 @@ The members an applet uses:
 
 The returned `BridgeRef` goes to the `*_from_alloc` calls of [`caliper.tensor_bridge.v1_2`](services/caliper-tensor-bridge-v1.md). Release and import calls belong to the frame thread, and the destructor of the pool releases the imports it made. Torch may free a block from any thread. Thus the pool queues the release of the import of that block and drains the queue on the frame thread, in `to_bridge` and in the destructor.
 
-GPTScope allocates its drawn attention heatmap buffer this way (see [Applets](in-tree-applets.md)). The platform differences are in [Torch on each platform](torch-per-platform.md).
+An ML applet allocates its drawn GPU buffers this way. The platform differences are in [Torch per Platform](torch-per-platform.md).
 
 ## `obj.hpp`
 

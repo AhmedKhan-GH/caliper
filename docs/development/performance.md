@@ -131,7 +131,7 @@ On an Apple silicon Mac, the hub sends a 512 × 512 heatmap at 60 Hz to four vie
 
 ## Tensor Handoff
 
-On an RTX 500 Ada, `embed_scope` gave approximately the same steps per second with the drained handoff and with the stream-ordered handoff. The cause is the `loss.item()` call at each step, which already synchronizes. The stream-ordered handoff stops the stalls of the frame thread on the training queue. A texture create costs about 1 ms, and an update costs a fraction of that.
+On an RTX 500 Ada, an MNIST training applet gave approximately the same steps per second with the drained handoff and with the stream-ordered handoff. The cause is the `loss.item()` call at each step, which already synchronizes. The stream-ordered handoff stops the stalls of the frame thread on the training queue. A texture create costs about 1 ms, and an update costs a fraction of that.
 
 A stress test in `tests/test_torch_adapter.cpp` makes 500 CUDA handoffs on a pool stream while a second thread trains. The largest measured stall of the frame thread came from a database table that the UI thread rebuilt, not from tensors.
 
@@ -151,7 +151,7 @@ A 64x48 f32 METAL update takes 0.129 ms with `WAIT_GPU` and 0.009 ms without it.
 
 ## Torch-Free Build
 
-Slang takes most of a 12.7 s configure. A fresh torch-free configure takes 6.5 s. A cold torch-free build of all targets has 462 steps and takes 120 s at `-j 8`. Then `libcaliper.a` is 276 KB, in six objects. A cold `libcaliper` build with torch on takes 123 s. An offscreen Caliper Embed run of `hello` draws 43 frames in 1.02 s.
+Slang takes most of a 12.7 s configure. A fresh torch-free configure takes 6.5 s. A cold torch-free build of all targets has 462 steps and takes 120 s at `-j 8`. Then `libcaliper.a` is 276 KB, in six objects. A cold `libcaliper` build with torch on takes 123 s. An offscreen Caliper Embed run of `hello_world` draws 43 frames in 1.02 s.
 
 ## Widget Agent Models
 
@@ -169,13 +169,13 @@ The windowless mode runs at about 60 frames per second. The first command opens 
 
 ## Data Store Rebuilds
 
-A table that `caliper.data.v1` rebuilt with `CREATE OR REPLACE TABLE` several times per second on a persistent store became slow. Over one session, in EmbedScope on Windows, each rebuild went from 80 ms to 500 ms. The cause is the growth of the write-ahead log and the catalog. `TEMP` tables do not have this problem.
+A table that `caliper.data.v1` rebuilt with `CREATE OR REPLACE TABLE` several times per second on a persistent store became slow. Over one session on Windows, each rebuild went from 80 ms to 500 ms. The cause is the growth of the write-ahead log and the catalog. `TEMP` tables do not have this problem.
 
 ## Vulkan and CUDA Costs
 
 Measured on one RTX 500 Ada laptop GPU, driver 596.47, Release build. Small samples, so the numbers describe this hardware only.
 
-- Training (embed_scope, MNIST, 20 s per run, three runs per path): training steps are level within noise. The direct path removes the 2.5 to 3.5 s frame-thread block in `retire()` and lowers frame time p99 from 19.8 to 22.5 ms down to 12.8 to 19.3 ms. Frame time p50 stays at about 8.3 ms because of vsync.
+- Training (MNIST applet, 20 s per run, three runs per path): training steps are level within noise. The direct path removes the 2.5 to 3.5 s frame-thread block in `retire()` and lowers frame time p99 from 19.8 to 22.5 ms down to 12.8 to 19.3 ms. Frame time p50 stays at about 8.3 ms because of vsync.
 - With a single image per texture, about 97 percent of kernels waited on a frame, and 30-second training dropped to 880 to 897 steps against 1407 on the buffer path. The second image is required.
 - One update by size (call / done): 256 by 256 is 57 / 265 µs buffer and 30 / 65 µs direct. 4096 by 4096 is 100 / 1971 µs buffer and 51 / 1391 µs direct. Source: gfx test `Vulkan+CUDA: timing — update cost by size`.
 - Texture create and release costs about 1 ms at applet sizes. Release still waits for the queue to go idle.

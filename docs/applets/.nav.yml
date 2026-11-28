@@ -18,7 +18,6 @@ nav:
       - tensor-and-arrow-headers.md
       - adapters.md
       - torch-per-platform.md
-      - in-tree-applets.md
   - Services:
       - services/service-catalog.md
       - services/caliper-ui-v1.md

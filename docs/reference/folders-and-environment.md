@@ -85,9 +85,8 @@ On Linux and macOS the host also reads `HOME` (on Windows `USERPROFILE`) to shor
 
 | Variable | What it does |
 |---|---|
-| `CALIPER_EMBED_AUTOTRAIN`, `CALIPER_GPT_AUTOTRAIN` | EmbedScope or GPTScope starts training on its first frame. |
-| `CALIPER_HELLO_CRASH` | The hello applet faults in its frame function, to exercise quarantine. |
-| `CALIPER_HELLO_INIT_FAIL` | The `on_init` function of the hello applet returns false. |
+| `CALIPER_HELLO_WORLD_CRASH` | The Hello World applet faults in its frame function, to exercise quarantine. |
+| `CALIPER_HELLO_WORLD_INIT_FAIL` | The `on_init` function of the Hello World applet returns false. |
 | `CALIPER_EMBED_APPLETS` | The applets folder the `embed_host` example passes in `CaliperCoreDesc.applets_dir`. |
 | `CALIPER_EMBED_EXIT_AFTER=<seconds>` | The `embed_host` example closes its window after that many seconds. |
 | `CALIPER_EMBED_OFFSCREEN` | Any value other than empty or `0` runs `embed_host` with no window. It exits with 0 only when the applet drew. |

@@ -56,4 +56,4 @@ The host then continues to tear down the applet. A job that ignores `cancelled()
 
 **Ids.** `submit` returns a job id. The id `0` is never valid and means the submission failed, for example because a headless host does not provide the service. `is_running` and `progress_of` return `false` and `0` for an unknown or finished id.
 
-EmbedScope (`applets/embed_scope/`) and PulseScope (`applets/pulse_scope/`) show consumers that submit background jobs, poll `cancelled()`, publish state under a mutex, and wait in teardown as described above.
+The MNIST applet (`examples/mnist/applet/`) submits a background training job, polls `cancelled()`, publishes state under a mutex, and waits in teardown as described above.

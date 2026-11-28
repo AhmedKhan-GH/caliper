@@ -2,10 +2,6 @@ site_name: Caliper Documentation
 site_url: https://ahmedkhan-gh.github.io/caliper/docs/
 docs_dir: docs
 site_dir: build/wiki-site
-# In the repository, not on the site: the cookbook is written around the applets, which are
-# not shipped.
-exclude_docs: |
-  applets/ml-applet-cookbook.md
 # Broken anchors fail the strict build too, like broken links.
 validation:
   anchors: warn

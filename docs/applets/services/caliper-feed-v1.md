@@ -60,4 +60,4 @@ Windows channels:
 
 Windows has no unprivileged path to CPU temperature or fan speed, so those channels do not exist there. The NVML channels exist only when an NVIDIA driver is present. The probe fails closed at start, and the host links no SDK.
 
-An unavailable signal is not a channel and never has a faked value. A consumer displays whatever enumerates. On a host with no channels, it says so in one line and draws nothing. PulseScope works this way (see [Applets](../in-tree-applets.md)).
+An unavailable signal is not a channel and never has a faked value. A consumer displays whatever enumerates. On a host with no channels, it says so in one line and draws nothing.

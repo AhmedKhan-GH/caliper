@@ -75,7 +75,7 @@ Caliper keeps third-party code as git submodules in `third_party/`. Run `./init-
 |---|---|
 | `src/`, `include/` | the host, the embeddable core and its C interfaces |
 | `sdk/` | the applet SDK: the ABI, the service headers, the C++ sugar, the adapters, the test fixture host and the `caliper-sdk` CMake package |
-| `applets/`, `examples/` | the first-party applets and the tutorial and embedding examples; each applet builds against the installed SDK, and the core build compiles none of them |
+| `examples/` | the tutorial, embedding and MNIST examples; each example applet builds against the installed SDK, and the core build compiles none of them |
 | `python/` | the `caliper` Python package |
 | `tests/` | the test suites, including the pixel-exact `tests/gfx` suite |
 | `docs/` | the documentation, published as the docs site (`mkdocs.yml`) |
