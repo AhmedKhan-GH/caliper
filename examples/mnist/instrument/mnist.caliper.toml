@@ -1,12 +1,12 @@
-[applet]
+[instrument]
 id      = "dev.caliper.mnist"
 name    = "MNIST Example"
 version = "0.1.0"
-summary = "Canonical ML applet: the PyTorch C++ MNIST CNN trained live with LibTorch."
+summary = "Canonical ML instrument: the PyTorch C++ MNIST CNN trained live with LibTorch."
 tag     = "Demo"
 
 [compat]
-abi_epoch = 3
+abi_epoch = 4
 min_host  = "0.6.0"
 
 [services]

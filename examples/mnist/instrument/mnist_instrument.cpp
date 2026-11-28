@@ -1,4 +1,4 @@
-// Canonical ML applet: the PyTorch C++ MNIST CNN trained live with LibTorch.
+// Canonical ML instrument: the PyTorch C++ MNIST CNN trained live with LibTorch.
 //
 // Model, optimizer, loss, and dataset pipeline follow the official PyTorch C++
 // LibTorch MNIST example:
@@ -27,7 +27,7 @@
 #include <thread>
 #include <vector>
 
-namespace mnist_applet {
+namespace mnist_instrument {
 
 namespace F = torch::nn::functional;
 
@@ -666,9 +666,9 @@ void draw_heatmap_fallback(const char* plot_id, const torch::Tensor& mosaic,
 
 } // namespace
 
-class MnistApplet final : public caliper::Applet {
+class MnistInstrument final : public caliper::Instrument {
 public:
-    MnistApplet() : s_(std::make_unique<MnistState>()) {}
+    MnistInstrument() : s_(std::make_unique<MnistState>()) {}
 
     bool on_init(caliper::Host& host) override {
         host_ = &host;
@@ -1042,13 +1042,13 @@ private:
     std::unique_ptr<MnistState> s_;
 };
 
-} // namespace mnist_applet
+} // namespace mnist_instrument
 
-CALIPER_APPLET(mnist_applet::MnistApplet,
+CALIPER_INSTRUMENT(mnist_instrument::MnistInstrument,
     .id       = "dev.caliper.mnist",
     .version  = "0.1.0",
     .name     = "MNIST Example",
-    .summary  = "Canonical ML applet: the PyTorch C++ MNIST CNN trained live with LibTorch.",
+    .summary  = "Canonical ML instrument: the PyTorch C++ MNIST CNN trained live with LibTorch.",
     .tag      = "Demo",
     .services = {CALIPER_UI_V1, CALIPER_LOG_V1, CALIPER_JOBS_V1,
                  CALIPER_DEVICE_V1})

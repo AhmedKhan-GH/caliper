@@ -26,7 +26,7 @@ endif()
 # Build Options (PyTorch-style)
 # ============================================================================
 
-# Dynamic CRT so host + applet DLLs share one heap (docs/development/compatibility-and-epochs.md). DuckDB
+# Dynamic CRT so host + instrument DLLs share one heap (docs/development/compatibility-and-epochs.md). DuckDB
 # under /MD is unverified until the first Windows session — CALIPER_STATIC_CRT
 # is the escape hatch if it breaks.
 option(CALIPER_STATIC_CRT "Use static MSVC runtime (/MT) — pre-D7 behavior" OFF)
@@ -81,15 +81,15 @@ option(BUILD_TESTS "Build tests" OFF)
 # ---- Python-entry-point spike (caliper-python) ------------------------------
 # libcaliper (core + Metal renderer + embed ABI) never includes a torch header:
 # its renderers consume raw MTLBuffer / CUDA pointers through CaliperTensor, and
-# only APPLETS (and the applet-side adapter tests) link libtorch. These options
-# make that boundary buildable: OFF skips the libtorch download/find_package and
-# every torch-linking target, so one process can host libcaliper next to a
+# only INSTRUMENTS (and the instrument-side adapter tests) link libtorch. These
+# options make that boundary buildable: OFF skips the libtorch download/find_package
+# and every torch-linking target, so one process can host libcaliper next to a
 # DIFFERENT torch (Python's torch 2.14.1 vs the vendored libtorch 2.5.1).
-option(CALIPER_WITH_TORCH   "Download/link the vendored libtorch for torch applets + adapter tests" ON)
-# The core build compiles no applets. ON also builds the example applets
-# (examples/hello_world and, with libtorch, examples/mnist/applet) here,
-# through the same caliper_add_applet() that builds them against the installed SDK.
-option(CALIPER_BUILD_APPLETS "Also build the example applets in the core build" OFF)
+option(CALIPER_WITH_TORCH   "Download/link the vendored libtorch for torch instruments + adapter tests" ON)
+# The core build compiles no instruments. ON also builds the example instruments
+# (examples/hello_world and, with libtorch, examples/mnist/instrument) here,
+# through the same caliper_add_instrument() that builds them against the installed SDK.
+option(CALIPER_BUILD_INSTRUMENTS "Also build the example instruments in the core build" OFF)
 option(CALIPER_BUILD_VIEWER "Build the caliper_viewer live-viewer process" ON)
 option(CALIPER_BUILD_EXAMPLES "Build the embedder example (examples/embed_host)" ON)
 option(CALIPER_BUILD_PYTHON  "Build the caliper Python extension (python/, nanobind)" OFF)
@@ -111,8 +111,8 @@ else()
     set(_caliper_builder_default ON)
 endif()
 option(CALIPER_WITH_BUILDER "Build the builder libraries, tools and tests (src/builder)" ${_caliper_builder_default})
-if(CALIPER_BUILD_APPLETS AND NOT CALIPER_WITH_TORCH)
-    message(STATUS "CALIPER_WITH_TORCH=OFF: skipping examples/mnist/applet; building torch-free example applets only")
+if(CALIPER_BUILD_INSTRUMENTS AND NOT CALIPER_WITH_TORCH)
+    message(STATUS "CALIPER_WITH_TORCH=OFF: skipping examples/mnist/instrument; building torch-free example instruments only")
 endif()
 
 # ============================================================================
@@ -120,7 +120,7 @@ endif()
 # ============================================================================
 
 # Definitions that change how ImGui, ImPlot or ImPlot3D are compiled. The
-# host's imgui target and every applet's caliper::ui_stack get the same list,
+# host's imgui target and every instrument's caliper::ui_stack get the same list,
 # and it is an input of the UI-stack hash (cmake/CaliperUiStack.cmake). None
 # are needed today.
 set(CALIPER_UI_STACK_DEFINITIONS "")
@@ -136,19 +136,19 @@ include(cmake/CaliperWgsl.cmake)
 # ============================================================================
 
 # `cmake --install <build> --prefix <prefix> --component sdk` installs the
-# caliper-sdk package that applets outside this repository build against with
+# caliper-sdk package that instruments outside this repository build against with
 # find_package(caliper-sdk CONFIG): caliper::sdk, caliper::ui_stack,
-# caliper::sdk_testing and caliper_add_applet() (sdk/cmake/caliper-sdk-config.cmake
+# caliper::sdk_testing and caliper_add_instrument() (sdk/cmake/caliper-sdk-config.cmake
 # lists what each holds). The core build uses the same targets and function.
 
-set(CALIPER_SDK_VERSION 0.2.0)
+set(CALIPER_SDK_VERSION 0.3.0)
 file(STRINGS sdk/include/caliper/abi.h _caliper_epoch_line
     REGEX "^#define CALIPER_ABI_EPOCH[ \t]+[0-9]+")
 string(REGEX REPLACE "^#define CALIPER_ABI_EPOCH[ \t]+([0-9]+).*" "\\1"
     CALIPER_SDK_ABI_EPOCH "${_caliper_epoch_line}")
 
 # The host's libtorch. The package records its version and location, and
-# caliper_add_applet(... TORCH) links exactly that libtorch.
+# caliper_add_instrument(... TORCH) links exactly that libtorch.
 if(CALIPER_WITH_TORCH)
     set(CALIPER_TORCH_VERSION "${Torch_VERSION}")
     set(CALIPER_TORCH_DIR "${LIBTORCH_DIR}")
@@ -169,7 +169,7 @@ target_include_directories(caliper_sdk INTERFACE
 
 # UI stack: the pinned ImGui, ImPlot, ImPlot3D and ImGuiFileDialog, without
 # any backend. Here it is the host's own libraries; the installed package
-# builds the same sources inside the applet's build (sdk/cmake/caliper-ui-stack.cmake).
+# builds the same sources inside the instrument's build (sdk/cmake/caliper-ui-stack.cmake).
 add_library(caliper_ui_stack INTERFACE)
 add_library(caliper::ui_stack ALIAS caliper_ui_stack)
 target_include_directories(caliper_ui_stack INTERFACE
@@ -182,18 +182,18 @@ target_link_libraries(caliper_ui_stack INTERFACE
     imgui implot implot3d ImGuiFileDialog
 )
 
-# Host-owned app-paths utility. Applets that still need the shared data dir
+# Host-owned app-paths utility. Instruments that still need the shared data dir
 # link this TARGET instead of compiling src/app_paths.cpp by path.
-# Dies when applets move to CaliperHost.applet_data_dir (Phase 1+).
+# Dies when instruments move to CaliperHost.instrument_data_dir (Phase 1+).
 add_library(caliper_app_paths STATIC src/app_paths.cpp)
 target_include_directories(caliper_app_paths PUBLIC ${CMAKE_SOURCE_DIR}/src)
 set_target_properties(caliper_app_paths PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
-# doctest backs the tests here and ships in the package for an applet's own
+# doctest backs the tests here and ships in the package for an instrument's own
 # tests (declared and fetched in cmake/Dependencies.cmake).
 caliper_fetch_doctest()
 
-# Fixture host for TDD of applets and the sugar, plus doctest.
+# Fixture host for TDD of instruments and the sugar, plus doctest.
 add_library(caliper_sdk_testing INTERFACE)
 add_library(caliper::sdk_testing ALIAS caliper_sdk_testing)
 target_include_directories(caliper_sdk_testing INTERFACE
@@ -202,8 +202,8 @@ target_include_directories(caliper_sdk_testing INTERFACE
 target_link_libraries(caliper_sdk_testing INTERFACE
     caliper::sdk $<BUILD_INTERFACE:doctest::doctest>)
 
-# caliper_add_applet(), shared with the installed package.
-include(sdk/cmake/CaliperAddApplet.cmake)
+# caliper_add_instrument(), shared with the installed package.
+include(sdk/cmake/CaliperAddInstrument.cmake)
 
 # ---- SDK install rules (component: sdk) ----
 include(CMakePackageConfigHelpers)
@@ -230,7 +230,7 @@ configure_file(sdk/cmake/caliper-sdk-info.cmake.in
 install(FILES
     "${CMAKE_SOURCE_DIR}/sdk/cmake/caliper-sdk-config.cmake"
     "${CMAKE_SOURCE_DIR}/sdk/cmake/caliper-ui-stack.cmake"
-    "${CMAKE_SOURCE_DIR}/sdk/cmake/CaliperAddApplet.cmake"
+    "${CMAKE_SOURCE_DIR}/sdk/cmake/CaliperAddInstrument.cmake"
     "${CMAKE_BINARY_DIR}/caliper-sdk-info.cmake"
     "${CMAKE_BINARY_DIR}/caliper-sdk-config-version.cmake"
     DESTINATION lib/cmake/caliper-sdk COMPONENT sdk)
@@ -240,10 +240,10 @@ install(FILES
 caliper_fetch_tomlplusplus()
 
 add_library(caliper_host_lib STATIC
-    src/host/applet_manifest.cpp
+    src/host/instrument_manifest.cpp
     src/host/negotiation.cpp
     src/host/crash_guard.cpp
-    src/host/applet_loader.cpp
+    src/host/instrument_loader.cpp
     src/host/job_system.cpp
     src/host/metrics_store.cpp
     src/host/feed_store.cpp
@@ -294,9 +294,10 @@ endif()
 set_target_properties(caliper_host_lib PROPERTIES
     CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON POSITION_INDEPENDENT_CODE ON)
 # What the host was built with, for the loader to compare with the [build] and
-# [compat] tables that caliper_add_applet() stamps into each applet's manifest.
-# CALIPER_HOST_TORCH_VERSION is defined only in a build with libtorch; the host
-# never links libtorch, it only names the version its applets must use.
+# [compat] tables that caliper_add_instrument() stamps into each instrument's
+# manifest. CALIPER_HOST_TORCH_VERSION is defined only in a build with
+# libtorch; the host never links libtorch, it only names the version its
+# instruments must use.
 target_compile_definitions(caliper_host_lib PUBLIC
     CALIPER_HOST_UI_STACK_HASH="${CALIPER_UI_STACK_HASH}"
     CALIPER_HOST_SDK_VERSION="${CALIPER_SDK_VERSION}")
@@ -389,7 +390,7 @@ if(NOT MSVC)
     target_compile_options(caliper_scene PRIVATE -ffp-contract=off)
 endif()
 
-# The browser viewer of spec applets that GET /v0/spec answers
+# The browser viewer of instruments that GET /v0/spec answers
 # (src/host/api/spec_page.h): the checked-in build of the web package's spec
 # page, python/caliper/_web/spec.html, embedded as bytes, so the C++ build
 # needs no Node. scripts/build_web.py refreshes that copy.
@@ -526,8 +527,8 @@ endif()
 # headless layer (caliper_host_lib) with the renderer/bridge/service-vending
 # layer that used to be pinned in the caliper exe — host_services (service
 # registry + vending), tensor_bridge (bridge v1–v1.2) — plus
-# the ordered core lifecycle (core_lifecycle: renderer selection + applet-canvas
-# ImGui context). The caliper exe is now its first embedder.
+# the ordered core lifecycle (core_lifecycle: renderer selection +
+# instrument-canvas ImGui context). The caliper exe is now its first embedder.
 #
 # caliper_host_lib stays a renderer-free INNER target so caliper_tests remains
 # headless (l1-survey do-not-touch): the renderer/bridge join the graph only at
@@ -588,9 +589,9 @@ target_include_directories(libcaliper PRIVATE ${THIRD_PARTY_DIR}/stb
 add_library(caliper::host_lib ALIAS caliper_host_lib)
 # src/host: internal host headers. include/: the embed C ABI root (caliper/
 # embed.h) — a PUBLIC dir of THIS target ONLY, so embedders (who link
-# libcaliper) can #include <caliper/embed.h> while applets (who link only
-# caliper::sdk = sdk/include, never libcaliper) physically cannot. The embed ABI
-# is off the applet include path by construction.
+# libcaliper) can #include <caliper/embed.h> while instruments (who link only
+# caliper::sdk = sdk/include, never libcaliper) physically cannot. The embed
+# ABI is off the instrument include path by construction.
 target_include_directories(libcaliper PUBLIC
     ${CMAKE_SOURCE_DIR}/src/host
     ${CMAKE_SOURCE_DIR}/include)
@@ -664,10 +665,10 @@ add_executable(caliper
     src/main.cpp
     # The landing screen, drawn with ImGui on every renderer backend.
     src/host/pages/landing_screen.cpp
-    # The applet page (page bar, status bar, dock space, docking by role, the
-    # applet's frame, the jobs tray), drawn by the app and by `caliper shot`,
-    # which renders it into an offscreen canvas and writes a PNG.
-    src/host/pages/applet_page.cpp
+    # The instrument page (page bar, status bar, dock space, docking by role,
+    # the instrument's frame, the jobs tray), drawn by the app and by
+    # `caliper shot`, which renders it into an offscreen canvas and writes a PNG.
+    src/host/pages/instrument_page.cpp
     src/host/app/shot.cpp
     # Caliper API v0 for the app and for `caliper shot` (--api), and the
     # spec page's Open in browser, which hands the viewer's link to the
@@ -700,7 +701,7 @@ target_include_directories(caliper PRIVATE ${CMAKE_SOURCE_DIR}/src/host)
 
 # The house fonts (IBM Plex Sans Condensed and Source Code Pro under the SIL OFL,
 # and Sternbild Display) come from the design token package and ship beside the
-# executable like applets do: <exe dir>/assets/fonts. A development build also
+# executable like instruments do: <exe dir>/assets/fonts. A development build also
 # reads them where the package keeps them (CALIPER_TOKEN_FONTS_DIR).
 sternbild_tokens_copy_assets(caliper FONTS_DIR "$<TARGET_FILE_DIR:caliper>/assets/fonts")
 
@@ -748,24 +749,24 @@ elseif(UNIX)
 endif()
 
 # ============================================================================
-# Applets
+# Instruments
 # ============================================================================
-# The core build compiles no applets, and the caliper target depends on none.
-# Applets build in their own repositories against the installed SDK with
-# caliper_add_applet(), and the example applets under examples/ build
-# standalone the same way (cmake -S <folder> -DCMAKE_PREFIX_PATH=<sdk prefix>).
-# BUILD_TESTS=ON or CALIPER_BUILD_APPLETS=ON also builds them here:
+# The core build compiles no instruments, and the caliper target depends on
+# none. Instruments build in their own repositories against the installed SDK
+# with caliper_add_instrument(), and the example instruments under examples/
+# build standalone the same way (cmake -S <folder> -DCMAKE_PREFIX_PATH=<sdk prefix>).
+# BUILD_TESTS=ON or CALIPER_BUILD_INSTRUMENTS=ON also builds them here:
 # examples/hello_world is the loader-test fixture (torch-free), and
-# examples/mnist/applet is the canonical ML applet (requires CALIPER_WITH_TORCH=ON).
-if(BUILD_TESTS OR CALIPER_BUILD_APPLETS)
+# examples/mnist/instrument is the canonical ML instrument (requires CALIPER_WITH_TORCH=ON).
+if(BUILD_TESTS OR CALIPER_BUILD_INSTRUMENTS)
     add_subdirectory(examples/hello_world)
     if(CALIPER_WITH_TORCH)
-        add_subdirectory(examples/mnist/applet)
+        add_subdirectory(examples/mnist/instrument)
     endif()
 endif()
 
 # embed_host: the second embedder of libcaliper, linked to caliper::embed. A
-# bare native-window host with an offscreen mode; not an applet, not linked
+# bare native-window host with an offscreen mode; not an instrument, not linked
 # into `caliper`. It also builds on its own against the installed caliper-embed
 # package (caliper_embed_install does that).
 if(CALIPER_BUILD_EXAMPLES)
@@ -799,7 +800,7 @@ if(BUILD_TESTS)
 
     # caliper_sdk_install: install the SDK component and build the probe and a
     # copy of examples/hello_world against it, using only find_package(caliper-sdk),
-    # then check that an applet source cannot include caliper/embed.h even with
+    # then check that an instrument source cannot include caliper/embed.h even with
     # the embed package in the same prefix (tests/sdk_install_probe/run.cmake).
     # The work folder holds those copies and builds; CI points it outside the
     # checkout.
@@ -848,7 +849,7 @@ if(BUILD_TESTS)
             "-DCALIPER_SOURCE_DIR=${CMAKE_SOURCE_DIR}"
             "-DWORK_DIR=${CALIPER_EMBED_PROBE_DIR}"
             "-DEXPECT_VERSION=${CALIPER_EMBED_PACKAGE_VERSION}"
-            "-DAPPLETS_DIR=${CMAKE_BINARY_DIR}/applets"
+            "-DINSTRUMENTS_DIR=${CMAKE_BINARY_DIR}/instruments"
             "-DGENERATOR=${CMAKE_GENERATOR}"
             "-DMAKE_PROGRAM=${CMAKE_MAKE_PROGRAM}"
             "-DCXX_COMPILER=${CMAKE_CXX_COMPILER}"
@@ -862,14 +863,14 @@ if(BUILD_TESTS)
             SKIP_REGULAR_EXPRESSION "headless run skipped: no GPU")
     endif()
 
-    # caliper_host_names_no_applet: no applet id, name or window title from
-    # examples/ may appear as a string literal in src/ or include/.
+    # caliper_host_names_no_instrument: no instrument id, name or window title
+    # from examples/ may appear as a string literal in src/ or include/.
     find_package(Python3 COMPONENTS Interpreter)
     if(Python3_Interpreter_FOUND)
-        add_test(NAME caliper_host_names_no_applet COMMAND "${Python3_EXECUTABLE}"
-            "${CMAKE_SOURCE_DIR}/scripts/check_host_names_no_applet.py"
+        add_test(NAME caliper_host_names_no_instrument COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_SOURCE_DIR}/scripts/check_host_names_no_instrument.py"
             --root "${CMAKE_SOURCE_DIR}")
-        set_tests_properties(caliper_host_names_no_applet PROPERTIES LABELS "boundary")
+        set_tests_properties(caliper_host_names_no_instrument PROPERTIES LABELS "boundary")
         # caliper_theme_colors: the theme holds no raw colour literal outside the generated
         # header of the design tokens. caliper_theme_colors_script tests the check itself.
         add_test(NAME caliper_theme_colors COMMAND "${Python3_EXECUTABLE}"
@@ -878,15 +879,15 @@ if(BUILD_TESTS)
             "${CMAKE_SOURCE_DIR}/scripts/test_check_theme_colors.py")
         set_tests_properties(caliper_theme_colors caliper_theme_colors_script PROPERTIES LABELS "boundary")
     else()
-        message(STATUS "Python 3 not found: caliper_host_names_no_applet is not registered")
+        message(STATUS "Python 3 not found: caliper_host_names_no_instrument is not registered")
     endif()
 endif()
 
 # The builder (src/builder) with the host's toml++, doctest and static DuckDB.
 # It comes after enable_testing(), so that its ctest entries (builder_*) are
 # registered beside the host's. The host library links its spec library for
-# spec applets; it installs nothing, so the sdk and embed install components
-# do not change.
+# spec-based instruments; it installs nothing, so the sdk and embed install
+# components do not change.
 if(CALIPER_WITH_BUILDER)
     add_subdirectory(src/builder)
     # The draw half of programs in a viewer (src/host/draw/draw_runtime.h,
@@ -933,11 +934,12 @@ if(CALIPER_WITH_BUILDER)
             target_link_libraries(caliper_gfx_tests PRIVATE caliper_draw_host)
         endif()
     endif()
-    # The spec applet kind in the loader (src/host/applet_spec.h): with the
-    # builder, caliper_host_lib validates a spec applet's spec with the spec
-    # library and lists it Ready; without it the loader lists every spec
-    # applet as refused, and applet_loader.cpp has no builder dependency.
-    target_sources(caliper_host_lib PRIVATE src/host/applet_spec.cpp)
+    # The spec kind in the loader (src/host/instrument_spec.h): with the
+    # builder, caliper_host_lib validates a spec-based instrument's spec with
+    # the spec library and lists it Ready; without it the loader lists every
+    # spec-based instrument as refused, and instrument_loader.cpp has no
+    # builder dependency.
+    target_sources(caliper_host_lib PRIVATE src/host/instrument_spec.cpp)
     target_link_libraries(caliper_host_lib PUBLIC caliper_builder_spec)
     target_compile_definitions(caliper_host_lib PRIVATE CALIPER_HOST_SPEC_RUNTIME=1)
     # Caliper API's command gateway over the builder session
@@ -986,8 +988,8 @@ if(TARGET caliper_builder_session)
         target_include_directories(caliper_app_session_tests PRIVATE
             ${CMAKE_SOURCE_DIR}/src/host ${CMAKE_SOURCE_DIR}/tests ${CMAKE_SOURCE_DIR}/third_party/stb)
         set_target_properties(caliper_app_session_tests PROPERTIES CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON)
-        if(TARGET hello_world_applet)
-            add_dependencies(caliper_app_session_tests hello_world_applet)   # app.launch in the process test
+        if(TARGET hello_world_instrument)
+            add_dependencies(caliper_app_session_tests hello_world_instrument)   # app.launch in the process test
         endif()
         add_test(NAME caliper_app_session COMMAND caliper_app_session_tests "--test-case-exclude=*hidden app*")
         set_tests_properties(caliper_app_session PROPERTIES LABELS "builder" TIMEOUT 120)
@@ -1027,8 +1029,8 @@ if(TARGET caliper_builder_session)
                 ${CMAKE_SOURCE_DIR}/third_party/stb)
             set_target_properties(caliper_app_live_tests PROPERTIES CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON)
             add_dependencies(caliper_app_live_tests caliper caliper_attention_producer)
-            if(TARGET hello_world_applet)
-                add_dependencies(caliper_app_live_tests hello_world_applet)
+            if(TARGET hello_world_instrument)
+                add_dependencies(caliper_app_live_tests hello_world_instrument)
             endif()
             # One entry per case: the acceptance case, F4 listing a stream of
             # caliper.serve() from its stream file, the attachment kept across
@@ -1059,7 +1061,7 @@ if(TARGET caliper_builder_session)
                 list(GET _parts 1 _filter)
                 add_test(NAME caliper_app_${_name} COMMAND caliper_app_live_tests "--test-case=${_filter}")
                 set_tests_properties(caliper_app_${_name} PROPERTIES LABELS "cli;builder;live" TIMEOUT 240
-                    ENVIRONMENT "CALIPER_TEST_CALIPER_EXE=$<TARGET_FILE:caliper>;CALIPER_TEST_PRODUCER_EXE=$<TARGET_FILE:caliper_attention_producer>;CALIPER_TEST_APPLETS=${CMAKE_BINARY_DIR}/applets;CALIPER_AGENT_OFFLINE=1"
+                    ENVIRONMENT "CALIPER_TEST_CALIPER_EXE=$<TARGET_FILE:caliper>;CALIPER_TEST_PRODUCER_EXE=$<TARGET_FILE:caliper_attention_producer>;CALIPER_TEST_INSTRUMENTS=${CMAKE_BINARY_DIR}/instruments;CALIPER_AGENT_OFFLINE=1"
                     SKIP_REGULAR_EXPRESSION "run skipped: no GPU")
             endforeach()
         endif()
@@ -1067,7 +1069,7 @@ if(TARGET caliper_builder_session)
             add_test(NAME caliper_app_session_hidden
                      COMMAND caliper_app_session_tests "--test-case=app session: the hidden app*")
             set_tests_properties(caliper_app_session_hidden PROPERTIES LABELS "cli;builder" TIMEOUT 240
-                ENVIRONMENT "CALIPER_TEST_CALIPER_EXE=$<TARGET_FILE:caliper>;CALIPER_TEST_APPLETS=${CMAKE_BINARY_DIR}/applets;CALIPER_AGENT_OFFLINE=1"
+                ENVIRONMENT "CALIPER_TEST_CALIPER_EXE=$<TARGET_FILE:caliper>;CALIPER_TEST_INSTRUMENTS=${CMAKE_BINARY_DIR}/instruments;CALIPER_AGENT_OFFLINE=1"
                 SKIP_REGULAR_EXPRESSION "run skipped: no GPU")
         endif()
     endif()
