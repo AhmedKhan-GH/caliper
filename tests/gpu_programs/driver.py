@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """The driver of the GPU programs acceptance test and its check script.
 
-It starts the hidden app with no script and caliper-mcp as a child over stdio, copies tests/gpu_programs/train.py
+It starts the hidden app with no script and caliper-mcp as a child over stdio, copies examples/mnist/train.py
 into a throwaway workspace, and sends tests/gpu_programs/transcript.jsonl through the MCP tools. The model runner of
 the app starts the training script, and the script runs the programs of the agent in its own process on the live
 tensors. The driver waits on events and on published state, never for a fixed time. It runs without a window
@@ -314,6 +314,9 @@ class Check:
             raise Fail(f"intervene_points lacks {w['point']}: {names[:20]}")
         m.body("control_create", {"id": w["id"], "kind": "toggle", "title": "Ablate Layer " + w["point"],
                                   "bind": "intervene:" + w["point"], "place": {"target": w["below"], "where": "below"}})
+        min_step = w.get("min_step", 0)
+        if min_step > 0:
+            self.until(f"run reaches step {min_step} before ablation", lambda: self.step_of_run() >= min_step, 90)
         base = self.loss_after(self.step_of_run(), 5)
         (self.work / "toggle_on").write_text("on\n")      # the scripted input of the app clicks the toggle
         on = self.event("the ablation applied", {"kind": "run", "change": "intervene", "point": w["point"],
@@ -561,11 +564,11 @@ def run(a):
            if k not in ("CALIPER_API", "CALIPER_AUTOLAUNCH", "CALIPER_EXIT_AFTER", "CALIPER_APPLET_PATH")
            and not k.startswith("CALIPER_RUN_")}
     env["PYTHONPATH"] = str(ROOT / "python") + os.pathsep + env.get("PYTHONPATH", "")
-    pre = subprocess.run([a.python, "-c", "import numpy, torch, caliper, caliper._netio, caliper._producer"],
+    pre = subprocess.run([a.python, "-c", "import numpy, torch, torchvision, caliper, caliper._netio, caliper._producer"],
                          env=env, capture_output=True, text=True)
     if pre.returncode != 0:
         why = pre.stderr.strip().splitlines()[-1] if pre.stderr.strip() else "an import failed"
-        raise Skip(f"torch, numpy, the native network sender or the producer module is missing: {why}")
+        raise Skip(f"torch, torchvision, numpy, the native network sender or the producer module is missing: {why}")
     gpu = subprocess.run([a.python, "-c", "import torch; raise SystemExit(0 if torch.backends.mps.is_available() else 3)"],
                          env=env, capture_output=True, text=True)
     if gpu.returncode != 0:
@@ -576,10 +579,14 @@ def run(a):
     (work / "user").mkdir()
     ws = work / "workspace"
     ws.mkdir()
-    (ws / "train.py").write_text((HERE / "train.py").read_text())
+    (ws / "train.py").write_text((ROOT / "examples" / "mnist" / "train.py").read_text())
+    mnist_data = Path(
+        os.environ.get("CALIPER_MNIST_DATA_DIR", str(Path.home() / ".cache" / "caliper" / "mnist"))
+    ).expanduser()
     env.update({"CALIPER_AGENT_OFFLINE": "1", "CALIPER_HIDDEN": "1", "CALIPER_DATA_DIR": str(work / "data"),
                 "CALIPER_USER_APPLETS_DIR": str(work / "user"), "CALIPER_WINDOW_SIZE": "1280x800",
-                "CALIPER_WORKSPACE": str(ws), "CALIPER_RUN_PYTHON": a.python})
+                "CALIPER_WORKSPACE": str(ws), "CALIPER_RUN_PYTHON": a.python,
+                "CALIPER_MNIST_DATA_DIR": str(mnist_data)})
     decisions = work / "approvals.txt"
     decisions.write_text("\n".join(APPROVALS) + "\n")
     # The scripted input of the app clicks the toggle when the driver writes the first file, and again when

@@ -2,14 +2,15 @@
 """The end-to-end check of a piece with both halves, through the command layer.
 
 It starts the hidden app with no script and caliper-mcp as a child over stdio, and lets the model runner start the
-small training script of the GPU programs test (tests/gpu_programs/train.py) in a throwaway workspace. Then it
+canonical MNIST training script (examples/mnist/train.py) in a throwaway workspace. Then it
 writes a workspace piece with `piece_update`, creates an instance of it in a scene panel with `program_create`, and
 checks the whole path: the app sends the instance to the script as PROGRAM, the script's derive pass runs at
-`caliper.step()` on the live weight `0.weight` and publishes its resource as RESOURCE, the app keeps the versions in
-the step history, `program_read` returns the elements, the draw half draws a bar for each row in the panel, and
-`selection_set` on a bar gives its fields and marks it in the picture. The piece computes the norm of each row of
-the weight, beside the row's index, so that a wrong layout, an unread tensor or a lost version shows. The driver
-waits on events and on published state, never for a fixed time, and runs without a window and without the network.
+`caliper.step()` on the live weight `fc1.weight` (128 x 9216, rank 2) and publishes its resource as RESOURCE, the app
+keeps the versions in the step history, `program_read` returns the elements, the draw half draws a bar for each row in
+the panel, and `selection_set` on a bar gives its fields and marks it in the picture. The piece computes the norm of
+each row of the weight, beside the row's index, so that a wrong layout, an unread tensor or a lost version shows. The
+driver waits on events and on published state, never for a fixed time, and runs without a window and without the
+network.
 
 Exit code 0 passes, 1 fails, and 77 skips for two reasons only, which the line "caliper_piece_path_acceptance
 skipped: ..." names: the machine has no Metal device (torch has no MPS device, or the app's renderer is not Metal),
@@ -42,13 +43,13 @@ gp = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(gp)
 Fail, Skip = gp.Fail, gp.Skip
 
-# A derive half that reads the 64 x 8 weight in place and writes one element for each row.
+# A derive half that reads the 128 x 9216 fc1.weight in place and writes one element for each row.
 DERIVE = """@compute @workgroup_size(64)
 fn measure(@builtin(global_invocation_id) id: vec3<u32>) {
     let i = id.x;
     let rows = shapes.w.z;
     let cols = shapes.w.w;
-    if (i >= rows || i >= 64u) {
+    if (i >= rows || i >= 128u) {
         return;
     }
     var sum = 0.0;
@@ -64,7 +65,7 @@ fn measure(@builtin(global_invocation_id) id: vec3<u32>) {
 # half's module leaves it out.
 DRAW = """@fragment
 fn bars(in: CaliperFullscreen) -> CaliperPicked {
-    let n = min(counts.norms, 64u);
+    let n = min(counts.norms, 128u);
     if (n == 0u) {
         discard;
     }
@@ -88,16 +89,16 @@ PIECE = {"name": "row_norms",
          "inputs": [{"name": "w", "kind": "tensor", "rank_min": 2, "rank_max": 2}],
          "params": [{"name": "gain", "default": 1.0, "min": 0.0, "max": 4.0}],
          "resources": [{"id": "norms", "kind": "buffer", "struct": "Row",
-                        "fields": ["row: u32", "norm: f32"], "count": 64}],
-         "derive": {"passes": [{"entry": "measure", "workgroups": [1, 1, 1], "writes": ["norms"]}]},
+                        "fields": ["row: u32", "norm: f32"], "count": 128}],
+         "derive": {"passes": [{"entry": "measure", "workgroups": [2, 1, 1], "writes": ["norms"]}]},
          "draw": {"camera": "none", "passes": [{"kind": "render", "fragment": "bars", "pick": True}],
                   "pick": {"resource": "norms", "fields": ["row", "norm"]}},
          "files": {"derive": DERIVE, "draw": DRAW}}
-ROWS = 64
+ROWS = 128
 
 
 def check_elements(read):
-    """The 64 rows of the weight, each with its index and a norm in the range of the layer's initialization.
+    """The 128 rows of fc1.weight, each with its index and a norm in the range of the layer's initialization.
     program_read gives an element as the values of its fields in their order: [row, norm]."""
     els = read.get("elements") or []
     if read.get("count") != ROWS or len(els) != ROWS:
@@ -106,7 +107,7 @@ def check_elements(read):
         if not isinstance(e, list) or len(e) != 2 or e[0] != i:
             raise Fail(f"element {i} is {e}: the layout or the pass is wrong")
         n = e[1]
-        # nn.Linear(8, 64) draws from U(-1/sqrt(8), 1/sqrt(8)): a row's norm is near 0.58 and never 0.
+        # nn.Linear(9216, 128) draws from U(-1/sqrt(9216), 1/sqrt(9216)): a row's norm is near 0.58 and never 0.
         if not isinstance(n, (int, float)) or not math.isfinite(n) or not 0.05 < n < 5.0:
             raise Fail(f"element {i} has the norm {n}: the pass did not read the weight")
 
@@ -126,7 +127,7 @@ def magenta(c, name):
 def steps(c, result):
     m = c.mcp
     m.body("spec_new", {"id": "piece_path", "title": "Piece Path"})
-    m.body("run_start", {"script": "train.py"})
+    m.body("run_start", {"script": "train.py", "args": ["--probe-every", "50", "--pace", "0.005"]})
     c.run = c.until("a run", lambda: next(iter(c.runs()), None), 60)
     c.until("the run is running and attached",
             lambda: (lambda r: r and r["state"] == "running" and r.get("attached"))(c.runs().get(c.run)), 120)
@@ -147,7 +148,7 @@ def steps(c, result):
     result["hash"] = piece_hash
     m.body("program_create", {"id": "norms", "title": "Row Norms",
                               "piece": {"name": "row_norms", "from": "workspace"},
-                              "bind": {"w": "live:0.weight"}, "panel": "world"})
+                              "bind": {"w": "live:fc1.weight"}, "panel": "world"})
     for half, host in (("derive", "script"), ("draw", "viewer")):
         try:
             c.event(f"the {half} half compiled in the {host}",
@@ -230,9 +231,9 @@ def run(a):
         r = subprocess.run([a.python, "-c", f"import {names}"], env=env, capture_output=True, text=True)
         return None if r.returncode == 0 else (r.stderr.strip().splitlines() or ["an import failed"])[-1]
 
-    why = imports("numpy, torch, caliper")
+    why = imports("numpy, torch, torchvision, caliper")
     if why:
-        raise Fail(f"the acceptance Python lacks numpy, torch or caliper: {why}")
+        raise Fail(f"the acceptance Python lacks numpy, torch, torchvision or caliper: {why}")
     why = imports("caliper._netio, caliper._producer")
     if why:
         raise Skip(f"the Python modules are not built: caliper._netio or caliper._producer is missing: {why}")
@@ -248,10 +249,14 @@ def run(a):
     (work / "user").mkdir()
     ws = work / "workspace"
     ws.mkdir()
-    (ws / "train.py").write_text((ROOT / "tests" / "gpu_programs" / "train.py").read_text())
+    (ws / "train.py").write_text((ROOT / "examples" / "mnist" / "train.py").read_text())
+    mnist_data = Path(
+        os.environ.get("CALIPER_MNIST_DATA_DIR", str(Path.home() / ".cache" / "caliper" / "mnist"))
+    ).expanduser()
     env.update({"CALIPER_AGENT_OFFLINE": "1", "CALIPER_HIDDEN": "1", "CALIPER_DATA_DIR": str(work / "data"),
                 "CALIPER_USER_APPLETS_DIR": str(work / "user"), "CALIPER_WINDOW_SIZE": "1280x800",
-                "CALIPER_WORKSPACE": str(ws), "CALIPER_RUN_PYTHON": a.python})
+                "CALIPER_WORKSPACE": str(ws), "CALIPER_RUN_PYTHON": a.python,
+                "CALIPER_MNIST_DATA_DIR": str(mnist_data)})
     # The person's decisions at the cards; a line that finds no card waits and does no harm.
     decisions = work / "approvals.txt"
     decisions.write_text("\n".join(f"approve {c} mcp" for c in ("spec.new", "run.start", "panel.create", "piece.update",

@@ -1,10 +1,10 @@
 {"step": "spec", "tool": "spec_new", "arguments": {"id": "hosted_runs", "title": "Hosted Runs Check"}}
-{"step": "start", "tool": "run_start", "arguments": {"script": "train.py"}, "expect_run": {"id": "train-1"}}
+{"step": "start", "tool": "run_start", "arguments": {"script": "train.py", "args": ["--seed", "1", "--lr", "0.2", "--batch-size", "128", "--log-every", "10", "--probe-every", "50", "--pace", "0.025"]}, "expect_run": {"id": "train-1"}}
 {"step": "running", "wait_state": {"run": "train-1", "states": ["running"]}}
 {"step": "listed", "tool": "run_list", "arguments": {}, "expect_runs": {"train-1": {"state": "running", "managed": true}}}
 {"step": "grows", "steps_grow": {"run": "train-1"}}
 {"step": "pids", "record_pids": "train.py"}
-{"step": "fork", "tool": "run_fork", "arguments": {"run": "train-1", "params": [{"name": "lr", "value": 0.0002}]}, "expect_run": {"parent": "train-1"}}
+{"step": "fork", "tool": "run_fork", "arguments": {"run": "train-1", "params": [{"name": "lr", "value": 0.0005}]}, "expect_run": {"parent": "train-1"}}
 {"step": "forked", "wait_state": {"run": "{child}", "states": ["running"]}}
 {"step": "pair", "tool": "run_list", "arguments": {}, "expect_runs": {"train-1": {"state": "running"}, "{child}": {"state": "running", "parent": "train-1"}}}
 {"step": "pids2", "record_pids": "train.py"}

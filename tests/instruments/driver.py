@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """The driver of the instrument acceptance test and the instrument check.
 
-It starts tests/instruments/train.py, starts the hidden app on the script's stream link and caliper-mcp
+It starts examples/mnist/train.py in app mode, starts the hidden app on the script's stream link and caliper-mcp
 as a child over stdio, and sends tests/instruments/transcript.jsonl through the MCP tools. It waits on the
 script's output, on events and on published state, never for a fixed time. Without a window and
 without the network. Exit code 0 passes, 77 skips (no app, no torch, no Metal), 1 fails.
@@ -33,8 +33,9 @@ APPROVALS = ["approve spec.new mcp", "approve panel.create mcp", "approve contro
              "approve run.set_param mcp"]
 # The scripted input of the hidden app (the steps of CALIPER_TEST_UI, read only with --hidden): it
 # waits until the spec page shows the panel "world", then until a call of events.wait for picks is
-# held, and only then clicks in the middle of the panel. The pick thus answers a held call.
-UI_SCRIPT = "panel world; held pick; pick_panel world 0.5 0.5"
+# held, and only then clicks on the largest module box (fc1, index 4 of 6) in the upper center of the
+# fitted stack. The pick thus answers a held call.
+UI_SCRIPT = "panel world; held pick; pick_panel world 0.5 0.27"
 
 
 class Fail(Exception):
@@ -138,36 +139,44 @@ def run(a):
         subprocess.run(["rm", "-rf", str(work)], check=True)
     (work / "data").mkdir(parents=True)
     (work / "user").mkdir()
+    mnist_data = Path(
+        os.environ.get("CALIPER_MNIST_DATA_DIR", str(Path.home() / ".cache" / "caliper" / "mnist"))
+    ).expanduser()
     env = {k: v for k, v in os.environ.items()
            if k not in ("CALIPER_API", "CALIPER_AUTOLAUNCH", "CALIPER_EXIT_AFTER", "CALIPER_APPLET_PATH")}
     env.update({"CALIPER_AGENT_OFFLINE": "1", "CALIPER_HIDDEN": "1", "CALIPER_DATA_DIR": str(work / "data"),
                 "CALIPER_USER_APPLETS_DIR": str(work / "user"), "CALIPER_WINDOW_SIZE": "1280x800",
+                "CALIPER_MNIST_DATA_DIR": str(mnist_data),
                 "PYTHONPATH": str(ROOT / "python") + os.pathsep + env.get("PYTHONPATH", "")})
     for exe in (a.app, a.mcp):
         if not exe or not Path(exe).exists():
             raise Skip(f"{exe or 'a program'} is not built")
-    pre = subprocess.run([a.python, "-c", "import torch, caliper, caliper._netio"], env=env,
+    pre = subprocess.run([a.python, "-c", "import torch, torchvision, caliper, caliper._netio"], env=env,
                          capture_output=True, text=True)
     if pre.returncode != 0:
-        raise Skip("torch or the native network sender is missing")
+        raise Skip("torch, torchvision or the native network sender is missing")
     decisions = work / "approvals.txt"
     decisions.write_text("\n".join(APPROVALS) + "\n")
     steps = [json.loads(l) for l in Path(a.transcript).read_text().splitlines() if l.strip()]
     procs = []
     result = {}
     try:
-        script = subprocess.Popen([a.python, "-u", str(HERE / "train.py")], env=env, stdout=subprocess.PIPE,
-                                  stderr=subprocess.STDOUT, text=True)
+        train_script = ROOT / "examples" / "mnist" / "train.py"
+        script = subprocess.Popen(
+            [a.python, "-u", str(train_script), "--mode", "app", "--print-lr",
+             "--pace", "0.01", "--probe-every", "50", "--data-dir", str(mnist_data)],
+            env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+        )
         procs.append(script)
         sout = Lines(script.stdout, work / "script.log")
-        link = sout.wait_for(r"^(https?://\S+)$", 120, lambda: script.poll() is None).group(1)
-        sout.wait_for(r"^lr \S+ step \d+$", 120, lambda: script.poll() is None)   # the loop runs
+        link = sout.wait_for(r"(https?://\S+)", 120, lambda: script.poll() is None).group(1)
 
         app_env = dict(env, CALIPER_TEST_APPROVALS=str(decisions), CALIPER_TEST_UI=UI_SCRIPT)
         app = subprocess.Popen([a.app, "--hidden", "--url", link, "--api", "--api-port", "0"], env=app_env,
                                stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
         procs.append(app)
         aout = Lines(app.stdout, work / "app.log")
+        sout.wait_for(r"^lr \S+ step \d+$", 120, lambda: script.poll() is None)   # attached and the loop runs
         api_file = work / "data" / "api.json"
         end = time.monotonic() + 90
         while not api_file.exists():

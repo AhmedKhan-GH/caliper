@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """The acceptance test of instrument building (design/instrument-interface.md, Acceptance Test) and its check script.
 
-It starts the hidden app with no script and caliper-mcp as a child over stdio, copies tests/instrument_building/
-train.py into a throwaway workspace, and builds an instrument on the managed run of that script with MCP tools
-only: a terrain from the surface operator over a live module output, the loss as a line in the same scene, state
-variables, controls, a heatmap that follows a pick through a reference, a time cursor with a transport, bound
-text, annotations and layout shares. It checks each part by state, events and panel data, not by eye. Each step
+It starts the hidden app with no script and caliper-mcp as a child over stdio, copies examples/mnist/train.py
+into a throwaway workspace, and builds an instrument on the managed run of that script with MCP tools
+only: a terrain from the surface operator over a live module output (live:fc1.act), the loss as a line in the same
+scene, state variables, controls, a heatmap that follows a pick through a reference, a time cursor with a transport,
+bound text, annotations and layout shares. It checks each part by state, events and panel data, not by eye. Each step
 is one method of Test, named step_<letter>_<name>, and the test stops with Fail(...) at the first wrong answer.
 The message names the step, the tool and the answer of the tool. It waits on events and on published state,
 never for a fixed time, and it asserts no update rate. It records the SHA-256 of the app, caliper-mcp and the
@@ -48,11 +48,11 @@ EDITS = {"spec.new": 1, "state.create": 3, "source.add": 9, "control.create": 9,
 RUNS = {"run.start": 1, "run.stop": 1, "run.set_param": 1, "intervene.set": 1, "intervene.clear": 1}
 APPROVALS = [f"approve {c} mcp" for table in (EDITS, RUNS) for c, n in table.items() for _ in range(n)]
 
-READOUT_FORMAT = "Step {step:,d}  Token {token:d}  Value {value:.3f}"
-READOUT_FIELDS = {"step": {"state": "cursor", "field": "step"}, "token": {"state": "token"},
+READOUT_FORMAT = "Step {step:,d}  Unit {unit:d}  Value {value:.3f}"
+READOUT_FIELDS = {"step": {"state": "cursor", "field": "step"}, "unit": {"state": "unit"},
                   "value": {"selection": "world", "entity": "terrain", "field": "value"}}
-ACT_ID = "live:blocks.0.attn.proj.act"
-HEAD_ID = "live:head.act"
+ACT_ID = "live:fc1.act"
+HEAD_ID = "live:fc2.act"
 LOSS_ID = "live:loss"
 MATERIAL_WGSL = """fn material(in: MaterialIn) -> vec4<f32> {
   if (abs(in.value - params.level) < 0.01) { return vec4<f32>(1.0, 0.6, 0.2, 1.0); }
@@ -361,7 +361,11 @@ class Test:
     def step_b_run(self):
         """spec_new, run_start of train.py, the attach, a growing step and the catalog."""
         self.edit("spec_new", {"id": "instrument_building_check", "title": "Instrument Building Check"})
-        r = self.answer("run_start", {"script": "train.py"})
+        r = self.answer("run_start", {
+            "script": "train.py",
+            "args": ["--watch-activations", "--probe-size", "64", "--test-batch-size", "64",
+                     "--probe-every", "50", "--pace", "0.015"],
+        })
         self.run = r["run"]["id"]
         self.res["run"] = self.run
         self.until("the run is running and attached",
@@ -383,9 +387,9 @@ class Test:
             shape = by.get(ACT_ID, {}).get("shape")
             if not seen or seen[-1] != shape:
                 seen.append(shape)
-            return by if shape == [512, 64] else None
+            return by if shape == [64, 128] else None
         try:
-            by_id = self.until(f"{ACT_ID} lists as (512, 64)", tiled, 60)
+            by_id = self.until(f"{ACT_ID} lists as (64, 128)", tiled, 60)
         finally:
             self.res["act_shapes_seen"] = seen
             print(f"  shapes of {ACT_ID} seen: {seen}")
@@ -393,8 +397,8 @@ class Test:
             if need not in by_id:
                 raise Fail(f"step {self.cur}: catalog_list lacks {need}; it lists {sorted(by_id)[:40]}")
         self.res["shapes"] = {i: by_id[i].get("shape") for i in (ACT_ID, HEAD_ID)}
-        if by_id[ACT_ID].get("shape") != [512, 64]:
-            raise Fail(f"step {self.cur}: {ACT_ID} has shape {by_id[ACT_ID].get('shape')}, not [512, 64]")
+        if by_id[ACT_ID].get("shape") != [64, 128]:
+            raise Fail(f"step {self.cur}: {ACT_ID} has shape {by_id[ACT_ID].get('shape')}, not [64, 128]")
         if LOSS_ID not in by_id:
             raise Fail(f"step {self.cur}: catalog_list lacks {LOSS_ID}; it lists {sorted(by_id)[:40]}")
         pick = LOSS_ID
@@ -404,17 +408,17 @@ class Test:
         print(f"  loss id used: {pick}")
 
     def step_c_state(self):
-        """State variables token, measure and palette, and the source act with 2048 kept steps."""
-        self.edit("state_create", {"id": "token", "title": "Token", "type": "integer", "min": 0, "max": 63,
+        """State variables unit, measure and palette, and the source act with 2048 kept steps."""
+        self.edit("state_create", {"id": "unit", "title": "Unit", "type": "integer", "min": 0, "max": 63,
                                    "default": 0})
         self.edit("state_create", {"id": "measure", "title": "Measure", "type": "text",
                                    "choices": ["raw", "zscore"], "default": "raw"})
         self.edit("state_create", {"id": "palette", "title": "Palette", "type": "text",
                                    "choices": ["viridis", "magma"], "default": "viridis"})
-        # The norm of each of the 64 tokens of the first sequence, kept for 2048 steps.
+        # The batch norm of each of the first 64 hidden units of fc1.act, kept for 2048 steps.
         self.edit("source_add", {"id": "act", "catalog": ACT_ID, "history": 2048,
-                                 "transform": [{"op": "slice", "axis": 0, "start": 0, "stop": 64},
-                                               {"op": "reduce", "fn": "norm", "axis": 1}]})
+                                 "transform": [{"op": "slice", "axis": 1, "start": 0, "stop": 64},
+                                               {"op": "reduce", "fn": "norm", "axis": 0}]})
 
     def step_d_scene(self):
         """The range window, the terrain, the kept loss and its window, the scene world and the slider level."""
@@ -438,29 +442,30 @@ class Test:
                  "bind": {"x": "loss_window.step", "z": "loss_window.value"},
                  "options": {"mode": "strip", "y": "max", "own": ["z"], "width_px": 2.0}}],
             "options": {"axes": True, "up": "+z", "box": [3.0, 1.0, 0.8],
-                        "select": {"state": "token", "field": "column", "entity": "terrain"}}})
+                        "select": {"state": "unit", "field": "column", "entity": "terrain"}}})
         self.edit("control_create", {"id": "level", "kind": "slider", "title": "Level", "bind": "value",
                                      "options": {"min": 0.0, "max": 4.0, "value": 1.0}})
 
     def step_e_controls(self):
-        """Sources norm and mean, the panel detail, the controls measure, palette, now, transport, pause,
+        """Sources raw and zscore, the panel detail, the controls measure, palette, now, transport, pause,
         the toggle and the lr slider."""
-        # The picked token's 64 values in each of the 8 sequences, raw and scaled per sequence.
-        token_rows = {"op": "slice", "axis": 0, "start": {"state": "token"}, "step": 64}
-        self.edit("source_add", {"id": "raw", "catalog": ACT_ID, "transform": [token_rows]})
-        self.edit("source_add", {"id": "zscore", "catalog": ACT_ID, "transform": [
-            token_rows, {"op": "normalise", "mode": "zscore", "axis": 1}]})
-        self.edit("panel_create", {"id": "detail", "primitive": "heatmap", "title": "Token Detail",
+        # The picked unit pair (unit, unit + 64) across the first 16 batch items, raw and z-scored per unit.
+        unit_slice = [{"op": "slice", "axis": 0, "start": 0, "stop": 16},
+                      {"op": "slice", "axis": 1, "start": {"state": "unit"}, "step": 64}]
+        self.edit("source_add", {"id": "raw", "catalog": ACT_ID, "transform": unit_slice})
+        self.edit("source_add", {"id": "zscore", "catalog": ACT_ID, "transform": unit_slice + [
+            {"op": "normalise", "mode": "zscore", "axis": 0}]})
+        self.edit("panel_create", {"id": "detail", "primitive": "heatmap", "title": "Unit Detail",
                                    "bind": {"values": {"state": "measure"}},
-                                   "options": {"x_label": "Width", "y_label": "Sequence"}})
-        # The picked token's value over the window's steps, for the series panel trace.
+                                   "options": {"x_label": "Pair", "y_label": "Batch"}})
+        # The picked unit's value over the window's steps, for the series panel trace.
         self.edit("source_add", {"id": "trace", "from": "act", "transform": [
             {"op": "window", "start": {"control": "window", "field": "lo"},
              "stop": {"control": "window", "field": "hi"}},
-            {"op": "slice", "axis": 1, "index": {"state": "token"}}]})
-        # The picked token's norm at the cursor, as one value, for the bound text.
+            {"op": "slice", "axis": 1, "index": {"state": "unit"}}]})
+        # The picked unit's norm at the cursor, as one value, for the bound text.
         self.edit("source_add", {"id": "focus", "from": "act", "transform": [
-            {"op": "slice", "axis": 0, "start": {"state": "token"}, "step": 64}]})
+            {"op": "slice", "axis": 0, "start": {"state": "unit"}, "step": 64}]})
         self.edit("control_create", {
             "id": "measure", "kind": "segmented", "title": "Measure", "bind": "state:measure",
             "options": {"choices": [{"value": "raw", "label": "Raw", "key": "r"},
@@ -474,27 +479,26 @@ class Test:
         self.edit("control_create", {"id": "transport", "kind": "transport", "title": "Time", "bind": "cursor"})
         self.edit("control_create", {"id": "pause", "kind": "button", "title": "Pause Run", "bind": "run:pause"})
         # The toggle binds an intervention at a module output, because a toggle may bind intervene:, param:,
-        # value or state:, and the run registers no boolean parameter. It ablates the output of the first
-        # attention projection.
-        pts = self.answer("intervene_points", {"match": "blocks.0.attn.proj"}).get("points", [])
+        # value or state:, and the run registers no boolean parameter. It ablates the hidden fc1 layer.
+        pts = self.answer("intervene_points", {"match": "fc1"}).get("points", [])
         if not pts:
             pts = self.answer("intervene_points", {}).get("points", [])
         if not pts:
             raise Fail(f"step {self.cur}: intervene_points lists no point")
-        self.toggle_point = next((p["point"] for p in pts if p.get("module") == "blocks.0.attn.proj"),
+        self.toggle_point = next((p["point"] for p in pts if p.get("module") == "fc1"),
                                  pts[0]["point"])
         self.res["toggle_point"] = self.toggle_point
-        self.edit("control_create", {"id": "ablate", "kind": "toggle", "title": "Ablate Block 0",
+        self.edit("control_create", {"id": "ablate", "kind": "toggle", "title": "Ablate fc1",
                                      "bind": "intervene:" + self.toggle_point, "options": {"value": False}})
         self.edit("control_create", {"id": "lr", "kind": "slider", "title": "Learning Rate", "bind": "param:lr",
-                                     "options": {"min": 1e-5, "max": 1e-3, "log": True, "value": 3e-4}})
+                                     "options": {"min": 1e-3, "max": 10.0, "log": True, "value": 1.0}})
 
     def step_f_annotations(self):
         """The series panels loss and trace, a band, a threshold, two markers and the layout."""
         self.edit("panel_create", {"id": "loss", "primitive": "series", "title": "Loss",
                                    "bind": {"x": "loss_window.step", "y": "loss_window.value"},
                                    "options": {"x_label": "Step", "y_label": "Loss"}})
-        self.edit("panel_create", {"id": "trace", "primitive": "series", "title": "Picked Token",
+        self.edit("panel_create", {"id": "trace", "primitive": "series", "title": "Picked Unit",
                                    "bind": {"x": "trace.step", "y": "trace.value"},
                                    "options": {"x_label": "Step", "y_label": "Norm"}})
         # The bound text of the readout control as a text panel too, because panel_data reads a text panel's value.
@@ -511,12 +515,12 @@ class Test:
             "id": "current", "kind": "marker",
             "at": [{"selection": "world", "entity": "terrain", "field": "x"},
                    {"selection": "world", "entity": "terrain", "field": "z"}],
-            "text": "Token {token:d} at {value:.3f}",
-            "fields": {"token": {"state": "token"},
+            "text": "Unit {unit:d} at {value:.3f}",
+            "fields": {"unit": {"state": "unit"},
                        "value": {"selection": "world", "entity": "terrain", "field": "z"}}}})
         self.edit("annotation_set", {"panel": "world", "annotation": {
             "id": "picked", "kind": "marker", "at": {"selection": "world", "entity": "terrain"},
-            "text": "Token {token:d}", "fields": {"token": {"state": "token"}}}})
+            "text": "Unit {unit:d}", "fields": {"unit": {"state": "unit"}}}})
         self.edit("layout_set", {"layout": {"root": "main", "nodes": [
             {"id": "main", "split": "vertical", "shares": [6, 3, 1, 1], "children": ["top", "middle", "row1", "row2"],
              "mins": {}},
@@ -617,30 +621,30 @@ class Test:
                 "cols": data.get("source_cols")}
 
     def step_i_pick(self):
-        """A pick on the terrain writes the state token, and the heatmap detail follows it through a reference."""
+        """A pick on the terrain writes the state unit, and the heatmap detail follows it through a reference."""
         before = self.detail()
         m = self.mark()
         rows = self.terrain()["rows"]
-        index = (rows // 2) * 64 + 20   # the middle row of the window, token 20
+        index = (rows // 2) * 64 + 20   # the middle row of the window, unit 20
         r = self.answer("selection_set", {"panel": "world", "entity": "terrain", "index": index})
         self.res["pick_fields"] = r.get("fields")
         pick = self.event("pick on world", {"kind": "pick", "panel": "world"}, m)
         fields = pick.get("fields") or {}
         if fields.get("column") != 20 or fields.get("entity") != "terrain":
             raise Fail(f"step {self.cur}: the pick event has the fields {json.dumps(fields)[:600]}, not column 20")
-        state = self.event("state token", {"kind": "state", "state": "token"}, m)
+        state = self.event("state unit", {"kind": "state", "state": "unit"}, m)
         if state.get("value") != 20:
-            raise Fail(f"step {self.cur}: the token event holds {state.get('value')}, not 20")
-        self.res["pick_event"], self.res["token_event"] = pick, state
-        token = {s["id"]: s for s in self.answer("state_get", {}).get("states", [])}.get("token", {})
-        if token.get("value") != 20 or "options.select" not in " ".join(map(str, token.get("writers", []))):
-            raise Fail(f"step {self.cur}: state_get gives the token {json.dumps(token)[:400]}")
+            raise Fail(f"step {self.cur}: the unit event holds {state.get('value')}, not 20")
+        self.res["pick_event"], self.res["unit_event"] = pick, state
+        unit = {s["id"]: s for s in self.answer("state_get", {}).get("states", [])}.get("unit", {})
+        if unit.get("value") != 20 or "options.select" not in " ".join(map(str, unit.get("writers", []))):
+            raise Fail(f"step {self.cur}: state_get gives the unit {json.dumps(unit)[:400]}")
         after = self.until("the detail panel changes", lambda: (lambda d: d if d["version"] != before["version"]
                                                                 else None)(self.detail()), 30)
         if after["values"] == before["values"]:
-            raise Fail(f"step {self.cur}: the picked token left the values of detail unchanged")
-        if (after["rows"], after["cols"]) != (8, 64):
-            raise Fail(f"step {self.cur}: detail is {after['rows']} by {after['cols']}, not 8 by 64")
+            raise Fail(f"step {self.cur}: the picked unit left the values of detail unchanged")
+        if (after["rows"], after["cols"]) != (16, 2):
+            raise Fail(f"step {self.cur}: detail is {after['rows']} by {after['cols']}, not 16 by 2")
         self.res["detail_after_pick"] = {"before": before["version"], "after": after["version"],
                                          "shape": [after["rows"], after["cols"]]}
         self.capture("pick")
@@ -754,11 +758,11 @@ class Test:
         if not xs or xs[-1] > step or abs(ys[-1] - value) > 1e-4 * max(1.0, abs(value)):
             raise Fail(f"step {self.cur}: the bound value {value} differs from the last value of trace at step "
                        f"{step}: x {xs[-3:]} y {ys[-3:]}")
-        token = {s["id"]: s for s in self.answer("state_get", {}).get("states", [])}["token"]["value"]
+        unit = {s["id"]: s for s in self.answer("state_get", {}).get("states", [])}["unit"]["value"]
         cursor = self.cursor_now()
-        if token != 20 or cursor["step"] != step:
-            raise Fail(f"step {self.cur}: token {token} and cursor {cursor} do not match step {step} and token 20")
-        return f"Step {step:,d}  Token {token:d}  Value {value:.3f}"
+        if unit != 20 or cursor["step"] != step:
+            raise Fail(f"step {self.cur}: unit {unit} and cursor {cursor} do not match step {step} and unit 20")
+        return f"Step {step:,d}  Unit {unit:d}  Value {value:.3f}"
 
     def step_k_live(self):
         """Live again: the cursor follows the run, and the bound text follows the newest step."""
@@ -945,11 +949,16 @@ class Test:
         self.res["sent_edits"] = dict(self.sent)
 
     def step_q_script_lines(self):
-        """The only lines of train.py that name Caliper are the import and the watch call."""
-        lines = [l.strip() for l in (HERE / "train.py").read_text().splitlines() if re.search("caliper", l, re.I)]
+        """The canonical MNIST script calls caliper.watch and contains no instrument/spec builder code."""
+        text = (ROOT / "examples" / "mnist" / "train.py").read_text()
+        lines = [l.strip() for l in text.splitlines() if re.search("caliper", l, re.I)]
         self.res["caliper_lines"] = lines
-        if lines != ["import caliper", "caliper.watch(model, optimizer)"]:
-            raise Fail(f"step {self.cur}: train.py names Caliper on these lines: {lines}")
+        if not any("caliper.watch(" in l for l in lines):
+            raise Fail(f"step {self.cur}: examples/mnist/train.py does not call caliper.watch")
+        forbidden = [tok for tok in ("panel_create", "control_create", "spec_new", "layout_set", "caliper.scene")
+                     if tok in text]
+        if forbidden:
+            raise Fail(f"step {self.cur}: examples/mnist/train.py contains instrument code: {forbidden}")
 
     def step_r_unchanged(self):
         """The SHA-256 of the app, caliper-mcp and the package files is the same as before the run."""
@@ -994,11 +1003,11 @@ def run(a):
            if k not in ("CALIPER_API", "CALIPER_AUTOLAUNCH", "CALIPER_EXIT_AFTER", "CALIPER_APPLET_PATH")
            and not k.startswith("CALIPER_RUN_")}
     env["PYTHONPATH"] = str(ROOT / "python") + os.pathsep + env.get("PYTHONPATH", "")
-    pre = subprocess.run([a.python, "-c", "import numpy, torch, caliper, caliper._netio, caliper._producer"],
+    pre = subprocess.run([a.python, "-c", "import numpy, torch, torchvision, caliper, caliper._netio, caliper._producer"],
                          env=env, capture_output=True, text=True)
     if pre.returncode != 0:
         why = pre.stderr.strip().splitlines()[-1] if pre.stderr.strip() else "an import failed"
-        raise Skip(f"torch or the native network sender is missing: {why}")
+        raise Skip(f"torch, torchvision or the native network sender is missing: {why}")
     gpu = subprocess.run([a.python, "-c", "import torch; raise SystemExit(0 if torch.backends.mps.is_available() else 3)"],
                          env=env, capture_output=True, text=True)
     if gpu.returncode != 0:
@@ -1009,10 +1018,14 @@ def run(a):
     (work / "user").mkdir()
     ws = work / "workspace"
     ws.mkdir()
-    (ws / "train.py").write_text((HERE / "train.py").read_text())
+    (ws / "train.py").write_text((ROOT / "examples" / "mnist" / "train.py").read_text())
+    mnist_data = Path(
+        os.environ.get("CALIPER_MNIST_DATA_DIR", str(Path.home() / ".cache" / "caliper" / "mnist"))
+    ).expanduser()
     env.update({"CALIPER_AGENT_OFFLINE": "1", "CALIPER_HIDDEN": "1", "CALIPER_DATA_DIR": str(work / "data"),
                 "CALIPER_USER_APPLETS_DIR": str(work / "user"), "CALIPER_WINDOW_SIZE": "1600x1000",
-                "CALIPER_WORKSPACE": str(ws), "CALIPER_RUN_PYTHON": a.python})
+                "CALIPER_WORKSPACE": str(ws), "CALIPER_RUN_PYTHON": a.python,
+                "CALIPER_MNIST_DATA_DIR": str(mnist_data)})
     decisions = work / "approvals.txt"
     decisions.write_text("\n".join(APPROVALS) + "\n")
     capture_dir = Path(a.capture_dir) if a.capture_dir else work / "captures"

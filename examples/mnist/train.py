@@ -168,6 +168,10 @@ def train(
     max_steps: int | None,
     probe_every: int,
     pace: float,
+    log_every: int = 0,
+    print_lr: bool = False,
+    probe_series: bool = False,
+    lr_factor=None,
 ) -> dict[str, float | int]:
     """Run the MNIST training loop and publish live Caliper views."""
     from caliper import interp as caliper_interp
@@ -205,9 +209,16 @@ def train(
         caliper.show(probe_acts["conv1"], "conv1.act")
         caliper.points(probe_acts["hidden"] @ proj, probe_y, "embedding", classes=10)
         caliper_interp.publish("probe.logits", probe_out.detach().contiguous())
+        if probe_series:
+            preds = probe_out.argmax(dim=1)
+            for d in range(4):
+                mask = probe_y == d
+                if mask.any():
+                    caliper.series((preds[mask] == d).float().mean(), f"probe.digit_{d}")
 
     step = 0
     last_loss = float("nan")
+    last_lr: float | None = None
     t0 = time.perf_counter()
     model.train()
     try:
@@ -237,6 +248,15 @@ def train(
                     publish_probe()
                 # --8<-- [end:views]
                 # --8<-- [end:train-step]
+
+                if log_every > 0 and step % log_every == 0:
+                    print(f"step {step} loss {loss.item():.6f}", flush=True)
+                if print_lr:
+                    factor = float(lr_factor()) if lr_factor is not None else 1.0
+                    cur_lr = float(optimizer.param_groups[0]["lr"]) * factor
+                    if last_lr is None or abs(cur_lr - last_lr) > 1e-12 * max(1.0, abs(cur_lr)):
+                        print(f"lr {cur_lr:.6g} step {step}", flush=True)
+                        last_lr = cur_lr
 
                 if pace > 0:
                     time.sleep(pace)
@@ -298,6 +318,14 @@ def build_parser() -> argparse.ArgumentParser:
                     help="app mode: seconds to wait for the Caliper app to attach")
     ap.add_argument("--pace", type=float, default=0.0,
                     help="optional pause in seconds after each step")
+    ap.add_argument("--watch-activations", action="store_true",
+                    help="publish per-module activation views through caliper.watch")
+    ap.add_argument("--log-every", type=int, default=0,
+                    help="print 'step <n> loss <v>' every N optimizer steps (0 disables)")
+    ap.add_argument("--print-lr", action="store_true",
+                    help="print 'lr <v> step <n>' whenever the effective learning rate changes")
+    ap.add_argument("--probe-series", action="store_true",
+                    help="publish per-digit probe accuracy series (probe.digit_0..3) at each probe step")
     return ap
 
 
@@ -315,13 +343,23 @@ def main(argv: list[str] | None = None) -> int:
         args.data_dir, args.batch_size, args.test_batch_size
     )
     probe_x, probe_y, proj = make_probe(test_set, args.probe_size, device)
+    from caliper import interp as caliper_interp
+    caliper_interp.publish(
+        "probe.images",
+        (probe_x.squeeze(1) * MNIST_STD[0] + MNIST_MEAN[0]).clamp(0.0, 1.0).contiguous(),
+    )
+    caliper_interp.publish("probe.labels", probe_y.to(torch.int32).contiguous())
+    caliper_interp.publish(
+        "probe.logits",
+        torch.zeros((probe_x.size(0), 10), dtype=torch.float32, device=device),
+    )
 
     # --8<-- [start:setup]
     model = Net().to(device)
     optimizer = torch.optim.Adadelta(model.parameters(), lr=args.lr)
     scheduler = StepLR(optimizer, step_size=1, gamma=args.gamma)
     # --8<-- [start:watch]
-    watch = caliper.watch(model, optimizer, activations=False, groups=False)
+    watch = caliper.watch(model, optimizer, activations=args.watch_activations, groups=False)
     # --8<-- [end:watch]
     # --8<-- [end:setup]
 
@@ -330,6 +368,10 @@ def main(argv: list[str] | None = None) -> int:
         max_steps=args.steps,
         probe_every=max(1, args.probe_every),
         pace=args.pace,
+        log_every=max(0, args.log_every),
+        print_lr=args.print_lr,
+        probe_series=args.probe_series,
+        lr_factor=lambda: watch._run.factor if watch._run is not None else 1.0,
     )
 
     try:
