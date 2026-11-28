@@ -45,7 +45,6 @@ REPO_PREFIXES = (
     "src/",
     "include/",
     "sdk/",
-    "applets/",
     "examples/",
     "python/",
     "web/",
@@ -81,8 +80,6 @@ EXEMPT_PATH_PREFIXES = (
     "include/caliper-embed",
     "include/caliper-testing",
     "third_party/libtorch",
-    "applets/services/",
-    "applets/loss_view",
     "tools/list",
     "tools/call",
 )

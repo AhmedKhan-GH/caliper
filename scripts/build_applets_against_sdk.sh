@@ -6,8 +6,8 @@
 #
 #   scripts/build_applets_against_sdk.sh <core build folder> <work folder> [applet folder...]
 #
-# Without applet folders it builds examples/hello and
-# every applets/* folder that has a CMakeLists.txt. The SDK goes to
+# Without applet folders it builds examples/hello_world and, when torch is
+# enabled in the installed SDK, examples/mnist/applet. The SDK goes to
 # <work folder>/caliper-sdk and the builds to <work folder>/build/<name>.
 # CMAKE_GENERATOR and CMAKE_BUILD_TYPE from the environment are honoured
 # (the build type defaults to Release).
@@ -25,19 +25,25 @@ shift 2
 # and pwd gives the usual path.
 root="$(cd "$(dirname "$0")/.." && { pwd -W 2>/dev/null || pwd; })"
 
-if [ $# -eq 0 ]; then
-    set -- "$root/examples/hello"
-    for dir in "$root"/applets/*/; do
-        [ -f "$dir/CMakeLists.txt" ] && set -- "$@" "${dir%/}"
-    done
-fi
-
 prefix="$work/caliper-sdk"
 rm -rf "$prefix"
 cmake --install "$core_build" --prefix "$prefix" --component sdk > /dev/null
 
+if [ $# -eq 0 ]; then
+    set -- "$root/examples/hello_world"
+    sdk_info="$prefix/lib/cmake/caliper-sdk/caliper-sdk-info.cmake"
+    if [ -f "$sdk_info" ] && grep -qE '^set\(CALIPER_TORCH_VERSION "[^"]+"\)' "$sdk_info"; then
+        if [ -f "$root/examples/mnist/applet/CMakeLists.txt" ]; then
+            set -- "$@" "$root/examples/mnist/applet"
+        fi
+    fi
+fi
+
 for dir in "$@"; do
     name="$(basename "$dir")"
+    if [ "$name" = "applet" ]; then
+        name="$(basename "$(dirname "$dir")")_applet"
+    fi
     echo "== $name"
     cmake -S "$dir" -B "$work/build/$name" \
         -DCMAKE_PREFIX_PATH="$prefix" \

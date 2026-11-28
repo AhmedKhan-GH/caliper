@@ -2,11 +2,11 @@
 """Fail when the host names an applet.
 
 The host must work with any applet and name none. This check collects, from
-the applets and examples in this repository:
+the example applets in this repository:
 
-  * the [applet] id and name of every *.caliper.toml under applets/ and examples/;
+  * the [applet] id and name of every *.caliper.toml under examples/;
   * every window title passed as a string literal to ImGui::Begin(...) in the
-    sources under applets/ and examples/;
+    sources under examples/;
 
 and fails if any of them appears as a whole C or C++ string literal in the
 code of a source file under src/ or include/. Matching whole literals, not
@@ -97,11 +97,14 @@ def source_files(folder):
 def collect_needles(root):
     """Maps each applet id, name and window title to where it came from."""
     needles = {}
-    for top in ("applets", "examples"):
-        for manifest in sorted((root / top).rglob("*.caliper.toml")):
+    for top in ("examples",):
+        folder = root / top
+        if not folder.is_dir():
+            continue
+        for manifest in sorted(folder.rglob("*.caliper.toml")):
             for value in manifest_names(manifest):
                 needles.setdefault(value, f"{manifest.relative_to(root)}")
-        for source in source_files(root / top):
+        for source in source_files(folder):
             text = source.read_text(encoding="utf-8", errors="replace")
             for match in BEGIN_TITLE.finditer(text):
                 title = match.group(1)

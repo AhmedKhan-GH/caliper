@@ -107,11 +107,10 @@ WINDOWS_ONLY = {
 }
 # tests/sdk_install_probe/no_embed/no_embed.cpp is left out: it is built to fail
 # (an applet that includes <caliper/embed.h> must not compile).
-# The applets the Windows lane builds against the installed SDK
-# (scripts/build_applets_against_sdk.sh with no folder: every scope but these).
-APPLETS_SKIPPED_ON_WINDOWS = {"embed_scope", "gpt_scope"}
-# An applet gets the SDK, UI-stack and export definitions of examples/hello.
-APPLET_DONORS = ["examples/hello/hello.cpp"]
+# An applet gets the SDK, UI-stack and export definitions of examples/hello_world.
+APPLET_DONORS = ["examples/hello_world/hello_world.cpp"]
+# Standalone example applets checked in addition to any already in compile_commands.json.
+EXAMPLE_APPLETS = ("examples/hello_world", "examples/mnist/applet")
 EXTRA_DEFINES = ["WIN32", "_WINDOWS", "_MBCS", "VK_USE_PLATFORM_WIN32_KHR", "IMGUI_IMPL_VULKAN_USE_VOLK"]
 MACOS_DEFINES = {"CALIPER_HAVE_METAL"}
 
@@ -325,9 +324,9 @@ def translation_units(build: str) -> list[tuple[str, list[str], str]]:
             k += len(item)
             if not any(afl[m:m + len(item)] == item for m in range(len(afl))):
                 afl += item
-    for scope in sorted(os.listdir(os.path.join(ROOT, "applets"))):
-        d = os.path.join(ROOT, "applets", scope)
-        if scope in APPLETS_SKIPPED_ON_WINDOWS or not os.path.exists(os.path.join(d, "CMakeLists.txt")):
+    for app_rel in EXAMPLE_APPLETS:
+        d = os.path.join(ROOT, app_rel)
+        if not os.path.exists(os.path.join(d, "CMakeLists.txt")):
             continue
         for dirpath, _, files in os.walk(d):
             if "/tests" in dirpath[len(d):]:
@@ -335,7 +334,8 @@ def translation_units(build: str) -> list[tuple[str, list[str], str]]:
             for f in sorted(files):
                 if f.endswith((".cpp", ".c")):
                     rel = os.path.relpath(os.path.join(dirpath, f), ROOT)
-                    units.append((rel, afl + ["-I" + d], astd))
+                    if rel not in by_rel:
+                        units.append((rel, afl + ["-I" + d], astd))
     return units
 
 
