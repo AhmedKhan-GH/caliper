@@ -13,6 +13,8 @@ Install the `interp` extra from the repository root to pin compatible library ve
 pip install -e ".[interp]"
 ```
 
+The build needs Rust (`cargo`), because it compiles the runtime WGSL compiler into `caliper._producer`, which runs the derive halves of the library pieces.
+
 The `interp` extra installs compatible tested versions:
 
 - `torch>=2.15.0` and `transformers>=5.24.0,<5.25.0`

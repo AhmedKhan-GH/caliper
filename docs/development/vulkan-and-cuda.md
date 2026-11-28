@@ -94,7 +94,7 @@ The library is a Rust static library, which CI prebuilds for each platform, so t
 
 - `CALIPER_WGSL_LIBRARY=<file>` names a library that a script or another build placed.
 - `CALIPER_WGSL_DOWNLOAD=ON` downloads the archive for the platform at configure time and checks its SHA-256. `CALIPER_WGSL_URL` names the release folder of the archives.
-- `CALIPER_WGSL_FROM_SOURCE=ON` builds the library with cargo at build time. It needs Rust and Python. The configure presets in `CMakePresets.json` enable this option until prebuilt archives are published.
+- `CALIPER_WGSL_FROM_SOURCE=ON` builds the library with cargo at build time. It needs Rust and Python. The configure presets in `CMakePresets.json` and the Python package build in `pyproject.toml` enable this option until prebuilt archives are published.
 
 ## Log Lines and Switches
 
