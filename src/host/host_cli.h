@@ -3,33 +3,33 @@
 // The caliper executable's command line. It is parsed before any window,
 // AppKit, GLFW or renderer exists. `caliper` with no subcommand and
 // `caliper dev` start the app; every other subcommand runs and exits without
-// starting it, so it never shows a window. `shot` draws the app's applet page
+// starting it, so it never shows a window. `shot` draws the app's instrument page
 // into an offscreen canvas (shot.h) and opens no window either.
 //
-//   caliper [--applets <dir>]... [--url <link>] [--api [--api-port <n>] [--allow-control]] [--hidden]
+//   caliper [--instruments <dir>]... [--url <link>] [--api [--api-port <n>] [--allow-control]] [--hidden]
 //           [--workspace <dir>]               start the app
-//   caliper dev <folder> [--applets <dir>]... [--url <link>] [--api [--api-port <n>] [--allow-control]]
+//   caliper dev <folder> [--instruments <dir>]... [--url <link>] [--api [--api-port <n>] [--allow-control]]
 //               [--hidden] [--workspace <dir>] start the app, <folder> searched first
-//   caliper list [--applets <dir>]... [--workspace <dir>]
-//                                             list the applets in search order
+//   caliper list [--instruments <dir>]... [--workspace <dir>]
+//                                             list the instruments in search order
 //   caliper check <folder>                    run the pre-load checks on <folder>
 //   caliper install <folder>                  check, then copy into the user folder
-//   caliper new <name> [<dir>]                create an applet from a template
+//   caliper new <name> [<dir>]                create an instrument from a template
 //   caliper build <folder>                    configure and build it, then check it
 //   caliper info                              print versions and served services
-//   caliper shot [--applets <dir>]... --launch <id> [--size <W>x<H>]
+//   caliper shot [--instruments <dir>]... --launch <id> [--size <W>x<H>]
 //                [--frames <N>] --out <file.png> [--api [--api-port <n>] [--allow-control]]
-//                [--workspace <dir>]          write the applet page as a PNG
+//                [--workspace <dir>]          write the instrument page as a PNG
 //   caliper serve [--port <n>] [--token-file <file>] [--assets <dir>]
 //                                             run the hub of wire protocol v3
 //   caliper --help                            print the usage
 //
-// `--applets <dir>` (or `--applets=<dir>`) adds a development folder to the
-// search, before CALIPER_APPLET_PATH and the installed folders; it may be
+// `--instruments <dir>` (or `--instruments=<dir>`) adds a development folder to the
+// search, before CALIPER_INSTRUMENT_PATH and the installed folders; it may be
 // given more than once, and the folders are searched in the order given.
-// A development folder without manifests whose applets/ subfolder has some,
-// such as an applet's build folder, stands for that subfolder
-// (resolve_applet_folder); dev, check and install resolve their folder the
+// A development folder without manifests whose instruments/ subfolder has some,
+// such as an instrument's build folder, stands for that subfolder
+// (resolve_instrument_folder); dev, check and install resolve their folder the
 // same way.
 //
 // `caliper serve` runs the hub (net/hub.h) on 127.0.0.1 until SIGINT or
@@ -71,7 +71,7 @@
 // needs the renderer, so only its parsing is here and main() runs it
 // (run_shot in shot.h).
 // ============================================================================
-#include "applet_loader.h"
+#include "instrument_loader.h"
 #include "negotiation.h"
 #include "net/hub.h"
 #include "net/json.h"
@@ -100,8 +100,8 @@ namespace caliper_host {
 struct CommandLine {
     enum class Command { Run, Help, Dev, List, Check, Install, New, Build, Info, Shot, Serve };
     Command command = Command::Run;
-    std::vector<std::string> applet_dirs;   // dev's folder, then --applets, in order
-    std::vector<std::string> operands;      // the subcommand's operands
+    std::vector<std::string> instrument_dirs;   // dev's folder, then --instruments, in order
+    std::vector<std::string> operands;          // the subcommand's operands
     // serve
     int port = -1;                          // --port; -1: kDefaultHubPort
     std::string token_file;                 // --token-file
@@ -124,17 +124,17 @@ struct CommandLine {
 };
 
 inline const char* usage_text() {
-    return "usage: caliper [--applets <dir>]... [--url <link>] [--api [--api-port <n>] [--allow-control]] [--hidden]\n"
+    return "usage: caliper [--instruments <dir>]... [--url <link>] [--api [--api-port <n>] [--allow-control]] [--hidden]\n"
            "               [--workspace <dir>]\n"
-           "       caliper dev <folder> [--applets <dir>]... [--url <link>] [--api [--api-port <n>] [--allow-control]]\n"
+           "       caliper dev <folder> [--instruments <dir>]... [--url <link>] [--api [--api-port <n>] [--allow-control]]\n"
            "                   [--hidden] [--workspace <dir>]\n"
-           "       caliper list [--applets <dir>]... [--workspace <dir>]\n"
+           "       caliper list [--instruments <dir>]... [--workspace <dir>]\n"
            "       caliper check <folder>\n"
            "       caliper install <folder>\n"
            "       caliper new <name> [<dir>]\n"
            "       caliper build <folder>\n"
            "       caliper info\n"
-           "       caliper shot [--applets <dir>]... --launch <id> [--size <W>x<H>]\n"
+           "       caliper shot [--instruments <dir>]... --launch <id> [--size <W>x<H>]\n"
            "                    [--frames <N>] --out <file.png> [--api [--api-port <n>] [--allow-control]]\n"
            "                    [--workspace <dir>]\n"
            "       caliper serve [--port <n>] [--token-file <file>] [--assets <dir>] [--allow-control]\n"
@@ -188,7 +188,7 @@ inline std::string windows_unavailable_message(const char* what) {
 inline CommandLine parse_command_line(int argc, const char* const* argv) {
     using C = CommandLine::Command;
     CommandLine cl;
-    const std::string kApplets = "--applets";
+    const std::string kInstruments = "--instruments";
     bool have_command = false;
     // shot's options, in the order of their first appearance.
     std::vector<std::string> shot_options;
@@ -202,22 +202,22 @@ inline CommandLine parse_command_line(int argc, const char* const* argv) {
         if (arg == "--help" || arg == "-h") {
             cl.command = C::Help;
             cl.operands.clear();
-            cl.applet_dirs.clear();
+            cl.instrument_dirs.clear();
             return cl;
         }
-        if (arg == kApplets || arg.rfind(kApplets + "=", 0) == 0) {
+        if (arg == kInstruments || arg.rfind(kInstruments + "=", 0) == 0) {
             std::string dir;
-            if (arg == kApplets) {
+            if (arg == kInstruments) {
                 if (i + 1 < argc && argv[i + 1]) dir = argv[++i];
             } else {
-                dir = arg.substr(kApplets.size() + 1);
+                dir = arg.substr(kInstruments.size() + 1);
             }
-            // "--applets --help" names no folder: an option is never one.
+            // "--instruments --help" names no folder: an option is never one.
             if (dir.empty() || dir.rfind("--", 0) == 0) {
-                cl.error = "--applets needs a folder";
+                cl.error = "--instruments needs a folder";
                 return cl;
             }
-            cl.applet_dirs.push_back(dir);
+            cl.instrument_dirs.push_back(dir);
             continue;
         }
         // shot's options: --launch, --size, --frames and --out, each with its
@@ -239,7 +239,7 @@ inline CommandLine parse_command_line(int argc, const char* const* argv) {
             }
             shot_options.push_back(opt);
             if (value.empty() || value.rfind("--", 0) == 0) {
-                cl.error = opt + (opt == "--launch"   ? " needs an applet id"
+                cl.error = opt + (opt == "--launch"   ? " needs an instrument id"
                                   : opt == "--size"   ? " needs a size such as 1600x1000"
                                   : opt == "--frames" ? " needs a number of frames"
                                                       : " needs a file");
@@ -436,7 +436,7 @@ inline CommandLine parse_command_line(int argc, const char* const* argv) {
         case C::Dev:
             operands(1, 1, "dev");
             if (cl.error.empty())   // the dev folder is searched first
-                cl.applet_dirs.insert(cl.applet_dirs.begin(), cl.operands[0]);
+                cl.instrument_dirs.insert(cl.instrument_dirs.begin(), cl.operands[0]);
             break;
         case C::List: operands(0, 0, "list"); break;
         case C::Info: operands(0, 0, "info"); break;
@@ -453,10 +453,10 @@ inline CommandLine parse_command_line(int argc, const char* const* argv) {
                 cl.error = "shot needs --out <file.png>";
             break;
     }
-    if (cl.error.empty() && !cl.applet_dirs.empty() &&
+    if (cl.error.empty() && !cl.instrument_dirs.empty() &&
         (cl.command == C::Check || cl.command == C::Install || cl.command == C::Build ||
          cl.command == C::New || cl.command == C::Info || cl.command == C::Serve))
-        cl.error = "--applets applies only to starting the app, dev, list and shot";
+        cl.error = "--instruments applies only to starting the app, dev, list and shot";
     if (cl.error.empty() && !shot_options.empty() && cl.command != C::Shot)
         cl.error = shot_options.front() + " applies only to shot";
     if (cl.error.empty() && !serve_options.empty() && cl.command != C::Serve)
@@ -524,16 +524,16 @@ inline WorkspaceChoice workspace_choice(const CommandLine& cl, const char* env,
 // What the subcommands read from the host. main() fills it with the
 // executable's own values; a test supplies its own folders.
 struct CliContext {
-    HostCaps caps;                      // what the host advertises (host_caps())
-    std::string sdk_version;            // host_sdk_version(); "" when unknown
-    std::string user_dir;               // the user applets folder
-    std::string shipped_dir;            // the applets shipped with the app
-    std::string data_root;              // <app data>/data, for data-schema stamps
-    const char* applet_path_env = nullptr;   // CALIPER_APPLET_PATH
-    std::string hub_file;               // serve: where producers find the hub ("" none)
-    std::string exe_dir;                // build: the executable's folder, for the SDK search
-    // list: the builder's workspace (workspace_choice), whose applets/ folder
-    // holds spec applets; "" for none. Only read.
+    HostCaps caps;                             // what the host advertises (host_caps())
+    std::string sdk_version;                   // host_sdk_version(); "" when unknown
+    std::string user_dir;                      // the user instruments folder
+    std::string shipped_dir;                   // the instruments shipped with the app
+    std::string data_root;                     // <app data>/data, for data-schema stamps
+    const char* instrument_path_env = nullptr; // CALIPER_INSTRUMENT_PATH
+    std::string hub_file;                      // serve: where producers find the hub ("" none)
+    std::string exe_dir;                       // build: the executable's folder, for the SDK search
+    // list: the builder's workspace (workspace_choice), whose instruments/ folder
+    // holds spec-based instruments; "" for none. Only read.
     std::string workspace_dir;
 };
 
@@ -541,18 +541,18 @@ namespace cli_detail {
 
 namespace fs = std::filesystem;
 
-inline bool passes(const AppletEntry& a) {
-    return a.status == AppletStatus::Ready || a.status == AppletStatus::Shadowed;
+inline bool passes(const InstrumentEntry& a) {
+    return a.status == InstrumentStatus::Ready || a.status == InstrumentStatus::Shadowed;
 }
 
-// The order list prints the applets in: search order, then id, then the
+// The order list prints the instruments in: search order, then id, then the
 // highest version first.
-inline std::vector<int> list_order(const AppletLoader& L) {
+inline std::vector<int> list_order(const InstrumentLoader& L) {
     std::vector<int> order;
     for (int i = 0; i < L.count(); i++) order.push_back(i);
     std::stable_sort(order.begin(), order.end(), [&](int x, int y) {
-        const AppletEntry& a = L.at(x);
-        const AppletEntry& b = L.at(y);
+        const InstrumentEntry& a = L.at(x);
+        const InstrumentEntry& b = L.at(y);
         if (a.search_rank != b.search_rank) return a.search_rank < b.search_rank;
         const std::string& ia = a.manifest.id.empty() ? a.manifest.name : a.manifest.id;
         const std::string& ib = b.manifest.id.empty() ? b.manifest.name : b.manifest.id;
@@ -562,28 +562,28 @@ inline std::vector<int> list_order(const AppletLoader& L) {
     return order;
 }
 
-inline std::string list_id(const AppletEntry& a) {
+inline std::string list_id(const InstrumentEntry& a) {
     return a.manifest.id.empty() ? a.manifest.name : a.manifest.id;
 }
 
-// One line per applet: status, id, version, kind (library or spec), folder,
-// in columns; a refused, failed or shadowed applet's reason on the next line,
+// One line per instrument: status, id, version, kind (library or spec), folder,
+// in columns; a refused, failed or shadowed instrument's reason on the next line,
 // under the id. `notes`, when given, holds lines to print under an entry
 // after its reason, or in its place for a failed entry: check's diagnostics
-// of a spec applet, whose first error is the reason of a failed one.
-inline void print_entries(const AppletLoader& L, std::ostream& out,
+// of a kind = "spec" instrument, whose first error is the reason of a failed one.
+inline void print_entries(const InstrumentLoader& L, std::ostream& out,
                           const std::map<int, std::vector<std::string>>* notes = nullptr) {
     const std::vector<int> order = list_order(L);
-    auto id_of = [](const AppletEntry& a) { return list_id(a); };
-    auto version_of = [](const AppletEntry& a) {
+    auto id_of = [](const InstrumentEntry& a) { return list_id(a); };
+    auto version_of = [](const InstrumentEntry& a) {
         return a.manifest.version.empty() ? std::string("-") : a.manifest.version;
     };
-    auto kind_of = [](const AppletEntry& a) {
-        return std::string(applet_kind_word(a.manifest.kind));
+    auto kind_of = [](const InstrumentEntry& a) {
+        return std::string(instrument_kind_word(a.manifest.kind));
     };
     size_t ws = 0, wi = 0, wv = 0, wk = 0;
     for (int i : order) {
-        ws = std::max(ws, std::string(applet_status_word(L.at(i).status)).size());
+        ws = std::max(ws, std::string(instrument_status_word(L.at(i).status)).size());
         wi = std::max(wi, id_of(L.at(i)).size());
         wv = std::max(wv, version_of(L.at(i)).size());
         wk = std::max(wk, kind_of(L.at(i)).size());
@@ -592,28 +592,28 @@ inline void print_entries(const AppletLoader& L, std::ostream& out,
         return s + std::string(w > s.size() ? w - s.size() : 0, ' ');
     };
     for (int i : order) {
-        const AppletEntry& a = L.at(i);
-        out << pad(applet_status_word(a.status), ws) << "  " << pad(id_of(a), wi)
+        const InstrumentEntry& a = L.at(i);
+        out << pad(instrument_status_word(a.status), ws) << "  " << pad(id_of(a), wi)
             << "  " << pad(version_of(a), wv) << "  " << pad(kind_of(a), wk) << "  "
             << a.folder << "\n";
         const std::vector<std::string>* lines = nullptr;
         if (notes)
             if (auto it = notes->find(i); it != notes->end()) lines = &it->second;
-        // A failed spec applet's reason is its first error, which its
+        // A failed kind = "spec" instrument's reason is its first error, which its
         // diagnostics hold too.
-        const bool reason = a.status != AppletStatus::Ready && !a.status_text.empty() &&
-                            !(lines && a.status == AppletStatus::Failed);
+        const bool reason = a.status != InstrumentStatus::Ready && !a.status_text.empty() &&
+                            !(lines && a.status == InstrumentStatus::Failed);
         if (reason) out << std::string(ws + 2, ' ') << a.status_text << "\n";
         if (lines)
             for (const std::string& line : *lines) out << std::string(ws + 2, ' ') << line << "\n";
     }
 }
 
-// Scans one folder and prints it; the number of applets that do not pass.
-// A spec applet that passes the listing checks is then validated in full
-// (AppletLoader::check_spec), and its diagnostics are printed under it with
+// Scans one folder and prints it; the number of instruments that do not pass.
+// A kind = "spec" instrument that passes the listing checks is then validated in full
+// (InstrumentLoader::check_spec), and its diagnostics are printed under it with
 // their lines and columns; one with an error fails.
-inline int check_folder(const std::string& folder, AppletLoader& L,
+inline int check_folder(const std::string& folder, InstrumentLoader& L,
                         std::ostream& out, std::ostream& err) {
     std::error_code ec;
     if (!fs::is_directory(folder, ec)) {
@@ -621,19 +621,19 @@ inline int check_folder(const std::string& folder, AppletLoader& L,
         return -1;
     }
     // Absolute, as list prints folders, and resolved: a build folder whose
-    // manifests are in its applets/ subfolder stands for that subfolder.
-    const auto dirs = applet_search_dirs({folder}, nullptr, "", "");
+    // manifests are in its instruments/ subfolder stands for that subfolder.
+    const auto dirs = instrument_search_dirs({folder}, nullptr, "", "");
     L.scan(dirs);
     if (L.count() == 0) {
-        err << "caliper: no applets in " << dirs.front() << "\n";
+        err << "caliper: no instruments in " << dirs.front() << "\n";
         return -1;
     }
-    if (resolve_applet_folder(folder) != folder)   // its applets/ subfolder
-        out << "using the applets in " << dirs.front() << "\n";
+    if (resolve_instrument_folder(folder) != folder)   // its instruments/ subfolder
+        out << "using the instruments in " << dirs.front() << "\n";
     std::map<int, std::vector<std::string>> notes;
     for (int i = 0; i < L.count(); i++) {
-        const AppletEntry& a = L.at(i);
-        if (a.manifest.kind != AppletKind::Spec || !passes(a)) continue;
+        const InstrumentEntry& a = L.at(i);
+        if (a.manifest.kind != InstrumentKind::Spec || !passes(a)) continue;
         std::vector<SpecDiagnostic> found;
         L.check_spec(i, &found);
         const std::string file = fs::path(a.spec_path).filename().string();
@@ -663,7 +663,7 @@ inline bool write_file(const fs::path& path, const std::string& text) {
 }
 
 // One file or folder that install places, from the checked folder into the
-// user applets folder.
+// user instruments folder.
 struct InstallCopy {
     fs::path from;
     fs::path to;
@@ -694,7 +694,7 @@ inline bool install_all(const std::vector<InstallCopy>& copies, std::string& err
             fs::remove_all(it->tmp, e);
         }
     };
-    // Hidden temporary names: the loader never takes them for applets.
+    // Hidden temporary names: the loader never takes them for instruments.
     for (const InstallCopy& c : copies) {
         Step st;
         st.to = c.to;
@@ -752,12 +752,12 @@ inline std::string replace_all(std::string s, const std::string& from,
 // ---- caliper list ----------------------------------------------------------
 inline int run_list(const CommandLine& cl, const CliContext& ctx, std::ostream& out,
                     std::ostream& /*err*/) {
-    AppletLoader L(ctx.caps, ctx.data_root);
+    InstrumentLoader L(ctx.caps, ctx.data_root);
     L.set_workspace(ctx.workspace_dir);
-    L.scan(applet_search_dirs(cl.applet_dirs, ctx.applet_path_env, ctx.user_dir,
-                              ctx.shipped_dir, ctx.workspace_dir));
+    L.scan(instrument_search_dirs(cl.instrument_dirs, ctx.instrument_path_env, ctx.user_dir,
+                                  ctx.shipped_dir, ctx.workspace_dir));
     if (L.count() == 0) {
-        out << "no applets found\n";
+        out << "no instruments found\n";
         return 0;
     }
     cli_detail::print_entries(L, out);
@@ -767,10 +767,10 @@ inline int run_list(const CommandLine& cl, const CliContext& ctx, std::ostream& 
 // ---- caliper check <folder> ------------------------------------------------
 inline int run_check(const CommandLine& cl, const CliContext& ctx, std::ostream& out,
                      std::ostream& err) {
-    AppletLoader L(ctx.caps, ctx.data_root);
+    InstrumentLoader L(ctx.caps, ctx.data_root);
     const int failing = cli_detail::check_folder(cl.operands[0], L, out, err);
     if (failing < 0) return 1;
-    out << (L.count() - failing) << " of " << L.count() << " applets pass the checks\n";
+    out << (L.count() - failing) << " of " << L.count() << " instruments pass the checks\n";
     return failing == 0 ? 0 : 1;
 }
 
@@ -784,28 +784,28 @@ inline int run_install(const CommandLine& cl, const CliContext& ctx, std::ostrea
         return 2;
     }
     if (ctx.user_dir.empty()) {
-        err << "caliper: the user applets folder is unknown\n";
+        err << "caliper: the user instruments folder is unknown\n";
         return 1;
     }
     std::error_code ec;
     if (fs::is_directory(folder, ec) && fs::exists(ctx.user_dir, ec) &&
         fs::equivalent(folder, ctx.user_dir, ec)) {
-        err << "caliper: " << folder << " is the user applets folder already\n";
+        err << "caliper: " << folder << " is the user instruments folder already\n";
         return 1;
     }
-    AppletLoader L(ctx.caps, ctx.data_root);
+    InstrumentLoader L(ctx.caps, ctx.data_root);
     const int failing = cli_detail::check_folder(folder, L, out, err);
     if (failing < 0) return 1;
     if (failing > 0) {
         err << "caliper: nothing installed; " << failing << " of " << L.count()
-            << " applets do not pass the checks\n";
+            << " instruments do not pass the checks\n";
         return 1;
     }
-    // A spec applet has no library to place; it lives in a workspace.
+    // An instrument written as a spec has no library to place; it lives in a workspace.
     for (int i = 0; i < L.count(); i++)
-        if (L.at(i).manifest.kind == AppletKind::Spec) {
+        if (L.at(i).manifest.kind == InstrumentKind::Spec) {
             err << "caliper: nothing installed; " << L.at(i).manifest.id
-                << " is a spec applet, which install does not take\n";
+                << " is written as a spec, which install does not take\n";
             return 1;
         }
     fs::create_directories(ctx.user_dir, ec);
@@ -813,15 +813,15 @@ inline int run_install(const CommandLine& cl, const CliContext& ctx, std::ostrea
         err << "caliper: cannot create " << ctx.user_dir << "\n";
         return 1;
     }
-    // Per applet: its library, then its asset folder assets/<stem>/ beside
-    // the library when there is one (where an applet that reads files from
+    // Per instrument: its library, then its asset folder assets/<stem>/ beside
+    // the library when there is one (where an instrument that reads files from
     // beside its library keeps them), then its manifest last, so a
     // manifest never names a library or assets not yet in place. One
     // transaction for the whole folder: a failure installs nothing.
     const fs::path dest(ctx.user_dir);
     std::vector<cli_detail::InstallCopy> copies;
     for (int i = 0; i < L.count(); i++) {
-        const AppletEntry& a = L.at(i);
+        const InstrumentEntry& a = L.at(i);
         const fs::path lib(a.dylib_path), manifest(a.manifest_path);
         std::string stem = manifest.filename().string();
         stem.resize(stem.size() - std::string(".caliper.toml").size());
@@ -844,30 +844,30 @@ inline int run_install(const CommandLine& cl, const CliContext& ctx, std::ostrea
 
 // ---- caliper new <name> [<dir>] --------------------------------------------
 
-// The names an applet made by `caliper new` gets from one argument: either a
+// The names an instrument made by `caliper new` gets from one argument: either a
 // short name (`my-viewer`, id `dev.example.my-viewer`) or a full id
 // (`com.example.my-viewer`, whose last part is the short name).
-struct NewAppletNames {
+struct NewInstrumentNames {
     std::string id;            // com.example.my-viewer
     std::string short_name;    // my-viewer: the default folder
     std::string stem;          // my_viewer: target, library, manifest, source
     std::string display;       // My Viewer: manifest name and window title
-    std::string class_name;    // MyViewerApplet
+    std::string class_name;    // MyViewerInstrument
     std::string error;
 };
 
-inline NewAppletNames new_applet_names(const std::string& arg) {
-    NewAppletNames n;
+inline NewInstrumentNames new_instrument_names(const std::string& arg) {
+    NewInstrumentNames n;
     const size_t dot = arg.rfind('.');
     n.short_name = dot == std::string::npos ? arg : arg.substr(dot + 1);
     n.id = dot == std::string::npos ? "dev.example." + arg : arg;
     bool ok = !n.short_name.empty() && n.short_name.size() <= 64 &&
               n.short_name[0] >= 'a' && n.short_name[0] <= 'z' &&
-              n.short_name.back() != '-' && is_valid_applet_id(n.id);
+              n.short_name.back() != '-' && is_valid_instrument_id(n.id);
     for (char c : n.short_name)
         ok = ok && ((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-');
     if (!ok) {
-        n.error = "not a valid applet name: " + arg +
+        n.error = "not a valid instrument name: " + arg +
                   " (use lowercase letters, digits and '-', starting with a letter, "
                   "or a full id such as com.example.my-viewer)";
         return n;
@@ -887,7 +887,7 @@ inline NewAppletNames new_applet_names(const std::string& arg) {
                          [&](const char* r) { return target == r; }) != std::end(kReserved) ||
             target.rfind("caliper_", 0) == 0;
         if (reserved) {
-            n.error = "not a usable applet name: " + arg + " (the CMake target \"" +
+            n.error = "not a usable instrument name: " + arg + " (the CMake target \"" +
                       target + "\" is reserved; choose another name)";
             return n;
         }
@@ -906,30 +906,30 @@ inline NewAppletNames new_applet_names(const std::string& arg) {
         n.class_name += up;
         word_start = false;
     }
-    n.class_name += "Applet";
+    n.class_name += "Instrument";
     return n;
 }
 
 namespace cli_detail {
 
-inline const char* kNewCMakeLists = R"(# @NAME@: a Caliper applet, built against an installed Caliper SDK.
+inline const char* kNewCMakeLists = R"(# @NAME@: a Caliper instrument, built against an installed Caliper SDK.
 #
 #   cmake -S . -B build -DCMAKE_PREFIX_PATH=<sdk prefix>
 #   cmake --build build
 #   ctest --test-dir build
-#   caliper dev build/applets
+#   caliper dev build/instruments
 cmake_minimum_required(VERSION 3.18)
 project(@STEM@ LANGUAGES CXX)
 
 find_package(caliper-sdk @SDK_VERSION@CONFIG REQUIRED)
 
-# The library lib@STEM@ (or @STEM@.dll) and its manifest, in build/applets.
+# The library lib@STEM@ (or @STEM@.dll) and its manifest, in build/instruments.
 # Add TORCH to link the libtorch the host was built with.
-caliper_add_applet(@STEM@
+caliper_add_instrument(@STEM@
     SOURCES @STEM@.cpp
     MANIFEST @STEM@.caliper.toml)
 
-# The applet's own test, on the SDK's fixture host: no window, no host.
+# The instrument's own test, on the SDK's fixture host: no window, no host.
 enable_testing()
 add_executable(@STEM@_tests tests/test_@STEM@.cpp)
 target_link_libraries(@STEM@_tests PRIVATE caliper::sdk_testing caliper::ui_stack)
@@ -937,12 +937,12 @@ set_target_properties(@STEM@_tests PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUI
 add_test(NAME @STEM@_tests COMMAND @STEM@_tests)
 )";
 
-inline const char* kNewManifest = R"([applet]
+inline const char* kNewManifest = R"([instrument]
 id      = "@ID@"
 name    = "@NAME@"
 version = "0.1.0"
-summary = "A new Caliper applet."
-tag     = "Applet"
+summary = "A new Caliper instrument."
+tag     = "Instrument"
 
 [compat]
 abi_epoch = @EPOCH@
@@ -952,12 +952,12 @@ min_host  = "@HOST_VERSION@"
 required = ["caliper.ui.v1", "caliper.log.v1"]
 )";
 
-inline const char* kNewSource = R"(// @NAME@: a Caliper applet. One window with a button and a plot.
+inline const char* kNewSource = R"(// @NAME@: a Caliper instrument. One window with a button and a plot.
 #include <caliper/caliper.hpp>
 #include <cmath>
 #include <vector>
 
-class @CLASS@ final : public caliper::Applet {
+class @CLASS@ final : public caliper::Instrument {
 public:
     bool on_init(caliper::Host& host) override {
         host_ = &host;
@@ -996,39 +996,39 @@ private:
 };
 
 // The id, version and services must match @STEM@.caliper.toml.
-CALIPER_APPLET(@CLASS@,
+CALIPER_INSTRUMENT(@CLASS@,
     .id       = "@ID@",
     .version  = "0.1.0",
     .name     = "@NAME@",
-    .summary  = "A new Caliper applet.",
-    .tag      = "Applet",
+    .summary  = "A new Caliper instrument.",
+    .tag      = "Instrument",
     .services = {CALIPER_UI_V1, CALIPER_LOG_V1})
 )";
 
 inline const char* kNewTest = R"(// @NAME@ on the SDK's fixture host: the descriptor agrees with the manifest,
-// and the applet initializes and cleans up without a window.
+// and the instrument initializes and cleans up without a window.
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <doctest/doctest.h>
 #include <caliper/fixture_host.h>
 #include <string>
 
-// The applet's source, compiled into the test so the test can drive its
+// The instrument's source, compiled into the test so the test can drive its
 // descriptor directly.
 #include "../@STEM@.cpp"
 
 TEST_CASE("@STEM@: descriptor and lifecycle") {
-    const CaliperAppletDescriptor* d = caliper_applet_descriptor();
+    const CaliperInstrumentDescriptor* d = caliper_instrument_descriptor();
     REQUIRE(d != nullptr);
     CHECK(std::string(d->id) == "@ID@");
     CHECK(std::string(d->version) == "0.1.0");
 
     caliper::testing::FixtureHost fx;
-    void* applet = d->api.create();
-    REQUIRE(applet != nullptr);
-    CHECK(d->api.initialize(applet, fx.host()));
+    void* instrument = d->api.create();
+    REQUIRE(instrument != nullptr);
+    CHECK(d->api.initialize(instrument, fx.host()));
     CHECK(fx.log_contains("@STEM@: on_init"));
-    d->api.cleanup(applet);
-    d->api.destroy(applet);
+    d->api.cleanup(instrument);
+    d->api.destroy(instrument);
     CHECK(fx.log_contains("@STEM@: on_cleanup"));
 }
 )";
@@ -1039,7 +1039,7 @@ inline int run_new(const CommandLine& cl, const CliContext& ctx, std::ostream& o
                    std::ostream& err) {
     namespace fs = std::filesystem;
     using cli_detail::replace_all;
-    const NewAppletNames n = new_applet_names(cl.operands[0]);
+    const NewInstrumentNames n = new_instrument_names(cl.operands[0]);
     if (!n.error.empty()) {
         err << "caliper: " << n.error << "\n";
         return 2;
@@ -1057,7 +1057,7 @@ inline int run_new(const CommandLine& cl, const CliContext& ctx, std::ostream& o
         err << "caliper: cannot create " << dir.string() << ": " << ec.message() << "\n";
         return 1;
     }
-    // A known SDK version becomes the find_package() floor; "0.2.0 " keeps
+    // A known SDK version becomes the find_package() floor; "0.3.0 " keeps
     // the template's spacing when it is there and when it is not.
     const std::string sdk = ctx.sdk_version.empty() ? "" : ctx.sdk_version + " ";
     auto fill = [&](std::string t) {
@@ -1082,7 +1082,7 @@ inline int run_new(const CommandLine& cl, const CliContext& ctx, std::ostream& o
             return 1;
         }
     }
-    out << "created " << dir.string() << " for applet " << n.id << "\n";
+    out << "created " << dir.string() << " for instrument " << n.id << "\n";
     for (const auto& [name, text] : files) out << "  " << name << "\n";
     return 0;
 }
@@ -1120,27 +1120,27 @@ inline std::string info_json(const CliContext& ctx) {
     return j.dump();
 }
 
-// What `caliper list` prints for the applets of `L`, in its order, as a JSON
-// object {"applets": [{"status", "id", "version", "kind", "folder", "reason"}]}:
+// What `caliper list` prints for the instruments of `L`, in its order, as a JSON
+// object {"instruments": [{"status", "id", "version", "kind", "folder", "reason"}]}:
 // the status word, the version ("" when the manifest has none), the kind
 // ("library" or "spec") and the reason that list prints under the id ("" for
-// a READY applet).
-inline std::string applets_json(const AppletLoader& L) {
+// a READY instrument).
+inline std::string instruments_json(const InstrumentLoader& L) {
     using caliper_net::Json;
     Json list = Json::array();
     for (int i : cli_detail::list_order(L)) {
-        const AppletEntry& a = L.at(i);
+        const InstrumentEntry& a = L.at(i);
         Json e = Json::object();
-        e.set("status", applet_status_word(a.status));
+        e.set("status", instrument_status_word(a.status));
         e.set("id", cli_detail::list_id(a));
         e.set("version", a.manifest.version);
-        e.set("kind", applet_kind_word(a.manifest.kind));
+        e.set("kind", instrument_kind_word(a.manifest.kind));
         e.set("folder", a.folder);
-        e.set("reason", a.status == AppletStatus::Ready ? std::string() : a.status_text);
+        e.set("reason", a.status == InstrumentStatus::Ready ? std::string() : a.status_text);
         list.push(std::move(e));
     }
     Json j = Json::object();
-    j.set("applets", std::move(list));
+    j.set("instruments", std::move(list));
     return j.dump();
 }
 

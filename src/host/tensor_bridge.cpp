@@ -410,7 +410,7 @@ bool TensorBridge::alloc_shared(CaliperDType dtype, int32_t ndim,
     e.shared = true;
 
     // Literal zero-copy (§3.5): when the backend imports our device, back the
-    // shared tensor with a device buffer the applet's kernels write in place —
+    // shared tensor with a device buffer the instrument's kernels write in place —
     // update_texture then does no copy. Falls back to a CPU-unified vector when
     // the backend has no device-shared texture path (GL or CUDA unpaired).
     void* device_ptr = nullptr;

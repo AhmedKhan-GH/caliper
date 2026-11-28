@@ -52,19 +52,19 @@ void set_bridge_log_sink(void (*sink)(CaliperLogLevel, const char*));
 namespace {
 
 // --- caliper.log.v1: timestamped console lines (console panel = later) ---
-// Installable sink (embed v1.1): when set, log.v1 lines route here instead of
+// Installable sink: when set, log.v1 lines route here instead of
 // stderr. A plain pointer, not atomic: it is installed at core create (before
-// any applet/worker exists) and cleared at shutdown AFTER workers join, so the
+// any instrument/worker exists) and cleared at shutdown AFTER workers join, so the
 // worker-thread reads are ordered by thread create/join (same discipline as
 // g_bridge's log sink). NULL => the built-in stderr writer below.
-void (*g_applet_log_sink)(void*, CaliperLogLevel, const char*) = nullptr;
-void*  g_applet_log_userdata = nullptr;
+void (*g_instrument_log_sink)(void*, CaliperLogLevel, const char*) = nullptr;
+void*  g_instrument_log_userdata = nullptr;
 
-// Reentrant time formatting: the docs promise log() is callable from applet
+// Reentrant time formatting: the docs promise log() is callable from instrument
 // worker threads, and plain std::localtime shares a static buffer.
 void log_impl(CaliperLogLevel level, const char* msg) {
-    if (g_applet_log_sink) {   // embedder installed a sink: route, don't touch stderr
-        g_applet_log_sink(g_applet_log_userdata, level, msg ? msg : "");
+    if (g_instrument_log_sink) {   // embedder installed a sink: route, don't touch stderr
+        g_instrument_log_sink(g_instrument_log_userdata, level, msg ? msg : "");
         return;
     }
     static const char* kTag[] = {"DEBUG", "INFO ", "WARN ", "ERROR"};
@@ -97,9 +97,9 @@ void ui_allocators(CaliperImGuiAllocFn* out_alloc, CaliperImGuiFreeFn* out_free,
 const CaliperUiV1 kUi = {sizeof(CaliperUiV1), &ui_imgui, &ui_implot,
                          &ui_implot3d, &ui_allocators};
 
-// --- caliper.ui.v1_1: v1 plus dock_hint (docs/applets/services/caliper-ui-v1-1.md) ---
+// --- caliper.ui.v1_1: v1 plus dock_hint (docs/instruments/services/caliper-ui-v1-1.md) ---
 // The hint goes to the page that owns the docked layout (the caliper exe's
-// applet page installs the sink). Without a sink, as in the embed core, a
+// instrument page installs the sink). Without a sink, as in the embed core, a
 // hint changes nothing. Read and written on the UI thread only.
 void (*g_dock_hint_sink)(void*, const char*, uint32_t) = nullptr;
 void* g_dock_hint_userdata = nullptr;
@@ -179,7 +179,7 @@ const CaliperMetricsV1_1 kMetrics11 = {sizeof(CaliperMetricsV1_1),
     &met_image, &met_hparams_json, &met_query, &met_last_error};
 
 // --- caliper.feed.v1: live telemetry ring buffers (feed spec §4) ---
-// One process-wide store, vended for applets AND embedders (feed.v1 is an
+// One process-wide store, vended for instruments AND embedders (feed.v1 is an
 // any-thread service). In T1 the store owns NO provider thread and NO channels:
 // caps() reports 0 (CALIPER_FEED_CAP_LIVE unset) and every read yields nothing
 // until a provider (T2 macOS sensors) or a test registers channels — honest
@@ -256,11 +256,11 @@ const CaliperDataV1 kData = {sizeof(CaliperDataV1), &dat_query,
 
 // --- caliper.jobs.v1: background compute with progress + cancel (§7.5) ---
 // Backed by one process-wide JobSystem; its dtor cancels + joins at shutdown.
-// A jobs.v1 fn is applet (or embedder) code, so it takes the guarded path: a
+// A jobs.v1 fn is instrument (or embedder) code, so it takes the guarded path: a
 // fault or exception fails the job, not the host. The table is shared by
 // every caller, so attribution comes from the loader instead — it has a
-// JobOwnerScope up around each applet entry point, and a fault in a job
-// submitted from inside one quarantines that applet (applet_loader.cpp).
+// JobOwnerScope up around each instrument entry point, and a fault in a job
+// submitted from inside one quarantines that instrument (instrument_loader.cpp).
 JobSystem g_jobs;
 
 uint64_t jobs_submit(const char* label, CaliperJobFn fn, void* user) {
@@ -454,10 +454,10 @@ HostRenderer* services_renderer() { return g_renderer; }
 
 TensorBridge* services_bridge() { return bridge(); }
 
-void set_applet_log_sink(void (*sink)(void*, CaliperLogLevel, const char*),
-                         void* userdata) {
-    g_applet_log_sink = sink;
-    g_applet_log_userdata = userdata;
+void set_instrument_log_sink(void (*sink)(void*, CaliperLogLevel, const char*),
+                             void* userdata) {
+    g_instrument_log_sink = sink;
+    g_instrument_log_userdata = userdata;
 }
 
 void set_dock_hint_sink(void (*sink)(void*, const char*, uint32_t), void* userdata) {

@@ -365,7 +365,7 @@ struct ExternalBuffer {
     void* handle = nullptr;        // id<MTLBuffer>, a page-aligned host pointer, or a Win32 HANDLE (duplicated)
     uint64_t size = 0;
     uint32_t usage = 0;            // kVertex | kIndex | kStorage | kCopySrc
-    bool allow_copy = true;        // false: refuse rather than copy (geometry service applets ask for this)
+    bool allow_copy = true;        // false: refuse rather than copy (geometry service instruments ask for this)
     // true: the memory is valid only until the call returns, so the backend copies it and never
     // wraps it (a live view's CPU payload, whose producer may free its bytes on return).
     bool transient = false;

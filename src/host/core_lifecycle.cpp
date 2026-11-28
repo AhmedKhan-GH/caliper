@@ -21,7 +21,7 @@ const char* display_name(const char* name) {
 }  // namespace
 
 std::unique_ptr<HostRenderer> core_select_renderer(std::string* why) {
-    // Renderer seam (docs/applets/rendering.md): backend hints run before
+    // Renderer seam (docs/instruments/rendering.md): backend hints run before
     // the window exists; init() runs after. Metal on Apple and Vulkan on
     // Windows (device-resident CUDA tensors through external-memory interop).
     const char* want = std::getenv("CALIPER_RENDERER");
@@ -58,9 +58,9 @@ void core_create_ui_context() {
     ImPlot3D::CreateContext();
     ImGuiIO& io = ImGui::GetIO();
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
-    // Docking (ImGui docking branch): the applet page hosts a docked desktop —
-    // applet windows tile into a central node + side column. Persisted
-    // per-window/dockspace layout lives in imgui.ini (host-owned).
+    // Docking (ImGui docking branch): the instrument page hosts a docked
+    // desktop — instrument windows tile into a central node + side column.
+    // Persisted per-window/dockspace layout lives in imgui.ini (host-owned).
     io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
 }
 

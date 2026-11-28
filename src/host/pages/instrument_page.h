@@ -1,11 +1,11 @@
 #pragma once
 // ============================================================================
-// The applet page of the caliper executable, shared by the app and by
+// The instrument page of the caliper executable, shared by the app and by
 // `caliper shot`. One frame of the page is, in this order: the page bar and
 // the status bar, then the jobs tray's strip above the status bar while it is
 // open (none of the three when the page is chromeless), the dock space over
 // the work area they leave (work_area.h), docking by role (dock_layout.h),
-// and the applet's own frame between UI checkpoints (ui_recovery.h). The jobs
+// and the instrument's own frame between UI checkpoints (ui_recovery.h). The jobs
 // tray, which the app draws on every page, is here too.
 //
 // The app draws these into its window; `caliper shot` draws the same frames
@@ -13,7 +13,7 @@
 // what the app shows. Navigation (Esc, Home, quarantine back to the landing)
 // stays with the caller: draw() only reports what happened.
 // ============================================================================
-#include "applet_loader.h"
+#include "instrument_loader.h"
 #include "frame_watchdog.h"
 #include "job_system.h"
 #include "ui/dock_layout.h"
@@ -30,40 +30,40 @@
 namespace caliper_host {
 
 // The CaliperHost block every launch hands the loader; the loader fills in
-// the applet's data folder.
-CaliperHost applet_host_proto();
+// the instrument's data folder.
+CaliperHost instrument_host_proto();
 
-// The page bar of the applet and live pages: a main menu bar one frame tall,
+// The page bar of the instrument and live pages: a main menu bar one frame tall,
 // with the landing command bar's height. Call ImGui::EndMainMenuBar() when it
 // returns true.
 bool begin_page_bar();
 
 class JobsTray;
 
-class AppletPage {
+class InstrumentPage {
 public:
     struct Result {
         bool home = false;    // the page bar's Home was clicked
-        bool alive = true;    // false: the applet faulted this frame and is quarantined
+        bool alive = true;    // false: the instrument faulted this frame and is quarantined
     };
 
-    // A freshly launched applet: the watchdog starts again.
+    // A freshly launched instrument: the watchdog starts again.
     void enter() { watchdog_.reset(); }
 
-    // Draws one frame of the page for loader entry `applet`, inside an ImGui
-    // frame the caller opened. `fi` is the frame passed to the applet, and
+    // Draws one frame of the page for loader entry `instrument`, inside an ImGui
+    // frame the caller opened. `fi` is the frame passed to the instrument, and
     // `tray` (may be null) the jobs tray, whose strip is drawn between the
     // status bar and the dock space unless the page is chromeless. When the
-    // applet faults, the UI state it left open is unwound before this
-    // returns, and the caller tears the applet down after rendering the frame.
-    Result draw(AppletLoader& loader, int applet, const CaliperFrameInfo& fi,
+    // instrument faults, the UI state it left open is unwound before this
+    // returns, and the caller tears the instrument down after rendering the frame.
+    Result draw(InstrumentLoader& loader, int instrument, const CaliperFrameInfo& fi,
                 const char* renderer_name, bool chromeless, JobsTray* tray);
 
-    // The layout that the applet's dock hints go to (set_dock_hint_sink).
+    // The layout that the instrument's dock hints go to (set_dock_hint_sink).
     DockLayout& dock_layout() { return dock_layout_; }
 
 private:
-    bool draw_bars(const AppletLoader& loader, int applet, const char* renderer_name);
+    bool draw_bars(const InstrumentLoader& loader, int instrument, const char* renderer_name);
 
     DockLayout dock_layout_;
     FrameWatchdog watchdog_;
@@ -76,8 +76,8 @@ private:
 // FAILED with its reason, then how many jobs finished and "clear finished" at
 // the right end. Entries that do not fit are behind "+N more", which opens the
 // whole list in a popup. The strip reserves its height from the work area,
-// so the dock space and every applet window end above it, and nothing of the
-// applet is covered unless the user opens the popup.
+// so the dock space and every instrument window end above it, and nothing of the
+// instrument is covered unless the user opens the popup.
 class JobsTray {
 public:
     struct Failure {
@@ -88,7 +88,7 @@ public:
 
     // Keeps every failed job in `views` that it has not seen before, and calls
     // `on_new` once for each. The job system's own entry does not last long
-    // enough: going Home joins the applet's jobs and drops every entry.
+    // enough: going Home joins the instrument's jobs and drops every entry.
     void note_failures(const std::vector<JobSystem::JobView>& views,
                        const std::function<void(const Failure&)>& on_new = {});
 

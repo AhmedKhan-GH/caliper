@@ -11,7 +11,7 @@
 // Square corners everywhere. No gradients, shadows, pills, chips or cards.
 //
 // Everything here is an ImDrawList rect, line, convex polygon or text, so
-// applets can adopt it later without any host dependency beyond Dear ImGui.
+// instruments can adopt it later without any host dependency beyond Dear ImGui.
 // ============================================================================
 
 #include <imgui.h>

@@ -5,17 +5,17 @@
 // --api or CALIPER_API=1; `caliper`, `caliper dev` and `caliper shot` take it
 // (api/app_api.h starts it for them).
 //
-//   GET  /v0/info                   the host's version, epoch, services and SDK
-//   GET  /v0/applets                the applets the app's loader lists, as
-//                                   `caliper list` shows them
-//   POST /v0/applets/{id}/launch    open that applet's page
-//   GET  /v0/capture.png            the app's current frame as a PNG
-//   GET  /v3/stream                 the WebSocket of wire protocol v3
-//   GET  /v0/stream                 the same WebSocket, under the API's prefix
-//   GET  /v0/commands               the command layer's descriptor table
-//   POST /v0/commands/{name}        run a command; the args object is the body
-//   GET  /v0/approvals/{id}         what became of a command that needed approval
-//   GET  /v0/spec                   the browser viewer of spec applets, a page
+//   GET  /v0/info                       the host's version, epoch, services and SDK
+//   GET  /v0/instruments                the instruments the app's loader lists, as
+//                                       `caliper list` shows them
+//   POST /v0/instruments/{id}/launch    open that instrument's page
+//   GET  /v0/capture.png                the app's current frame as a PNG
+//   GET  /v3/stream                     the WebSocket of wire protocol v3
+//   GET  /v0/stream                     the same WebSocket, under the API's prefix
+//   GET  /v0/commands                   the command layer's descriptor table
+//   POST /v0/commands/{name}            run a command; the args object is the body
+//   GET  /v0/approvals/{id}             what became of a command that needed approval
+//   GET  /v0/spec                       the browser viewer of spec-based instruments, a page
 //
 // THE COMMAND LAYER. The last three are served only while a CommandGateway
 // (api/command_gateway.h) is set with set_command_gateway(); without one they
@@ -48,10 +48,10 @@
 // (HubOptions::stream_access); the viewer token does not open it.
 //
 // THE SPEC PAGE. GET /v0/spec answers Options::spec_page_html, the page of
-// the web package that draws a saved spec applet in a browser
+// the web package that draws a saved instrument in a browser
 // (web/src/spec/), embedded in the executable; no file is read. The page
-// takes the token and the applet's id from its own address and calls
-// spec.get, applet.list and panel.data. Options::viewer_token is a second
+// takes the token and the instrument's id from its own address and calls
+// spec.get, instrument.list and panel.data. Options::viewer_token is a second
 // token for it: a request that carries the viewer token instead of the
 // session token may only GET the page and POST those three commands
 // (kViewerCommands), always from the origin viewer, so the link printed for
@@ -77,7 +77,7 @@
 // protocol says). Nothing else is served: no files and no way to run code but
 // the commands of the command layer, which build data. A request with a body
 // is refused (413), except a command's arguments, and launch takes only an
-// applet id in its path that the app's loader lists.
+// instrument id in its path that the app's loader lists.
 //
 // THREADS. The hub's thread answers every request and never waits for the
 // app. A request that reads or changes the app's state is a Call that the
@@ -118,7 +118,7 @@ constexpr size_t kMaxCommandBody = size_t(1) << 20;
 
 // ---- routing --------------------------------------------------------------------------
 
-enum class Route { None, Info, Applets, Launch, Capture, Stream, Commands, Command, Approval, SpecPage, SpecAsset };
+enum class Route { None, Info, Instruments, Launch, Capture, Stream, Commands, Command, Approval, SpecPage, SpecAsset };
 
 // The spec page's path, and the commands a request with the viewer token may run.
 inline constexpr char kSpecPagePath[] = "/v0/spec";
@@ -128,25 +128,25 @@ inline constexpr char kSpecPagePath[] = "/v0/spec";
 inline constexpr char kSpecAssetHead[] = "/v0/spec/";
 inline constexpr const char* kSpecAssets[] = {"caliper-views-loader.js", "caliper-views.js", "caliper-views.wasm"};
 bool spec_asset(const std::string& name);
-inline constexpr const char* kViewerCommands[] = {"spec.get", "applet.list", "panel.data"};
+inline constexpr const char* kViewerCommands[] = {"spec.get", "instrument.list", "panel.data"};
 bool viewer_command(const std::string& name);
 
 struct Routed {
     Route route = Route::None;   // None: 404
     const char* allow = "";      // the method the path takes ("GET" or "POST")
     bool method_ok = false;      // false: 405 with Allow
-    std::string applet_id;       // Launch: the id in the path
+    std::string instrument_id;   // Launch: the id in the path
     std::string name;            // Command: the command's name; Approval: the approval id
 };
 // The endpoint a method and path name. The path is matched exactly, without
-// percent-decoding: an applet id, a command name and an approval id hold no
+// percent-decoding: an instrument id, a command name and an approval id hold no
 // character that needs escaping. A command name or an approval id in the path
 // is 1 to 128 characters without a '/'.
 Routed route(const std::string& method, const std::string& path);
 
-// The applet ids launch accepts in its path: 1 to 128 characters of
+// The instrument ids launch accepts in its path: 1 to 128 characters of
 // [A-Za-z0-9._-] (every valid manifest id is one).
-bool plausible_applet_id(const std::string& id);
+bool plausible_instrument_id(const std::string& id);
 // The approval ids GET /v0/approvals/{id} accepts: 1 to 128 characters of
 // [A-Za-z0-9._:-] (the command layer's are "ap-<n>").
 bool plausible_approval_id(const std::string& id);
@@ -173,7 +173,7 @@ struct TokenTable {
 // Content-Length (411), one that is not a number (400) or over
 // kMaxCommandBody (413), a Content-Type other than application/json (415),
 // and with the viewer token an X-Caliper-Origin other than viewer (400); for
-// every other endpoint: a body (413), the applet id of a launch and the
+// every other endpoint: a body (413), the instrument id of a launch and the
 // approval id of an approval (400). The command layer's three endpoints are
 // 404 unless command_layer is true. The command's origin is the token's
 // (TOKENS); X-Caliper-Origin is ignored for every other token. A request with
@@ -247,11 +247,11 @@ struct Options {
 
 // What the frame thread is asked to do.
 struct Call {
-    enum class Kind { Applets, Launch, Capture };
+    enum class Kind { Instruments, Launch, Capture };
     uint64_t ticket = 0;
-    Kind kind = Kind::Applets;
-    std::string applet_id;   // Launch
-    std::string origin;      // the origin of the request's token: "api", "mcp" or "agent"
+    Kind kind = Kind::Instruments;
+    std::string instrument_id;   // Launch
+    std::string origin;          // the origin of the request's token: "api", "mcp" or "agent"
 };
 
 struct Stats {
@@ -293,14 +293,14 @@ public:
     std::string base_url() const;      // http://127.0.0.1:<port>/v0
     std::string stream_url() const;    // ws://127.0.0.1:<port>/v3/stream (no token)
     // http://127.0.0.1:<port>/v0/spec?token=<viewer token>, "" without a
-    // viewer token; a saved spec applet opens with &applet=<id> added.
+    // viewer token; a saved instrument opens with &instrument=<id> added.
     std::string spec_url() const;
 
     // ---- the frame thread ----
     // The calls waiting for the frame thread, oldest first. Cheap when none
     // wait: call it once per frame.
     std::vector<Call> take();
-    // Answers an Applets or Launch call with a JSON body. A call that has
+    // Answers an Instruments or Launch call with a JSON body. A call that has
     // timed out meanwhile is dropped.
     void reply(uint64_t ticket, int status, std::string json);
     // Answers a Capture call with the frame: w x h tightly packed RGBA8, which

@@ -14,9 +14,9 @@
 // holds this run's text. It is one JSON object {"version": 1, "pid", "port",
 // "token", "url", "stream_url", "spec_url"}, whose "token" is the mcp token:
 // commands sent with it are reviewed in the app, and the person's own token is
-// in no file. spec_url is the browser viewer of spec applets with the viewer
-// token (api_server.h, THE SPEC PAGE); a saved spec applet opens at spec_url +
-// "&applet=<id>", and start() prints that line too.
+// in no file. spec_url is the browser viewer of spec-based instruments with the
+// viewer token (api_server.h, THE SPEC PAGE); a saved instrument opens at
+// spec_url + "&instrument=<id>", and start() prints that line too.
 //
 // An agent the app starts (the side chat's agent, the widget agent's
 // sidecar) gets a token of its own, origin agent, in an API file of its own
@@ -28,7 +28,7 @@
 // the server a gateway; take() then also hands their requests to it.
 //
 // The caller answers the calls of the frame thread itself (main.cpp, shot.cpp):
-// applets with applets_json() (host_cli.h), launch by its own navigation, and
+// instruments with instruments_json() (host_cli.h), launch by its own navigation, and
 // capture by reading back a frame it drew: shot reads its offscreen canvas at
 // the end of a frame, and the app the frame its window presents
 // (window_captures.h).
@@ -99,18 +99,18 @@ public:
     // Revokes that file's token and removes the file.
     void revoke_agent_file(const std::string& path);
 
-    // The link of the browser viewer of the saved spec applet `applet` (its
-    // workspace id): spec_url + "&applet=<id>", with the viewer token, which
+    // The link of the browser viewer of the saved instrument `instrument` (its
+    // workspace id): spec_url + "&instrument=<id>", with the viewer token, which
     // opens the spec page and its reads only (api_server.h, THE SPEC PAGE).
     // Never the person's session token nor the API file's: "" with the
     // reason when the link would carry either, when the API is not running,
-    // when this build has no spec page, or when `applet` is not an id.
-    std::string viewer_link(const std::string& applet, std::string* why) const;
-    // Whether viewer_link() can give a link of `applet` once the API runs:
+    // when this build has no spec page, or when `instrument` is not an id.
+    std::string viewer_link(const std::string& instrument, std::string* why) const;
+    // Whether viewer_link() can give a link of `instrument` once the API runs:
     // false, with the reason, for a build with no browser viewer or an id
-    // that viewer_applet_id() (open_url.h) refuses. Needs no running API, so
+    // that viewer_instrument_id() (open_url.h) refuses. Needs no running API, so
     // that a caller asks before it starts one.
-    static bool viewer_link_possible(const std::string& applet, std::string* why);
+    static bool viewer_link_possible(const std::string& instrument, std::string* why);
 
 private:
     std::string file_json(const std::string& token) const;
@@ -125,10 +125,10 @@ private:
     unsigned agent_files_made_ = 0;
 };
 
-// The body of a launch that opened, or found open, applet `id`.
+// The body of a launch that opened, or found open, instrument `id`.
 std::string launched_json(const std::string& id, const std::string& version, bool already_open);
 // The body of a launch whose page is not open yet: `status` PENDING_APPROVAL
-// when its applet.open waits for the person's approval, PENDING when the app
+// when its instrument.open waits for the person's approval, PENDING when the app
 // cannot tell yet whether it will, and `note` saying so and how to check.
 std::string launch_pending_json(const std::string& id, const std::string& version, const std::string& status,
                                 const std::string& note);

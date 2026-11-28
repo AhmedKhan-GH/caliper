@@ -1,12 +1,12 @@
 #pragma once
 // caliper_host::ArtifactStore — the content-addressed blob store behind
-// caliper.artifacts.v1 (docs/applets/services/caliper-artifacts-v1.md): checkpoints keyed by sha256,
+// caliper.artifacts.v1 (docs/instruments/services/caliper-artifacts-v1.md): checkpoints keyed by sha256,
 // deduplicated on disk, lineage-linked to the metrics run that produced them.
 //
 // Layout: blobs live as files at <root>/artifacts/<64-hex-digest>; the index
 // (digest, name, run, len, ts) lives in DuckDB at <root>/artifacts.duckdb.
 //
-// Threading: every method is callable from applet job threads. One DuckDB
+// Threading: every method is callable from instrument job threads. One DuckDB
 // connection guarded by one mutex — calls serialize internally (the
 // artifacts.v1 header promises this). Same sanctioned model as MetricsStore.
 //

@@ -49,7 +49,7 @@ struct Fixture {
     std::shared_ptr<LiveCatalog> catalog;
     std::uint64_t clock = 1;
     Fixture(const std::string& depth = "") {
-        spec::ParseResult r = spec::parse_toml("caliper_spec = 1\n[applet]\nid = \"k\"\n[[source]]\nid = \"act\"\n"
+        spec::ParseResult r = spec::parse_toml("caliper_spec = 2\n[instrument]\nid = \"k\"\n[[source]]\nid = \"act\"\n"
                                                "catalog = \"live:act\"\n" + depth);
         REQUIRE(r.ok());
         history.configure(r.spec);

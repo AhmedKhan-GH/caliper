@@ -1,11 +1,11 @@
 #pragma once
-// The spec of a spec applet, read and checked with the builder's spec
+// The spec of a kind = "spec" instrument, read and checked with the builder's spec
 // library (design/spec-format.md). Only a build with CALIPER_WITH_BUILDER
-// has this file's definitions: applet_spec.cpp joins caliper_host_lib with
-// the spec library then, and applet_loader.h is the part of the loader that
-// builds without it. The app opens a spec applet's page from an entry's
+// has this file's definitions: instrument_spec.cpp joins caliper_host_lib with
+// the spec library then, and instrument_loader.h is the part of the loader that
+// builds without it. The app opens a spec-based instrument's page from an entry's
 // spec_path with read_spec_file().
-#include "applet_loader.h"
+#include "instrument_loader.h"
 #include <caliper_builder/spec/spec.h>
 #include <caliper_builder/spec/validate.h>
 #include <cstdint>
@@ -37,8 +37,8 @@ struct SpecFile {
 SpecFile read_spec_file(const std::string& spec_path,
                         const caliper_builder::spec::SourceResolver& resolver = {});
 
-// The newest spec format version the spec library reads (caliper_spec); it
-// reads every version from 0 to this one.
+// The oldest and newest spec format versions the spec library reads (caliper_spec).
+int64_t spec_runtime_min_format_version();
 int64_t spec_runtime_format_version();
 
 } // namespace caliper_host

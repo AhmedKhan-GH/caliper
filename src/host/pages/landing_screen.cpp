@@ -5,7 +5,7 @@
 // Sternbild primitives (sternbild_theme.h); this file only arranges them.
 //
 // Patterns, named where they are applied below:
-//   status bar (VS Code / JetBrains)       backend, GPU, memory, applet count
+//   status bar (VS Code / JetBrains)       backend, GPU, memory, instrument count
 //   command bar of key buttons             Bloomberg command line and function
 //                                          keys: each button holds its key
 //   dense tables                           Bloomberg, W&B run tables: tabular
@@ -25,7 +25,7 @@
 #include "ui/sternbild_fonts.h"
 #include "ui/sternbild_theme.h"
 #include "ui/work_area.h"
-#include "applet_loader.h"
+#include "instrument_loader.h"
 #include "device_query.h"
 #include "host_services.h"
 #include "job_system.h"
@@ -56,10 +56,10 @@
 
 namespace {
 
-using caliper_host::AppletEntry;
-using caliper_host::AppletKind;
-using caliper_host::AppletLoader;
-using caliper_host::AppletStatus;
+using caliper_host::InstrumentEntry;
+using caliper_host::InstrumentKind;
+using caliper_host::InstrumentLoader;
+using caliper_host::InstrumentStatus;
 namespace col = sternbild::col;
 namespace metric = sternbild::metric;
 namespace font_size = sternbild::font_size;
@@ -161,26 +161,26 @@ int natural_compare(const std::string& a, const std::string& b) {
 // Instruments columns; the value is the TableSetupColumn user id.
 enum Column { kName = 0, kId = 1, kVersion = 2, kTag = 3, kStatus = 4 };
 
-int status_rank(AppletStatus s) {
+int status_rank(InstrumentStatus s) {
     switch (s) {
-        case AppletStatus::Active:      return 0;
-        case AppletStatus::Ready:       return 1;
-        case AppletStatus::Refused:     return 2;
-        case AppletStatus::Failed:      return 3;
-        case AppletStatus::Quarantined: return 4;
-        case AppletStatus::Shadowed:    return 5;
+        case InstrumentStatus::Active:      return 0;
+        case InstrumentStatus::Ready:       return 1;
+        case InstrumentStatus::Refused:     return 2;
+        case InstrumentStatus::Failed:      return 3;
+        case InstrumentStatus::Quarantined: return 4;
+        case InstrumentStatus::Shadowed:    return 5;
     }
     return 6;
 }
 
-const char* status_word(AppletStatus s) {
+const char* status_word(InstrumentStatus s) {
     switch (s) {
-        case AppletStatus::Ready:       return "READY";
-        case AppletStatus::Active:      return "ACTIVE";
-        case AppletStatus::Refused:     return "REFUSED";
-        case AppletStatus::Failed:      return "FAILED";
-        case AppletStatus::Quarantined: return "QUARANTINED";
-        case AppletStatus::Shadowed:    return "SHADOWED";
+        case InstrumentStatus::Ready:       return "READY";
+        case InstrumentStatus::Active:      return "ACTIVE";
+        case InstrumentStatus::Refused:     return "REFUSED";
+        case InstrumentStatus::Failed:      return "FAILED";
+        case InstrumentStatus::Quarantined: return "QUARANTINED";
+        case InstrumentStatus::Shadowed:    return "SHADOWED";
     }
     return "UNKNOWN";
 }
@@ -188,20 +188,21 @@ const char* status_word(AppletStatus s) {
 // Pre-attentive colour: the running instrument is the one bronze status;
 // launchable is secondary; anything that cannot launch recedes to faint.
 // No red, no green (SPEC §9).
-ImU32 status_colour(AppletStatus s) {
+ImU32 status_colour(InstrumentStatus s) {
     switch (s) {
-        case AppletStatus::Ready:  return col::secondary;
-        case AppletStatus::Active: return col::bronze;
-        default:                   return col::faint;
+        case InstrumentStatus::Ready:  return col::secondary;
+        case InstrumentStatus::Active: return col::bronze;
+        default:                       return col::faint;
     }
 }
 
-bool launchable(const AppletEntry& e) { return e.status == AppletStatus::Ready; }
+bool launchable(const InstrumentEntry& e) { return e.status == InstrumentStatus::Ready; }
 
-// One of the person's dashboards: a spec applet of the open workspace, listed
-// under Projects; every other applet is an installed instrument.
-bool dashboard(const AppletLoader& loader, int i) {
-    return loader.at(i).manifest.kind == caliper_host::AppletKind::Spec && loader.in_workspace(i);
+// One of the person's dashboards: a spec-based instrument of the open
+// workspace, listed under Projects; every other entry is an installed
+// instrument.
+bool dashboard(const InstrumentLoader& loader, int i) {
+    return loader.at(i).manifest.kind == caliper_host::InstrumentKind::Spec && loader.in_workspace(i);
 }
 
 bool any_popup_open() {
@@ -494,7 +495,7 @@ void LandingScreen::draw(const Context& ctx) {
         enter_requested_ = enter_from_command_ = false;
     }
 
-    // Launch after every window of this frame has ended, so the applet's
+    // Launch after every window of this frame has ended, so the instrument's
     // initialize() never runs inside a half-built landing frame. A restart
     // is a launch too (it ends in initialize()), so it waits the same way.
     if (pending_launch_ >= 0) {
@@ -764,7 +765,7 @@ void LandingScreen::draw_command_bar() {
 // Rows
 // ============================================================================
 
-void LandingScreen::rebuild_rows(const AppletLoader& loader) {
+void LandingScreen::rebuild_rows(const InstrumentLoader& loader) {
     // Space-separated terms, all of which must appear (case-insensitive) in
     // the name, id or tag: "embed train" narrows the way a terminal filter
     // does; a single term is a plain substring match.
@@ -798,7 +799,7 @@ void LandingScreen::rebuild_rows(const AppletLoader& loader) {
     // rows keep the loader's order and nothing reshuffles between frames.
     const int column = sort_column_;
     const bool descending = sort_descending_;
-    auto key_compare = [&](const AppletEntry& a, const AppletEntry& b) {
+    auto key_compare = [&](const InstrumentEntry& a, const InstrumentEntry& b) {
         switch (column) {
             case kName:    return natural_compare(a.manifest.name, b.manifest.name);
             case kId:      return natural_compare(a.manifest.id, b.manifest.id);
@@ -809,8 +810,8 @@ void LandingScreen::rebuild_rows(const AppletLoader& loader) {
         }
     };
     std::stable_sort(rows_.begin(), rows_.end(), [&](int ia, int ib) {
-        const AppletEntry& a = loader.at(ia);
-        const AppletEntry& b = loader.at(ib);
+        const InstrumentEntry& a = loader.at(ia);
+        const InstrumentEntry& b = loader.at(ib);
         if (int c = key_compare(a, b)) return descending ? c > 0 : c < 0;
         if (int c = natural_compare(a.manifest.tag, b.manifest.tag)) return c < 0;
         return natural_compare(a.manifest.name, b.manifest.name) < 0;
@@ -838,7 +839,7 @@ void LandingScreen::rebuild_rows(const AppletLoader& loader) {
 // the header title. Undocking and the per-node window menu are off: the four
 // panes are the landing, not a desktop to rearrange, so the only edit is
 // moving a splitter, and that persists in the app-data imgui.ini like the
-// applet layout does.
+// instrument layout does.
 void LandingScreen::draw_dock_space() {
     // The command and status bars and the jobs tray are viewport side bars:
     // they reserve their height from the work area, so the host is simply the
@@ -863,7 +864,7 @@ void LandingScreen::draw_dock_space() {
     const ImGuiID dock_id = ImGui::GetID("sternbild_landing_dockspace");
 
     // First-run layout, attempted once per process, with the same guard as
-    // the applet page in main.cpp:
+    // the instrument page in main.cpp:
     //  - fresh dockspace (no imgui.ini history): build the four-pane tiling,
     //    left 0.62 (Projects 0.32 over Instruments: Projects holds the
     //    workspace's dashboards over the ways in), right 0.38 (Inspector over
@@ -920,8 +921,8 @@ void LandingScreen::draw_dock_space() {
 // ============================================================================
 
 // Projects: the person's own work over the ways to start more. The open
-// workspace's dashboards (its spec applets, which F3 New dashboard makes and
-// ⌘S saves) are a dense table like Instruments, one selection with it: ↑↓
+// workspace's dashboards (its spec-based instruments, which F3 New dashboard
+// makes and ⌘S saves) are a dense table like Instruments, one selection with it: ↑↓
 // walk both as one list, Enter or a double click opens. Under them, or alone
 // while there are none, the numbered menu of ways in (Bloomberg numbered
 // menus, VS Code Welcome; landing/final): number, the way in as a key button
@@ -1040,7 +1041,7 @@ void LandingScreen::draw_projects(const Context& ctx) {
 // The workspace's dashboards under Projects: name, id and status, as the
 // Instruments rows show them, with the same selection, hover and bronze.
 void LandingScreen::draw_dashboards(const Context& ctx, float height) {
-    const AppletLoader& loader = *ctx.loader;
+    const InstrumentLoader& loader = *ctx.loader;
     ImFont* ui = sternbild::fonts().ui;
     ImFont* mono = sternbild::fonts().mono;
     if (!sternbild::begin_table("##dashboards", 3, ImVec2(0.0f, height),
@@ -1052,7 +1053,7 @@ void LandingScreen::draw_dashboards(const Context& ctx, float height) {
     ImGui::TableSetupColumn("Status", ImGuiTableColumnFlags_WidthStretch, 1.0f);
     sternbild::table_header_row();
     for (const int idx : project_rows_) {
-        const AppletEntry& e = loader.at(idx);
+        const InstrumentEntry& e = loader.at(idx);
         const bool selected = idx == selected_;
         ImGui::PushID(idx);
         ImGui::TableNextRow(ImGuiTableRowFlags_None, metric::row);
@@ -1304,15 +1305,15 @@ void LandingScreen::draw_sessions(const Context& ctx) {
 // hover, the selected row in bronze, full-row hit targets (Fitts), ↑↓ to move
 // and Enter or a double click to launch.
 void LandingScreen::draw_instruments(const Context& ctx) {
-    const AppletLoader* loader = ctx.loader;
-    // The installed applets: every entry but the workspace's dashboards,
+    const InstrumentLoader* loader = ctx.loader;
+    // The installed instruments: every entry but the workspace's dashboards,
     // which Projects lists.
     const int installed = (loader ? loader->count() : 0) - dashboards_;
     {
         int unavailable = 0;
         for (int i = 0; loader && i < loader->count(); ++i)
             unavailable += !dashboard(*loader, i) && !launchable(loader->at(i)) &&
-                           loader->at(i).status != AppletStatus::Active;
+                           loader->at(i).status != InstrumentStatus::Active;
         char subtitle[64];
         if (unavailable > 0)
             std::snprintf(subtitle, sizeof subtitle,
@@ -1358,7 +1359,7 @@ void LandingScreen::draw_instruments(const Context& ctx) {
     }
     if (!loader || installed <= 0) {
         faint_line("No instruments found. Drop a dylib + <name>.caliper.toml "
-                   "into the applets folder.");
+                   "into the instruments folder.");
         return;
     }
     // The instruments are the rows after the dashboards (rebuild_rows()).
@@ -1412,7 +1413,7 @@ void LandingScreen::draw_instruments(const Context& ctx) {
         sternbild::table_header_row();
 
         for (const int idx : shown) {
-            const AppletEntry& e = loader->at(idx);
+            const InstrumentEntry& e = loader->at(idx);
             const bool selected = idx == selected_;
             ImGui::PushID(idx);
             ImGui::TableNextRow(ImGuiTableRowFlags_None, metric::row);
@@ -1470,7 +1471,7 @@ void LandingScreen::draw_instruments(const Context& ctx) {
 // holding the one primary action (Fitts: a single target per pane, always in
 // the same place and never scrolled out of reach by a long summary).
 void LandingScreen::draw_inspector(const Context& ctx) {
-    const AppletLoader* loader = ctx.loader;
+    const InstrumentLoader* loader = ctx.loader;
     const bool any = loader && selected_ >= 0 && selected_ < loader->count();
     pane_header(kInspector,
                 any ? loader->at(selected_).manifest.name.c_str() : "none selected",
@@ -1479,7 +1480,7 @@ void LandingScreen::draw_inspector(const Context& ctx) {
         faint_line("Select an instrument.");
         return;
     }
-    const AppletEntry& e = loader->at(selected_);
+    const InstrumentEntry& e = loader->at(selected_);
 
     // The footer is the plate and a padding above and below it; the list
     // takes the rest of the pane.
@@ -1498,8 +1499,8 @@ void LandingScreen::draw_inspector(const Context& ctx) {
     // table or the command line does the same. Disabled when the row cannot
     // launch, with the reason beside it in faint (honesty: a disabled control
     // says why); one line, cut with an ellipsis, since the STATUS row above
-    // carries the full text. A quarantined applet says instead what brings it
-    // back: after a C++ exception (the stack unwound, nothing is corrupt) a
+    // carries the full text. A quarantined instrument says instead what brings
+    // it back: after a C++ exception (the stack unwound, nothing is corrupt) a
     // ⌘R Restart key button that unloads and relaunches it; after a signal
     // (memory may be corrupt) only a restart of Caliper itself.
     ImGui::SetCursorPosY(table_y + table_h + metric::pad);
@@ -1519,8 +1520,8 @@ void LandingScreen::draw_inspector(const Context& ctx) {
         ImGui::SameLine(0.0f, metric::gap);
         const float text_h = ImGui::GetTextLineHeight();
         ImGui::SetCursorPosY(button_y + std::max(0.0f, (kPlate - text_h) * 0.5f));
-        const char* reason = e.status == AppletStatus::Active ? "running"
-                             : e.status == AppletStatus::Quarantined
+        const char* reason = e.status == InstrumentStatus::Active ? "running"
+                             : e.status == InstrumentStatus::Quarantined
                                  ? "restart Caliper to reload"
                              : e.status_text.empty() ? "not available"
                                                      : e.status_text.c_str();
@@ -1537,7 +1538,7 @@ void LandingScreen::draw_inspector(const Context& ctx) {
 
 // The Inspector's definition rows: label (small uppercase secondary) left,
 // value right, one row per manifest field, in manifest order.
-void LandingScreen::draw_inspector_rows(const caliper_host::AppletEntry& e, const Context& ctx) {
+void LandingScreen::draw_inspector_rows(const caliper_host::InstrumentEntry& e, const Context& ctx) {
     const auto& m = e.manifest;
     ImFont* ui = sternbild::fonts().ui;
     ImFont* mono = sternbild::fonts().mono;
@@ -1579,12 +1580,12 @@ void LandingScreen::draw_inspector_rows(const caliper_host::AppletEntry& e, cons
     field("Tag");
     if (m.tag.empty()) cell_text("none", ui, font_size::ui, col::faint);
     else cell_text(m.tag.c_str(), ui, font_size::ui, col::parchment);
-    if (m.kind == AppletKind::Spec) {
-        // A spec applet is data: its kind, its spec's facts and its file, in
-        // place of a library's epoch, services and binary.
+    if (m.kind == InstrumentKind::Spec) {
+        // A spec-based instrument is data: its kind, its spec's facts and its
+        // file, in place of a library's epoch, services and binary.
         field("Kind");
         cell_text("spec", mono, font_size::mono, col::parchment);
-        SpecAppletFacts facts;
+        SpecInstrumentFacts facts;
         const bool known = !e.spec_path.empty() && ctx.spec_facts && ctx.spec_facts(e, &facts);
         if (known && facts.error.empty()) {
             field("Spec format");
@@ -1772,15 +1773,15 @@ void LandingScreen::draw_status_bar(const Context& ctx) {
     }
     if (ctx.loader) {
         int unavailable = 0;
-        // A shadowed copy is another copy of a listed applet, not an
+        // A shadowed copy is another copy of a listed instrument, not an
         // instrument of its own.
         int n = 0;
         for (int i = 0; i < ctx.loader->count(); ++i) {
-            const AppletStatus s = ctx.loader->at(i).status;
+            const InstrumentStatus s = ctx.loader->at(i).status;
             // The workspace's dashboards are the person's, under Projects.
-            if (s == AppletStatus::Shadowed || dashboard(*ctx.loader, i)) continue;
+            if (s == InstrumentStatus::Shadowed || dashboard(*ctx.loader, i)) continue;
             n++;
-            unavailable += (s != AppletStatus::Ready && s != AppletStatus::Active);
+            unavailable += (s != InstrumentStatus::Ready && s != InstrumentStatus::Active);
         }
         char text[64];
         std::snprintf(text, sizeof text,

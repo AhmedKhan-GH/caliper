@@ -16,8 +16,8 @@ class Backend;
 
 namespace caliper_host {
 
-// Host-internal renderer seam (docs/applets/rendering.md). The ABI never sees this;
-// backends are swappable forever because applets only see ImGui + bridge ids.
+// Host-internal renderer seam (docs/instruments/rendering.md). The ABI never sees this;
+// backends are swappable forever because instruments only see ImGui + bridge ids.
 class HostRenderer {
 public:
     virtual ~HostRenderer() = default;
@@ -123,7 +123,7 @@ public:
 
     // Literal zero-copy alloc_shared (spec §3.5): make texture `tex`'s interop
     // buffer be the tensor's backing store and return a device pointer to it
-    // (a CUDA device ptr on Vulkan). The applet's kernels write there directly
+    // (a CUDA device ptr on Vulkan). The instrument's kernels write there directly
     // and the update pass reads it in place — zero data copies. Default false:
     // backends without device interop keep the CPU-vector alloc_shared.
     virtual bool alloc_device_shared(uint64_t /*tex*/, uint64_t /*bytes*/,
@@ -153,7 +153,7 @@ public:
     // ---- Embed canvas seam (libcaliper R4 L2a) ----------------------------
     // When libcaliper is EMBEDDED (caliper/embed.h — Compass, embed_host) there
     // is no GLFW: the host supplies a native child view (NSView*/HWND) or asks
-    // for an OFFSCREEN target, and the applet's ImGui frame is composited by
+    // for an OFFSCREEN target, and the instrument's ImGui frame is composited by
     // THIS backend against that surface. NO imgui_impl_glfw is wired — the
     // embedder feeds ImGuiIO via caliper_core_event; the embed layer sets
     // io.DisplaySize/DeltaTime BEFORE canvas_new_frame (it owns timing/size).
@@ -213,12 +213,12 @@ public:
 
     // Stream-ordered handoff: true when this backend honors a
     // non-NULL CaliperTensor.stream by GPU-ordering the device update after
-    // the producer's stream/queue. Surfaced to applets as bridge-v1.1 caps()
+    // the producer's stream/queue. Surfaced to instruments as bridge-v1.1 caps()
     // bit 0. Default false: a backend that ignores stream must never let an
     // adapter skip its drain.
     virtual bool honors_stream_ordered_handoff() const { return false; }
 
-    // ---- Measurement (docs/applets/rendering.md, "Copy Counters and
+    // ---- Measurement (docs/instruments/rendering.md, "Copy Counters and
     // Frame Statistics") ------------------------------------------------------
     // Every copy the host makes of tensor or geometry data on the way to
     // pixels is counted here, by whoever makes it: an upload of host bytes (a

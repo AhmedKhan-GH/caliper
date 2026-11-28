@@ -4,11 +4,11 @@
 // one-core-per-process slot they share with caliper_core_create.
 //
 // Split out of embed_core.cpp so that a host without the native core's
-// lifecycle (the applet loader, the service registry, the job system, the app
+// lifecycle (the instrument loader, the service registry, the job system, the app
 // paths: the WebAssembly viewer in web/wasm) can link the views and the hosted
 // core alone. Everything here needs only ImGui, the renderer seam and the
 // process TensorBridge (services_bridge()); embed_core.cpp keeps create,
-// shutdown, the canvas, the frame arc, events and applets, and calls back in
+// shutdown, the canvas, the frame arc, events and instruments, and calls back in
 // through caliper_embed_views_draw / caliper_embed_views_destroy_all.
 // ===========================================================================
 #include "caliper/embed.h"
@@ -112,9 +112,9 @@ const char* caliper_core_last_error(CaliperCore* core) {
 }
 // ===========================================================================
 // v1.2 — built-in tensor views (embed.h). The core draws a host's tensor itself:
-// texture through the process TensorBridge (the SAME bridge applets use, driven
+// texture through the process TensorBridge (the SAME bridge instruments use, driven
 // host-side so it can reach the host-only set_mapping), an ImGui window per view
-// composited after the applet. Frame-thread only, like every bridge op.
+// composited after the instrument. Frame-thread only, like every bridge op.
 //
 // ZERO-COPY HONESTY. A METAL tensor goes through the v1.2 import path only
 // (import_allocation + update_texture_from_alloc: the renderer's compute/blit
@@ -276,7 +276,7 @@ void caliper_embed_views_draw(CaliperCore* core) {
             ImGui::SetNextWindowSize(ImVec2(v.size_x, v.size_y), ImGuiCond_FirstUseEver);
         }
         v.placed = true;
-        // Title = the view name; the ### id keeps it apart from applet windows.
+        // Title = the view name; the ### id keeps it apart from instrument windows.
         const std::string label = v.name + "###caliper.view." + v.name;
         ImGui::PushStyleColor(ImGuiCol_ResizeGrip, 0);   // a view resizes from its edges
         const bool open = ImGui::Begin(label.c_str(), nullptr,

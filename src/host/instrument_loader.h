@@ -1,5 +1,5 @@
 #pragma once
-#include "applet_manifest.h"
+#include "instrument_manifest.h"
 #include "crash_guard.h"
 #include "negotiation.h"
 #include <caliper/abi.h>
@@ -15,7 +15,7 @@ namespace caliper_host {
 
 class JobOwner;   // job_system.h
 
-enum class AppletStatus {
+enum class InstrumentStatus {
     Ready,        // negotiated, will dlopen on launch
     Refused,      // pre-dlopen negotiation refusal (friendly reason)
     Failed,       // broken: parse error, missing binary, bad descriptor, init false
@@ -25,24 +25,24 @@ enum class AppletStatus {
                   // same id is chosen (higher version, or found first)
 };
 
-struct AppletEntry {
-    AppletManifest manifest;   // manifest.kind: a compiled applet or a spec applet
-    std::string dylib_path;    // "" when binary missing; always "" for a spec applet
-    // A spec applet's spec, <folder>/<manifest.spec>, once that file passed
-    // the listing checks (spec_listing_checks); "" otherwise and for a
-    // compiled applet. The app reads it with read_spec_file (applet_spec.h).
+struct InstrumentEntry {
+    InstrumentManifest manifest;   // manifest.kind: Library or Spec
+    std::string dylib_path;        // "" when binary missing; always "" for kind = "spec"
+    // Spec file of a kind = "spec" instrument, <folder>/<manifest.spec>, once that
+    // file passed the listing checks (spec_listing_checks); "" otherwise and for
+    // a library instrument. The app reads it with read_spec_file (instrument_spec.h).
     std::string spec_path;
-    std::string data_dir;      // per-applet sandbox; storage for the ABI pointer ("" for a spec applet)
+    std::string data_dir;      // per-instrument sandbox; storage for the ABI pointer ("" for kind = "spec")
     std::string folder;        // the folder the manifest was found in
     std::string manifest_path; // <folder>/<stem>.caliper.toml
     int search_rank = 0;       // that folder's position in the search order
-    AppletStatus status = AppletStatus::Failed;
-    // Card text for Refused/Failed/Quarantined/Shadowed; on a spec applet that
-    // stays Ready after launch(), why no page opened (kSpecPageUnavailable).
+    InstrumentStatus status = InstrumentStatus::Failed;
+    // Card text for Refused/Failed/Quarantined/Shadowed; on a kind = "spec" instrument
+    // that stays Ready after launch(), why no page opened (kSpecPageUnavailable).
     std::string status_text;
 
     void* handle = nullptr;
-    const CaliperAppletDescriptor* desc = nullptr;
+    const CaliperInstrumentDescriptor* desc = nullptr;
     void* instance = nullptr;
     // Owner of the guarded jobs this instance submits (fresh per launch): a
     // fault in one of them quarantines the instance like a fault in frame().
@@ -62,8 +62,8 @@ struct AppletEntry {
 };
 
 // The data-schema stamp (docs/development/compatibility-and-epochs.md): a small TOML
-// file the host keeps in each applet's data folder, recording the highest
-// [data].schema that has opened the folder. The applet never writes it.
+// file the host keeps in each instrument's data folder, recording the highest
+// [data].schema that has opened the folder. The instrument never writes it.
 inline constexpr const char* kDataStampName = ".caliper-data.toml";
 // The schema recorded in <data_dir>/.caliper-data.toml; 0 when there is no
 // stamp or it cannot be read (a damaged stamp is ignored and rewritten by the
@@ -74,35 +74,35 @@ uint32_t read_data_schema_stamp(const std::string& data_dir);
 // True when the stamp now holds at least `schema`.
 bool raise_data_schema_stamp(const std::string& data_dir, uint32_t schema);
 
-// The folders the host searches for applets, in order
-// (docs/development/compatibility-and-epochs.md, "Several copies of one applet"): the
+// The folders the host searches for instruments, in order
+// (docs/development/compatibility-and-epochs.md, "Several copies of one instrument"): the
 // development paths, first those given on the command line and then those in
-// CALIPER_APPLET_PATH, each list in its own order; then the open workspace's
-// applets/ folder, when a workspace is given; then the user applets folder;
-// then the applets shipped with the app. Relative paths are made absolute
+// CALIPER_INSTRUMENT_PATH, each list in its own order; then the open workspace's
+// instruments/ folder, when a workspace is given; then the user instruments folder;
+// then the instruments shipped with the app. Relative paths are made absolute
 // against the current directory, each development folder is resolved by
-// resolve_applet_folder(), empty entries are dropped, and a folder listed
+// resolve_instrument_folder(), empty entries are dropped, and a folder listed
 // twice is searched once, at its first position. A loader that scans the
-// workspace's folder must be told the workspace (AppletLoader::set_workspace).
-std::vector<std::string> applet_search_dirs(
+// workspace's folder must be told the workspace (InstrumentLoader::set_workspace).
+std::vector<std::string> instrument_search_dirs(
     const std::vector<std::string>& command_line_dirs,
-    const char* applet_path_env,          // CALIPER_APPLET_PATH, or nullptr
-    const std::string& user_dir,          // "" to leave out
-    const std::string& shipped_dir,       // "" to leave out
+    const char* instrument_path_env,         // CALIPER_INSTRUMENT_PATH, or nullptr
+    const std::string& user_dir,             // "" to leave out
+    const std::string& shipped_dir,          // "" to leave out
     const std::string& workspace_dir = "");  // the workspace's root; "" for none
-// The folder of a workspace that holds its spec applets: <workspace>/applets
+// The folder of a workspace that holds its spec-based instruments: <workspace>/instruments
 // (design/builder-session.md); "" for "".
-std::string workspace_applets_dir(const std::string& workspace_dir);
+std::string workspace_instruments_dir(const std::string& workspace_dir);
 // The folder the host scans for a development folder `dir`: `dir` itself
-// when it holds a manifest (<stem>.caliper.toml), otherwise its applets/
-// subfolder when that holds one, which is where caliper_add_applet() puts
-// an applet's build output, so an applet's build folder can be named
+// when it holds a manifest (<stem>.caliper.toml), otherwise its instruments/
+// subfolder when that holds one, which is where caliper_add_instrument() puts
+// an instrument's build output, so an instrument's build folder can be named
 // directly. Otherwise, a folder that does not exist included, `dir` as given.
-std::string resolve_applet_folder(const std::string& dir);
-// CALIPER_APPLET_PATH split into folders: ';' separates them on Windows and
+std::string resolve_instrument_folder(const std::string& dir);
+// CALIPER_INSTRUMENT_PATH split into folders: ';' separates them on Windows and
 // ':' elsewhere. Empty entries are dropped.
-std::vector<std::string> split_applet_path(const std::string& value);
-inline constexpr char kAppletPathSeparator =
+std::vector<std::string> split_instrument_path(const std::string& value);
+inline constexpr char kInstrumentPathSeparator =
 #ifdef _WIN32
     ';';
 #else
@@ -110,23 +110,23 @@ inline constexpr char kAppletPathSeparator =
 #endif
 
 // The status in capitals, as the landing screen and the command line write it.
-const char* applet_status_word(AppletStatus s);
+const char* instrument_status_word(InstrumentStatus s);
 
 // Card text of a copy that another copy of the same id shadows.
 std::string shadowed_reason(const std::string& winner_version,
                             const std::string& winner_folder);
 
-// ---- spec applets ---------------------------------------------------------
-// A spec applet (kind = "spec") is a folder with a manifest and a spec and no
-// library: data, not code. The loader lists it like a compiled applet, with
-// the same statuses and the same choice among copies of one id, but never
-// maps or calls anything for it, so the crash guard and the watchdog have
-// nothing to guard. Listing checks only what is cheap (spec_listing_checks);
+// ---- spec-based instruments -----------------------------------------------
+// An instrument written as a spec (kind = "spec") is a folder with a manifest
+// and a spec and no library: data, not code. The loader lists it like a library
+// instrument, with the same statuses and the same choice among copies of one id,
+// but never maps or calls anything for it, so the crash guard and the watchdog
+// have nothing to guard. Listing checks only what is cheap (spec_listing_checks);
 // check_spec() validates the spec fully with the builder's spec library,
-// which a build without CALIPER_WITH_BUILDER does not have: there every spec
-// applet is Refused with no_spec_runtime_reason().
+// which a build without CALIPER_WITH_BUILDER does not have: there every
+// kind = "spec" instrument is Refused with no_spec_runtime_reason().
 
-// Where spec applets are looked for, besides a manifest directly in a
+// Where kind = "spec" instruments are looked for, besides a manifest directly in a
 // searched folder: a manifest of kind "spec" in a subfolder of a searched
 // folder (<dir>/<name>/<stem>.caliper.toml), as a workspace keeps them. A
 // subfolder that is a symbolic link or whose name starts with '.' is skipped,
@@ -138,23 +138,25 @@ inline constexpr std::uintmax_t kMaxSpecManifestBytes = 64 * 1024;
 // The largest spec file: the spec format's limit of 512 KiB (spec.too_large).
 inline constexpr std::uintmax_t kMaxSpecFileBytes = 512 * 1024;
 
-// True when this build validates spec applets (it was built with the
-// builder's spec library); false when every spec applet is Refused.
+// True when this build validates kind = "spec" instruments (it was built with the
+// builder's spec library); false when every kind = "spec" instrument is Refused.
 bool spec_runtime_available();
-// The newest spec format version this build reads (caliper_spec), which
-// reads every version from 0 to this one; -1 without the spec runtime.
+// The oldest and newest spec format versions this build reads (caliper_spec);
+// -1 without the spec runtime.
+int64_t spec_min_format_version();
 int64_t spec_format_version();
 
-// Refusal and failure texts of spec applets (docs/reference/refusal-messages.md).
+// Refusal and failure texts of kind = "spec" instruments (docs/reference/refusal-messages.md).
 std::string no_spec_runtime_reason();
 std::string spec_version_reason(int64_t spec_version, int64_t host_version);
 std::string workspace_library_reason();
-// The text a Ready spec applet keeps after launch(): spec applets open as a
-// page, which the loader does not draw. The app opens the page itself.
+// The text a Ready kind = "spec" instrument keeps after launch(): instruments
+// written as specs open as a page, which the loader does not draw. The app opens
+// the page itself.
 inline constexpr const char* kSpecPageUnavailable =
-    "A spec applet opens as a page, which this version of Caliper does not draw yet.";
+    "An instrument written as a spec opens as a page, which this version of Caliper does not draw yet.";
 
-// Why the file at `spec_path` cannot be a spec applet's spec, or "" when it
+// Why the file at `spec_path` cannot be an instrument's spec, or "" when it
 // can: it exists, it is a regular file and not a symbolic link (wherever it
 // points), and it holds at most kMaxSpecFileBytes. `manifest_file` names the
 // manifest in the text.
@@ -189,36 +191,36 @@ std::string format_spec_diagnostic(const std::string& file, const SpecDiagnostic
 // versions the one found first in the search order. The other copies that
 // passed are Shadowed, with a text naming the chosen copy's version and
 // folder; refused and failed copies keep their own status and reason.
-// Choosing never runs applet code. A chosen copy that later fails at launch
+// Choosing never runs instrument code. A chosen copy that later fails at launch
 // is not replaced by the next one until the host scans again.
-class AppletLoader {
+class InstrumentLoader {
 public:
-    AppletLoader(HostCaps caps, std::string data_root);
-    ~AppletLoader() { close_all(); }
+    InstrumentLoader(HostCaps caps, std::string data_root);
+    ~InstrumentLoader() { close_all(); }
 
     // The open workspace, before scanning (design/builder-session.md). Its
-    // applets/ folder (workspace_applets_dir) is scanned as a search folder
-    // like any other, at the position applet_search_dirs gives it, but holds
-    // spec applets only: a workspace is data, so a compiled applet's manifest
-    // there is listed as Refused (workspace_library_reason) and its library
+    // instruments/ folder (workspace_instruments_dir) is scanned as a search folder
+    // like any other, at the position instrument_search_dirs gives it, but holds
+    // spec-based instruments only: a workspace is data, so a library instrument's
+    // manifest there is listed as Refused (workspace_library_reason) and its library
     // is never opened, and every manifest in it is read with the bounds of a
     // subfolder's. "" for no workspace.
     void set_workspace(const std::string& workspace_dir);
     const std::string& workspace_dir() const { return workspace_dir_; }
 
-    // Adds the applets in `dir` at the next position of the search order.
+    // Adds the instruments in `dir` at the next position of the search order.
     // Returns the entries added.
     int scan(const std::string& dir);
-    // Scans each folder in order (applet_search_dirs gives the host's order).
+    // Scans each folder in order (instrument_search_dirs gives the host's order).
     int scan(const std::vector<std::string>& dirs);
-    // Lists the workspace's applets/ folder again, so that a spec applet saved
-    // since the last scan (applet.save) appears and one deleted goes: the
+    // Lists the workspace's instruments/ folder again, so that a spec-based instrument
+    // saved since the last scan (instrument.save) appears and one deleted goes: the
     // entries found there are replaced by what the folder holds now, at the
     // folder's position in the search order, or at the next position when
     // it was not scanned before. Entries move, so indices taken before are
-    // stale. Like scan(), it reallocates what a running compiled applet
-    // holds, so it does nothing and returns -1 while one is Active; a spec
-    // applet marked Active by the app is listed again as Ready. Returns the
+    // stale. Like scan(), it reallocates what a running library instrument
+    // holds, so it does nothing and returns -1 while one is Active; a kind = "spec"
+    // instrument marked Active by the app is listed again as Ready. Returns the
     // entries listed from the folder.
     int rescan_workspace();
     int count() const { return (int)entries_.size(); }
@@ -226,27 +228,27 @@ public:
     // running), otherwise the first copy that is not Shadowed; -1 when the
     // id is unknown.
     int find(const std::string& id) const;
-    AppletEntry&       at(int i)       { return entries_[i]; }
-    const AppletEntry& at(int i) const { return entries_[i]; }
-    // The entry was found in the open workspace's applets/ folder: one of the
-    // person's dashboards when it is a spec applet.
+    InstrumentEntry&       at(int i)       { return entries_[i]; }
+    const InstrumentEntry& at(int i) const { return entries_[i]; }
+    // The entry was found in the open workspace's instruments/ folder: one of the
+    // person's dashboards when it is a kind = "spec" instrument.
     bool in_workspace(int i) const {
         return workspace_rank_ >= 0 && i >= 0 && i < (int)entries_.size() && entries_[i].search_rank == workspace_rank_;
     }
 
-    // host_proto: filled CaliperHost except applet_data_dir, which the loader
+    // host_proto: filled CaliperHost except instrument_data_dir, which the loader
     // points at this entry's sandbox dir before initialize().
-    // A spec applet is never loaded: launch() validates its spec (check_spec)
-    // and returns false, leaving it Ready with kSpecPageUnavailable as its
-    // text when the spec is valid, or Failed with the first error.
+    // A kind = "spec" instrument is never loaded: launch() validates its spec
+    // (check_spec) and returns false, leaving it Ready with kSpecPageUnavailable
+    // as its text when the spec is valid, or Failed with the first error.
     bool launch(int idx, CaliperHost host_proto);
-    // Full validation of a spec applet that passed the listing checks (Ready
-    // or Shadowed): its spec is read again, parsed and validated with the
-    // spec library (read_spec_file in applet_spec.h). On an error the entry
+    // Full validation of a kind = "spec" instrument that passed the listing checks
+    // (Ready or Shadowed): its spec is read again, parsed and validated with the
+    // spec library (read_spec_file in instrument_spec.h). On an error the entry
     // becomes Failed with the first error, formatted by
     // format_spec_diagnostic, as its text. `diagnostics` receives every error
     // and warning, located in the file. False, changing nothing, for a
-    // compiled applet, an entry that did not pass, or a build without the
+    // library instrument, an entry that did not pass, or a build without the
     // spec runtime.
     bool check_spec(int idx, std::vector<SpecDiagnostic>* diagnostics = nullptr);
     // The headless acceptance check of a Ready or Shadowed entry: dlopen,
@@ -254,7 +256,7 @@ public:
     // create() and destroy(); initialize() never runs, so the data folder and
     // its stamp are untouched. True when all of it passed. On failure the
     // entry takes the status and text that launch() would give it. For a
-    // spec applet, check_spec().
+    // kind = "spec" instrument, check_spec().
     bool probe(int idx);
     bool frame(int idx, const CaliperFrameInfo& info);  // false => just quarantined
     void teardown(int idx);
@@ -274,32 +276,32 @@ public:
 
 private:
     // Adds the entry of one manifest found in a searched folder at `rank`.
-    // `in_subfolder`: found in a subfolder, where only spec applets are
-    // taken; `in_workspace`: found under the workspace's applets/ folder.
+    // `in_subfolder`: found in a subfolder, where only kind = "spec" instruments
+    // are taken; `in_workspace`: found under the workspace's instruments/ folder.
     // Returns the entries added (0 or 1).
     int add_manifest(const std::filesystem::path& manifest, int rank, bool in_subfolder,
                      bool in_workspace);
-    // The checks of a spec applet made at listing time, on an entry whose
-    // manifest parsed: the spec file, then min_host, the spec runtime and
+    // The checks of a kind = "spec" instrument made at listing time, on an entry
+    // whose manifest parsed: the spec file, then min_host, the spec runtime and
     // the spec's format version. Sets status, status_text and spec_path.
-    void spec_listing_checks(AppletEntry& a) const;
+    void spec_listing_checks(InstrumentEntry& a) const;
     bool is_workspace_folder(const std::string& dir) const;
     void resolve_duplicates();
     // dlopen (once) and the checks between it and create(); false with the
     // entry Failed or Refused and its reason.
-    bool open_and_check(AppletEntry& a);
-    bool quarantine_if_job_faulted(AppletEntry& a);
+    bool open_and_check(InstrumentEntry& a);
+    bool quarantine_if_job_faulted(InstrumentEntry& a);
     // `instance` faulted in `where`: Quarantined with the guard's reason and
     // kind. An Exception keeps the instance for restart(); a Signal abandons
     // it. `initialized`: initialize() had returned true for it.
-    static void quarantine(AppletEntry& a, const std::string& why, FaultKind kind,
+    static void quarantine(InstrumentEntry& a, const std::string& why, FaultKind kind,
                            void* instance, bool initialized);
 
     HostCaps caps_;
     std::string data_root_;
     std::string workspace_dir_;           // set_workspace(); "" for none
-    std::string workspace_key_;           // its applets/ folder, made comparable
-    std::vector<AppletEntry> entries_;
+    std::string workspace_key_;           // its instruments/ folder, made comparable
+    std::vector<InstrumentEntry> entries_;
     std::vector<CaliperHost> host_blocks_;  // stable storage per entry
     int next_rank_ = 0;                      // search position of the next scan
     int workspace_rank_ = -1;                // the workspace folder's position, once scanned

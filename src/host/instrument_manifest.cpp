@@ -1,4 +1,4 @@
-#include "applet_manifest.h"
+#include "instrument_manifest.h"
 #include <toml++/toml.hpp>
 #include <cctype>
 #include <cstdint>
@@ -19,7 +19,7 @@ bool is_valid_semver(const std::string& v) {
     return part == 2 && digits > 0;
 }
 
-bool is_valid_applet_id(const std::string& id) {
+bool is_valid_instrument_id(const std::string& id) {
     if (id.empty() || id.size() > 128) return false;
     int seg = 0;   // chars in the current dot-separated segment
     for (char c : id) {
@@ -43,8 +43,8 @@ bool is_plain_file_name(const std::string& name) {
     return true;
 }
 
-const char* applet_kind_word(AppletKind kind) {
-    return kind == AppletKind::Spec ? "spec" : "library";
+const char* instrument_kind_word(InstrumentKind kind) {
+    return kind == InstrumentKind::Spec ? "spec" : "library";
 }
 
 namespace {
@@ -64,19 +64,19 @@ std::vector<std::string> read_array(const toml::table& t, const char* key) {
             if (auto s = e.value<std::string>()) out.push_back(*s);
     return out;
 }
-// The rest of a spec applet's manifest, after [applet]'s id, name, version,
-// summary and tag (docs/applets/manifest.md, "Spec applets"): applet.spec
+// The rest of a kind = "spec" instrument manifest, after [instrument]'s id, name,
+// version, summary and tag (docs/instruments/manifest.md): instrument.spec
 // is required and is a plain file name; [compat].min_host keeps its meaning;
 // the keys that only a library can honour are errors rather than ignored, so
-// that a manifest meant for a library is never taken for a spec applet.
+// that a manifest meant for a library is never taken for a kind = "spec" instrument.
 template <class Fail>
-ManifestResult parse_spec_applet(const toml::table& root, const toml::table& applet,
-                                 ManifestResult& r, const Fail& fail) {
-    auto spec = applet["spec"];
-    if (!spec) return fail("manifest missing applet.spec, the spec file of a kind = \"spec\" applet");
+ManifestResult parse_spec_kind(const toml::table& root, const toml::table& instrument,
+                               ManifestResult& r, const Fail& fail) {
+    auto spec = instrument["spec"];
+    if (!spec) return fail("manifest missing instrument.spec, the spec file of a kind = \"spec\" instrument");
     const auto file = spec.value<std::string>();
     if (!spec.is_string() || !file || !is_plain_file_name(*file))
-        return fail("applet.spec is not a plain file name in the applet's folder: " +
+        return fail("instrument.spec is not a plain file name in the instrument's folder: " +
                     (file ? *file : std::string("(not a string)")));
     r.manifest.spec = *file;
 
@@ -84,9 +84,9 @@ ManifestResult parse_spec_applet(const toml::table& root, const toml::table& app
         const toml::table* compat = compat_node.as_table();
         if (!compat) return fail("[compat] is not a table");
         if (compat->contains("abi_epoch"))
-            return fail("compat.abi_epoch does not apply to a spec applet, which has no library");
+            return fail("compat.abi_epoch does not apply to a kind = \"spec\" instrument, which has no library");
         if (compat->contains("torch"))
-            return fail("compat.torch does not apply to a spec applet, which has no library");
+            return fail("compat.torch does not apply to a kind = \"spec\" instrument, which has no library");
         if (auto mh = (*compat)["min_host"].value<std::string>()) {   // as for a library
             if (!is_valid_semver(*mh))
                 return fail("compat.min_host is not strict semver x.y.z: " + *mh);
@@ -94,11 +94,11 @@ ManifestResult parse_spec_applet(const toml::table& root, const toml::table& app
         }
     }
     if (root.contains("build"))
-        return fail("[build] does not apply to a spec applet, which has no library");
+        return fail("[build] does not apply to a kind = \"spec\" instrument, which has no library");
     if (root.contains("services"))
-        return fail("[services] does not apply to a spec applet, which calls no service");
+        return fail("[services] does not apply to a kind = \"spec\" instrument, which calls no service");
     if (root.contains("data"))
-        return fail("[data] does not apply to a spec applet, which keeps no data of its own");
+        return fail("[data] does not apply to a kind = \"spec\" instrument, which keeps no data of its own");
     r.ok = true;
     return r;
 }
@@ -113,23 +113,23 @@ ManifestResult parse_manifest_text(const std::string& toml_text) {
     }
 
     ManifestResult r;
-    auto* applet = root["applet"].as_table();
-    if (!applet) return fail("manifest missing [applet] table");
+    auto* instrument = root["instrument"].as_table();
+    if (!instrument) return fail("manifest missing [instrument] table");
 
     // The kind first: every refusal below keeps it, so that the loader lists
-    // a broken spec applet as a spec applet (ManifestResult).
+    // a broken kind = "spec" instrument with its declared kind (ManifestResult).
     std::string kind_error;
-    if (auto kind = (*applet)["kind"]) {
+    if (auto kind = (*instrument)["kind"]) {
         const auto word = kind.value<std::string>();
         if (!kind.is_string() || !word)
-            kind_error = "applet.kind is not a string";
+            kind_error = "instrument.kind is not a string";
         else if (*word == "spec")
-            r.manifest.kind = AppletKind::Spec;
+            r.manifest.kind = InstrumentKind::Spec;
         else if (*word != "library")
-            kind_error = "applet.kind is not \"library\" or \"spec\": " + *word;
+            kind_error = "instrument.kind is not \"library\" or \"spec\": " + *word;
     }
     // From here on `fail` is this lambda, which keeps the declared kind.
-    const AppletKind declared = r.manifest.kind;
+    const InstrumentKind declared = r.manifest.kind;
     auto fail = [declared](std::string msg) {
         ManifestResult f;
         f.error = std::move(msg);
@@ -138,24 +138,24 @@ ManifestResult parse_manifest_text(const std::string& toml_text) {
     };
 
     auto req_str = [&](const char* key, std::string& dst) -> bool {
-        if (auto v = (*applet)[key].value<std::string>()) { dst = *v; return true; }
+        if (auto v = (*instrument)[key].value<std::string>()) { dst = *v; return true; }
         return false;
     };
     if (!req_str("id", r.manifest.id) || r.manifest.id.empty())
-        return fail("manifest missing applet.id");
-    if (!is_valid_applet_id(r.manifest.id))
-        return fail("applet.id is not a valid applet id (lowercase reverse-DNS, "
+        return fail("manifest missing instrument.id");
+    if (!is_valid_instrument_id(r.manifest.id))
+        return fail("instrument.id is not a valid instrument id (lowercase reverse-DNS, "
                     "[a-z0-9.-]): " + r.manifest.id);
     if (!req_str("name", r.manifest.name) || r.manifest.name.empty())
-        return fail("manifest missing applet.name");
+        return fail("manifest missing instrument.name");
     if (!req_str("version", r.manifest.version))
-        return fail("manifest missing applet.version");
+        return fail("manifest missing instrument.version");
     if (!is_valid_semver(r.manifest.version))
-        return fail("applet.version is not strict semver x.y.z: " + r.manifest.version);
+        return fail("instrument.version is not strict semver x.y.z: " + r.manifest.version);
     req_str("summary", r.manifest.summary);
     req_str("tag", r.manifest.tag);
     if (!kind_error.empty()) return fail(kind_error);
-    if (r.manifest.kind == AppletKind::Spec) return parse_spec_applet(root, *applet, r, fail);
+    if (r.manifest.kind == InstrumentKind::Spec) return parse_spec_kind(root, *instrument, r, fail);
 
     auto* compat = root["compat"].as_table();
     if (!compat) return fail("manifest missing [compat].abi_epoch");

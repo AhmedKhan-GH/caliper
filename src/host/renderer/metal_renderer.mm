@@ -1,11 +1,11 @@
-// Metal backend for the HostRenderer seam (docs/applets/rendering.md).
+// Metal backend for the HostRenderer seam (docs/instruments/rendering.md).
 // make_metal_renderer() (declared in host_renderer.h) constructs it and
 // core_select_renderer() chooses it on macOS. There is no fallback: if its
 // start fails, the app, caliper shot and the embedding core refuse with
 // start_error(). Apple-only translation unit.
 //
 // Frame ordering matches the C1 contract: the CLEAR happens in new_frame()
-// (the Metal render pass is opened there with loadAction=Clear), the applet
+// (the Metal render pass is opened there with loadAction=Clear), the instrument
 // draws its ImGui frame, then render() flushes RenderDrawData and presents.
 //
 // Compiled with ARC (-fobjc-arc, set in CMakeLists): ObjC strong references
@@ -138,7 +138,7 @@ public:
 
     // ---- Embed canvas seam (libcaliper R4 L2a) ---------------------------
     // Parallel to init()/new_frame()/render(): a GLFW-free path that composites
-    // the applet's ImGui frame onto an offscreen RGBA8 texture (readable) or a
+    // the instrument's ImGui frame onto an offscreen RGBA8 texture (readable) or a
     // CAMetalLayer attached to the host's native NSView. Shares device_/queue_/
     // textures_ with the texture ops, so the bridge works unchanged.
     // The ImGui *render* backend (imgui_impl_metal) is wired here; the *platform*
@@ -620,7 +620,7 @@ public:
     void* native_queue() const override { return (__bridge void*)queue_; }
     caliper_gfx::Backend* gfx() override { return gfx_.get(); }
     // Colormap/blit a texture FROM an imported buffer at a byte offset, with NO
-    // data copy (the applet's kernels already wrote the bytes). Guards mirror
+    // data copy (the instrument's kernels already wrote the bytes). Guards mirror
     // tex_update_from_device; the byte offset rides setBuffer:offset: (f32) or
     // sourceOffset: (u8). Colormap/vmin/vmax are the texture's pinned mapping.
     bool tex_update_from_imported(uint64_t tex, uint64_t alloc, uint64_t offset_bytes,
@@ -716,7 +716,7 @@ public:
     }
 
 private:
-    // ---- CALIPER_METAL_STATS (docs/applets/rendering.md, "Copy Counters
+    // ---- CALIPER_METAL_STATS (docs/instruments/rendering.md, "Copy Counters
     // and Frame Statistics"): frame times, GPU times from the command buffers'
     // GPUStartTime and GPUEndTime, and updates by path, over a window that
     // frame_stats() resets and over the whole run, which shutdown prints in one

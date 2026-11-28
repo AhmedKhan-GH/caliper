@@ -1,4 +1,4 @@
-// Vulkan backend for the HostRenderer seam (docs/applets/rendering.md).
+// Vulkan backend for the HostRenderer seam (docs/instruments/rendering.md).
 // Sibling to metal_renderer.mm; make_vulkan_renderer() constructs it and
 // core_select_renderer() chooses it on Windows. There is no fallback: if its
 // start fails (no Vulkan driver, remote desktop, ...), the app, caliper shot
@@ -76,7 +76,7 @@
 // <windows.h> (deliberate, see volk.h) — so declare the one kernel32 call we
 // use the same way rather than dragging the whole header in after the shims.
 extern "C" __declspec(dllimport) int __stdcall CloseHandle(void* hObject);
-// import_external_allocation dups the applet's shareable handle so the host
+// import_external_allocation dups the instrument's shareable handle so the host
 // owns a lifetime-independent copy (closed at release). Same declare-not-
 // include discipline as CloseHandle above.
 extern "C" __declspec(dllimport) void* __stdcall GetCurrentProcess(void);
@@ -283,7 +283,7 @@ public:
 
     // ---- Embed canvas seam (libcaliper R4 L2a) ---------------------------
     // Parallel to init()/new_frame()/render(): a GLFW-free path that composites
-    // the applet's ImGui frame onto an offscreen RGBA8 target (readable) or a
+    // the instrument's ImGui frame onto an offscreen RGBA8 target (readable) or a
     // swapchain over the host's native HWND. Builds its OWN instance/device here
     // (init() is never called on this instance), wiring ONLY the ImGui *render*
     // backend (imgui_impl_vulkan) — never imgui_impl_glfw; the embedder feeds io
@@ -368,7 +368,7 @@ public:
         // Same session-start CUDA interop pairing the exe init() does (spec §3.1):
         // pick_device_and_queue() only sets external_memory_ok_/timeline_ok_ and
         // enables the extensions — without this the bridge reads interop_device()
-        // as CPU, and applets fall back with no zero-copy under
+        // as CPU, and instruments fall back with no zero-copy under
         // embed. Wired here (post ImGui init, mirroring init()) so caps match the
         // exe path; the run-proven Metal canvas path pairs interop the same way.
         resolve_interop_pairing();
@@ -649,7 +649,7 @@ public:
 
         // When the tensor's data IS our shared buffer (the alloc_shared
         // literal-zero-copy path, spec §3.5), there is nothing to copy — the
-        // applet's kernels already wrote it in place.
+        // instrument's kernels already wrote it in place.
         const bool shared_in_place = (src == dst.interop.cuda_ptr);
 
         bool ok = false;
@@ -681,9 +681,9 @@ public:
     }
 
     // Literal zero-copy alloc_shared (spec §3.5): create/size texture `tex`'s
-    // interop buffer and hand back a CUDA device pointer into it. The applet
-    // wraps this with torch::from_blob and writes it; update_texture then runs
-    // the buffer->image pass with no copy (shared_in_place above).
+    // interop buffer and hand back a CUDA device pointer into it. The
+    // instrument wraps this with torch::from_blob and writes it; update_texture
+    // then runs the buffer->image pass with no copy (shared_in_place above).
     // Test-only readback: the CaliperTextureId is the descriptor set, so find
     // the Tex whose descset matches and copy its image to host bytes.
     std::vector<uint8_t> debug_readback_rgba8(uint64_t id, int, int) override {
@@ -704,7 +704,7 @@ public:
         return true;
     }
 
-    // ---- Bridge v1.2: import applet-exported allocations (zero data copies) --
+    // ---- Bridge v1.2: import instrument-exported allocations (zero data copies)
     // supports_external_import gates the bridge's CALIPER_BRIDGE_CAP_IMPORT_ALLOC:
     // available only when the Vulkan side exports external memory AND a
     // UUID-matched CUDA device is paired (interop live).
@@ -716,7 +716,7 @@ public:
 #endif
     }
 
-    // Import an applet-exported CUDA allocation as one VkBuffer (its import
+    // Import an instrument-exported CUDA allocation as one VkBuffer (its import
     // twin of ensure_buffer's export). Returns a renderer-internal id (0 on
     // failure -> bridge falls back). Any failure frees everything it created.
     uint64_t import_external_allocation(void* os_handle, uint64_t size_bytes,
@@ -727,7 +727,7 @@ public:
         if (os_handle == nullptr || size_bytes == 0) return 0;
 
         // Own our own copy of the shareable handle (DUPLICATE_SAME_ACCESS);
-        // the applet/adapter keeps and closes theirs independently.
+        // the instrument/adapter keeps and closes theirs independently.
         HANDLE dup = nullptr;
         if (!DuplicateHandle(GetCurrentProcess(), (HANDLE)os_handle,
                              GetCurrentProcess(), &dup, 0, /*bInheritHandle=*/0,
@@ -772,7 +772,7 @@ public:
         imp.handle = dup;
         VkMemoryAllocateInfo mai{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
         mai.pNext = &imp;
-        mai.allocationSize = size_bytes;   // the applet's padded allocation size
+        mai.allocationSize = size_bytes;   // the instrument's padded allocation size
         if (!find_mem_type(mr.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
                            &mai.memoryTypeIndex) ||
             vkAllocateMemory(device_, &mai, nullptr, &a.memory) != VK_SUCCESS) {
@@ -814,7 +814,7 @@ public:
     }
 
     // Colormap/blit a texture FROM an imported allocation at a byte offset, with
-    // NO data copy (the applet's kernels already wrote the bytes). Guards mirror
+    // NO data copy (the instrument's kernels already wrote the bytes). Guards mirror
     // tex_update_from_device; the byte offset rides the descriptor (f32) or the
     // BufferImageCopy (u8). Returns false -> bridge CPU-stages.
     bool tex_update_from_imported(uint64_t tex, uint64_t alloc, uint64_t offset_bytes,
@@ -934,7 +934,7 @@ private:
         void* direct_stream = nullptr;
         // Two images, once a kernel has to write a texture a frame may sample:
         // the kernel writes the back one, then the two trade places, so training
-        // never waits for the frame. id_set is the set applets hold, whichever
+        // never waits for the frame. id_set is the set instruments hold, whichever
         // image it was made for; frame_render draws descset instead.
         std::shared_ptr<Tex> back;
         VkDescriptorSet id_set = VK_NULL_HANDLE;
@@ -944,11 +944,12 @@ private:
         VkFramebuffer fb = VK_NULL_HANDLE;  // embed canvas OFFSCREEN render target
     };
 
-    // Bridge v1.2 imported external allocation: one VkBuffer per applet-exported
-    // CUDA allocation, imported (not exported) via VkImportMemoryWin32HandleInfoKHR.
-    // Textures reference it at descriptor/copy byte offsets — no per-texture
-    // buffer, no data copy. handle_dup is our DuplicateHandle copy (CloseHandle
-    // at release; the applet/adapter keeps and closes its own).
+    // Bridge v1.2 imported external allocation: one VkBuffer per
+    // instrument-exported CUDA allocation, imported (not exported) via
+    // VkImportMemoryWin32HandleInfoKHR. Textures reference it at
+    // descriptor/copy byte offsets — no per-texture buffer, no data copy.
+    // handle_dup is our DuplicateHandle copy (CloseHandle at release; the
+    // instrument/adapter keeps and closes its own).
     struct ImportedAlloc {
         VkBuffer buf = VK_NULL_HANDLE;
         VkDeviceMemory memory = VK_NULL_HANDLE;
@@ -1705,7 +1706,7 @@ private:
     // (external_memory_ok_/timeline_ok_ set by pick_device_and_queue) plus a
     // UUID-matched CUDA pairing. Shared verbatim by the exe swapchain path
     // (init()) and the embed canvas path (canvas_init()) so the interop caps are
-    // identical under both — otherwise embed advertises 0 and applets fall back.
+    // identical under both — otherwise embed advertises 0 and instruments fall back.
     void resolve_interop_pairing() {
         interop_ok_ = external_memory_ok_ && ensure_cuda();
 
@@ -2351,7 +2352,7 @@ private:
         return true;
     }
 
-    // What applets hold for this texture: fixed for its life, across swaps.
+    // What instruments hold for this texture: fixed for its life, across swaps.
     static VkDescriptorSet public_set(const Tex& t) {
         return t.id_set != VK_NULL_HANDLE ? t.id_set : t.descset;
     }
@@ -2383,7 +2384,7 @@ private:
         swapped_sets_[t.id_set] = t.descset;
     }
 
-    // Applets draw with id_set; send each draw to whichever image is the front.
+    // Instruments draw with id_set; send each draw to whichever image is the front.
     void resolve_swapped_textures(ImDrawData* dd) {
         if (swapped_sets_.empty()) return;
         for (ImDrawList* list : dd->CmdLists)
@@ -2395,7 +2396,7 @@ private:
     }
 
     // ---- V4 pipelined imported update: update_pipelined minus the D2D copy ----
-    // The applet already wrote the imported allocation, so CUDA only SIGNALS
+    // The instrument already wrote the imported allocation, so CUDA only SIGNALS
     // base+1 on the producer's stream (no cuMemcpyDtoDAsync); the Vulkan pass
     // GPU-waits base+1 / signals base+2, exactly as update_pipelined does. Reads
     // src.buf at src_off in place. Reuses the texture's own sync objects

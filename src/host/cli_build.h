@@ -1,6 +1,6 @@
 #pragma once
 // ============================================================================
-// caliper build <folder>: configures and builds an applet folder against the
+// caliper build <folder>: configures and builds an instrument folder against the
 // installed Caliper SDK with CMake, then runs the checks of `caliper check`
 // on the result (host_cli.h). It opens no window and starts no app.
 //

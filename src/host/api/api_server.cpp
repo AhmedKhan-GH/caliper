@@ -24,7 +24,7 @@ using caliper_net::HttpRequest;
 namespace {
 
 const char kPrefix[] = "/v0/";
-const char kLaunchHead[] = "/v0/applets/";
+const char kLaunchHead[] = "/v0/instruments/";
 const char kLaunchTail[] = "/launch";
 const char kCommands[] = "/v0/commands";
 const char kCommandHead[] = "/v0/commands/";
@@ -213,8 +213,8 @@ Routed route(const std::string& method, const std::string& path) {
     Routed r;
     if (path == "/v0/info") {
         r.route = Route::Info;
-    } else if (path == "/v0/applets") {
-        r.route = Route::Applets;
+    } else if (path == "/v0/instruments") {
+        r.route = Route::Instruments;
     } else if (path == "/v0/capture.png") {
         r.route = Route::Capture;
     } else if (path == kStreamPath || path == kStreamAlias) {
@@ -234,7 +234,7 @@ Routed route(const std::string& method, const std::string& path) {
         const size_t b = path.size() - (sizeof kLaunchTail - 1);
         if (b > a && path.find('/', a) == b) {
             r.route = Route::Launch;
-            r.applet_id = path.substr(a, b - a);
+            r.instrument_id = path.substr(a, b - a);
         }
     }
     if (r.route == Route::None) return r;
@@ -255,7 +255,7 @@ bool viewer_command(const std::string& name) {
     return false;
 }
 
-bool plausible_applet_id(const std::string& id) {
+bool plausible_instrument_id(const std::string& id) {
     if (id.empty() || id.size() > 128) return false;
     for (char c : id)
         if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '.' ||
@@ -366,7 +366,7 @@ Verdict check(const HttpRequest& r, const TokenTable& tokens, bool command_layer
         if (rt != Route::SpecPage && rt != Route::SpecAsset && !(rt == Route::Command && viewer_command(v.routed.name))) {
             v.status = 403;
             v.message = "the viewer token opens only the spec page, its views' files and the commands spec.get, "
-                        "applet.list and panel.data";
+                        "instrument.list and panel.data";
             return v;
         }
     }
@@ -432,9 +432,9 @@ Verdict check(const HttpRequest& r, const TokenTable& tokens, bool command_layer
         v.message = "Caliper API v0 takes no request body";
         return v;
     }
-    if (v.routed.route == Route::Launch && !plausible_applet_id(v.routed.applet_id)) {
+    if (v.routed.route == Route::Launch && !plausible_instrument_id(v.routed.instrument_id)) {
         v.status = 400;
-        v.message = "not an applet id: an id is 1 to 128 characters of A-Z, a-z, 0-9, '.', '_' and '-'";
+        v.message = "not an instrument id: an id is 1 to 128 characters of A-Z, a-z, 0-9, '.', '_' and '-'";
         return v;
     }
     if (rt == Route::Approval && !plausible_approval_id(v.routed.name)) {
@@ -480,7 +480,7 @@ std::string error_json(const std::string& message) {
 struct Server::Impl {
     struct Pending {
         ConnId conn = 0;
-        Call::Kind kind = Call::Kind::Applets;
+        Call::Kind kind = Call::Kind::Instruments;
         uint64_t deadline_ms = 0;
         bool layer = false;              // a command request or an approval lookup
         bool held = false;               // a command the frame thread handed to the command layer
@@ -678,12 +678,12 @@ struct Server::Impl {
                 }
                 call.kind = Call::Kind::Capture;
                 break;
-            case Route::Applets:
-                call.kind = Call::Kind::Applets;
+            case Route::Instruments:
+                call.kind = Call::Kind::Instruments;
                 break;
             case Route::Launch:
                 call.kind = Call::Kind::Launch;
-                call.applet_id = v.routed.applet_id;
+                call.instrument_id = v.routed.instrument_id;
                 call.origin = v.origin;
                 break;
             default:   // the stream path never reaches here (http_door.h)

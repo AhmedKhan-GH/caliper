@@ -4,7 +4,7 @@
 // bar (or the landing's command bar) takes the top edge, and the status bar,
 // then the jobs tray above it, take the bottom edge. Each is an ImGui viewport
 // side bar, which reserves its height from the work area, and the page's dock
-// space fills what is left, so no applet window ever runs under a bar.
+// space fills what is left, so no instrument window ever runs under a bar.
 //
 // ImGui moves the viewport's public WorkPos / WorkSize only on the next
 // frame, so a dock space laid out from them would run under a bar for the one
@@ -16,7 +16,7 @@
 // The jobs tray takes its strip only while it has something to show, and
 // JobsTrayPresence decides when, so the work area does not jump: a job must
 // run for kOpenDelay before the strip appears, which keeps a job that starts
-// and ends within a moment from moving the applet's panes at all, and the
+// and ends within a moment from moving the instrument's panes at all, and the
 // strip stays for kCloseDelay after the last running job has ended (showing
 // it as finished), so a run of jobs one after another keeps one strip. A kept
 // failure holds the strip open until the user clears it, and clearing with

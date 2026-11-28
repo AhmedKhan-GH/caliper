@@ -112,7 +112,7 @@ bool AppApi::start(const CommandLine& cl, const std::string& capture_unavailable
     if (!file_.empty()) out << " (agents read " << file_ << ", whose commands are reviewed)";
     out << std::endl;
     if (!caliper_api::spec_page_html().empty())
-        out << "[api] Spec applets in a browser at " << server_->spec_url() << "&applet=<id>" << std::endl;
+        out << "[api] Instruments in a browser at " << server_->spec_url() << "&instrument=<id>" << std::endl;
     return true;
 }
 
@@ -173,24 +173,24 @@ void AppApi::revoke_agent_file(const std::string& path) {
     }
 }
 
-bool AppApi::viewer_link_possible(const std::string& applet, std::string* why) {
+bool AppApi::viewer_link_possible(const std::string& instrument, std::string* why) {
     auto refuse = [&](const char* reason) {
         if (why) *why = reason;
         return false;
     };
     if (caliper_api::spec_page_html().empty()) return refuse("this build has no browser viewer");
-    // A workspace id, as applet.save names the folder: nothing to escape,
+    // A workspace id, as instrument.save names the folder: nothing to escape,
     // and never "." or "..".
-    if (!viewer_applet_id(applet)) return refuse("the dashboard's id cannot be a link");
+    if (!viewer_instrument_id(instrument)) return refuse("the instrument's id cannot be a link");
     return true;
 }
 
-std::string AppApi::viewer_link(const std::string& applet, std::string* why) const {
+std::string AppApi::viewer_link(const std::string& instrument, std::string* why) const {
     auto refuse = [&](const char* reason) {
         if (why) *why = reason;
         return std::string();
     };
-    if (!viewer_link_possible(applet, why)) return {};
+    if (!viewer_link_possible(instrument, why)) return {};
     if (!server_) return refuse("Caliper API is not running");
     const std::string base = server_->spec_url();
     const std::string mark = std::string("?") + CALIPER_NET_TOKEN_PARAM + "=";
@@ -201,7 +201,7 @@ std::string AppApi::viewer_link(const std::string& applet, std::string* why) con
     // the viewer token alone.
     if (token.empty() || token == server_->token() || token == server_->mcp_token())
         return refuse("the link would carry a token that opens more than the viewer");
-    return base + "&applet=" + applet;
+    return base + "&instrument=" + instrument;
 }
 
 void AppApi::stop() {

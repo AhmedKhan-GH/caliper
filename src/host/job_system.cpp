@@ -68,7 +68,7 @@ void ctl_progress(const CaliperJobControl* ctl, float frac, const char* msg) {
     if (frac > 1.0f) frac = 1.0f;
     b->progress.store(frac);
     if (msg) {
-        // Copy the applet's string BEFORE taking the lock: a bad msg faults
+        // Copy the instrument's string BEFORE taking the lock: a bad msg faults
         // in this copy, and in a guarded job the guard then siglongjmps out —
         // with msg_mutex held, the job's own failure report and the panel's
         // views() would both block on it forever.
@@ -114,12 +114,12 @@ uint64_t JobSystem::start(std::string label, CaliperJobFn fn, void* user,
                          raw->id, raw->label.c_str(), what);
         };
         if (guarded) {
-            // Applet code (caliper.jobs.v1): under the crash guard, so a fault
-            // fails this job instead of the host. No host lock is held across
-            // fn — mutex_ is only ever the submitter's, never this thread's,
-            // and the ctl thunks copy applet memory before taking msg_mutex —
-            // so the guard's siglongjmp out of fn strands no lock. Jobs this
-            // fn submits inherit its owner.
+            // Instrument code (caliper.jobs.v1): under the crash guard, so a
+            // fault fails this job instead of the host. No host lock is held
+            // across fn — mutex_ is only ever the submitter's, never this
+            // thread's, and the ctl thunks copy instrument memory before
+            // taking msg_mutex — so the guard's siglongjmp out of fn strands
+            // no lock. Jobs this fn submits inherit its owner.
             JobOwnerScope scope(owner);
             const GuardResult r =
                 guarded_call([&] { fn(user, &raw->block.ctl); });

@@ -1,4 +1,4 @@
-#include "pages/applet_page.h"
+#include "pages/instrument_page.h"
 
 #include "pages/landing_screen.h"   // draw_host_status_items
 #include "ui/sternbild_theme.h"
@@ -26,12 +26,12 @@ double now_ms() {
 
 } // namespace
 
-CaliperHost applet_host_proto() {
+CaliperHost instrument_host_proto() {
     CaliperHost proto{};
     proto.struct_size  = sizeof(CaliperHost);
     proto.abi_epoch    = CALIPER_ABI_EPOCH;
     proto.host_version = kHostVersionU32;
-    proto.applet_data_dir = nullptr;   // the loader fills it per applet
+    proto.instrument_data_dir = nullptr;   // the loader fills it per instrument
     proto.get_service = [](const CaliperHost*, const char* id) {
         return services_get(id);
     };
@@ -48,58 +48,58 @@ bool begin_page_bar() {
     return open;
 }
 
-AppletPage::Result AppletPage::draw(AppletLoader& loader, int applet,
-                                    const CaliperFrameInfo& fi,
-                                    const char* renderer_name, bool chromeless,
-                                    JobsTray* tray) {
+InstrumentPage::Result InstrumentPage::draw(InstrumentLoader& loader, int instrument,
+                                            const CaliperFrameInfo& fi,
+                                            const char* renderer_name, bool chromeless,
+                                            JobsTray* tray) {
     Result r;
     // The page bar and the status bar, then the jobs tray's strip above the
     // status bar while it is open, unless the page is chromeless
-    // (CALIPER_CHROMELESS=1), which promises the applet the whole window.
+    // (CALIPER_CHROMELESS=1), which promises the instrument the whole window.
     if (!chromeless) {
-        if (draw_bars(loader, applet, renderer_name)) r.home = true;
+        if (draw_bars(loader, instrument, renderer_name)) r.home = true;
         if (tray) tray->draw();
     }
 
     // Docked desktop. A passthru dock space fills the work area the bars
-    // leave this frame (work_area.h), so the applet's windows can be docked
+    // leave this frame (work_area.h), so the instrument's windows can be docked
     // and none runs under a bar. The central node stays transparent while
-    // empty, so a full-viewport applet docked into it looks exactly as before.
+    // empty, so a full-viewport instrument docked into it looks exactly as before.
     const ImGuiID dock_id =
         dock_space_over_work_area(0, ImGuiDockNodeFlags_PassthruCentralNode);
 
-    // Docking by role (dock_layout.h): windows the applet hinted, or began
+    // Docking by role (dock_layout.h): windows the instrument hinted, or began
     // without a hint, and that have no saved layout are placed the first time
     // they appear. A layout the user arranged is never touched.
     dock_layout_.apply(dock_id);
 
-    // The UI stacks are checkpointed around the applet's frame: a throw or
+    // The UI stacks are checkpointed around the instrument's frame: a throw or
     // fault partway through it leaves its windows, plots and pushes open, and
     // they are unwound before the host draws anything more into this frame.
     const UiCheckpoint ui_checkpoint = UiCheckpoint::store();
     const double t0 = now_ms();
-    dock_layout_.begin_applet_frame();
-    r.alive = loader.frame(applet, fi);
-    dock_layout_.end_applet_frame();
+    dock_layout_.begin_instrument_frame();
+    r.alive = loader.frame(instrument, fi);
+    dock_layout_.end_instrument_frame();
     watchdog_.feed(now_ms() - t0);
     if (!r.alive) ui_checkpoint.recover();   // quarantined mid-frame
     return r;
 }
 
-// The applet page's chrome: the page bar over the work area and the status
+// The instrument page's chrome: the page bar over the work area and the status
 // bar under it. True when the page bar's Home was clicked.
-bool AppletPage::draw_bars(const AppletLoader& loader, int applet,
-                           const char* renderer_name) {
+bool InstrumentPage::draw_bars(const InstrumentLoader& loader, int instrument,
+                               const char* renderer_name) {
     bool home = false;
-    // Applet bar: Home as one key button holding its key, esc (recognition
-    // over recall, nothing printed beside it), the applet's name as metadata,
+    // Instrument bar: Home as one key button holding its key, esc (recognition
+    // over recall, nothing printed beside it), the instrument's name as metadata,
     // and the watchdog warning in bronze, the palette's only accent. The
     // page's one action lives here; the status bar below carries only facts.
     if (begin_page_bar()) {
         if (sternbild::key_button("esc", "Home")) home = true;
         ImGui::Separator();
         ImGui::PushStyleColor(ImGuiCol_Text, sternbild::col::secondary);
-        ImGui::TextUnformatted(loader.at(applet).manifest.name.c_str());
+        ImGui::TextUnformatted(loader.at(instrument).manifest.name.c_str());
         ImGui::PopStyleColor();
         if (watchdog_.flagged()) {
             ImGui::Separator();
@@ -112,7 +112,7 @@ bool AppletPage::draw_bars(const AppletLoader& loader, int applet,
 
     // Status bar (VS Code): the same persistent strip as the landing's, so
     // the machine is always in the same place; facts only, as there (Home is
-    // in the applet bar above). Like the menu bar it is a viewport side bar,
+    // in the instrument bar above). Like the menu bar it is a viewport side bar,
     // drawn before the dock space that fills what it leaves.
     sternbild::status_bar_begin();
     ::draw_host_status_items(renderer_name);

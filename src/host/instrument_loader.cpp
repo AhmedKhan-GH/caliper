@@ -1,4 +1,4 @@
-#include "applet_loader.h"
+#include "instrument_loader.h"
 #include "crash_guard.h"
 #include "job_system.h"
 #include <toml++/toml.hpp>
@@ -12,11 +12,11 @@
 #include <istream>
 #include <iterator>
 #include <map>
-// With the builder, the full validation of a spec applet's spec
-// (check_spec) uses the spec library through applet_spec.h; the build defines
+// With the builder, the full validation of a kind = "spec" instrument's spec
+// (check_spec) uses the spec library through instrument_spec.h; the build defines
 // CALIPER_HOST_SPEC_RUNTIME for this library only then (CMakeLists.txt).
 #ifdef CALIPER_HOST_SPEC_RUNTIME
-#include "applet_spec.h"
+#include "instrument_spec.h"
 #endif
 
 #ifdef _WIN32
@@ -201,7 +201,7 @@ bool raise_data_schema_stamp(const std::string& data_dir, uint32_t schema) {
             std::ofstream out(tmp, std::ios::binary | std::ios::trunc);
             if (!out) return false;
             out << "# Written by the Caliper host. The highest data schema that has\n"
-                   "# opened this folder; an applet with a lower schema is refused.\n"
+                   "# opened this folder; an instrument with a lower schema is refused.\n"
                    "schema = " << schema << "\n";
             out.flush();
             if (!out) {
@@ -219,11 +219,11 @@ bool raise_data_schema_stamp(const std::string& data_dir, uint32_t schema) {
     return read_data_schema_stamp(data_dir) >= schema;
 }
 
-std::vector<std::string> split_applet_path(const std::string& value) {
+std::vector<std::string> split_instrument_path(const std::string& value) {
     std::vector<std::string> out;
     size_t start = 0;
     while (start <= value.size()) {
-        size_t end = value.find(kAppletPathSeparator, start);
+        size_t end = value.find(kInstrumentPathSeparator, start);
         if (end == std::string::npos) end = value.size();
         if (end > start) out.push_back(value.substr(start, end - start));
         start = end + 1;
@@ -249,10 +249,10 @@ bool holds_manifest(const fs::path& dir) {
 }
 } // namespace
 
-std::string resolve_applet_folder(const std::string& dir) {
+std::string resolve_instrument_folder(const std::string& dir) {
     std::error_code ec;
     if (dir.empty() || !fs::is_directory(dir, ec) || holds_manifest(dir)) return dir;
-    const fs::path sub = fs::path(dir) / "applets";
+    const fs::path sub = fs::path(dir) / "instruments";
     if (fs::is_directory(sub, ec) && holds_manifest(sub)) return sub.string();
     return dir;
 }
@@ -277,20 +277,20 @@ fs::path folder_key(const fs::path& p) {
 }
 } // namespace
 
-std::string workspace_applets_dir(const std::string& workspace_dir) {
+std::string workspace_instruments_dir(const std::string& workspace_dir) {
     return workspace_dir.empty() ? std::string()
-                                 : (fs::path(workspace_dir) / "applets").string();
+                                 : (fs::path(workspace_dir) / "instruments").string();
 }
 
-std::vector<std::string> applet_search_dirs(
-    const std::vector<std::string>& command_line_dirs, const char* applet_path_env,
+std::vector<std::string> instrument_search_dirs(
+    const std::vector<std::string>& command_line_dirs, const char* instrument_path_env,
     const std::string& user_dir, const std::string& shipped_dir,
     const std::string& workspace_dir) {
     std::vector<std::string> wanted = command_line_dirs;
-    if (applet_path_env)
-        for (auto& d : split_applet_path(applet_path_env)) wanted.push_back(d);
+    if (instrument_path_env)
+        for (auto& d : split_instrument_path(instrument_path_env)) wanted.push_back(d);
     const size_t development = wanted.size();
-    wanted.push_back(workspace_applets_dir(workspace_dir));
+    wanted.push_back(workspace_instruments_dir(workspace_dir));
     wanted.push_back(user_dir);
     wanted.push_back(shipped_dir);
 
@@ -300,7 +300,7 @@ std::vector<std::string> applet_search_dirs(
         const std::string& d = wanted[i];
         if (d.empty()) continue;
         fs::path p = absolute_folder(d);
-        if (i < development) p = fs::path(resolve_applet_folder(p.string()));
+        if (i < development) p = fs::path(resolve_instrument_folder(p.string()));
         const fs::path key = folder_key(p);
         if (std::find(seen.begin(), seen.end(), key) != seen.end()) continue;
         seen.push_back(key);
@@ -309,14 +309,14 @@ std::vector<std::string> applet_search_dirs(
     return out;
 }
 
-const char* applet_status_word(AppletStatus s) {
+const char* instrument_status_word(InstrumentStatus s) {
     switch (s) {
-        case AppletStatus::Ready:       return "READY";
-        case AppletStatus::Active:      return "ACTIVE";
-        case AppletStatus::Refused:     return "REFUSED";
-        case AppletStatus::Failed:      return "FAILED";
-        case AppletStatus::Quarantined: return "QUARANTINED";
-        case AppletStatus::Shadowed:    return "SHADOWED";
+        case InstrumentStatus::Ready:       return "READY";
+        case InstrumentStatus::Active:      return "ACTIVE";
+        case InstrumentStatus::Refused:     return "REFUSED";
+        case InstrumentStatus::Failed:      return "FAILED";
+        case InstrumentStatus::Quarantined: return "QUARANTINED";
+        case InstrumentStatus::Shadowed:    return "SHADOWED";
     }
     return "UNKNOWN";
 }
@@ -327,13 +327,15 @@ std::string shadowed_reason(const std::string& winner_version,
            " is used instead.";
 }
 
-// ---- spec applets ---------------------------------------------------------
+// ---- spec-based instruments -----------------------------------------------
 
 #ifdef CALIPER_HOST_SPEC_RUNTIME
 bool spec_runtime_available() { return true; }
+int64_t spec_min_format_version() { return spec_runtime_min_format_version(); }
 int64_t spec_format_version() { return spec_runtime_format_version(); }
 #else
 bool spec_runtime_available() { return false; }
+int64_t spec_min_format_version() { return -1; }
 int64_t spec_format_version() { return -1; }
 #endif
 
@@ -348,8 +350,8 @@ std::string spec_version_reason(int64_t spec_version, int64_t host_version) {
 }
 
 std::string workspace_library_reason() {
-    return "A workspace holds spec applets only; a compiled applet is installed in "
-           "the user applets folder.";
+    return "A workspace holds spec-based instruments only; a library instrument is "
+           "installed in the user instruments folder.";
 }
 
 std::string spec_file_problem(const std::string& spec_path,
@@ -362,7 +364,7 @@ std::string spec_file_problem(const std::string& spec_path,
     // A plain file name cannot leave the folder; a link could, so none is
     // followed, wherever it points.
     if (fs::is_symlink(st))
-        return "spec file " + name + " is a symbolic link; a spec applet's spec is a "
+        return "spec file " + name + " is a symbolic link; an instrument's spec is a "
                "regular file in its folder";
     if (!fs::is_regular_file(st)) return "spec file " + name + " is not a regular file";
     const std::uintmax_t size = fs::file_size(p, ec);
@@ -525,27 +527,27 @@ ManifestResult read_bounded_manifest(const fs::path& path) {
 }
 } // namespace
 
-AppletLoader::AppletLoader(HostCaps caps, std::string data_root)
+InstrumentLoader::InstrumentLoader(HostCaps caps, std::string data_root)
     : caps_(std::move(caps)), data_root_(std::move(data_root)) {}
 
-void AppletLoader::set_workspace(const std::string& workspace_dir) {
+void InstrumentLoader::set_workspace(const std::string& workspace_dir) {
     workspace_dir_ = workspace_dir;
     workspace_key_ = workspace_dir.empty()
                          ? std::string()
-                         : folder_key(absolute_folder(workspace_applets_dir(workspace_dir))).string();
+                         : folder_key(absolute_folder(workspace_instruments_dir(workspace_dir))).string();
 }
 
-bool AppletLoader::is_workspace_folder(const std::string& dir) const {
+bool InstrumentLoader::is_workspace_folder(const std::string& dir) const {
     return !workspace_key_.empty() && folder_key(absolute_folder(dir)).string() == workspace_key_;
 }
 
-void AppletLoader::spec_listing_checks(AppletEntry& a) const {
+void InstrumentLoader::spec_listing_checks(InstrumentEntry& a) const {
     const fs::path manifest(a.manifest_path);
-    // applet.spec is a plain file name (the parser checked), so this is a
-    // file directly in the applet's folder.
+    // instrument.spec is a plain file name (the parser checked), so this is a
+    // file directly in the instrument's folder.
     const fs::path spec = manifest.parent_path() / a.manifest.spec;
     auto failed = [&](std::string why) {
-        a.status = AppletStatus::Failed;
+        a.status = InstrumentStatus::Failed;
         a.status_text = std::move(why);
     };
     if (std::string why = spec_file_problem(spec.string(), manifest.filename().string());
@@ -559,60 +561,60 @@ void AppletLoader::spec_listing_checks(AppletEntry& a) const {
         return failed("spec file " + a.manifest.spec + " " + why);
     a.spec_path = spec.string();
 
-    // Of the checks before dlopen, only min_host applies to a spec applet
-    // (the parser refused the keys of the others). negotiate() gives its
-    // text; the epoch it compares first is the host's own here, since a spec
-    // applet has none.
-    AppletManifest m = a.manifest;
+    // Of the checks before dlopen, only min_host applies to a kind = "spec"
+    // instrument (the parser refused the keys of the others). negotiate() gives
+    // its text; the epoch it compares first is the host's own here, since a
+    // kind = "spec" instrument has none.
+    InstrumentManifest m = a.manifest;
     m.abi_epoch = caps_.abi_epoch;
     if (auto n = negotiate(m, caps_); !n.ok) {
-        a.status = AppletStatus::Refused;
+        a.status = InstrumentStatus::Refused;
         a.status_text = n.reason;
     } else if (!spec_runtime_available()) {
-        a.status = AppletStatus::Refused;
+        a.status = InstrumentStatus::Refused;
         a.status_text = no_spec_runtime_reason();
-    } else if (version < 0 || version > spec_format_version()) {
-        a.status = AppletStatus::Refused;
+    } else if (version < spec_min_format_version() || version > spec_format_version()) {
+        a.status = InstrumentStatus::Refused;
         a.status_text = spec_version_reason(version, spec_format_version());
     } else {
-        a.status = AppletStatus::Ready;
+        a.status = InstrumentStatus::Ready;
     }
 }
 
-int AppletLoader::scan(const std::vector<std::string>& dirs) {
+int InstrumentLoader::scan(const std::vector<std::string>& dirs) {
     int added = 0;
     for (const std::string& d : dirs) added += scan(d);
     return added;
 }
 
-int AppletLoader::scan(const std::string& dir) {
+int InstrumentLoader::scan(const std::string& dir) {
     const int rank = next_rank_++;
     if (is_workspace_folder(dir)) workspace_rank_ = rank;
     return scan_at(dir, rank);
 }
 
-int AppletLoader::rescan_workspace() {
+int InstrumentLoader::rescan_workspace() {
     if (workspace_key_.empty()) return 0;
-    for (const AppletEntry& a : entries_)
-        if (a.status == AppletStatus::Active && a.manifest.kind != AppletKind::Spec) return -1;
+    for (const InstrumentEntry& a : entries_)
+        if (a.status == InstrumentStatus::Active && a.manifest.kind != InstrumentKind::Spec) return -1;
     // What the workspace's folder gave: a manifest in it, or in one of its
     // subfolders.
     entries_.erase(std::remove_if(entries_.begin(), entries_.end(),
-                                  [&](const AppletEntry& a) {
+                                  [&](const InstrumentEntry& a) {
                                       const fs::path folder(a.folder);
                                       return is_workspace_folder(folder.string()) ||
                                              is_workspace_folder(folder.parent_path().string());
                                   }),
                    entries_.end());
     if (workspace_rank_ < 0) workspace_rank_ = next_rank_++;
-    const int added = scan_at(workspace_applets_dir(workspace_dir_), workspace_rank_);
+    const int added = scan_at(workspace_instruments_dir(workspace_dir_), workspace_rank_);
     // scan_at() chooses copies again only when the folder exists.
     resolve_duplicates();
     host_blocks_.assign(entries_.size(), CaliperHost{});
     return added;
 }
 
-int AppletLoader::scan_at(const std::string& dir, int rank) {
+int InstrumentLoader::scan_at(const std::string& dir, int rank) {
     std::error_code ec;
     if (!fs::is_directory(dir, ec)) return 0;
     const bool workspace = is_workspace_folder(dir);
@@ -629,7 +631,7 @@ int AppletLoader::scan_at(const std::string& dir, int rank) {
             subfolders.push_back(e.path());
         }
     }
-    // Spec applets are folders: one level down, a manifest of kind "spec".
+    // Spec-based instruments are folders: one level down, a manifest of kind "spec".
     size_t read_below = 0;
     for (const fs::path& sub : subfolders) {
         std::error_code sec;
@@ -643,42 +645,42 @@ int AppletLoader::scan_at(const std::string& dir, int rank) {
         }
     }
     resolve_duplicates();
-    // By name; copies of one applet newest first, then in search order.
+    // By name; copies of one instrument newest first, then in search order.
     std::sort(entries_.begin(), entries_.end(),
-              [](const AppletEntry& a, const AppletEntry& b) {
+              [](const InstrumentEntry& a, const InstrumentEntry& b) {
                   if (a.manifest.name != b.manifest.name)
                       return a.manifest.name < b.manifest.name;
                   if (int c = semver_cmp(a.manifest.version, b.manifest.version))
                       return c > 0;
                   return a.search_rank < b.search_rank;
               });
-    // Rescanning reallocates host_blocks_, which active applets hold pointers
+    // Rescanning reallocates host_blocks_, which active instruments hold pointers
     // into — scan() must only run before any launch (true for both the app
     // and the tests; enforce it if a rescan feature ever appears).
     host_blocks_.assign(entries_.size(), CaliperHost{});
     return added;
 }
 
-int AppletLoader::add_manifest(const fs::path& path, int rank, bool in_subfolder,
-                               bool in_workspace) {
+int InstrumentLoader::add_manifest(const fs::path& path, int rank, bool in_subfolder,
+                                   bool in_workspace) {
     const std::string fname = path.filename().string();
     // A manifest beside its library is read as it always was; one that may
     // be data from anyone is read with bounds first.
     const ManifestResult parsed = in_subfolder || in_workspace
                                       ? read_bounded_manifest(path)
                                       : parse_manifest_file(path.string());
-    // Compiled applets are flat: outside the workspace a subfolder adds spec
-    // applets only, and anything else in it is not looked at, as before.
-    if (in_subfolder && !in_workspace && parsed.manifest.kind != AppletKind::Spec) return 0;
+    // Library instruments are flat: outside the workspace a subfolder adds
+    // kind = "spec" instruments only, and anything else in it is not looked at, as before.
+    if (in_subfolder && !in_workspace && parsed.manifest.kind != InstrumentKind::Spec) return 0;
 
-    AppletEntry entry;
+    InstrumentEntry entry;
     entry.folder = path.parent_path().string();
     entry.manifest_path = path.string();
     entry.search_rank = rank;
     if (!parsed.ok) {
         entry.manifest.name = fname;
         entry.manifest.kind = parsed.manifest.kind;
-        entry.status = AppletStatus::Failed;
+        entry.status = InstrumentStatus::Failed;
         entry.status_text = parsed.error;
         entries_.push_back(std::move(entry));
         return 1;
@@ -687,21 +689,21 @@ int AppletLoader::add_manifest(const fs::path& path, int rank, bool in_subfolder
     // The id becomes a path under the data root. The parser already
     // refuses ids outside [a-z0-9.-]; this re-check is the boundary's own
     // guarantee, independent of where the manifest came from.
-    if (!is_valid_applet_id(entry.manifest.id)) {
+    if (!is_valid_instrument_id(entry.manifest.id)) {
         entry.manifest.name = fname;
-        entry.status = AppletStatus::Failed;
-        entry.status_text = "applet id is not path-safe: " + entry.manifest.id;
+        entry.status = InstrumentStatus::Failed;
+        entry.status_text = "instrument id is not path-safe: " + entry.manifest.id;
         entries_.push_back(std::move(entry));
         return 1;
     }
-    if (entry.manifest.kind == AppletKind::Spec) {
+    if (entry.manifest.kind == InstrumentKind::Spec) {
         // No library, no data folder: nothing of it is ever mapped or called.
         spec_listing_checks(entry);
         entries_.push_back(std::move(entry));
         return 1;
     }
     if (in_workspace) {
-        entry.status = AppletStatus::Refused;
+        entry.status = InstrumentStatus::Refused;
         entry.status_text = workspace_library_reason();
         entries_.push_back(std::move(entry));
         return 1;
@@ -715,13 +717,13 @@ int AppletLoader::add_manifest(const fs::path& path, int rank, bool in_subfolder
                                 ? read_data_schema_stamp(entry.data_dir)
                                 : 0;
     if (entry.dylib_path.empty()) {
-        entry.status = AppletStatus::Failed;
-        entry.status_text = "applet binary not found next to " + fname;
+        entry.status = InstrumentStatus::Failed;
+        entry.status_text = "instrument binary not found next to " + fname;
     } else if (auto n = negotiate(entry.manifest, caps_, stored); !n.ok) {
-        entry.status = AppletStatus::Refused;
+        entry.status = InstrumentStatus::Refused;
         entry.status_text = n.reason;
     } else {
-        entry.status = AppletStatus::Ready;
+        entry.status = InstrumentStatus::Ready;
     }
     entries_.push_back(std::move(entry));
     return 1;
@@ -729,66 +731,66 @@ int AppletLoader::add_manifest(const fs::path& path, int rank, bool in_subfolder
 
 // Recomputed from scratch after every scan: a Shadowed copy passed every
 // check, so it is a candidate again until the comparison says otherwise.
-void AppletLoader::resolve_duplicates() {
+void InstrumentLoader::resolve_duplicates() {
     for (auto& a : entries_)
-        if (a.status == AppletStatus::Shadowed) {
-            a.status = AppletStatus::Ready;
+        if (a.status == InstrumentStatus::Shadowed) {
+            a.status = InstrumentStatus::Ready;
             a.status_text.clear();
         }
     // The chosen copy of each id: the highest version among the Ready
     // copies; among equal versions the one found first (then, within one
     // folder, the first library path, so the choice never depends on the
     // order the folder lists its files in).
-    // A spec applet's file is its spec; a compiled applet's, its library.
-    auto location = [](const AppletEntry& a) -> const std::string& {
-        return a.manifest.kind == AppletKind::Spec ? a.spec_path : a.dylib_path;
+    // A kind = "spec" instrument's file is its spec; a library instrument's, its library.
+    auto location = [](const InstrumentEntry& a) -> const std::string& {
+        return a.manifest.kind == InstrumentKind::Spec ? a.spec_path : a.dylib_path;
     };
-    auto better = [&](const AppletEntry& a, const AppletEntry& b) {
+    auto better = [&](const InstrumentEntry& a, const InstrumentEntry& b) {
         if (int c = semver_cmp(a.manifest.version, b.manifest.version)) return c > 0;
         if (a.search_rank != b.search_rank) return a.search_rank < b.search_rank;
         return location(a) < location(b);
     };
-    std::map<std::string, const AppletEntry*> chosen;
+    std::map<std::string, const InstrumentEntry*> chosen;
     for (const auto& a : entries_) {
-        if (a.status != AppletStatus::Ready) continue;
+        if (a.status != InstrumentStatus::Ready) continue;
         auto [it, inserted] = chosen.emplace(a.manifest.id, &a);
         if (!inserted && better(a, *it->second)) it->second = &a;
     }
     for (auto& a : entries_) {
-        if (a.status != AppletStatus::Ready) continue;
-        const AppletEntry* best = chosen[a.manifest.id];
+        if (a.status != InstrumentStatus::Ready) continue;
+        const InstrumentEntry* best = chosen[a.manifest.id];
         if (best == &a) continue;
-        a.status = AppletStatus::Shadowed;
+        a.status = InstrumentStatus::Shadowed;
         a.status_text = shadowed_reason(best->manifest.version, best->folder);
     }
 }
 
-int AppletLoader::find(const std::string& id) const {
+int InstrumentLoader::find(const std::string& id) const {
     int fallback = -1;
     for (int i = 0; i < count(); i++) {
-        const AppletEntry& a = entries_[i];
+        const InstrumentEntry& a = entries_[i];
         if (a.manifest.id != id) continue;
-        if (a.status == AppletStatus::Ready || a.status == AppletStatus::Active)
+        if (a.status == InstrumentStatus::Ready || a.status == InstrumentStatus::Active)
             return i;
-        if (fallback < 0 && a.status != AppletStatus::Shadowed) fallback = i;
+        if (fallback < 0 && a.status != InstrumentStatus::Shadowed) fallback = i;
     }
     return fallback;
 }
 
-bool AppletLoader::open_and_check(AppletEntry& a) {
+bool InstrumentLoader::open_and_check(InstrumentEntry& a) {
     auto fail = [&](std::string why) {
-        a.status = AppletStatus::Failed;
+        a.status = InstrumentStatus::Failed;
         a.status_text = std::move(why);
         return false;
     };
 
     // The stamp may have been raised since scan() (another copy of the
-    // applet, or another process using the same data folder): checked again
+    // instrument, or another process using the same data folder): checked again
     // before the library is opened.
     if (a.manifest.data_schema != 0) {
         const uint32_t stored = read_data_schema_stamp(a.data_dir);
         if (a.manifest.data_schema < stored) {
-            a.status = AppletStatus::Refused;
+            a.status = InstrumentStatus::Refused;
             a.status_text = data_schema_reason(stored, a.manifest.data_schema);
             return false;
         }
@@ -797,7 +799,7 @@ bool AppletLoader::open_and_check(AppletEntry& a) {
     if (!a.handle) {
         a.handle = lib_open(a.dylib_path.c_str());
         if (!a.handle) return fail("load failed: " + lib_error());
-        auto get_desc = (const CaliperAppletDescriptor* (*)(void))
+        auto get_desc = (const CaliperInstrumentDescriptor* (*)(void))
             lib_sym(a.handle, CALIPER_DESCRIPTOR_SYMBOL);
         if (!get_desc)
             return fail(std::string("missing export ") + CALIPER_DESCRIPTOR_SYMBOL);
@@ -806,7 +808,7 @@ bool AppletLoader::open_and_check(AppletEntry& a) {
 
     // Descriptor sanity: the binary must agree with its manifest (§14).
     const auto* d = a.desc;
-    if (!d || d->struct_size < sizeof(CaliperAppletDescriptor))
+    if (!d || d->struct_size < sizeof(CaliperInstrumentDescriptor))
         return fail("descriptor missing or truncated");
     if (d->abi_epoch != caps_.abi_epoch)
         return fail("descriptor ABI epoch disagrees with manifest");
@@ -821,71 +823,71 @@ bool AppletLoader::open_and_check(AppletEntry& a) {
     // The descriptor's required_services is the binary's own declaration —
     // the source of truth. negotiate() checked the MANIFEST's list before
     // dlopen (the fast path); a manifest that under-declares must not let an
-    // applet run against a host missing a service it will call. Same card
+    // instrument run against a host missing a service it will call. Same card
     // text as the manifest refusal. The image stays mapped like every other
     // post-dlopen failure (close_all never dlcloses).
     if (d->required_services)
         for (const char* const* s = d->required_services; *s; ++s)
             if (!caps_.services.count(*s)) {
-                a.status = AppletStatus::Refused;
+                a.status = InstrumentStatus::Refused;
                 a.status_text = missing_service_reason(*s);
                 return false;
             }
     return true;
 }
 
-bool AppletLoader::check_spec(int idx, std::vector<SpecDiagnostic>* diagnostics) {
+bool InstrumentLoader::check_spec(int idx, std::vector<SpecDiagnostic>* diagnostics) {
     if (diagnostics) diagnostics->clear();
     if (idx < 0 || idx >= count()) return false;
-    AppletEntry& a = entries_[idx];
-    if (a.manifest.kind != AppletKind::Spec || a.spec_path.empty() ||
-        (a.status != AppletStatus::Ready && a.status != AppletStatus::Shadowed))
+    InstrumentEntry& a = entries_[idx];
+    if (a.manifest.kind != InstrumentKind::Spec || a.spec_path.empty() ||
+        (a.status != InstrumentStatus::Ready && a.status != InstrumentStatus::Shadowed))
         return false;
 #ifdef CALIPER_HOST_SPEC_RUNTIME
     SpecFile file = read_spec_file(a.spec_path);
     if (diagnostics) *diagnostics = file.diagnostics;
     if (!file.ok) {
-        a.status = AppletStatus::Failed;
+        a.status = InstrumentStatus::Failed;
         a.status_text = file.reason;
         return false;
     }
     return true;
 #else
-    return false;   // never reached: without the runtime a spec applet is Refused
+    return false;   // never reached: without the runtime a kind = "spec" instrument is Refused
 #endif
 }
 
-bool AppletLoader::launch(int idx, CaliperHost host_proto) {
+bool InstrumentLoader::launch(int idx, CaliperHost host_proto) {
     if (idx < 0 || idx >= count()) return false;
-    AppletEntry& a = entries_[idx];
-    if (a.manifest.kind == AppletKind::Spec) {
+    InstrumentEntry& a = entries_[idx];
+    if (a.manifest.kind == InstrumentKind::Spec) {
         // Data, not code: nothing is opened or called. The app opens the
         // page of a valid spec itself; this call only says it did not.
-        if (a.status != AppletStatus::Ready || !check_spec(idx)) return false;
+        if (a.status != InstrumentStatus::Ready || !check_spec(idx)) return false;
         a.status_text = kSpecPageUnavailable;
         return false;
     }
-    if (a.status == AppletStatus::Active) teardown(idx);
-    if (a.status != AppletStatus::Ready) return false;
+    if (a.status == InstrumentStatus::Active) teardown(idx);
+    if (a.status != InstrumentStatus::Ready) return false;
     if (!open_and_check(a)) return false;
     const auto* d = a.desc;
 
     auto fail = [&](std::string why) {
-        a.status = AppletStatus::Failed;
+        a.status = InstrumentStatus::Failed;
         a.status_text = std::move(why);
         return false;
     };
 
     std::error_code ec;
     fs::create_directories(a.data_dir, ec);
-    // The stamp is raised before any applet code can touch the folder: the
-    // applet migrates its data in initialize(), so data that a failed
+    // The stamp is raised before any instrument code can touch the folder: the
+    // instrument migrates its data in initialize(), so data that a failed
     // initialize() left half-migrated is still marked.
     if (!raise_data_schema_stamp(a.data_dir, a.manifest.data_schema))
         return fail("could not record the data schema in " +
                     (fs::path(a.data_dir) / kDataStampName).string());
     host_blocks_[idx] = host_proto;
-    host_blocks_[idx].applet_data_dir = a.data_dir.c_str();
+    host_blocks_[idx].instrument_data_dir = a.data_dir.c_str();
 
     // Jobs submitted from here on (initialize() may start one) are this
     // instance's: a fault in one quarantines it (quarantine_if_job_faulted).
@@ -915,16 +917,16 @@ bool AppletLoader::launch(int idx, CaliperHost host_proto) {
     }
 
     a.instance = instance;
-    a.status = AppletStatus::Active;
+    a.status = InstrumentStatus::Active;
     a.status_text.clear();
     return true;
 }
 
-bool AppletLoader::probe(int idx) {
+bool InstrumentLoader::probe(int idx) {
     if (idx < 0 || idx >= count()) return false;
-    AppletEntry& a = entries_[idx];
-    if (a.manifest.kind == AppletKind::Spec) return check_spec(idx);
-    if (a.status != AppletStatus::Ready && a.status != AppletStatus::Shadowed)
+    InstrumentEntry& a = entries_[idx];
+    if (a.manifest.kind == InstrumentKind::Spec) return check_spec(idx);
+    if (a.status != InstrumentStatus::Ready && a.status != InstrumentStatus::Shadowed)
         return false;
     if (!open_and_check(a)) return false;
     const auto* d = a.desc;
@@ -937,7 +939,7 @@ bool AppletLoader::probe(int idx) {
         return false;
     }
     if (!instance) {
-        a.status = AppletStatus::Failed;
+        a.status = InstrumentStatus::Failed;
         a.status_text = "create() returned null";
         return false;
     }
@@ -949,9 +951,9 @@ bool AppletLoader::probe(int idx) {
     return true;
 }
 
-void AppletLoader::quarantine(AppletEntry& a, const std::string& why,
-                              FaultKind kind, void* instance, bool initialized) {
-    a.status = AppletStatus::Quarantined;
+void InstrumentLoader::quarantine(InstrumentEntry& a, const std::string& why,
+                                  FaultKind kind, void* instance, bool initialized) {
+    a.status = InstrumentStatus::Quarantined;
     a.status_text = why;
     a.fault_kind = kind;
     a.instance = nullptr;   // never called again, whatever the kind
@@ -968,17 +970,17 @@ void AppletLoader::quarantine(AppletEntry& a, const std::string& why,
 // flagged it (JobOwner). The job's GuardResult stayed on its worker and only
 // its text reached the owner, so the kind is read back from the text
 // (fault_kind_of, which errs toward Signal).
-bool AppletLoader::quarantine_if_job_faulted(AppletEntry& a) {
+bool InstrumentLoader::quarantine_if_job_faulted(InstrumentEntry& a) {
     if (!a.jobs || !a.jobs->faulted()) return false;
     const std::string fault = a.jobs->fault();
     quarantine(a, "crashed in " + fault, fault_kind_of(fault), a.instance, true);
     return true;
 }
 
-bool AppletLoader::frame(int idx, const CaliperFrameInfo& info) {
+bool InstrumentLoader::frame(int idx, const CaliperFrameInfo& info) {
     if (idx < 0 || idx >= count()) return false;
-    AppletEntry& a = entries_[idx];
-    if (a.status != AppletStatus::Active || !a.instance) return false;
+    InstrumentEntry& a = entries_[idx];
+    if (a.status != InstrumentStatus::Active || !a.instance) return false;
     if (quarantine_if_job_faulted(a)) return false;
 
     JobOwnerScope jobs_scope(a.jobs);
@@ -993,10 +995,10 @@ bool AppletLoader::frame(int idx, const CaliperFrameInfo& info) {
     return true;
 }
 
-void AppletLoader::teardown(int idx) {
+void InstrumentLoader::teardown(int idx) {
     if (idx < 0 || idx >= count()) return;
-    AppletEntry& a = entries_[idx];
-    if (a.status != AppletStatus::Active || !a.instance) return;
+    InstrumentEntry& a = entries_[idx];
+    if (a.status != InstrumentStatus::Active || !a.instance) return;
     if (quarantine_if_job_faulted(a)) return;
 
     JobOwnerScope jobs_scope(a.jobs);
@@ -1016,19 +1018,19 @@ void AppletLoader::teardown(int idx) {
                    false);
         return;
     }
-    a.status = AppletStatus::Ready;
+    a.status = InstrumentStatus::Ready;
 }
 
-bool AppletLoader::restartable(int idx) const {
+bool InstrumentLoader::restartable(int idx) const {
     if (idx < 0 || idx >= count()) return false;
-    const AppletEntry& a = entries_[idx];
-    return a.status == AppletStatus::Quarantined &&
+    const InstrumentEntry& a = entries_[idx];
+    return a.status == InstrumentStatus::Quarantined &&
            a.fault_kind == FaultKind::Exception;
 }
 
-bool AppletLoader::restart(int idx, CaliperHost host_proto) {
+bool InstrumentLoader::restart(int idx, CaliperHost host_proto) {
     if (!restartable(idx)) return false;
-    AppletEntry& a = entries_[idx];
+    InstrumentEntry& a = entries_[idx];
 
     // Unload: release the old instance as teardown() would have, had the
     // exception not stopped it — cleanup() only if initialize() had
@@ -1057,20 +1059,20 @@ bool AppletLoader::restart(int idx, CaliperHost host_proto) {
         }
     }
 
-    a.status = AppletStatus::Ready;
+    a.status = InstrumentStatus::Ready;
     a.status_text.clear();
     a.fault_kind = FaultKind::None;
     return launch(idx, host_proto);
 }
 
-void AppletLoader::close_all() {
+void InstrumentLoader::close_all() {
     for (int i = 0; i < count(); i++) teardown(i);
     for (auto& a : entries_) {
         // ALL dylibs are deliberately left mapped at shutdown — never
         // dlclosed. close_all() only runs when the process is exiting, where
         // unloading buys nothing (the OS reclaims every page anyway) and
         // risks everything: dlclose runs the image's static destructors, and
-        // heavyweight applet deps (libtorch above all) are not unload-safe —
+        // heavyweight instrument deps (libtorch above all) are not unload-safe —
         // their global thread pools and allocator state can abort in malloc
         // at teardown. Same policy every mature plugin host converges on.
         // (Quarantined images were already exempt: running destructors in a

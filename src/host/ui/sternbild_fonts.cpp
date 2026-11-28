@@ -46,7 +46,7 @@ bool is_file(const fs::path& path) {
     return fs::is_regular_file(path, ec);
 }
 
-// The same lookup main.cpp uses for <exe dir>/applets.
+// The same lookup main.cpp uses for <exe dir>/instruments.
 std::string exe_dir() {
     std::string dir;
 #ifdef __APPLE__

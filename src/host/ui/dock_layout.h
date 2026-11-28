@@ -1,8 +1,8 @@
 #pragma once
 // ============================================================================
-// Docking by role on the applet page (caliper.ui.v1_1 dock_hint, see
-// docs/applets/services/caliper-ui-v1-1.md). The host never names an applet window:
-// an applet declares the role of each window beside its Begin(), and this
+// Docking by role on the instrument page (caliper.ui.v1_1 dock_hint, see
+// docs/instruments/services/caliper-ui-v1-1.md). The host never names an instrument window:
+// an instrument declares the role of each window beside its Begin(), and this
 // unit places each window, once, the first time it appears, in the node for
 // its role:
 //
@@ -15,7 +15,7 @@
 // docked already, such as one restored from imgui.ini; only when neither
 // exists is a side column split off the central node.
 //
-// A window the applet gives no hint is placed in the centre when it is an
+// A window the instrument gives no hint is placed in the centre when it is an
 // ordinary window: not a child window, popup, tooltip or modal, and without
 // ImGuiWindowFlags_NoDocking, NoSavedSettings, NoMove, NoResize, NoTitleBar
 // or AlwaysAutoResize. Any other window keeps the placement ImGui gives it.
@@ -25,7 +25,7 @@
 // imgui.ini for a window with NoSavedSettings.
 //
 // On a dock space with no saved layout at all the side column is built
-// before the first frame of the applet page, so the first windows dock in
+// before the first frame of the instrument page, so the first windows dock in
 // the frame they first appear. Otherwise a window that needs a new node, or
 // whose hint arrives after its first Begin(), is placed on the next frame.
 //
@@ -72,8 +72,8 @@ public:
         place(window_title, id, role);
     }
 
-    // Once per frame on the applet page, after DockSpaceOverViewport() and
-    // before the applet's frame: places the windows that could not be placed
+    // Once per frame on the instrument page, after DockSpaceOverViewport() and
+    // before the instrument's frame: places the windows that could not be placed
     // when their hint arrived.
     void apply(ImGuiID dockspace_id) {
         ImGuiDockNode* root = ImGui::DockBuilderGetNode(dockspace_id);
@@ -96,17 +96,17 @@ public:
         pending_.clear();
     }
 
-    // Bracket the applet's frame. Every ordinary window (see the header) the
-    // applet began in between without a hint is placed as
+    // Bracket the instrument's frame. Every ordinary window (see the header) the
+    // instrument began in between without a hint is placed as
     // CALIPER_DOCK_CENTRAL. A hinted window that turned out to have
     // NoSavedSettings loses the imgui.ini entry its hint made, and is docked
     // on the next frame instead.
-    void begin_applet_frame() {
+    void begin_instrument_frame() {
         first_begin_ = ImGui::GetCurrentContext()
                            ? ImGui::GetCurrentContext()->WindowsActiveCount
                            : 0;
     }
-    void end_applet_frame() {
+    void end_instrument_frame() {
         ImGuiContext* g = ImGui::GetCurrentContext();
         if (!g) return;
         for (size_t i = 0; i < via_settings_.size();) {
