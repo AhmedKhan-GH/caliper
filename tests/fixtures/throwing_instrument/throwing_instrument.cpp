@@ -1,9 +1,9 @@
-// Test fixture: a hand-written epoch-2 descriptor (abi.h) that throws a C++
+// Test fixture: a hand-written descriptor (abi.h) that throws a C++
 // exception INTO the host from a chosen entry point. Deliberately NOT the
-// CALIPER_APPLET sugar — its thunks catch at the ABI boundary, as every
-// well-behaved applet must (§6c) — because the crash guard's catch(...) exists
-// for exactly the applet that doesn't. Built into ${CMAKE_BINARY_DIR}/test-applets,
-// never the host's applets dir, so no card for it ever appears in the app.
+// CALIPER_INSTRUMENT sugar — its thunks catch at the ABI boundary, as every
+// well-behaved instrument must (§6c) — because the crash guard's catch(...) exists
+// for exactly the instrument that doesn't. Built into ${CMAKE_BINARY_DIR}/test-instruments,
+// never the host's instruments dir, so no card for it ever appears in the app.
 #include <caliper/abi.h>
 #include <caliper/caliper.hpp>   // caliper::ui::connect only (and the UI headers)
 #include <caliper/services/jobs_v1.h>
@@ -16,7 +16,7 @@ namespace {
 
 // CALIPER_THROWING_WHERE names the entry point that throws: "create",
 // "initialize", "frame" (the default) or "cleanup". Two more modes fail in a
-// background job instead: on its first frame() the applet submits a
+// background job instead: on its first frame() the instrument submits a
 // caliper.jobs.v1 job that throws ("job") or writes through null
 // ("job-fault"), and the entry point itself returns normally. "frame-fault"
 // writes through null in frame() itself. "frame-imgui" and
@@ -80,7 +80,7 @@ void open_ui_and_leave_it() {
 }
 
 void job_throws(void*, const CaliperJobControl*) {
-    throw std::runtime_error("throwing_applet.job");
+    throw std::runtime_error("throwing_instrument.job");
 }
 void job_faults(void*, const CaliperJobControl*) {
     volatile int* p = nullptr;
@@ -88,7 +88,7 @@ void job_faults(void*, const CaliperJobControl*) {
 }
 
 void* create(void) {
-    if (throws_in("create")) throw std::runtime_error("throwing_applet.create");
+    if (throws_in("create")) throw std::runtime_error("throwing_instrument.create");
     return new Instance();
 }
 // destroy() and cleanup() say so through log.v1, so a test can see a
@@ -110,7 +110,7 @@ bool initialize(void* self, const CaliperHost* host) {
     // After the lookups, so an instance whose initialize() threw can still
     // say when it is destroyed.
     if (throws_in("initialize"))
-        throw std::runtime_error("throwing_applet.initialize");
+        throw std::runtime_error("throwing_instrument.initialize");
     say(inst, "throwing.initialize");
     return true;
 }
@@ -118,33 +118,33 @@ void frame(void* self, const CaliperFrameInfo*) {
     auto* inst = static_cast<Instance*>(self);
     if (inst->frames++ == 0 && inst->jobs) {
         if (throws_in("job"))
-            inst->jobs->submit("throwing_applet: job", &job_throws, nullptr);
+            inst->jobs->submit("throwing_instrument: job", &job_throws, nullptr);
         if (throws_in("job-fault"))
-            inst->jobs->submit("throwing_applet: job-fault", &job_faults, nullptr);
+            inst->jobs->submit("throwing_instrument: job-fault", &job_faults, nullptr);
     }
-    if (throws_in("frame")) throw std::runtime_error("throwing_applet.frame");
+    if (throws_in("frame")) throw std::runtime_error("throwing_instrument.frame");
     if (throws_in("frame-fault")) write_through_null();
     const bool imgui_throw = throws_in("frame-imgui");
     const bool imgui_fault = throws_in("frame-imgui-fault");
     if ((imgui_throw || imgui_fault) && inst->ui) {
         open_ui_and_leave_it();
-        if (imgui_throw) throw std::runtime_error("throwing_applet.frame-imgui");
+        if (imgui_throw) throw std::runtime_error("throwing_instrument.frame-imgui");
         write_through_null();
     }
 }
 void cleanup(void* self) {
     say(static_cast<Instance*>(self), "throwing.cleanup");
-    if (throws_in("cleanup")) throw std::runtime_error("throwing_applet.cleanup");
+    if (throws_in("cleanup")) throw std::runtime_error("throwing_instrument.cleanup");
 }
 
 const char* const kServices[] = {nullptr};
 
 } // namespace
 
-extern "C" CALIPER_EXPORT const CaliperAppletDescriptor*
-caliper_applet_descriptor(void) {
-    static const CaliperAppletDescriptor kDesc = {
-        sizeof(CaliperAppletDescriptor),
+extern "C" CALIPER_EXPORT const CaliperInstrumentDescriptor*
+caliper_instrument_descriptor(void) {
+    static const CaliperInstrumentDescriptor kDesc = {
+        sizeof(CaliperInstrumentDescriptor),
         CALIPER_ABI_EPOCH,
         "dev.caliper.throwing",
         "0.1.0",
@@ -152,7 +152,7 @@ caliper_applet_descriptor(void) {
         "Test fixture: throws a C++ exception across the C ABI.",
         "Test",
         kServices,
-        {sizeof(CaliperAppletAPI), &create, &destroy, &initialize, &frame,
+        {sizeof(CaliperInstrumentAPI), &create, &destroy, &initialize, &frame,
          &cleanup},
     };
     return &kDesc;

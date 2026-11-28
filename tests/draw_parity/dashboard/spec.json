@@ -1,9 +1,5 @@
 {
- "applet": {
-  "id": "mnist_parity",
-  "title": "MNIST Probe Dashboard"
- },
- "caliper_spec": 1,
+ "caliper_spec": 2,
  "control": [
   {
    "bind": "intervene:conv1#3",
@@ -15,6 +11,10 @@
    "title": "Ablate Filter conv1#3"
   }
  ],
+ "instrument": {
+  "id": "mnist_parity",
+  "title": "MNIST Probe Dashboard"
+ },
  "layout": {
   "children": [
    {

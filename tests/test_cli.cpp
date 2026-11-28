@@ -1,13 +1,13 @@
 // The caliper command line's subcommands (src/host/host_cli.h), called as
 // main() calls them but with a CliContext of temporary folders, so nothing
-// touches the user's applets and no window ever opens. `dev` starts the app,
+// touches the user's instruments and no window ever opens. `dev` starts the app,
 // so only its parsing is tested.
 #include <doctest/doctest.h>
 #include "cli_build.h"
 #include "host_cli.h"
 #include "net/wire.h"
 #include "net/ws.h"
-#include "spec_applet_fixture.h"
+#include "spec_instrument_fixture.h"
 #include "test_proc.h"
 #include "test_temp.h"
 #include <chrono>
@@ -60,12 +60,12 @@ struct TempDir {
     std::string str(const std::string& sub) const { return (path / sub).string(); }
 };
 
-void fake_applet(const fs::path& dir, const std::string& stem, const std::string& id,
-                 const std::string& version, const std::string& extra = "") {
+void fake_instrument(const fs::path& dir, const std::string& stem, const std::string& id,
+                     const std::string& version, const std::string& extra = "") {
     fs::create_directories(dir);
     std::ofstream(dir / (stem + ".caliper.toml")) <<
-        "[applet]\nid=\"" << id << "\"\nname=\"Example\"\nversion=\"" << version <<
-        "\"\n[compat]\nabi_epoch=3\n" << extra;
+        "[instrument]\nid=\"" << id << "\"\nname=\"Example\"\nversion=\"" << version <<
+        "\"\n[compat]\nabi_epoch=4\n" << extra;
     std::ofstream(dir / lib_name(stem)) << "library bytes";
 }
 
@@ -92,8 +92,8 @@ Run run(const std::vector<const char*>& args, const CliContext& ctx) {
 
 CliContext context(const TempDir& t) {
     CliContext c;
-    c.caps = HostCaps{3, "0.6.0", {"caliper.ui.v1", "caliper.log.v1"}, "", ""};
-    c.sdk_version = "0.2.0";
+    c.caps = HostCaps{4, "0.6.0", {"caliper.ui.v1", "caliper.log.v1"}, "", ""};
+    c.sdk_version = "0.3.0";
     c.user_dir = t.str("user");
     c.shipped_dir = t.str("shipped");
     c.data_root = t.str("data");
@@ -138,14 +138,14 @@ TEST_CASE("cli: subcommands and their operands parse") {
     CHECK(parse({"help"}).command == Command::Help);
     CHECK(parse({"list", "--help"}).command == Command::Help);
 
-    auto dev = parse({"--applets", "/b", "dev", "/a", "--applets=/c"});
+    auto dev = parse({"--instruments", "/b", "dev", "/a", "--instruments=/c"});
     CHECK(dev.error.empty());
     CHECK(dev.command == Command::Dev);
-    CHECK(dev.applet_dirs == std::vector<std::string>{"/a", "/b", "/c"});   // dev's first
+    CHECK(dev.instrument_dirs == std::vector<std::string>{"/a", "/b", "/c"});   // dev's first
 
-    auto list = parse({"list", "--applets", "/x"});
+    auto list = parse({"list", "--instruments", "/x"});
     CHECK(list.command == Command::List);
-    CHECK(list.applet_dirs == std::vector<std::string>{"/x"});
+    CHECK(list.instrument_dirs == std::vector<std::string>{"/x"});
 
     CHECK(parse({"check", "/f"}).operands == std::vector<std::string>{"/f"});
     CHECK(parse({"install", "/f"}).command == Command::Install);
@@ -177,11 +177,11 @@ TEST_CASE("cli: wrong command lines are usage errors") {
     CHECK(parse({"new", "a", "b", "c"}).error == "new takes a name and an optional folder");
     CHECK(parse({"info", "x"}).error == "info takes no operands");
     CHECK(parse({"list", "x"}).error == "list takes no operands");
-    CHECK(parse({"check", "/f", "--applets", "/x"}).error ==
-          "--applets applies only to starting the app, dev, list and shot");
-    CHECK(parse({"--applets"}).error == "--applets needs a folder");
-    CHECK(parse({"--applets", "--help"}).error == "--applets needs a folder");
-    CHECK(parse({"list", "--applets=--x"}).error == "--applets needs a folder");
+    CHECK(parse({"check", "/f", "--instruments", "/x"}).error ==
+          "--instruments applies only to starting the app, dev, list and shot");
+    CHECK(parse({"--instruments"}).error == "--instruments needs a folder");
+    CHECK(parse({"--instruments", "--help"}).error == "--instruments needs a folder");
+    CHECK(parse({"list", "--instruments=--x"}).error == "--instruments needs a folder");
     CHECK(parse({"serve", "x"}).error == "serve takes no operands");
     CHECK(parse({"serve", "--port"}).error == "--port needs a number");
     CHECK(parse({"serve", "--port", "65536"}).error == "--port needs a number from 0 to 65535, not 65536");
@@ -189,16 +189,16 @@ TEST_CASE("cli: wrong command lines are usage errors") {
     CHECK(parse({"serve", "--token-file"}).error == "--token-file needs a file");
     CHECK(parse({"serve", "--assets="}).error == "--assets needs a folder");
     CHECK(parse({"list", "--port", "1"}).error == "--port applies only to serve");
-    CHECK(parse({"serve", "--applets", "/x"}).error ==
-          "--applets applies only to starting the app, dev, list and shot");
+    CHECK(parse({"serve", "--instruments", "/x"}).error ==
+          "--instruments applies only to starting the app, dev, list and shot");
 }
 
 TEST_CASE("cli: shot takes its options in either spelling, with defaults") {
-    auto shot = parse({"shot", "--applets", "/a", "--launch", "com.example.viewer",
+    auto shot = parse({"shot", "--instruments", "/a", "--launch", "com.example.viewer",
                        "--out", "/tmp/v.png"});
     CHECK(shot.error.empty());
     CHECK(shot.command == Command::Shot);
-    CHECK(shot.applet_dirs == std::vector<std::string>{"/a"});
+    CHECK(shot.instrument_dirs == std::vector<std::string>{"/a"});
     CHECK(shot.launch_id == "com.example.viewer");
     CHECK(shot.out == "/tmp/v.png");
     CHECK(shot.width == 1600);
@@ -206,7 +206,7 @@ TEST_CASE("cli: shot takes its options in either spelling, with defaults") {
     CHECK(shot.frames == 60);
 
     auto sized = parse({"--size=800x600", "shot", "--launch=x.y.z", "--frames=5",
-                        "--out=o.png", "--applets=/b"});
+                        "--out=o.png", "--instruments=/b"});
     CHECK(sized.error.empty());
     CHECK(sized.command == Command::Shot);
     CHECK(sized.width == 800);
@@ -214,7 +214,7 @@ TEST_CASE("cli: shot takes its options in either spelling, with defaults") {
     CHECK(sized.frames == 5);
     CHECK(sized.launch_id == "x.y.z");
     CHECK(sized.out == "o.png");
-    CHECK(sized.applet_dirs == std::vector<std::string>{"/b"});
+    CHECK(sized.instrument_dirs == std::vector<std::string>{"/b"});
 
     auto largest = parse({"shot", "--launch", "x", "--size", "16384x1", "--out", "o.png"});
     CHECK(largest.error.empty());
@@ -228,8 +228,8 @@ TEST_CASE("cli: wrong shot command lines are usage errors") {
     CHECK(parse({"shot", "--launch", "x"}).error == "shot needs --out <file.png>");
     CHECK(parse({"shot", "x", "--launch", "x", "--out", "o.png"}).error ==
           "shot takes no operands");
-    CHECK(parse({"shot", "--launch"}).error == "--launch needs an applet id");
-    CHECK(parse({"shot", "--launch", "--out", "o.png"}).error == "--launch needs an applet id");
+    CHECK(parse({"shot", "--launch"}).error == "--launch needs an instrument id");
+    CHECK(parse({"shot", "--launch", "--out", "o.png"}).error == "--launch needs an instrument id");
     CHECK(parse({"shot", "--launch", "x", "--out"}).error == "--out needs a file");
     CHECK(parse({"shot", "--frames="}).error == "--frames needs a number of frames");
     CHECK(parse({"shot", "--size"}).error == "--size needs a size such as 1600x1000");
@@ -249,7 +249,7 @@ TEST_CASE("cli: wrong shot command lines are usage errors") {
 }
 
 TEST_CASE("cli: the usage names shot") {
-    CHECK(std::string(usage_text()).find("caliper shot [--applets <dir>]... --launch <id>") !=
+    CHECK(std::string(usage_text()).find("caliper shot [--instruments <dir>]... --launch <id>") !=
           std::string::npos);
 }
 
@@ -259,7 +259,7 @@ TEST_CASE("cli: the -psn_ argument Finder passes is ignored") {
     CHECK(cl.command == Command::Run);
     auto dev = parse({"dev", "-psn_0_1", "/a"});
     CHECK(dev.error.empty());
-    CHECK(dev.applet_dirs == std::vector<std::string>{"/a"});
+    CHECK(dev.instrument_dirs == std::vector<std::string>{"/a"});
 }
 
 // Not on Windows, which refuses serve before it runs: a Hub opens a socket
@@ -295,7 +295,7 @@ TEST_CASE("cli: info prints the versions and every service") {
     ctx.caps.ui_stack_hash = "0123456789abcdef";
     const Run r = run({"info"}, ctx);
     CHECK(r.code == 0);
-    CHECK(r.out == "host 0.6.0\nabi_epoch 3\nsdk 0.2.0\nlibtorch 2.5.1\n"
+    CHECK(r.out == "host 0.6.0\nabi_epoch 4\nsdk 0.3.0\nlibtorch 2.5.1\n"
                    "ui_stack 0123456789abcdef\n"
                    "service caliper.log.v1\nservice caliper.ui.v1\n");
     ctx.sdk_version.clear();
@@ -308,13 +308,13 @@ TEST_CASE("cli: info prints the versions and every service") {
 TEST_CASE("cli: list shows every copy in search order, with reasons") {
     TempDir t("list");
     const CliContext ctx = context(t);
-    CHECK(run({"list"}, ctx).out == "no applets found\n");
+    CHECK(run({"list"}, ctx).out == "no instruments found\n");
 
-    fake_applet(t.path / "dev", "x", "x.app", "2.0.0", "torch=\"9.9.9\"\n");
-    fake_applet(t.path / "user", "x", "x.app", "1.0.0");
-    fake_applet(t.path / "shipped", "x", "x.app", "1.0.0");
+    fake_instrument(t.path / "dev", "x", "x.app", "2.0.0", "torch=\"9.9.9\"\n");
+    fake_instrument(t.path / "user", "x", "x.app", "1.0.0");
+    fake_instrument(t.path / "shipped", "x", "x.app", "1.0.0");
     const std::string dev = t.str("dev");
-    const Run r = run({"list", "--applets", dev.c_str()}, ctx);
+    const Run r = run({"list", "--instruments", dev.c_str()}, ctx);
     CHECK(r.code == 0);
     const std::string expected =
         "REFUSED   x.app  2.0.0  library  " + dev + "\n"
@@ -325,18 +325,18 @@ TEST_CASE("cli: list shows every copy in search order, with reasons") {
     CHECK(r.out == expected);
 }
 
-TEST_CASE("cli: list shows the spec applets of the workspace, after the development folders") {
+TEST_CASE("cli: list shows the spec-based instruments of the workspace, after the development folders") {
     TempDir t("list-workspace");
     CliContext ctx = context(t);
     const fs::path ws = t.path / "ws";
-    caliper_test::write_spec_applet(ws / "applets" / "board", "board", "local.board", "0.1.0");
-    // Without the workspace the applet is not listed.
-    CHECK(run({"list"}, ctx).out == "no applets found\n");
+    caliper_test::write_spec_instrument(ws / "instruments" / "board", "board", "local.board", "0.1.0");
+    // Without the workspace the instrument is not listed.
+    CHECK(run({"list"}, ctx).out == "no instruments found\n");
     ctx.workspace_dir = ws.string();
     const Run r = run({"list"}, ctx);
     CHECK(r.code == 0);
     INFO(r.out);
-    CHECK(r.out.find("local.board  0.1.0  spec  " + (ws / "applets" / "board").string()) != std::string::npos);
+    CHECK(r.out.find("local.board  0.1.0  spec  " + (ws / "instruments" / "board").string()) != std::string::npos);
 }
 
 TEST_CASE("cli: --api and --api-port start the app, dev and shot with Caliper API") {
@@ -415,7 +415,7 @@ TEST_CASE("cli: --workspace names the builder's workspace for the app, dev and s
         args.push_back("/w");
         CHECK(parse(args).error == "--workspace applies only to starting the app, dev, shot and list");
     }
-    // list takes it, for the workspace's spec applets.
+    // list takes it, for the workspace's spec-based instruments.
     const auto listed = parse({"list", "--workspace", "/w"});
     CHECK(listed.error.empty());
     CHECK(listed.workspace == "/w");
@@ -443,9 +443,9 @@ TEST_CASE("cli: the workspace is --workspace, then CALIPER_WORKSPACE, then the d
 
 TEST_CASE("cli: the usage names --url, --api, --allow-control and --hidden") {
     const std::string u = usage_text();
-    CHECK(u.find("usage: caliper [--applets <dir>]... [--url <link>] [--api [--api-port <n>] [--allow-control]] "
+    CHECK(u.find("usage: caliper [--instruments <dir>]... [--url <link>] [--api [--api-port <n>] [--allow-control]] "
                  "[--hidden]") != std::string::npos);
-    CHECK(u.find("caliper dev <folder> [--applets <dir>]... [--url <link>] [--api [--api-port <n>] "
+    CHECK(u.find("caliper dev <folder> [--instruments <dir>]... [--url <link>] [--api [--api-port <n>] "
                  "[--allow-control]]\n                   [--hidden]") != std::string::npos);
     CHECK(u.find("--out <file.png> [--api [--api-port <n>] [--allow-control]]") != std::string::npos);
     CHECK(u.find("caliper serve [--port <n>] [--token-file <file>] [--assets <dir>] [--allow-control]") !=
@@ -460,19 +460,19 @@ TEST_CASE("cli: info and list as JSON hold what the text forms print") {
     CliContext ctx = context(t);
     ctx.caps.torch_version = "2.5.1";
     CHECK(info_json(ctx) ==
-          "{\"abi_epoch\":3,\"host\":\"0.6.0\",\"libtorch\":\"2.5.1\",\"sdk\":\"0.2.0\","
+          "{\"abi_epoch\":4,\"host\":\"0.6.0\",\"libtorch\":\"2.5.1\",\"sdk\":\"0.3.0\","
           "\"services\":[\"caliper.log.v1\",\"caliper.ui.v1\"],\"ui_stack\":null}");
 
-    fake_applet(t.path / "dev", "x", "x.app", "2.0.0", "torch=\"9.9.9\"\n");
-    fake_applet(t.path / "user", "x", "x.app", "1.0.0");
+    fake_instrument(t.path / "dev", "x", "x.app", "2.0.0", "torch=\"9.9.9\"\n");
+    fake_instrument(t.path / "user", "x", "x.app", "1.0.0");
     ctx = context(t);   // a host without libtorch, as in the list test
-    AppletLoader L(ctx.caps, ctx.data_root);
-    L.scan(applet_search_dirs({t.str("dev")}, nullptr, ctx.user_dir, ctx.shipped_dir));
+    InstrumentLoader L(ctx.caps, ctx.data_root);
+    L.scan(instrument_search_dirs({t.str("dev")}, nullptr, ctx.user_dir, ctx.shipped_dir));
     caliper_net::Json j;
     std::string err;
-    const std::string text = applets_json(L);
+    const std::string text = instruments_json(L);
     REQUIRE_MESSAGE(caliper_net::Json::parse(text.data(), text.size(), &j, &err), err);
-    const caliper_net::Json* list = j.find("applets");
+    const caliper_net::Json* list = j.find("instruments");
     REQUIRE(list);
     REQUIRE(list->size() == 2);
     const caliper_net::Json& refused = list->at(0);
@@ -511,15 +511,15 @@ TEST_CASE("cli: Windows refuses serve, build, --api and --url with one message, 
     CHECK(windows_unavailable_message("caliper serve") == "caliper serve is not available on Windows yet");
 }
 
-TEST_CASE("cli: build takes one folder and no --applets") {
+TEST_CASE("cli: build takes one folder and no --instruments") {
     auto b = parse({"build", "/a"});
     CHECK(b.error.empty());
     CHECK(b.command == Command::Build);
     CHECK(b.operands == std::vector<std::string>{"/a"});
     CHECK(parse({"build"}).error == "build takes one folder");
     CHECK(parse({"build", "/a", "/b"}).error == "build takes one folder");
-    CHECK(parse({"build", "/a", "--applets", "/x"}).error ==
-          "--applets applies only to starting the app, dev, list and shot");
+    CHECK(parse({"build", "/a", "--instruments", "/x"}).error ==
+          "--instruments applies only to starting the app, dev, list and shot");
     CHECK(parse({"build", "/a", "--api"}).error == "--api applies only to starting the app, dev and shot");
     CHECK(std::string(usage_text()).find("caliper build <folder>\n") != std::string::npos);
 }
@@ -605,14 +605,14 @@ TEST_CASE("cli: build reads what a failed configure lacked from CMake's output")
     CHECK(configure_lack("CMake Error: CMake was unable to find a build program corresponding to \"Ninja\".") ==
           BuildLack::BuildTool);
     CHECK(configure_lack("  Could not find a package configuration file provided by \"caliper-sdk\"\n"
-                         "  (requested version 0.2.0) with any of the following names:") == BuildLack::Sdk);
+                         "  (requested version 0.3.0) with any of the following names:") == BuildLack::Sdk);
     CHECK(configure_lack("  Could not find a configuration file for package \"caliper-sdk\" that is "
-                         "compatible with requested version \"0.3.0\".") == BuildLack::SdkVersion);
-    CHECK(configure_lack("CMake Error at CMakeLists.txt:12 (caliper_add_applet): abi_epoch") ==
+                         "compatible with requested version \"0.4.0\".") == BuildLack::SdkVersion);
+    CHECK(configure_lack("CMake Error at CMakeLists.txt:12 (caliper_add_instrument): abi_epoch") ==
           BuildLack::Unknown);
 }
 
-TEST_CASE("cli: build refuses what is not an applet folder before it runs anything") {
+TEST_CASE("cli: build refuses what is not an instrument folder before it runs anything") {
     TempDir t("build-refuse");
     const CliContext ctx = context(t);
     const std::string missing = t.str("missing");
@@ -633,18 +633,18 @@ TEST_CASE("cli: build refuses what is not an applet folder before it runs anythi
 TEST_CASE("cli: check passes a good folder and fails a bad one") {
     TempDir t("check");
     const CliContext ctx = context(t);
-    fake_applet(t.path / "good", "a", "x.a", "1.0.0");
-    fake_applet(t.path / "good", "b", "x.b", "0.3.0");
+    fake_instrument(t.path / "good", "a", "x.a", "1.0.0");
+    fake_instrument(t.path / "good", "b", "x.b", "0.3.0");
     const std::string good = t.str("good");
     const Run ok = run({"check", good.c_str()}, ctx);
     CHECK(ok.code == 0);
     CHECK(ok.out == "READY  x.a  1.0.0  library  " + good + "\n"
                     "READY  x.b  0.3.0  library  " + good + "\n"
-                    "2 of 2 applets pass the checks\n");
+                    "2 of 2 instruments pass the checks\n");
 
-    fake_applet(t.path / "bad", "a", "x.a", "1.0.0", "min_host=\"9.0.0\"\n");
-    fake_applet(t.path / "bad", "b", "x.b", "1.0.0", "[build]\nui_stack=\"ffff\"\n");
-    std::ofstream(t.path / "bad" / "c.caliper.toml") << "[applet]\nid=\"x.c\"\n";
+    fake_instrument(t.path / "bad", "a", "x.a", "1.0.0", "min_host=\"9.0.0\"\n");
+    fake_instrument(t.path / "bad", "b", "x.b", "1.0.0", "[build]\nui_stack=\"ffff\"\n");
+    std::ofstream(t.path / "bad" / "c.caliper.toml") << "[instrument]\nid=\"x.c\"\n";
     CliContext pinned = ctx;
     pinned.caps.ui_stack_hash = "0000";
     const std::string bad = t.str("bad");
@@ -655,8 +655,8 @@ TEST_CASE("cli: check passes a good folder and fails a bad one") {
     CHECK(no.out.find("REFUSED  x.b") != std::string::npos);
     CHECK(no.out.find("Built against UI stack ffff; this host uses 0000") != std::string::npos);
     CHECK(no.out.find("FAILED   c.caliper.toml") != std::string::npos);
-    CHECK(no.out.find("manifest missing applet.name") != std::string::npos);
-    CHECK(no.out.find("0 of 3 applets pass the checks") != std::string::npos);
+    CHECK(no.out.find("manifest missing instrument.name") != std::string::npos);
+    CHECK(no.out.find("0 of 3 instruments pass the checks") != std::string::npos);
 
     const Run missing = run({"check", t.str("nowhere").c_str()}, ctx);
     CHECK(missing.code == 1);
@@ -664,14 +664,14 @@ TEST_CASE("cli: check passes a good folder and fails a bad one") {
     fs::create_directories(t.path / "empty");
     const Run empty = run({"check", t.str("empty").c_str()}, ctx);
     CHECK(empty.code == 1);
-    CHECK(empty.err == "caliper: no applets in " + t.str("empty") + "\n");
+    CHECK(empty.err == "caliper: no instruments in " + t.str("empty") + "\n");
 }
 
-TEST_CASE("cli: list shows spec applets with their kind, as JSON too") {
+TEST_CASE("cli: list shows spec-based instruments with their kind, as JSON too") {
     TempDir t("list-spec");
     const CliContext ctx = context(t);
-    caliper_test::write_spec_applet(t.path / "user" / "demo", "demo", "local.demo", "0.1.0");
-    fake_applet(t.path / "user", "x", "x.app", "1.0.0");
+    caliper_test::write_spec_instrument(t.path / "user" / "demo", "demo", "local.demo", "0.1.0");
+    fake_instrument(t.path / "user", "x", "x.app", "1.0.0");
     const std::string folder = (t.path / "user" / "demo").string();
     const Run r = run({"list"}, ctx);
     CHECK(r.code == 0);
@@ -684,13 +684,13 @@ TEST_CASE("cli: list shows spec applets with their kind, as JSON too") {
                        "READY    x.app       1.0.0  library  " + t.str("user") + "\n");
     }
 
-    AppletLoader L(ctx.caps, ctx.data_root);
-    L.scan(applet_search_dirs({}, nullptr, ctx.user_dir, ctx.shipped_dir));
+    InstrumentLoader L(ctx.caps, ctx.data_root);
+    L.scan(instrument_search_dirs({}, nullptr, ctx.user_dir, ctx.shipped_dir));
     caliper_net::Json j;
     std::string err;
-    const std::string text = applets_json(L);
+    const std::string text = instruments_json(L);
     REQUIRE_MESSAGE(caliper_net::Json::parse(text.data(), text.size(), &j, &err), err);
-    const caliper_net::Json* list = j.find("applets");
+    const caliper_net::Json* list = j.find("instruments");
     REQUIRE(list);
     REQUIRE(list->size() == 2);
     CHECK(list->at(0).find("kind")->as_string() == "spec");
@@ -699,55 +699,55 @@ TEST_CASE("cli: list shows spec applets with their kind, as JSON too") {
     CHECK(list->at(1).find("kind")->as_string() == "library");
 }
 
-TEST_CASE("cli: check validates a spec applet fully and prints its diagnostics") {
+TEST_CASE("cli: check validates a kind = \"spec\" instrument fully and prints its diagnostics") {
     if (!spec_runtime_available()) return;   // listed as refused, as list shows
     TempDir t("check-spec");
     const CliContext ctx = context(t);
 
     // A valid spec with a warning passes, and the warning is printed with
     // its line and column.
-    caliper_test::write_spec_applet(t.path / "ws" / "applets" / "warned", "warned",
-                                    "local.warned", "0.1.0", caliper_test::kWarningSpec);
-    const std::string warned = (t.path / "ws" / "applets" / "warned").string();
+    caliper_test::write_spec_instrument(t.path / "ws" / "instruments" / "warned", "warned",
+                                        "local.warned", "0.1.0", caliper_test::kWarningSpec);
+    const std::string warned = (t.path / "ws" / "instruments" / "warned").string();
     const Run ok = run({"check", warned.c_str()}, ctx);
     CHECK(ok.code == 0);
     const std::string head = "READY  local.warned  0.1.0  spec  " + warned + "\n";
     CHECK(ok.out.rfind(head, 0) == 0);
     CHECK(ok.out.find("       warned.spec.toml:6:") == head.size());
     CHECK(ok.out.find(": warning spec.unused_source: ") != std::string::npos);
-    CHECK(ok.out.find("1 of 1 applets pass the checks\n") != std::string::npos);
+    CHECK(ok.out.find("1 of 1 instruments pass the checks\n") != std::string::npos);
 
     // A spec that fails validation fails the check, with every error under it.
-    caliper_test::write_spec_applet(t.path / "ws" / "applets" / "broken", "broken",
-                                    "local.broken", "0.1.0", caliper_test::kInvalidSpec);
-    const std::string broken = (t.path / "ws" / "applets" / "broken").string();
+    caliper_test::write_spec_instrument(t.path / "ws" / "instruments" / "broken", "broken",
+                                        "local.broken", "0.1.0", caliper_test::kInvalidSpec);
+    const std::string broken = (t.path / "ws" / "instruments" / "broken").string();
     const Run bad = run({"check", broken.c_str()}, ctx);
     CHECK(bad.code == 1);
     CHECK(bad.out.rfind("FAILED  local.broken  0.1.0  spec  " + broken + "\n"
                         "        broken.spec.toml:9:", 0) == 0);
     CHECK(bad.out.find(": error spec.unknown_source: ") != std::string::npos);
-    CHECK(bad.out.find("0 of 1 applets pass the checks\n") != std::string::npos);
+    CHECK(bad.out.find("0 of 1 instruments pass the checks\n") != std::string::npos);
 
-    // The workspace's applets/ folder holds its applets one folder down.
-    const std::string applets = (t.path / "ws" / "applets").string();
-    const Run both = run({"check", applets.c_str()}, ctx);
+    // The workspace's instruments/ folder holds its instruments one folder down.
+    const std::string instruments = (t.path / "ws" / "instruments").string();
+    const Run both = run({"check", instruments.c_str()}, ctx);
     CHECK(both.code == 1);
     CHECK(both.out.find("FAILED  local.broken  0.1.0  spec  " + broken) != std::string::npos);
     CHECK(both.out.find("READY   local.warned  0.1.0  spec  " + warned) != std::string::npos);
-    CHECK(both.out.find("1 of 2 applets pass the checks\n") != std::string::npos);
+    CHECK(both.out.find("1 of 2 instruments pass the checks\n") != std::string::npos);
 
-    // install takes no spec applet.
+    // install takes no kind = "spec" instrument.
     const Run in = run({"install", warned.c_str()}, ctx);
     CHECK(in.code == 1);
-    CHECK(in.err == "caliper: nothing installed; local.warned is a spec applet, which install "
+    CHECK(in.err == "caliper: nothing installed; local.warned is written as a spec, which install "
                     "does not take\n");
     CHECK_FALSE(fs::exists(t.path / "user"));
 }
 
-TEST_CASE("cli: install copies passing applets into the user folder, or nothing") {
+TEST_CASE("cli: install copies passing instruments into the user folder, or nothing") {
     TempDir t("install");
     const CliContext ctx = context(t);
-    fake_applet(t.path / "build", "a", "x.a", "1.0.0");
+    fake_instrument(t.path / "build", "a", "x.a", "1.0.0");
     const std::string build = t.str("build");
     const Run r = run({"install", build.c_str()}, ctx);
     CHECK(r.code == 0);
@@ -757,16 +757,16 @@ TEST_CASE("cli: install copies passing applets into the user folder, or nothing"
     CHECK_FALSE(fs::exists(t.path / "user" / (lib_name("a") + ".tmp")));
 
     // An update replaces the installed copy.
-    fake_applet(t.path / "build", "a", "x.a", "1.1.0");
+    fake_instrument(t.path / "build", "a", "x.a", "1.1.0");
     CHECK(run({"install", build.c_str()}, ctx).code == 0);
     CHECK(slurp(t.path / "user" / "a.caliper.toml").find("1.1.0") != std::string::npos);
 
-    // One applet that does not pass: nothing is copied.
-    fake_applet(t.path / "mixed", "b", "x.b", "1.0.0");
-    fake_applet(t.path / "mixed", "c", "x.c", "1.0.0", "torch=\"9.9.9\"\n");
+    // One instrument that does not pass: nothing is copied.
+    fake_instrument(t.path / "mixed", "b", "x.b", "1.0.0");
+    fake_instrument(t.path / "mixed", "c", "x.c", "1.0.0", "torch=\"9.9.9\"\n");
     const Run no = run({"install", t.str("mixed").c_str()}, ctx);
     CHECK(no.code == 1);
-    CHECK(no.err == "caliper: nothing installed; 1 of 2 applets do not pass the checks\n");
+    CHECK(no.err == "caliper: nothing installed; 1 of 2 instruments do not pass the checks\n");
     CHECK_FALSE(fs::exists(t.path / "user" / "b.caliper.toml"));
 
     CHECK(run({"install", "https://example.com/x.zip"}, ctx).code == 2);
@@ -774,45 +774,45 @@ TEST_CASE("cli: install copies passing applets into the user folder, or nothing"
 }
 
 TEST_CASE("cli: new derives an id, a stem and names from one argument") {
-    auto n = new_applet_names("my-viewer");
+    auto n = new_instrument_names("my-viewer");
     CHECK(n.error.empty());
     CHECK(n.id == "dev.example.my-viewer");
     CHECK(n.short_name == "my-viewer");
     CHECK(n.stem == "my_viewer");
     CHECK(n.display == "My Viewer");
-    CHECK(n.class_name == "MyViewerApplet");
-    auto full = new_applet_names("com.example.scope2");
+    CHECK(n.class_name == "MyViewerInstrument");
+    auto full = new_instrument_names("com.example.scope2");
     CHECK(full.id == "com.example.scope2");
     CHECK(full.stem == "scope2");
     CHECK(full.display == "Scope2");
     for (const char* bad : {"", "My-Viewer", "9lives", "my_viewer", "a..b", "trail-",
                             "com.example.", "../x", "a/b"}) {
         CAPTURE(bad);
-        CHECK_FALSE(new_applet_names(bad).error.empty());
+        CHECK_FALSE(new_instrument_names(bad).error.empty());
     }
 }
 
 TEST_CASE("cli: new refuses names whose CMake targets are reserved") {
     // CMake (or one of its generators) reserves these target names; the stem
-    // is the applet's target and <stem>_tests its test's.
+    // is the instrument's target and <stem>_tests its test's.
     for (const char* name : {"all", "clean", "help", "install", "package", "package-source",
                              "preinstall", "rebuild-cache", "edit-cache", "test",
                              "zero-check", "all-build", "run", "depend",
                              "com.example.test", "caliper-sdk-ui-stack"}) {
         CAPTURE(name);
-        const auto n = new_applet_names(name);
+        const auto n = new_instrument_names(name);
         CHECK(n.error.find("is reserved; choose another name") != std::string::npos);
     }
-    CHECK(new_applet_names("run").error.find("\"run_tests\"") != std::string::npos);
+    CHECK(new_instrument_names("run").error.find("\"run_tests\"") != std::string::npos);
     for (const char* name : {"tests", "testing", "installer", "my-test", "allot"}) {
         CAPTURE(name);
-        CHECK(new_applet_names(name).error.empty());
+        CHECK(new_instrument_names(name).error.empty());
     }
     TempDir t("reserved");
     const CliContext ctx = context(t);
     const Run r = run({"new", "install", t.str("x").c_str()}, ctx);
     CHECK(r.code == 2);
-    CHECK(r.err == "caliper: not a usable applet name: install (the CMake target "
+    CHECK(r.err == "caliper: not a usable instrument name: install (the CMake target "
                    "\"install\" is reserved; choose another name)\n");
     CHECK_FALSE(fs::exists(t.path / "x"));
 }
@@ -823,22 +823,22 @@ TEST_CASE("cli: new writes a project from the template and never overwrites") {
     const std::string dir = t.str("viewer");
     const Run r = run({"new", "com.example.my-viewer", dir.c_str()}, ctx);
     CHECK(r.code == 0);
-    CHECK(r.out == "created " + dir + " for applet com.example.my-viewer\n"
+    CHECK(r.out == "created " + dir + " for instrument com.example.my-viewer\n"
                    "  CMakeLists.txt\n  my_viewer.caliper.toml\n  my_viewer.cpp\n"
                    "  tests/test_my_viewer.cpp\n");
     const std::string cmake = slurp(t.path / "viewer" / "CMakeLists.txt");
-    CHECK(cmake.find("find_package(caliper-sdk 0.2.0 CONFIG REQUIRED)") != std::string::npos);
-    CHECK(cmake.find("caliper_add_applet(my_viewer\n    SOURCES my_viewer.cpp\n"
+    CHECK(cmake.find("find_package(caliper-sdk 0.3.0 CONFIG REQUIRED)") != std::string::npos);
+    CHECK(cmake.find("caliper_add_instrument(my_viewer\n    SOURCES my_viewer.cpp\n"
                      "    MANIFEST my_viewer.caliper.toml)") != std::string::npos);
     const std::string manifest = slurp(t.path / "viewer" / "my_viewer.caliper.toml");
     auto parsed = parse_manifest_text(manifest);
     REQUIRE(parsed.ok);
     CHECK(parsed.manifest.id == "com.example.my-viewer");
     CHECK(parsed.manifest.name == "My Viewer");
-    CHECK(parsed.manifest.abi_epoch == 3);
+    CHECK(parsed.manifest.abi_epoch == 4);
     CHECK(parsed.manifest.min_host == "0.6.0");
     const std::string source = slurp(t.path / "viewer" / "my_viewer.cpp");
-    CHECK(source.find("class MyViewerApplet final") != std::string::npos);
+    CHECK(source.find("class MyViewerInstrument final") != std::string::npos);
     CHECK(source.find(".id       = \"com.example.my-viewer\"") != std::string::npos);
     CHECK(source.find("caliper::ui::dock_hint(host_, \"My Viewer\", CALIPER_DOCK_CENTRAL)") !=
           std::string::npos);
@@ -858,33 +858,33 @@ TEST_CASE("cli: new writes a project from the template and never overwrites") {
               .find("find_package(caliper-sdk CONFIG REQUIRED)") != std::string::npos);
 }
 
-TEST_CASE("cli: check and install take a build folder whose applets are in applets/") {
+TEST_CASE("cli: check and install take a build folder whose instruments are in instruments/") {
     TempDir t("build-folder");
     const CliContext ctx = context(t);
-    fake_applet(t.path / "build" / "applets", "a", "x.a", "1.0.0");
+    fake_instrument(t.path / "build" / "instruments", "a", "x.a", "1.0.0");
     const std::string build = t.str("build");
     // Joined part by part: the host prints folders with the platform's
     // separator, '\' on Windows.
-    const std::string applets = (t.path / "build" / "applets").string();
+    const std::string instruments = (t.path / "build" / "instruments").string();
     const Run r = run({"check", build.c_str()}, ctx);
     CHECK(r.code == 0);
-    CHECK(r.out == "using the applets in " + applets + "\n"
-                   "READY  x.a  1.0.0  library  " + applets + "\n"
-                   "1 of 1 applets pass the checks\n");
+    CHECK(r.out == "using the instruments in " + instruments + "\n"
+                   "READY  x.a  1.0.0  library  " + instruments + "\n"
+                   "1 of 1 instruments pass the checks\n");
     // Named directly, the folder is used as given and nothing more is said.
-    const Run direct = run({"check", applets.c_str()}, ctx);
+    const Run direct = run({"check", instruments.c_str()}, ctx);
     CHECK(direct.out.rfind("READY  x.a", 0) == 0);
 
     const Run in = run({"install", build.c_str()}, ctx);
     CHECK(in.code == 0);
-    CHECK(in.out.rfind("using the applets in " + applets + "\n", 0) == 0);
+    CHECK(in.out.rfind("using the instruments in " + instruments + "\n", 0) == 0);
     CHECK(fs::exists(t.path / "user" / "a.caliper.toml"));
 
-    // A folder with no manifests and none in applets/ names itself.
-    fs::create_directories(t.path / "empty" / "applets");
+    // A folder with no manifests and none in instruments/ names itself.
+    fs::create_directories(t.path / "empty" / "instruments");
     const Run none = run({"check", t.str("empty").c_str()}, ctx);
     CHECK(none.code == 1);
-    CHECK(none.err == "caliper: no applets in " + t.str("empty") + "\n");
+    CHECK(none.err == "caliper: no instruments in " + t.str("empty") + "\n");
 }
 
 namespace {
@@ -904,10 +904,10 @@ void write(const fs::path& p, const std::string& text) {
 }
 } // namespace
 
-TEST_CASE("cli: install copies an applet's asset folder and replaces it on update") {
+TEST_CASE("cli: install copies an instrument's asset folder and replaces it on update") {
     TempDir t("assets");
     const CliContext ctx = context(t);
-    fake_applet(t.path / "build", "a", "x.a", "1.0.0");
+    fake_instrument(t.path / "build", "a", "x.a", "1.0.0");
     write(t.path / "build" / "assets" / "a" / "old.txt", "v1");
     write(t.path / "build" / "assets" / "other" / "x.txt", "not a's");
     const std::string build = t.str("build");
@@ -917,7 +917,7 @@ TEST_CASE("cli: install copies an applet's asset folder and replaces it on updat
 
     fs::remove(t.path / "build" / "assets" / "a" / "old.txt");
     write(t.path / "build" / "assets" / "a" / "new.txt", "v2");
-    fake_applet(t.path / "build", "a", "x.a", "1.1.0");
+    fake_instrument(t.path / "build", "a", "x.a", "1.1.0");
     REQUIRE(run({"install", build.c_str()}, ctx).code == 0);
     CHECK(slurp(t.path / "user" / "assets" / "a" / "new.txt") == "v2");
     CHECK_FALSE(fs::exists(t.path / "user" / "assets" / "a" / "old.txt"));
@@ -967,8 +967,8 @@ TEST_CASE("cli: an install that fails part-way puts everything back") {
 TEST_CASE("cli: an install that cannot stage a file installs nothing") {
     TempDir t("stage-fail");
     const CliContext ctx = context(t);
-    fake_applet(t.path / "build", "a", "x.a", "1.0.0");
-    fake_applet(t.path / "build", "b", "x.b", "1.0.0");
+    fake_instrument(t.path / "build", "a", "x.a", "1.0.0");
+    fake_instrument(t.path / "build", "b", "x.b", "1.0.0");
     write(t.path / "build" / "assets" / "b" / "data.txt", "b's");
     write(t.path / "user" / "assets", "a file where a folder must go");
     const Run r = run({"install", t.str("build").c_str()}, ctx);

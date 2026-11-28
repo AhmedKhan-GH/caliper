@@ -255,7 +255,7 @@ struct SessionApp {
             session->registry().set_frame_thread(std::this_thread::get_id());
             while (!stop.load()) {
                 for (const caliper_api::Call& c : server->take()) {
-                    if (c.kind == caliper_api::Call::Kind::Applets) server->reply(c.ticket, 200, "{\"applets\":[]}");
+                    if (c.kind == caliper_api::Call::Kind::Instruments) server->reply(c.ticket, 200, "{\"instruments\":[]}");
                     else server->reply(c.ticket, 404, caliper_api::error_json("not in this test"));
                 }
                 session->queue().drain();
@@ -293,10 +293,10 @@ struct SessionApp {
     }
 };
 
-// A spec with one applet id, saved once, so that saving again overwrites.
-void save_one_applet(uint16_t port) {
+// A spec with one instrument id, saved once, so that saving again overwrites.
+void save_one_instrument(uint16_t port) {
     REQUIRE(command(port, "spec.new", {{"id", "dash"}, {"title", "Dash"}}, "mcp")["ok"] == true);
-    const json saved = command(port, "applet.save", json::object(), "mcp");
+    const json saved = command(port, "instrument.save", json::object(), "mcp");
     INFO(saved.dump());
     REQUIRE(saved["ok"] == true);
 }
@@ -335,9 +335,9 @@ TEST_CASE("api commands: the table, a read, spec edits and undo over a real sess
     }
 
     // A read.
-    const json listed = command(port, "applet.list", json::object());
+    const json listed = command(port, "instrument.list", json::object());
     REQUIRE(listed["ok"] == true);
-    CHECK(listed["result"]["applets"] == json::array());
+    CHECK(listed["result"]["instruments"] == json::array());
     const json none = command(port, "spec.get", json::object());
     CHECK(none["ok"] == true);
     CHECK(none["result"] == json({{"open", false}}));
@@ -368,7 +368,7 @@ TEST_CASE("api commands: the table, a read, spec edits and undo over a real sess
     INFO(undone.dump());
     REQUIRE(undone["ok"] == true);
     CHECK(app.session->open_spec()->spec.panels.empty());
-    CHECK(app.session->open_spec()->spec.applet.id == "dash");
+    CHECK(app.session->open_spec()->spec.instrument.id == "dash");
     CHECK(command(port, "history.redo", json::object())["ok"] == true);
     CHECK(app.session->open_spec()->spec.panels.size() == 1);
 
@@ -399,7 +399,7 @@ TEST_CASE("api commands: the table, a read, spec edits and undo over a real sess
     CHECK(error_code(command(port, "spec.new", {{"id", "x"}}, "mcp", "not a group")) == "command.invalid_invocation");
     CHECK(error_code(command(port, "panel.create", {{"id", "note"}, {"primitive", "text"}}, "mcp")) != "");
     // An invalid group or name ran nothing.
-    CHECK(app.session->open_spec()->spec.applet.id == "dash");
+    CHECK(app.session->open_spec()->spec.instrument.id == "dash");
 }
 
 TEST_CASE("api commands: the viewer token opens the spec page and runs its reads from the viewer origin only") {
@@ -419,11 +419,11 @@ TEST_CASE("api commands: the viewer token opens the spec page and runs its reads
     REQUIRE(command(port, "spec.new", {{"id", "dash"}, {"title", "Dash"}})["ok"] == true);
     REQUIRE(command(port, "panel.create", {{"id", "note"}, {"primitive", "text"}, {"options", {{"text", "Hi"}}}})["ok"] ==
             true);
-    REQUIRE(command(port, "applet.save", json::object())["ok"] == true);
+    REQUIRE(command(port, "instrument.save", json::object())["ok"] == true);
     CHECK(app.server->spec_url() == "http://127.0.0.1:" + std::to_string(port) + "/v0/spec?token=" + o.viewer_token);
 
     // The page, with the viewer token in its address, and with the session token.
-    const Response page = read_response(send_request(port, "GET", "/v0/spec?token=" + o.viewer_token + "&applet=dash", ""));
+    const Response page = read_response(send_request(port, "GET", "/v0/spec?token=" + o.viewer_token + "&instrument=dash", ""));
     CHECK(page.status == 200);
     CHECK(page.body == o.spec_page_html);
     CHECK(page.headers.at("content-type") == "text/html; charset=utf-8");
@@ -433,27 +433,27 @@ TEST_CASE("api commands: the viewer token opens the spec page and runs its reads
     CHECK(read_response(send_request(port, "GET", "/v0/spec", "")).status == 401);
 
     // The page's three reads, from the viewer origin.
-    const Response got = as_viewer("spec.get", {{"applet", "dash"}});
+    const Response got = as_viewer("spec.get", {{"instrument", "dash"}});
     REQUIRE(got.status == 200);
     CHECK(got.value()["result"]["json"]["panel"][0]["id"] == "note");
-    CHECK(as_viewer("applet.list", json::object()).value()["result"]["applets"].size() == 1);
-    const Response data = as_viewer("panel.data", {{"applet", "dash"}, {"panel", "note"}});
+    CHECK(as_viewer("instrument.list", json::object()).value()["result"]["instruments"].size() == 1);
+    const Response data = as_viewer("panel.data", {{"instrument", "dash"}, {"panel", "note"}});
     REQUIRE(data.status == 200);
     CHECK(data.value()["result"]["data"]["value"].is_null());
-    CHECK(as_viewer("panel.data", {{"applet", "dash"}, {"panel", "note"}}, "X-Caliper-Origin: viewer\r\n").status == 200);
-    CHECK(as_viewer("panel.data", {{"applet", "dash"}, {"panel", "note"}}, "X-Caliper-Origin: api\r\n").status == 400);
+    CHECK(as_viewer("panel.data", {{"instrument", "dash"}, {"panel", "note"}}, "X-Caliper-Origin: viewer\r\n").status == 200);
+    CHECK(as_viewer("panel.data", {{"instrument", "dash"}, {"panel", "note"}}, "X-Caliper-Origin: api\r\n").status == 400);
 
     // Nothing else: other commands, other endpoints and the stream.
-    for (const char* name : {"panel.remove", "spec.set_text", "applet.save", "data.query", "capture.frame",
+    for (const char* name : {"panel.remove", "spec.set_text", "instrument.save", "data.query", "capture.frame",
                              "history.undo"}) {
         CAPTURE(name);
         CHECK(as_viewer(name, json::object()).status == 403);
     }
-    for (const char* path : {"/v0/info", "/v0/applets", "/v0/commands", "/v0/capture.png", "/v0/approvals/ap-1"}) {
+    for (const char* path : {"/v0/info", "/v0/instruments", "/v0/commands", "/v0/capture.png", "/v0/approvals/ap-1"}) {
         CAPTURE(path);
         CHECK(read_response(send_request(port, "GET", path, viewer)).status == 403);
     }
-    CHECK(read_response(send_request(port, "POST", "/v0/applets/x/launch", viewer)).status == 403);
+    CHECK(read_response(send_request(port, "POST", "/v0/instruments/x/launch", viewer)).status == 403);
     caliper_net::Client c;
     std::string why;
     bool refused = !c.connect("ws://127.0.0.1:" + std::to_string(port) + "/v3/stream?token=" + o.viewer_token, &why);
@@ -466,7 +466,7 @@ TEST_CASE("api commands: the viewer token opens the spec page and runs its reads
 
     // The session token runs from its own origin, whatever X-Caliper-Origin
     // claims: a claim of viewer neither lowers nor raises it.
-    CHECK(command(port, "panel.data", {{"applet", "dash"}, {"panel", "note"}}, "viewer")["ok"] == true);
+    CHECK(command(port, "panel.data", {{"instrument", "dash"}, {"panel", "note"}}, "viewer")["ok"] == true);
     REQUIRE(app.session->open_spec().has_value());
     CHECK(app.session->open_spec()->spec.panels.size() == 1);
 }
@@ -522,24 +522,24 @@ TEST_CASE("api commands: a build without the views' files answers 404 for them")
 TEST_CASE("api commands: a destructive command from mcp or agent is held while the person decides") {
     SessionApp app;
     const uint16_t port = app.port();
-    save_one_applet(port);
+    save_one_instrument(port);
 
-    // Overwriting the saved applet from mcp: held until the person approves.
-    const int held = send_command(port, "applet.save", {{"overwrite", true}}, "mcp");
-    const std::string id = app.pending_approval("applet.save", "mcp");
+    // Overwriting the saved instrument from mcp: held until the person approves.
+    const int held = send_command(port, "instrument.save", {{"overwrite", true}}, "mcp");
+    const std::string id = app.pending_approval("instrument.save", "mcp");
     REQUIRE_FALSE(id.empty());
     CHECK(app.server->stats().commands_held == 1);
     // Meanwhile API v0, the stream, the table, approvals and other commands answer.
     CHECK(get(port, "/v0/info").status == 200);
-    CHECK(get(port, "/v0/applets").status == 200);
+    CHECK(get(port, "/v0/instruments").status == 200);
     CHECK(get(port, "/v0/commands").status == 200);
     const Response look = get(port, "/v0/approvals/" + id);
     REQUIRE(look.status == 200);
-    CHECK(look.value() == json{{"approval", id}, {"state", "pending"}, {"result", nullptr}, {"name", "applet.save"},
+    CHECK(look.value() == json{{"approval", id}, {"state", "pending"}, {"result", nullptr}, {"name", "instrument.save"},
                                {"origin", "mcp"}, {"review", {{"diff", ""}, {"warnings", json::array()}}}});
     std::string why;
     CHECK_MESSAGE(viewer_handshake(port, &why), why);
-    CHECK(command(port, "applet.list", json::object(), "mcp")["result"]["applets"].size() == 1);
+    CHECK(command(port, "instrument.list", json::object(), "mcp")["result"]["instruments"].size() == 1);
     // Approved in the app, it runs and answers.
     CHECK(app.session->queue().approve(id).get().ok);
     const Response approved = read_response(held);
@@ -637,15 +637,15 @@ TEST_CASE("api commands: events.wait is a long poll that the server holds until 
 TEST_CASE("api commands: an api call gets command.needs_approval at once and reads the outcome later") {
     SessionApp app;
     const uint16_t port = app.port();
-    save_one_applet(port);
+    save_one_instrument(port);
 
-    const json asked = command(port, "applet.save", {{"overwrite", true}});
+    const json asked = command(port, "instrument.save", {{"overwrite", true}});
     CHECK(error_code(asked) == "command.needs_approval");
     const std::string id = asked["error"]["approval"].get<std::string>();
     REQUIRE_FALSE(id.empty());
     CHECK(app.server->stats().commands_held == 0);
     CHECK(get(port, "/v0/approvals/" + id).value() == json{{"approval", id}, {"state", "pending"}, {"result", nullptr},
-                                                           {"name", "applet.save"}, {"origin", "api"},
+                                                           {"name", "instrument.save"}, {"origin", "api"},
                                                            {"review", {{"diff", ""}, {"warnings", json::array()}}}});
 
     CHECK(app.session->queue().approve(id).get().ok);
@@ -684,7 +684,7 @@ TEST_CASE("api commands: caliper-mcp drives a session through the app's API serv
     INFO(result.dump());
     CHECK(result["isError"] == false);
     REQUIRE(app.session->open_spec().has_value());
-    CHECK(app.session->open_spec()->spec.applet.id == "from-mcp");
+    CHECK(app.session->open_spec()->spec.instrument.id == "from-mcp");
     CHECK(child.finish().success());
     CHECK(child.all_err().find("the app's command table") != std::string::npos);
     CHECK(child.all_out().find(kMcpToken) == std::string::npos);
@@ -816,15 +816,15 @@ TEST_CASE("api commands: a saved Allow all of mcp applies at launch, and no requ
                                           body));
     };
     // mcp: an edit that review would hold runs at once, and the overwrite of a
-    // saved applet still waits for the person.
-    save_one_applet(port);
+    // saved instrument still waits for the person.
+    save_one_instrument(port);
     const json text = {{"id", "a"}, {"primitive", "text"}, {"options", {{"text", "A"}}}};
     CHECK(command(port, "panel.create", text, "mcp")["ok"] == true);
-    const int held = send_request(port, "POST", "/v0/commands/applet.save",
+    const int held = send_request(port, "POST", "/v0/commands/instrument.save",
                                   "Authorization: Bearer " + std::string(kMcpToken) +
                                       "\r\nContent-Type: application/json\r\nContent-Length: 18\r\n",
                                   R"({"overwrite":true})");
-    const std::string id = app.pending_approval("applet.save", "mcp");
+    const std::string id = app.pending_approval("instrument.save", "mcp");
     REQUIRE_FALSE(id.empty());
     app.session->queue().deny(id);
     CHECK(error_code(read_response(held).value()) == "command.denied");

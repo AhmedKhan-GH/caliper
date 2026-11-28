@@ -1,10 +1,10 @@
-# `caliper build <folder>` as an applet author runs it, run by ctest as
+# `caliper build <folder>` as an instrument author runs it, run by ctest as
 # caliper_cli_build:
 #   1. install the SDK component of this build to <WORK_DIR>/prefix;
 #   2. run `caliper new` into <WORK_DIR>/built;
 #   3. run `caliper build` on it with CALIPER_SDK_DIR naming the prefix: it
 #      must configure, build and pass `caliper check`, and leave the library
-#      and its manifest in build/applets;
+#      and its manifest in build/instruments;
 #   4. the clear errors: CALIPER_SDK_DIR without an SDK, CALIPER_CMAKE that is
 #      not a program, a project that finds no SDK anywhere, and a compiler that
 #      does not exist (each on a fresh project, so no cache hides the cause);
@@ -25,11 +25,11 @@ file(MAKE_DIRECTORY "${WORK_DIR}/home")
 set(prefix "${WORK_DIR}/prefix")
 set(data "${WORK_DIR}/app-data")
 
-# The environment of every caliper run: no app-data or user applets folder of
+# The environment of every caliper run: no app-data or user instruments folder of
 # the user's, a home folder without caliper-sdk, no CMAKE_PREFIX_PATH, and the
 # generator, build tool and compiler of this build.
-set(env --unset=CALIPER_APPLET_PATH --unset=CALIPER_SDK_DIR --unset=CMAKE_PREFIX_PATH
-    "CALIPER_DATA_DIR=${data}" "CALIPER_USER_APPLETS_DIR=${WORK_DIR}/user-applets"
+set(env --unset=CALIPER_INSTRUMENT_PATH --unset=CALIPER_SDK_DIR --unset=CMAKE_PREFIX_PATH
+    "CALIPER_DATA_DIR=${data}" "CALIPER_USER_INSTRUMENTS_DIR=${WORK_DIR}/user-instruments"
     "HOME=${WORK_DIR}/home" "CALIPER_CMAKE=${CMAKE_COMMAND}")
 if(GENERATOR)
     list(APPEND env "CMAKE_GENERATOR=${GENERATOR}")
@@ -68,7 +68,7 @@ foreach(name built no-sdk no-compiler)
     endif()
 endforeach()
 
-# The applet, built and checked.
+# The instrument, built and checked.
 set(compiler_env)
 if(CXX_COMPILER)
     set(compiler_env "CXX=${CXX_COMPILER}")
@@ -80,16 +80,16 @@ endif()
 if(NOT out MATCHES "using the Caliper SDK in [^\n]*prefix\n")
     message(FATAL_ERROR "caliper build did not name the SDK it used:\n${out}")
 endif()
-if(NOT out MATCHES "READY +com\\.example\\.built +0\\.1\\.0 .*1 of 1 applets pass the checks")
+if(NOT out MATCHES "READY +com\\.example\\.built +0\\.1\\.0 .*1 of 1 instruments pass the checks")
     message(FATAL_ERROR "caliper build did not pass the checks:\n${out}")
 endif()
-if(NOT EXISTS "${WORK_DIR}/built/build/applets/built.caliper.toml")
-    message(FATAL_ERROR "caliper build left no manifest in built/build/applets")
+if(NOT EXISTS "${WORK_DIR}/built/build/instruments/built.caliper.toml")
+    message(FATAL_ERROR "caliper build left no manifest in built/build/instruments")
 endif()
 # On macOS the library carries the host's minimum macOS (MACOS_MIN, the core
 # build's CMAKE_OSX_DEPLOYMENT_TARGET), which the SDK package passes on.
 if(MACOS_MIN)
-    file(GLOB libs "${WORK_DIR}/built/build/applets/*.dylib")
+    file(GLOB libs "${WORK_DIR}/built/build/instruments/*.dylib")
     execute_process(COMMAND vtool -show-build ${libs} OUTPUT_VARIABLE shown ERROR_VARIABLE shown)
     string(REGEX MATCHALL "minos [0-9.]+" minos "${shown}")
     list(REMOVE_DUPLICATES minos)
@@ -101,7 +101,7 @@ message(STATUS "caliper build: configured, built and checked ${WORK_DIR}/built")
 
 # A second run builds nothing new and passes again.
 caliper(ENV "CALIPER_SDK_DIR=${prefix}" ${compiler_env} ARGS build "${WORK_DIR}/built")
-if(NOT rc EQUAL 0 OR NOT out MATCHES "1 of 1 applets pass the checks")
+if(NOT rc EQUAL 0 OR NOT out MATCHES "1 of 1 instruments pass the checks")
     message(FATAL_ERROR "a second caliper build failed (exit ${rc}):\n${out}")
 endif()
 

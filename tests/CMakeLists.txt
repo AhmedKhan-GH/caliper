@@ -9,11 +9,11 @@ add_library(caliper_test_run_marker OBJECT test_run_marker.cpp)
 target_link_libraries(caliper_test_run_marker PRIVATE caliper_app_paths)
 
 # Windows has no rpath: a test binary that links libtorch (or dlopens a torch
-# applet) finds c10.dll / torch_cpu.dll only beside itself or on PATH. Without
+# instrument) finds c10.dll / torch_cpu.dll only beside itself or on PATH. Without
 # them it dies 0xc0000135 before main, and on a desktop session (a CI runner
 # included) the loader's "DLL was not found" dialog holds the process open until
 # ctest's timeout. One copy into the tests' output dir serves every torch-linked
-# test binary (and the torch applets caliper_tests and caliper_embed_tests load),
+# test binary (and the torch instruments caliper_tests and caliper_embed_tests load),
 # mirroring the caliper exe's "Copying PyTorch DLLs" step in the root CMakeLists.
 if(CALIPER_WITH_TORCH AND MSVC)
     file(GLOB _caliper_test_torch_dlls "${LIBTORCH_DIR}/lib/*.dll")
@@ -26,7 +26,7 @@ if(CALIPER_WITH_TORCH AND MSVC)
         COMMENT "Copying PyTorch DLLs next to the test executables")
     add_custom_target(caliper_test_torch_dlls DEPENDS "${_caliper_test_torch_dlls_stamp}")
 endif()
-# Each test target that links libtorch or dlopens a torch applet calls this,
+# Each test target that links libtorch or dlopens a torch instrument calls this,
 # so the DLLs land before it runs.
 function(caliper_test_needs_torch_dlls target)
     if(TARGET caliper_test_torch_dlls)
@@ -81,22 +81,22 @@ target_link_libraries(caliper_tests PRIVATE caliper_gfx)
 # tests/shaders/colormap_cases.h, against the reference compiled into this binary.
 target_sources(caliper_tests PRIVATE test_colormap_keys.cpp)
 target_sources(caliper_tests PRIVATE test_loader.cpp)
-# UI recovery after an applet fault (src/host/ui/ui_recovery.h, header-only):
+# UI recovery after an instrument fault (src/host/ui/ui_recovery.h, header-only):
 # headless ImGui/ImPlot/ImPlot3D contexts handed to the throwing fixture.
 target_sources(caliper_tests PRIVATE test_ui_recovery.cpp)
-# Docking by role on the applet page (src/host/ui/dock_layout.h, header-only)
+# Docking by role on the instrument page (src/host/ui/dock_layout.h, header-only)
 # on a headless ImGui context.
 target_sources(caliper_tests PRIVATE test_dock_layout.cpp)
 # The work area a page's bars leave, and when the jobs tray takes its strip
 # (src/host/ui/work_area.h, header-only), on a headless ImGui context.
 target_sources(caliper_tests PRIVATE test_work_area.cpp)
-# The applet search order, copies of one id, and the command line
-# (src/host/host_cli.h); the acceptance check for applets built outside the
-# core runs only when CALIPER_TEST_APPLET_DIR is set.
-target_sources(caliper_tests PRIVATE test_applet_search.cpp test_applet_acceptance.cpp)
-# Spec applets in the loader (src/host/applet_loader.h): the search, the
+# The instrument search order, copies of one id, and the command line
+# (src/host/host_cli.h); the acceptance check for instruments built outside the
+# core runs only when CALIPER_TEST_INSTRUMENT_DIR is set.
+target_sources(caliper_tests PRIVATE test_instrument_search.cpp test_instrument_acceptance.cpp)
+# Spec-based instruments in the loader (src/host/instrument_loader.h): the search, the
 # listing checks, the full validation with the spec library, and launch.
-target_sources(caliper_tests PRIVATE test_spec_applet.cpp)
+target_sources(caliper_tests PRIVATE test_spec_instrument.cpp)
 # The command line's subcommands (src/host/host_cli.h) on temporary folders,
 # with caliper build's own source and the header's out-of-line part, which the
 # executable compiles too.
@@ -130,11 +130,11 @@ if(CALIPER_WITH_BUILDER AND NOT WIN32)
 endif()
 # The manifest parser and the loader compiled as a build without
 # CALIPER_WITH_BUILDER compiles them, without CALIPER_HOST_SPEC_RUNTIME and
-# with no builder library, so that the path that lists every spec applet as
-# refused runs in every build without a second full build.
-add_executable(caliper_loader_nospec_tests test_main.cpp test_spec_applet_nospec.cpp
-    ${CMAKE_SOURCE_DIR}/src/host/applet_manifest.cpp
-    ${CMAKE_SOURCE_DIR}/src/host/applet_loader.cpp
+# with no builder library, so that the path that lists every kind = "spec"
+# instrument as refused runs in every build without a second full build.
+add_executable(caliper_loader_nospec_tests test_main.cpp test_spec_instrument_nospec.cpp
+    ${CMAKE_SOURCE_DIR}/src/host/instrument_manifest.cpp
+    ${CMAKE_SOURCE_DIR}/src/host/instrument_loader.cpp
     ${CMAKE_SOURCE_DIR}/src/host/negotiation.cpp
     ${CMAKE_SOURCE_DIR}/src/host/crash_guard.cpp
     ${CMAKE_SOURCE_DIR}/src/host/job_system.cpp)
@@ -146,14 +146,14 @@ if(UNIX)
 endif()
 set_target_properties(caliper_loader_nospec_tests PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
 add_test(NAME caliper_loader_nospec COMMAND caliper_loader_nospec_tests)
-# What applet.save writes is what the loader accepts: a builder session saves
-# an applet and the loader lists and validates it (test_spec_applet_session.cpp).
+# What instrument.save writes is what the loader accepts: a builder session saves
+# an instrument and the loader lists and validates it (test_spec_instrument_session.cpp).
 if(CALIPER_WITH_BUILDER AND NOT WIN32)
-    add_executable(caliper_spec_applet_session_tests test_main.cpp test_spec_applet_session.cpp)
-    target_link_libraries(caliper_spec_applet_session_tests PRIVATE doctest::doctest caliper_host_lib
+    add_executable(caliper_spec_instrument_session_tests test_main.cpp test_spec_instrument_session.cpp)
+    target_link_libraries(caliper_spec_instrument_session_tests PRIVATE doctest::doctest caliper_host_lib
         caliper_builder_session caliper_builder_duckdb caliper_test_run_marker)
-    set_target_properties(caliper_spec_applet_session_tests PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
-    add_test(NAME caliper_spec_applet_session COMMAND caliper_spec_applet_session_tests)
+    set_target_properties(caliper_spec_instrument_session_tests PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
+    add_test(NAME caliper_spec_instrument_session COMMAND caliper_spec_instrument_session_tests)
 endif()
 # On Windows the socket cases of the WebSocket layer, the hub and Caliper API
 # are not built or run: every feature built on them is refused there
@@ -165,22 +165,22 @@ if(WIN32)
     set_tests_properties(caliper_net_tests PROPERTIES SKIP_REGULAR_EXPRESSION "skipped on Windows")
 endif()
 # The throwing fixture (a raw descriptor that throws across the ABI) backs the
-# crash guard's exception case; it builds into test-applets, not applets.
-add_subdirectory(fixtures/throwing_applet)
-add_dependencies(caliper_tests hello_world_applet throwing_applet)
+# crash guard's exception case; it builds into test-instruments, not instruments.
+add_subdirectory(fixtures/throwing_instrument)
+add_dependencies(caliper_tests hello_world_instrument throwing_instrument)
 if(CALIPER_WITH_TORCH)
-    add_dependencies(caliper_tests mnist_applet)
+    add_dependencies(caliper_tests mnist_instrument)
     caliper_test_needs_torch_dlls(caliper_tests)
     if(APPLE)
         set_target_properties(caliper_tests PROPERTIES
             BUILD_RPATH "${CMAKE_SOURCE_DIR}/third_party/libtorch/lib")
     endif()
 else()
-    target_compile_definitions(caliper_tests PRIVATE CALIPER_TESTS_NO_TORCH_APPLETS=1)
+    target_compile_definitions(caliper_tests PRIVATE CALIPER_TESTS_NO_TORCH_INSTRUMENTS=1)
 endif()
 target_compile_definitions(caliper_tests PRIVATE
-    CALIPER_TEST_APPLETS_DIR="${CMAKE_BINARY_DIR}/applets"
-    CALIPER_TEST_FIXTURES_DIR="${CMAKE_BINARY_DIR}/test-applets"
+    CALIPER_TEST_INSTRUMENTS_DIR="${CMAKE_BINARY_DIR}/instruments"
+    CALIPER_TEST_FIXTURES_DIR="${CMAKE_BINARY_DIR}/test-instruments"
     CALIPER_TEST_DATA_ROOT="${CMAKE_BINARY_DIR}/test-data"
     CALIPER_TEST_SOURCE_ROOT="${CMAKE_SOURCE_DIR}")
 
@@ -253,23 +253,23 @@ set_target_properties(caliper_colormap_cases PROPERTIES CXX_STANDARD 17 CXX_STAN
 # ---------------------------------------------------------------------------
 # The caliper executable's subcommands, run as a user runs them. Each runs and
 # exits without a window (host_cli.h); `caliper dev` and plain `caliper` start
-# the app, so no test runs them. The applets folder of this build stands in
+# the app, so no test runs them. The instruments folder of this build stands in
 # for an outside build folder. Every entry runs with a controlled environment:
-# CALIPER_APPLET_PATH unset, CALIPER_USER_APPLETS_DIR in the build tree, and
+# CALIPER_INSTRUMENT_PATH unset, CALIPER_USER_INSTRUMENTS_DIR in the build tree, and
 # CALIPER_DATA_DIR on a folder of its own that must still not exist after the
-# run (only `install` without CALIPER_USER_APPLETS_DIR may create applets/ in
+# run (only `install` without CALIPER_USER_INSTRUMENTS_DIR may create instruments/ in
 # it), which proves that the subcommands open no store and create nothing in
 # the app-data folder.
 # ---------------------------------------------------------------------------
 if(TARGET caliper)
     set(_cli_work "${CMAKE_CURRENT_BINARY_DIR}/cli-work")
     function(caliper_cli_test name)
-        cmake_parse_arguments(PARSE_ARGV 1 t "DEFAULT_USER_APPLETS;EMPTY_DATA_DIR"
+        cmake_parse_arguments(PARSE_ARGV 1 t "DEFAULT_USER_INSTRUMENTS;EMPTY_DATA_DIR"
             "ARGS;EXIT;MATCH;ERROR;CLEAN;STAGE;ALLOW;ENV" "")
         set(data "${_cli_work}/app-data-${name}")
-        set(env "--unset=CALIPER_APPLET_PATH|CALIPER_DATA_DIR=${data}")
-        if(NOT t_DEFAULT_USER_APPLETS)
-            string(APPEND env "|CALIPER_USER_APPLETS_DIR=${_cli_work}/user-applets")
+        set(env "--unset=CALIPER_INSTRUMENT_PATH|CALIPER_DATA_DIR=${data}")
+        if(NOT t_DEFAULT_USER_INSTRUMENTS)
+            string(APPEND env "|CALIPER_USER_INSTRUMENTS_DIR=${_cli_work}/user-instruments")
         endif()
         if(DEFINED t_ENV)   # more of the run's environment, "|"-separated
             string(APPEND env "|${t_ENV}")
@@ -292,34 +292,34 @@ if(TARGET caliper)
     caliper_cli_test(help ARGS "--help" EXIT 0 MATCH "usage: caliper")
     caliper_cli_test(bad_option ARGS "--frobnicate" EXIT 2
         ERROR "unknown option: --frobnicate")
-    caliper_cli_test(applets_needs_folder ARGS "--applets|--help" EXIT 2
-        ERROR "--applets needs a folder")
+    caliper_cli_test(instruments_needs_folder ARGS "--instruments|--help" EXIT 2
+        ERROR "--instruments needs a folder")
     caliper_cli_test(info ARGS "info" EXIT 0
-        MATCH "abi_epoch 3.*service caliper\\.ui\\.v1_1")
-    caliper_cli_test(list ARGS "list|--applets|${CMAKE_BINARY_DIR}/applets" EXIT 0
+        MATCH "abi_epoch 4.*service caliper\\.ui\\.v1_1")
+    caliper_cli_test(list ARGS "list|--instruments|${CMAKE_BINARY_DIR}/instruments" EXIT 0
         MATCH "READY +dev\\.caliper\\.hello-world +0\\.1\\.0 ")
-    caliper_cli_test(check ARGS "check|${CMAKE_BINARY_DIR}/test-applets" EXIT 0
-        MATCH "1 of 1 applets pass the checks")
-    # An applet's build folder, its manifests only in build/applets as
-    # caliper_add_applet() leaves them: check uses that subfolder and says so.
+    caliper_cli_test(check ARGS "check|${CMAKE_BINARY_DIR}/test-instruments" EXIT 0
+        MATCH "1 of 1 instruments pass the checks")
+    # An instrument's build folder, its manifests only in build/instruments as
+    # caliper_add_instrument() leaves them: check uses that subfolder and says so.
     # Printed folders use the platform's separator, '\' on Windows, so the
     # patterns accept either.
-    caliper_cli_test(check_build_folder ARGS "check|${_cli_work}/applet-build" EXIT 0
-        MATCH "^using the applets in .*applet-build[/\\]applets.*1 of 1 applets pass the checks"
-        CLEAN "${_cli_work}/applet-build"
-        STAGE "${CMAKE_BINARY_DIR}/test-applets|${_cli_work}/applet-build/applets")
+    caliper_cli_test(check_build_folder ARGS "check|${_cli_work}/instrument-build" EXIT 0
+        MATCH "^using the instruments in .*instrument-build[/\\]instruments.*1 of 1 instruments pass the checks"
+        CLEAN "${_cli_work}/instrument-build"
+        STAGE "${CMAKE_BINARY_DIR}/test-instruments|${_cli_work}/instrument-build/instruments")
     caliper_cli_test(check_missing ARGS "check|${_cli_work}/nowhere" EXIT 1
         ERROR "not a folder")
-    caliper_cli_test(install ARGS "install|${CMAKE_BINARY_DIR}/test-applets" EXIT 0
-        MATCH "installed dev\\.caliper\\.throwing 0\\.1\\.0 in .*user-applets"
-        CLEAN "${_cli_work}/user-applets")
-    # Without CALIPER_USER_APPLETS_DIR install writes applets/ under the
+    caliper_cli_test(install ARGS "install|${CMAKE_BINARY_DIR}/test-instruments" EXIT 0
+        MATCH "installed dev\\.caliper\\.throwing 0\\.1\\.0 in .*user-instruments"
+        CLEAN "${_cli_work}/user-instruments")
+    # Without CALIPER_USER_INSTRUMENTS_DIR install writes instruments/ under the
     # app-data folder, and nothing else there.
-    caliper_cli_test(install_default ARGS "install|${CMAKE_BINARY_DIR}/test-applets" EXIT 0
-        MATCH "installed dev\\.caliper\\.throwing 0\\.1\\.0 in .*app-data-install_default[/\\]applets"
-        DEFAULT_USER_APPLETS ALLOW "applets")
+    caliper_cli_test(install_default ARGS "install|${CMAKE_BINARY_DIR}/test-instruments" EXIT 0
+        MATCH "installed dev\\.caliper\\.throwing 0\\.1\\.0 in .*app-data-install_default[/\\]instruments"
+        DEFAULT_USER_INSTRUMENTS ALLOW "instruments")
     caliper_cli_test(new ARGS "new|com.example.cli-made|${_cli_work}/cli-made" EXIT 0
-        MATCH "created .*cli-made for applet com\\.example\\.cli-made"
+        MATCH "created .*cli-made for instrument com\\.example\\.cli-made"
         CLEAN "${_cli_work}/cli-made")
     caliper_cli_test(new_reserved ARGS "new|test|${_cli_work}/reserved" EXIT 2
         ERROR "the CMake target \"test\" is reserved")
@@ -342,8 +342,8 @@ if(TARGET caliper)
     # this build's installed SDK, then its clear errors for a missing SDK,
     # CMake or compiler (tests/cli_build.cmake). POSIX only, as build is.
     caliper_cli_test(build_operand ARGS "build" EXIT 2 ERROR "build takes one folder")
-    caliper_cli_test(build_applets ARGS "build|${_cli_work}|--applets|${_cli_work}" EXIT 2
-        ERROR "--applets applies only to starting the app, dev, list and shot")
+    caliper_cli_test(build_instruments ARGS "build|${_cli_work}|--instruments|${_cli_work}" EXIT 2
+        ERROR "--instruments applies only to starting the app, dev, list and shot")
     if(NOT WIN32)
         add_test(NAME caliper_cli_build COMMAND "${CMAKE_COMMAND}"
             "-DEXE=$<TARGET_FILE:caliper>"
@@ -366,9 +366,9 @@ if(TARGET caliper)
         ERROR "--size takes <W>x<H>")
     caliper_cli_test(shot_option_elsewhere ARGS "list|--frames|3" EXIT 2
         ERROR "--frames applies only to shot")
-    caliper_cli_test(shot_unknown_applet
-        ARGS "shot|--applets|${CMAKE_BINARY_DIR}/applets|--launch|dev.example.nowhere|--out|${CMAKE_CURRENT_BINARY_DIR}/x.png"
-        EXIT 1 ERROR "no applet with the id dev\\.example\\.nowhere")
+    caliper_cli_test(shot_unknown_instrument
+        ARGS "shot|--instruments|${CMAKE_BINARY_DIR}/instruments|--launch|dev.example.nowhere|--out|${CMAKE_CURRENT_BINARY_DIR}/x.png"
+        EXIT 1 ERROR "no instrument with the id dev\\.example\\.nowhere")
 
     # No fallback renderer (renderer core, step 5). Where the platform's
     # renderer cannot start, the app and shot refuse with one message that
@@ -389,11 +389,11 @@ if(TARGET caliper)
     caliper_cli_test(app_renderer_gl ARGS "--hidden" EXIT 1 EMPTY_DATA_DIR
         ENV "CALIPER_RENDERER=gl|CALIPER_EXIT_AFTER=2" ERROR "caliper: ${_gl_removed}")
     caliper_cli_test(shot_no_renderer
-        ARGS "shot|--applets|${CMAKE_BINARY_DIR}/applets|--launch|dev.caliper.hello-world|--out|${CMAKE_CURRENT_BINARY_DIR}/x.png"
+        ARGS "shot|--instruments|${CMAKE_BINARY_DIR}/instruments|--launch|dev.caliper.hello-world|--out|${CMAKE_CURRENT_BINARY_DIR}/x.png"
         EXIT 1 EMPTY_DATA_DIR ENV "--unset=CALIPER_RENDERER|CALIPER_TEST_RENDERER_FAIL=1"
         ERROR "caliper: shot cannot draw offscreen: ${_no_renderer}")
     caliper_cli_test(shot_renderer_gl
-        ARGS "shot|--applets|${CMAKE_BINARY_DIR}/applets|--launch|dev.caliper.hello-world|--out|${CMAKE_CURRENT_BINARY_DIR}/x.png"
+        ARGS "shot|--instruments|${CMAKE_BINARY_DIR}/instruments|--launch|dev.caliper.hello-world|--out|${CMAKE_CURRENT_BINARY_DIR}/x.png"
         EXIT 1 EMPTY_DATA_DIR ENV "CALIPER_RENDERER=gl"
         ERROR "caliper: shot cannot draw offscreen: ${_gl_removed}")
 
@@ -404,13 +404,13 @@ if(TARGET caliper)
     add_executable(caliper_png_check png_check.cpp)
     target_include_directories(caliper_png_check PRIVATE ${CMAKE_SOURCE_DIR}/third_party/stb)
     set_target_properties(caliper_png_check PROPERTIES CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON)
-    add_dependencies(caliper_png_check hello_world_applet)
+    add_dependencies(caliper_png_check hello_world_instrument)
     foreach(mode temp data_dir)
         set(name caliper_cli_shot_${mode})
         add_test(NAME ${name} COMMAND "${CMAKE_COMMAND}"
             "-DEXE=$<TARGET_FILE:caliper>"
             "-DCHECK=$<TARGET_FILE:caliper_png_check>"
-            "-DAPPLETS=${CMAKE_BINARY_DIR}/applets"
+            "-DINSTRUMENTS=${CMAKE_BINARY_DIR}/instruments"
             "-DID=dev.caliper.hello-world" "-DSIZE=640x400" "-DFRAMES=10"
             "-DWORK_DIR=${CMAKE_CURRENT_BINARY_DIR}/shot-work-${mode}" "-DMODE=${mode}"
             -P "${CMAKE_CURRENT_SOURCE_DIR}/shot_run.cmake")
@@ -436,7 +436,7 @@ if(TARGET caliper)
         add_test(NAME caliper_test_data_guard COMMAND "${CMAKE_COMMAND}"
             "-DEXE=$<TARGET_FILE:caliper>"
             "-DEMBED_TESTS=$<TARGET_FILE:caliper_embed_tests>"
-            "-DAPPLETS=${CMAKE_BINARY_DIR}/applets"
+            "-DINSTRUMENTS=${CMAKE_BINARY_DIR}/instruments"
             "-DPYTHON=${_guard_python}"
             "-DPYTHON_DIR=${CMAKE_SOURCE_DIR}/python"
             "-DWORK_DIR=${CMAKE_CURRENT_BINARY_DIR}/data-guard-work"
@@ -494,7 +494,7 @@ if(TARGET caliper)
         # (src/host/builder/widget_app.cpp), so the switch is here too, beside
         # the tree-wide one of caliper_offline_tests().
         set(_api_env "CALIPER_TEST_CALIPER_EXE=$<TARGET_FILE:caliper>"
-                     "CALIPER_TEST_APPLETS=${CMAKE_BINARY_DIR}/applets" "CALIPER_AGENT_OFFLINE=1")
+                     "CALIPER_TEST_INSTRUMENTS=${CMAKE_BINARY_DIR}/instruments" "CALIPER_AGENT_OFFLINE=1")
         if(TARGET caliper_viewer)
             list(APPEND _api_env "CALIPER_TEST_VIEWER_EXE=$<TARGET_FILE:caliper_viewer>")
         endif()
@@ -652,7 +652,7 @@ set_tests_properties(caliper_export_tests PROPERTIES LABELS "export"
     SKIP_RETURN_CODE 77)
 
 # ---------------------------------------------------------------------------
-# caliper_torch_tests — the applet-side torch adapter (adapters/torch.hpp).
+# caliper_torch_tests — the instrument-side torch adapter (adapters/torch.hpp).
 # A SEPARATE binary because it links libtorch: keeping torch out of
 # caliper_tests spares the fast unit suite the torch link cost. Registered
 # under the "torch" label so `ctest -L torch` selects it; the MPS cases skip
@@ -704,22 +704,22 @@ target_link_libraries(caliper_embed_tests PRIVATE
 # tensor_bridge.h, renderer/host_renderer.h).
 target_include_directories(caliper_embed_tests PRIVATE ${CMAKE_SOURCE_DIR}/src/host)
 target_compile_definitions(caliper_embed_tests PRIVATE
-    CALIPER_TEST_APPLETS_DIR="${CMAKE_BINARY_DIR}/applets")
+    CALIPER_TEST_INSTRUMENTS_DIR="${CMAKE_BINARY_DIR}/instruments")
 set_target_properties(caliper_embed_tests PROPERTIES
     CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
 # The offscreen case composites + reads back the hello_world fixture, so its dylib
-# and manifest must exist in build/applets before the test runs. When libtorch is
-# enabled, mnist_applet is the second distinct applet the swap cases load.
-add_dependencies(caliper_embed_tests hello_world_applet)
+# and manifest must exist in build/instruments before the test runs. When libtorch is
+# enabled, mnist_instrument is the second distinct instrument the swap cases load.
+add_dependencies(caliper_embed_tests hello_world_instrument)
 if(CALIPER_WITH_TORCH)
-    add_dependencies(caliper_embed_tests mnist_applet)
+    add_dependencies(caliper_embed_tests mnist_instrument)
     caliper_test_needs_torch_dlls(caliper_embed_tests)
     if(APPLE)
         set_target_properties(caliper_embed_tests PROPERTIES
             BUILD_RPATH "${CMAKE_SOURCE_DIR}/third_party/libtorch/lib")
     endif()
 else()
-    target_compile_definitions(caliper_embed_tests PRIVATE CALIPER_TESTS_NO_TORCH_APPLETS=1)
+    target_compile_definitions(caliper_embed_tests PRIVATE CALIPER_TESTS_NO_TORCH_INSTRUMENTS=1)
 endif()
 add_test(NAME caliper_embed_tests COMMAND caliper_embed_tests)
 # The stores this binary opens go to a work folder, never the user's app-data.

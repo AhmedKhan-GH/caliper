@@ -36,7 +36,7 @@ gp, Fail, Skip = d.gp, d.Fail, d.Skip
 
 # The pixels that a panel's program draws at least: the digit ring columns and labels, the confusion grid cells and labels.
 MIN_PIXELS = 500
-NOT_OPEN = "The app does not have this dashboard open. It shows data when the dashboard is open in the app."
+NOT_OPEN = "The app does not have this instrument open. It shows data when the instrument is open in the app."
 
 
 def page(url, project, mode):
@@ -87,7 +87,7 @@ def build(r, c):
     froms = {p["id"]: p["piece"]["from"] for p in spec.get("program", [])}
     if froms != {"digit_bars": "workspace", "confusion_view": "inline"}:
         raise Fail(f"the programs pin {froms}, not a workspace piece and an inline piece")
-    r.call("applet_save", {})
+    r.call("instrument_save", {})
 
     r.step("both programs compile, the run goes on")
     r.call("run_pause", {"op": "resume", "run": c.run})
@@ -108,7 +108,7 @@ def run(a):
     if not all((views / f).exists() for f in ("caliper-views-loader.js", "caliper-views.js", "caliper-views.wasm")):
         raise Skip(f"needs the WebAssembly views in {views} (scripts/build_wasm.py or scripts/fetch_wasm.py)")
     env = {k: v for k, v in os.environ.items()
-           if k not in ("CALIPER_API", "CALIPER_AUTOLAUNCH", "CALIPER_EXIT_AFTER", "CALIPER_APPLET_PATH")
+           if k not in ("CALIPER_API", "CALIPER_AUTOLAUNCH", "CALIPER_EXIT_AFTER", "CALIPER_INSTRUMENT_PATH")
            and not k.startswith("CALIPER_RUN_")}
     env["PYTHONPATH"] = str(ROOT / "python") + os.pathsep + env.get("PYTHONPATH", "")
     pre = subprocess.run([a.python, "-c", "import numpy, torch, torchvision, caliper, caliper._netio, caliper._producer"],
@@ -128,7 +128,7 @@ def run(a):
     (ws / d.SCRIPT).write_text((ROOT / "examples" / "mnist" / "train.py").read_text())
     env.update({
         "CALIPER_AGENT_OFFLINE": "1", "CALIPER_HIDDEN": "1", "CALIPER_DATA_DIR": str(work / "data"),
-        "CALIPER_USER_APPLETS_DIR": str(work / "user"), "CALIPER_WINDOW_SIZE": "1280x800",
+        "CALIPER_USER_INSTRUMENTS_DIR": str(work / "user"), "CALIPER_WINDOW_SIZE": "1280x800",
         "CALIPER_WORKSPACE": str(ws), "CALIPER_RUN_PYTHON": a.python,
         "CALIPER_MNIST_DATA_DIR": str(d.mnist_data_dir()),
     })
@@ -155,7 +155,7 @@ def run(a):
         c.app, c.mcp_path = a.app, a.mcp
         r = d.Run(c, approvals, transcript)
         build(r, c)
-        url = json.loads(api_file.read_text())["spec_url"] + "&applet=viewer_check"
+        url = json.loads(api_file.read_text())["spec_url"] + "&instrument=viewer_check"
         for project in a.projects.split(","):
             r.step(f"the page draws both programs, {project}")
             got = page(url, project, "programs")
@@ -175,8 +175,8 @@ def run(a):
         result["not_open"] = got
         if got.get("error") or got.get("banner") != NOT_OPEN:
             raise Fail(f"the page of a dashboard that is not open shows {got}")
-        if any(p["state"] != "Dashboard not open in the app" for p in got["panels"]):
-            raise Fail(f"a panel of a dashboard that is not open shows another state: {got['panels']}")
+        if any(p["state"] != "Instrument not open in the app" for p in got["panels"]):
+            raise Fail(f"a panel of an instrument that is not open shows another state: {got['panels']}")
         return result
     finally:
         transcript.close()

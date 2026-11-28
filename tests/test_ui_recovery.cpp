@@ -1,4 +1,4 @@
-// UI recovery after an applet fault (src/host/ui/ui_recovery.h). The throwing
+// UI recovery after an instrument fault (src/host/ui/ui_recovery.h). The throwing
 // fixture opens a window, a child, a table, a tree node, a 2-D and a 3-D plot
 // and a pile of pushes on the host's contexts, then throws (or writes through
 // null) with all of it still open, inside the loader's guarded frame(). The
@@ -8,7 +8,7 @@
 // GPU-free: ImGui runs headless (no renderer backend; a stand-in marks the
 // font atlas uploaded), which is all the stacks need.
 #include <doctest/doctest.h>
-#include "applet_loader.h"
+#include "instrument_loader.h"
 #include "ui/ui_recovery.h"
 #include <caliper/fixture_host.h>
 #include <caliper/services/ui_v1.h>
@@ -110,9 +110,9 @@ struct ErrorCount {
     }
 };
 
-// What the host draws after the applet's frame: its own window (the Jobs
+// What the host draws after the instrument's frame: its own window (the Jobs
 // tray), then, on the next frame, a window with a plot of each kind, which
-// would trip over a plot the applet left open.
+// would trip over a plot the instrument left open.
 void host_window() {
     ImGui::Begin("Host: Jobs");
     ImGui::TextUnformatted("host");
@@ -146,7 +146,7 @@ struct Stacks {
     }
 };
 
-int find_throwing(AppletLoader& L) {
+int find_throwing(InstrumentLoader& L) {
     for (int k = 0; k < L.count(); k++)
         if (L.at(k).manifest.id == "dev.caliper.throwing") return k;
     return -1;
@@ -154,7 +154,7 @@ int find_throwing(AppletLoader& L) {
 
 }  // namespace
 
-TEST_CASE("ui recovery: an applet's half-finished UI is unwound and the next "
+TEST_CASE("ui recovery: an instrument's half-finished UI is unwound and the next "
           "frame runs") {
     HeadlessUi ui;
     g_ui = &ui;
@@ -162,14 +162,14 @@ TEST_CASE("ui recovery: an applet's half-finished UI is unwound and the next "
     fx.provide(CALIPER_UI_V1, &kTestUi);
     CaliperFrameInfo fi{};
     fi.struct_size = sizeof fi;
-    const HostCaps caps{3, "0.6.0", {"caliper.ui.v1", "caliper.log.v1"}};
+    const HostCaps caps{4, "0.6.0", {"caliper.ui.v1", "caliper.log.v1"}};
     ImGuiContext& g = *ui.imgui;
 
-    // One frame as main.cpp runs it: checkpoint, the applet's guarded
+    // One frame as main.cpp runs it: checkpoint, the instrument's guarded
     // frame() fails, recover, the host draws on. Then a whole next frame.
     auto fail_mid_frame_and_recover = [&](const char* where, FaultKind kind) {
         setenv("CALIPER_THROWING_WHERE", where, 1);
-        AppletLoader L(caps, CALIPER_TEST_DATA_ROOT);
+        InstrumentLoader L(caps, CALIPER_TEST_DATA_ROOT);
         L.scan(CALIPER_TEST_FIXTURES_DIR);
         const int i = find_throwing(L);
         REQUIRE(i >= 0);
@@ -179,7 +179,7 @@ TEST_CASE("ui recovery: an applet's half-finished UI is unwound and the next "
         const Stacks before = Stacks::now();
         const UiCheckpoint cp = UiCheckpoint::store();
         CHECK_FALSE(L.frame(i, fi));
-        CHECK(L.at(i).status == AppletStatus::Quarantined);
+        CHECK(L.at(i).status == InstrumentStatus::Quarantined);
         CHECK(L.at(i).fault_kind == kind);
 
         // Everything the fixture began is still open: the fault really did
@@ -197,7 +197,7 @@ TEST_CASE("ui recovery: an applet's half-finished UI is unwound and the next "
 
         // Recovery reports through its own channel and puts the host's
         // settings back: the callback the host had installed sees none of the
-        // applet's errors, and ImGui's error tooltip never opens even though
+        // instrument's errors, and ImGui's error tooltip never opens even though
         // the host had it on.
         ErrorCount errors;
         g.IO.ConfigErrorRecoveryEnableTooltip = true;
@@ -232,7 +232,7 @@ TEST_CASE("ui recovery: an applet's half-finished UI is unwound and the next "
         CHECK(ui.implot3d->ColormapModifiers.Size == 0);
 
         // The host draws on: its window is a top-level window, not a child
-        // of the applet's, and nothing in the rest of this frame or the next
+        // of the instrument's, and nothing in the rest of this frame or the next
         // is a recoverable error.
         ImGui::Begin("Host: Jobs");
         CHECK(g.CurrentWindowStack.Size == before.windows + 1);
@@ -254,12 +254,12 @@ TEST_CASE("ui recovery: an applet's half-finished UI is unwound and the next "
     SUBCASE("after a memory fault") {
         fail_mid_frame_and_recover("frame-imgui-fault", FaultKind::Signal);
     }
-    SUBCASE("without the checkpoint the host's window nests in the applet's") {
+    SUBCASE("without the checkpoint the host's window nests in the instrument's") {
         // The control: the same fault, no recovery. The host's next window
-        // opens inside the applet's half-built one, and ImGui finds the
-        // applet's leftovers at the end of the frame.
+        // opens inside the instrument's half-built one, and ImGui finds the
+        // instrument's leftovers at the end of the frame.
         setenv("CALIPER_THROWING_WHERE", "frame-imgui", 1);
-        AppletLoader L(caps, CALIPER_TEST_DATA_ROOT);
+        InstrumentLoader L(caps, CALIPER_TEST_DATA_ROOT);
         L.scan(CALIPER_TEST_FIXTURES_DIR);
         const int i = find_throwing(L);
         REQUIRE(i >= 0);
@@ -274,7 +274,7 @@ TEST_CASE("ui recovery: an applet's half-finished UI is unwound and the next "
         ui.end_frame();
         CHECK(errors.n > 0);
         // EndFrame recovered what it could; the plot contexts it does not
-        // know about still hold the applet's plots.
+        // know about still hold the instrument's plots.
         CHECK(ui.implot->CurrentPlot != nullptr);
         ui.implot->CurrentPlot = nullptr;
         ui.implot->CurrentItems = nullptr;
@@ -288,7 +288,7 @@ TEST_CASE("ui recovery: an applet's half-finished UI is unwound and the next "
         host_window();
         CHECK(cp.recover() == 0);
         ui.end_frame();
-        // Outside a frame (an applet launched before the first one) the
+        // Outside a frame (an instrument launched before the first one) the
         // checkpoint is empty and recover() does nothing.
         const UiCheckpoint outside = UiCheckpoint::store();
         CHECK(outside.recover() == 0);

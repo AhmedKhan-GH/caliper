@@ -169,7 +169,7 @@ export function registerInterpPieceTests(test: typeof import('../../web/node_mod
       const program = JSON.parse(fs.readFileSync(path.join(fixture, `${id}.viewer.json`), 'utf8'));
       for (const r of program.resources) { r.base64 = Buffer.from(r.bytes).toString('base64'); delete r.bytes; }
       const spec = {
-        caliper_spec: 1, applet: { id: 'layout-test', title: 'Layout Test' },
+        caliper_spec: 2, instrument: { id: 'layout-test', title: 'Layout Test' },
         panel: [{ id, primitive: 'scene', bind: {}, options: { labels: true, scale_bar: false } }],
         program: [{ id, params: program.params }], layout: id,
       };
@@ -240,7 +240,7 @@ export function registerInterpPieceTests(test: typeof import('../../web/node_mod
     for (const r of program.resources) { r.base64 = Buffer.from(r.bytes).toString('base64'); delete r.bytes; }
     const panel = program.id as string;
     const spec = {
-      caliper_spec: 1, applet: { id: 'hover-test', title: 'Hover Test' },
+      caliper_spec: 2, instrument: { id: 'hover-test', title: 'Hover Test' },
       panel: [{ id: panel, primitive: 'scene', bind: {}, options: { labels: true, select: { state: 'selected_node', field: 'index' } } }],
       program: [{ id: panel, params: { selected_node: { state: 'selected_node', default: 4 } } }], layout: panel,
     };

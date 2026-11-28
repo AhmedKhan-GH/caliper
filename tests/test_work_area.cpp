@@ -136,7 +136,7 @@ TEST_CASE("work area: the dock space ends above the tray, the tray above the sta
     CHECK(without.GetWidth() == doctest::Approx(kWidth));
 
     // The first frame with the tray: the dock space already ends above it,
-    // so no applet window runs under the strip even for one frame.
+    // so no instrument window runs under the strip even for one frame.
     page.frame(true);
     const ImRect tray = Page::window_rect("##tray_bar");
     const ImRect status = Page::window_rect("##status_bar");
@@ -152,16 +152,16 @@ TEST_CASE("work area: the dock space ends above the tray, the tray above the sta
     // A window docked in the dock space ends above the strip too.
     page.frame(true, [&] {
         ImGui::SetNextWindowDockID(page.dockspace, ImGuiCond_Always);
-        ImGui::Begin("Applet");
+        ImGui::Begin("Instrument");
         ImGui::End();
     });
     page.frame(true, [&] {
         ImGui::SetNextWindowDockID(page.dockspace, ImGuiCond_Always);
-        ImGui::Begin("Applet");
+        ImGui::Begin("Instrument");
         ImGui::End();
     });
-    const ImRect applet = Page::window_rect("Applet");
-    CHECK(applet.Max.y <= tray.Min.y + 0.5f);
+    const ImRect instrument = Page::window_rect("Instrument");
+    CHECK(instrument.Max.y <= tray.Min.y + 0.5f);
 
     // The tray goes: the dock space reaches the status bar again at once.
     page.frame(false);

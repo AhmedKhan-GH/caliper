@@ -2,29 +2,29 @@
 #include "negotiation.h"
 using namespace caliper_host;
 
-static AppletManifest base() {
-    AppletManifest m;
+static InstrumentManifest base() {
+    InstrumentManifest m;
     m.id = "a.b"; m.name = "A"; m.version = "1.0.0";
-    m.abi_epoch = 3; m.min_host = "0.6.0";
+    m.abi_epoch = 4; m.min_host = "0.6.0";
     m.required_services = {"caliper.ui.v1"};
     return m;
 }
 static HostCaps host() {
-    return HostCaps{3, "0.6.0", {"caliper.ui.v1", "caliper.log.v1"}};
+    return HostCaps{4, "0.6.0", {"caliper.ui.v1", "caliper.log.v1"}};
 }
 
-TEST_CASE("negotiate: compatible applet passes") {
+TEST_CASE("negotiate: compatible instrument passes") {
     auto n = negotiate(base(), host());
     CHECK(n.ok);
     CHECK(n.reason.empty());
 }
 
 TEST_CASE("negotiate: epoch mismatch → friendly reason") {
-    auto m = base(); m.abi_epoch = 2;   // an applet built before epoch 3 removed the geometry service
+    auto m = base(); m.abi_epoch = 3;   // an instrument built before epoch 4
     auto n = negotiate(m, host());
     CHECK_FALSE(n.ok);
     CHECK(n.reason ==
-        "Built for ABI epoch 2; this host speaks 3 — check for an applet update.");
+        "Built for ABI epoch 3; this host speaks 4 — check for an instrument update.");
 }
 
 TEST_CASE("negotiate: min_host newer than host → refuse") {
@@ -73,7 +73,7 @@ TEST_CASE("negotiate: libtorch must match exactly") {
     CHECK(n.reason == "Built against libtorch 2.4.0; this host provides 2.5.1.");
 }
 
-TEST_CASE("negotiate: a host without libtorch refuses a torch applet") {
+TEST_CASE("negotiate: a host without libtorch refuses a torch instrument") {
     auto m = base(); m.torch = "2.5.1";
     auto n = negotiate(m, host());
     CHECK_FALSE(n.ok);
@@ -90,7 +90,7 @@ TEST_CASE("negotiate: UI-stack hash must match when both sides have one") {
     auto n = negotiate(m, torch_host());
     CHECK_FALSE(n.ok);
     CHECK(n.reason == "Built against UI stack bbbbbbbbbbbb; this host uses "
-                      "aaaaaaaaaaaa — rebuild the applet against this host's SDK.");
+                      "aaaaaaaaaaaa — rebuild the instrument against this host's SDK.");
     // An empty host hash disables the check; so does a manifest without one.
     CHECK(negotiate(m, host()).ok);
     m.ui_stack.clear();
@@ -100,11 +100,11 @@ TEST_CASE("negotiate: UI-stack hash must match when both sides have one") {
 TEST_CASE("negotiate: data schema lower than the stored one is refused") {
     auto m = base(); m.data_schema = 2;
     CHECK(negotiate(m, host(), 0).ok);   // nothing recorded
-    CHECK(negotiate(m, host(), 1).ok);   // the applet migrates upward
+    CHECK(negotiate(m, host(), 1).ok);   // the instrument migrates upward
     CHECK(negotiate(m, host(), 2).ok);
     auto n = negotiate(m, host(), 3);
     CHECK_FALSE(n.ok);
-    CHECK(n.reason == "Stored data is schema 3; this applet reads schema 2.");
+    CHECK(n.reason == "Stored data is schema 3; this instrument reads schema 2.");
     m.data_schema = 0;                   // no key, no check
     CHECK(negotiate(m, host(), 3).ok);
 }
@@ -115,7 +115,7 @@ TEST_CASE("negotiate: check order is epoch, min_host, UI stack, torch, services,
     m.torch = "1.0.0"; m.required_services = {"caliper.nope.v1"}; m.data_schema = 1;
     const HostCaps c = torch_host();
     CHECK(negotiate(m, c, 5).reason.find("ABI epoch") != std::string::npos);
-    m.abi_epoch = 3;
+    m.abi_epoch = 4;
     CHECK(negotiate(m, c, 5).reason.find("Requires host") != std::string::npos);
     m.min_host.clear();
     CHECK(negotiate(m, c, 5).reason.find("UI stack") != std::string::npos);
@@ -131,7 +131,7 @@ TEST_CASE("negotiate: check order is epoch, min_host, UI stack, torch, services,
 
 TEST_CASE("host_caps: advertises the epoch, the version and every served id") {
     const HostCaps c = host_caps();
-    CHECK(c.abi_epoch == 3);
+    CHECK(c.abi_epoch == 4);
     CHECK(c.version == "0.6.0");
     CHECK(c.services.count("caliper.ui.v1") == 1);
     CHECK(c.services == host_service_ids());

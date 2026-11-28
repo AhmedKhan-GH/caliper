@@ -1,6 +1,6 @@
-caliper_spec = 1
+caliper_spec = 2
 
-[applet]
+[instrument]
 id = "mnist_parity"
 title = "MNIST Probe Dashboard"
 

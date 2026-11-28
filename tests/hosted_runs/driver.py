@@ -341,10 +341,10 @@ def run(a):
         os.environ.get("CALIPER_MNIST_DATA_DIR", str(Path.home() / ".cache" / "caliper" / "mnist"))
     ).expanduser()
     env = {k: v for k, v in os.environ.items()
-           if k not in ("CALIPER_API", "CALIPER_AUTOLAUNCH", "CALIPER_EXIT_AFTER", "CALIPER_APPLET_PATH")
+           if k not in ("CALIPER_API", "CALIPER_AUTOLAUNCH", "CALIPER_EXIT_AFTER", "CALIPER_INSTRUMENT_PATH")
            and not k.startswith("CALIPER_RUN_")}
     env.update({"CALIPER_AGENT_OFFLINE": "1", "CALIPER_HIDDEN": "1", "CALIPER_DATA_DIR": str(work / "data"),
-                "CALIPER_USER_APPLETS_DIR": str(work / "user"), "CALIPER_WINDOW_SIZE": "1280x800",
+                "CALIPER_USER_INSTRUMENTS_DIR": str(work / "user"), "CALIPER_WINDOW_SIZE": "1280x800",
                 "CALIPER_WORKSPACE": str(ws), "CALIPER_RUN_PYTHON": a.python,
                 "CALIPER_MNIST_DATA_DIR": str(mnist_data),
                 "PYTHONPATH": str(ROOT / "python") + os.pathsep + env.get("PYTHONPATH", "")})

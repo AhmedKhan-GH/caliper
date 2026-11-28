@@ -1,6 +1,6 @@
 // gfx_texture_path.mm: the texture path's rows of the graphics suite (caliper_gfx_texture_tests).
 //
-// Each case puts one tensor into a texture through one of the texture path's clients, as an applet,
+// Each case puts one tensor into a texture through one of the texture path's clients, as an instrument,
 // a host or a training script does, and reads the texture back: the tensor bridge
 // (texture_from_tensor_mapped, texture_from_tensor, update_texture, alloc_shared, and
 // import_allocation with update_texture_from_alloc), the embed views (caliper_core_view_tensor) and

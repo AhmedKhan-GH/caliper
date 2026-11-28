@@ -1,4 +1,4 @@
-[applet]
+[instrument]
 id      = "dev.caliper.throwing"
 name    = "Throwing"
 version = "0.1.0"
@@ -6,4 +6,4 @@ summary = "Test fixture: throws a C++ exception across the C ABI."
 tag     = "Test"
 
 [compat]
-abi_epoch = 3
+abi_epoch = 4

@@ -66,9 +66,9 @@ CARDS = {"spec_new", "spec_open", "run_start", "run_pause", "run_set_param", "ru
          "layout_set", "control_create", "cursor_set", "selection_set", "intervene_set", "intervene_clear",
          "program_remove", "panel_remove"}
 
-FOREIGN = '''caliper_spec = 1
+FOREIGN = '''caliper_spec = 2
 
-[applet]
+[instrument]
 id = "shared"
 title = "Shared Instrument"
 
@@ -605,7 +605,7 @@ def run(a):
         if not exe or not Path(exe).exists():
             raise Skip(f"{exe or 'a program'} is not built")
     env = {k: v for k, v in os.environ.items()
-           if k not in ("CALIPER_API", "CALIPER_AUTOLAUNCH", "CALIPER_EXIT_AFTER", "CALIPER_APPLET_PATH")
+           if k not in ("CALIPER_API", "CALIPER_AUTOLAUNCH", "CALIPER_EXIT_AFTER", "CALIPER_INSTRUMENT_PATH")
            and not k.startswith("CALIPER_RUN_")}
     env["PYTHONPATH"] = str(ROOT / "python") + os.pathsep + env.get("PYTHONPATH", "")
     pre = subprocess.run([a.python, "-c", "import numpy, torch, torchvision, caliper, caliper._netio, caliper._producer"],
@@ -626,7 +626,7 @@ def run(a):
     (ws / SCRIPT).write_text((ROOT / "examples" / "mnist" / "train.py").read_text())
     env.update({
         "CALIPER_AGENT_OFFLINE": "1", "CALIPER_HIDDEN": "1", "CALIPER_DATA_DIR": str(work / "data"),
-        "CALIPER_USER_APPLETS_DIR": str(work / "user"), "CALIPER_WINDOW_SIZE": "1280x800",
+        "CALIPER_USER_INSTRUMENTS_DIR": str(work / "user"), "CALIPER_WINDOW_SIZE": "1280x800",
         "CALIPER_WORKSPACE": str(ws), "CALIPER_RUN_PYTHON": a.python,
         "CALIPER_MNIST_DATA_DIR": str(mnist_data_dir()),
     })

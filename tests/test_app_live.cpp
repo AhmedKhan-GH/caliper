@@ -7,7 +7,7 @@
 // sources, opens it on the spec page, and checks that the frame and the
 // heatmap panel change from one capture to the next while the stream runs,
 // that the catalog shows the live sources with their shapes and rates, and
-// that launching another applet keeps the stream attached. POSIX with Metal
+// that launching another instrument keeps the stream attached. POSIX with Metal
 // only; without Metal the case is skipped.
 //
 // The other cases drive the hidden app's landing screen and live page through
@@ -187,7 +187,7 @@ std::map<std::string, json> live_entries(uint16_t port, const std::string& token
 // ---- the hidden app driven by CALIPER_TEST_SPEC_UI, beside a producer ----
 
 struct Env {
-    std::string exe, producer, applets;
+    std::string exe, producer, instruments;
     std::string window, shots;   // CALIPER_TEST_WINDOW, CALIPER_TEST_SHOTS ("" when unset)
     bool ok = false;
 };
@@ -196,11 +196,11 @@ Env test_env() {
     Env e;
     const char* exe = std::getenv("CALIPER_TEST_CALIPER_EXE");
     const char* producer = std::getenv("CALIPER_TEST_PRODUCER_EXE");
-    const char* applets = std::getenv("CALIPER_TEST_APPLETS");
-    if (!exe || !*exe || !producer || !*producer || !applets || !*applets) return e;
+    const char* instruments = std::getenv("CALIPER_TEST_INSTRUMENTS");
+    if (!exe || !*exe || !producer || !*producer || !instruments || !*instruments) return e;
     e.exe = exe;
     e.producer = producer;
-    e.applets = applets;
+    e.instruments = instruments;
     if (const char* w = std::getenv("CALIPER_TEST_WINDOW"); w && *w) e.window = w;
     if (const char* d = std::getenv("CALIPER_TEST_SHOTS"); d && *d) e.shots = d;
     e.ok = true;
@@ -253,11 +253,11 @@ std::string shot_name(const Env& env, const std::string& what) {
     return "fix-" + what + "-" + (env.window.empty() ? std::string("800x500") : env.window);
 }
 
-// The app's environment: data, workspace's applets and window size, the
+// The app's environment: data, workspace's instruments and window size, the
 // input script and its shots folder.
 std::vector<std::string> app_env(const Env& env, const TempDir& t, const std::string& script,
                                  const std::string& shots) {
-    return {"CALIPER_DATA_DIR=" + t.str("data"), "CALIPER_USER_APPLETS_DIR=" + t.str("user-applets"),
+    return {"CALIPER_DATA_DIR=" + t.str("data"), "CALIPER_USER_INSTRUMENTS_DIR=" + t.str("user-instruments"),
             "CALIPER_WINDOW_SIZE=" + (env.window.empty() ? std::string("800x500") : env.window),
             "CALIPER_TEST_SPEC_UI=" + script, "CALIPER_TEST_SPEC_UI_SHOTS=" + shots};
 }
@@ -287,13 +287,13 @@ bool eventually(Proc& app, F pred, int ms = 20000) {
 TEST_CASE("app live: F4 lists a caliper.serve() stream from its stream file, and Enter attaches it without its link") {
     const Env env = test_env();
     if (!env.ok) {
-        MESSAGE("CALIPER_TEST_CALIPER_EXE, CALIPER_TEST_PRODUCER_EXE or CALIPER_TEST_APPLETS is not set: run the "
+        MESSAGE("CALIPER_TEST_CALIPER_EXE, CALIPER_TEST_PRODUCER_EXE or CALIPER_TEST_INSTRUMENTS is not set: run the "
                 "ctest entry caliper_app_live_f4_stream");
         return;
     }
     TempDir t("f4");
     fs::create_directories(t.str("data"));
-    fs::create_directories(t.str("user-applets"));
+    fs::create_directories(t.str("user-instruments"));
     const std::string shots = env.shots.empty() ? t.str("") : env.shots;
     Proc producer;
     const std::string link = start_producer(producer, env, t.str("data"));
@@ -304,7 +304,7 @@ TEST_CASE("app live: F4 lists a caliper.serve() stream from its stream file, and
 
     // The person's steps: F4 on the landing, Enter on the listed stream.
     Proc app;
-    REQUIRE(app.start(env.exe, {"--hidden", "--applets", env.applets, "--workspace", t.str("ws")},
+    REQUIRE(app.start(env.exe, {"--hidden", "--instruments", env.instruments, "--workspace", t.str("ws")},
                       app_env(env, t,
                               "page landing;key f4;wait 10;shot " + list_shot + ";key enter;page live;wait 40;shot " +
                                   live_shot + ";quit",
@@ -338,7 +338,7 @@ TEST_CASE("app live: the stream stays attached across Home and the spec page unt
     if (!env.ok) return;
     TempDir t("home");
     fs::create_directories(t.str("data"));
-    fs::create_directories(t.str("user-applets"));
+    fs::create_directories(t.str("user-instruments"));
     const std::string shots = env.shots.empty() ? t.str("") : env.shots;
     Proc producer;
     const std::string link = start_producer(producer, env);
@@ -351,7 +351,7 @@ TEST_CASE("app live: the stream stays attached across Home and the spec page unt
         t.str("live2") + ";wait-file " + t.str("detach") + ";key cmd+d;page landing;touch " + t.str("detached");
     Proc app;
     REQUIRE(app.start(env.exe,
-                      {"--hidden", "--applets", env.applets, "--url", link, "--api", "--api-port", "0", "--workspace",
+                      {"--hidden", "--instruments", env.instruments, "--url", link, "--api", "--api-port", "0", "--workspace",
                        t.str("ws")},
                       app_env(env, t, script, shots)));
     if (!has_metal(app)) {
@@ -359,7 +359,7 @@ TEST_CASE("app live: the stream stays attached across Home and the spec page unt
         app.wait(30000);
         return;
     }
-    REQUIRE_MESSAGE(app.read_until("[api] Spec applets in a browser", 60000), app.text);
+    REQUIRE_MESSAGE(app.read_until("[api] Instruments in a browser", 60000), app.text);
     const json api = json::parse(std::ifstream(t.str("data") + "/api.json"), nullptr, false);
     REQUIRE(api.is_object());
     const uint16_t port = api["port"].get<uint16_t>();
@@ -389,8 +389,8 @@ TEST_CASE("app live: the stream stays attached across Home and the spec page unt
     ok(port, token, "source.add", {{"id", "entropy"}, {"catalog", "live:attn.entropy"}});
     ok(port, token, "panel.create",
        {{"id", "heads"}, {"primitive", "heatmap"}, {"title", "Entropy by layer and head"}, {"bind", {{"values", "entropy"}}}});
-    ok(port, token, "applet.save");
-    CHECK(ok(port, token, "applet.open", {{"id", "entropy"}})["title"] == "Entropy");
+    ok(port, token, "instrument.save");
+    CHECK(ok(port, token, "instrument.open", {{"id", "entropy"}})["title"] == "Entropy");
     auto renders_change = [&] {
         const Image a = decode(ok(port, token, "panel.render", {{"id", "heads"}, {"width", 320}, {"height", 200}}));
         return eventually(app, [&] {
@@ -403,7 +403,7 @@ TEST_CASE("app live: the stream stays attached across Home and the spec page unt
     REQUIRE_MESSAGE(eventually(app, [&] { return fs::exists(t.str("home2")); }, 60000), app.text);
     CHECK(app.text.find("[live] detached") == std::string::npos);
     CHECK(live_entries(port, token).count("live:attn.entropy") == 1);
-    CHECK(ok(port, token, "applet.open", {{"id", "entropy"}})["title"] == "Entropy");
+    CHECK(ok(port, token, "instrument.open", {{"id", "entropy"}})["title"] == "Entropy");
     CHECK(renders_change());
 
     // F5 on the landing returns to the live page of the attached stream; ⌘D
@@ -416,7 +416,7 @@ TEST_CASE("app live: the stream stays attached across Home and the spec page unt
     REQUIRE_MESSAGE(eventually(app, [&] { return fs::exists(t.str("detached")); }, 60000), app.text);
     CHECK(app_says(app, "[live] detached: attention_train.py", 10000));
     CHECK(eventually(app, [&] { return live_entries(port, token).empty(); }));
-    CHECK(ok(port, token, "applet.open", {{"id", "entropy"}})["title"] == "Entropy");
+    CHECK(ok(port, token, "instrument.open", {{"id", "entropy"}})["title"] == "Entropy");
     const Image offline = decode(ok(port, token, "panel.render", {{"id", "heads"}, {"width", 320}, {"height", 200}}));
     CHECK(offline.px != last_live.px);
     REQUIRE(script_ended(app, 30000));
@@ -433,7 +433,7 @@ TEST_CASE("app live: a second stream replaces the first; a stream that ends whil
     if (!env.ok) return;
     TempDir t("second");
     fs::create_directories(t.str("data"));
-    fs::create_directories(t.str("user-applets"));
+    fs::create_directories(t.str("user-instruments"));
     const std::string shots = env.shots.empty() ? t.str("") : env.shots;
     Proc first;
     const std::string link = start_producer(first, env);
@@ -444,7 +444,7 @@ TEST_CASE("app live: a second stream replaces the first; a stream that ends whil
                                ";touch " + t.str("shot");
     Proc app;
     REQUIRE(app.start(env.exe,
-                      {"--hidden", "--applets", env.applets, "--url", link, "--api", "--api-port", "0", "--workspace",
+                      {"--hidden", "--instruments", env.instruments, "--url", link, "--api", "--api-port", "0", "--workspace",
                        t.str("ws")},
                       app_env(env, t, script, shots)));
     if (!has_metal(app)) {
@@ -452,7 +452,7 @@ TEST_CASE("app live: a second stream replaces the first; a stream that ends whil
         app.wait(30000);
         return;
     }
-    REQUIRE_MESSAGE(app.read_until("[api] Spec applets in a browser", 60000), app.text);
+    REQUIRE_MESSAGE(app.read_until("[api] Instruments in a browser", 60000), app.text);
     const json api = json::parse(std::ifstream(t.str("data") + "/api.json"), nullptr, false);
     REQUIRE(api.is_object());
     const uint16_t port = api["port"].get<uint16_t>();
@@ -505,14 +505,14 @@ TEST_CASE("app live: a second attach that fails leaves the attached stream attac
     TempDir t("restore");
     fs::create_directories(t.str("data/streams"));
     fs::permissions(t.str("data/streams"), fs::perms::owner_all, fs::perm_options::replace);
-    fs::create_directories(t.str("user-applets"));
+    fs::create_directories(t.str("user-instruments"));
     Proc producer;
     const std::string link = start_producer(producer, env);
     const std::string script = "page live;key escape;page landing;wait-file " + t.str("r0") +
                                ";key f4;wait 10;key enter;wait 30;touch " + t.str("r1");
     Proc app;
     REQUIRE(app.start(env.exe,
-                      {"--hidden", "--applets", env.applets, "--url", link, "--api", "--api-port", "0", "--workspace",
+                      {"--hidden", "--instruments", env.instruments, "--url", link, "--api", "--api-port", "0", "--workspace",
                        t.str("ws")},
                       app_env(env, t, script, t.str(""))));
     if (!has_metal(app)) {
@@ -520,7 +520,7 @@ TEST_CASE("app live: a second attach that fails leaves the attached stream attac
         app.wait(30000);
         return;
     }
-    REQUIRE_MESSAGE(app.read_until("[api] Spec applets in a browser", 60000), app.text);
+    REQUIRE_MESSAGE(app.read_until("[api] Instruments in a browser", 60000), app.text);
     const uint16_t port = json::parse(std::ifstream(t.str("data") + "/api.json"), nullptr, false)["port"].get<uint16_t>();
     const std::string token = start_token(app);
     REQUIRE(eventually(app, [&] { return live_entries(port, token).count("live:attn") == 1; }));
@@ -570,7 +570,7 @@ TEST_CASE("app live: CALIPER_HOME_AFTER goes Home once, and the live page opened
     if (!env.ok) return;
     TempDir t("home-after");
     fs::create_directories(t.str("data"));
-    fs::create_directories(t.str("user-applets"));
+    fs::create_directories(t.str("user-instruments"));
     Proc producer;
     const std::string link = start_producer(producer, env);
     // The hook goes Home a second after the live page opened; F5 comes back,
@@ -579,7 +579,7 @@ TEST_CASE("app live: CALIPER_HOME_AFTER goes Home once, and the live page opened
                                                      t.str("stayed"), t.str(""));
     e.push_back("CALIPER_HOME_AFTER=1");
     Proc app;
-    REQUIRE(app.start(env.exe, {"--hidden", "--applets", env.applets, "--url", link, "--workspace", t.str("ws")}, e));
+    REQUIRE(app.start(env.exe, {"--hidden", "--instruments", env.instruments, "--url", link, "--workspace", t.str("ws")}, e));
     if (!has_metal(app)) {
         ::kill(app.pid, SIGTERM);
         app.wait(30000);
@@ -599,7 +599,7 @@ TEST_CASE("app live: files dropped on the live page start a new spec beside the 
     if (!env.ok) return;
     TempDir t("drop");
     fs::create_directories(t.str("data"));
-    fs::create_directories(t.str("user-applets"));
+    fs::create_directories(t.str("user-instruments"));
     const std::string shots = env.shots.empty() ? t.str("") : env.shots;
     for (const char* name : {"runs_a", "runs_b", "runs_c"}) {
         std::ofstream f(t.str(std::string(name) + ".csv"));
@@ -619,7 +619,7 @@ TEST_CASE("app live: files dropped on the live page start a new spec beside the 
         ";page spec;pane source table:runs_c;touch " + t.str("third");
     Proc app;
     REQUIRE(app.start(env.exe,
-                      {"--hidden", "--applets", env.applets, "--url", link, "--api", "--api-port", "0", "--workspace",
+                      {"--hidden", "--instruments", env.instruments, "--url", link, "--api", "--api-port", "0", "--workspace",
                        t.str("ws")},
                       app_env(env, t, script, shots)));
     if (!has_metal(app)) {
@@ -627,7 +627,7 @@ TEST_CASE("app live: files dropped on the live page start a new spec beside the 
         app.wait(30000);
         return;
     }
-    REQUIRE_MESSAGE(app.read_until("[api] Spec applets in a browser", 60000), app.text);
+    REQUIRE_MESSAGE(app.read_until("[api] Instruments in a browser", 60000), app.text);
     const json api = json::parse(std::ifstream(t.str("data") + "/api.json"), nullptr, false);
     REQUIRE(api.is_object());
     const uint16_t port = api["port"].get<uint16_t>();
@@ -641,7 +641,7 @@ TEST_CASE("app live: files dropped on the live page start a new spec beside the 
     CHECK(first["dirty"] == true);
     REQUIRE_MESSAGE(eventually(app, [&] { return fs::exists(t.str("second")); }, 90000), app.text);
     CHECK(ok(port, token, "spec.get")["id"] == first_id);   // the same, unsaved spec
-    ok(port, token, "applet.save");
+    ok(port, token, "instrument.save");
     std::ofstream(t.str("saved")).put('\n');
     REQUIRE_MESSAGE(eventually(app, [&] { return fs::exists(t.str("third")); }, 90000), app.text);
     CHECK(ok(port, token, "spec.get")["id"] != first_id);   // a new spec this time
@@ -665,14 +665,14 @@ struct SaveApp {
     uint16_t port = 0;
     std::string token;
     bool start(const Env& env, const TempDir& t, const std::string& script, const std::string& shots) {
-        REQUIRE(app.start(env.exe, {"--hidden", "--applets", env.applets, "--api", "--api-port", "0", "--workspace", t.str("ws")},
+        REQUIRE(app.start(env.exe, {"--hidden", "--instruments", env.instruments, "--api", "--api-port", "0", "--workspace", t.str("ws")},
                           app_env(env, t, script, shots)));
         if (!has_metal(app)) {
             ::kill(app.pid, SIGTERM);
             app.wait(30000);
             return false;
         }
-        REQUIRE_MESSAGE(app.read_until("[api] Spec applets in a browser", 60000), app.text);
+        REQUIRE_MESSAGE(app.read_until("[api] Instruments in a browser", 60000), app.text);
         const json api = json::parse(std::ifstream(t.str("data") + "/api.json"), nullptr, false);
         REQUIRE(api.is_object());
         port = api["port"].get<uint16_t>();
@@ -711,7 +711,7 @@ TEST_CASE("app save: F3 New dashboard over unsaved changes asks Save changes fir
     if (!env.ok) return;
     TempDir t("save-new");
     fs::create_directories(t.str("data"));
-    fs::create_directories(t.str("user-applets"));
+    fs::create_directories(t.str("user-instruments"));
     const std::string shots = env.shots.empty() ? t.str("") : env.shots;
     const std::string shot = shot_name(env, "save-changes");
     const std::string home = "key escape;wait 5;key escape;page landing;";
@@ -740,11 +740,11 @@ TEST_CASE("app save: F3 New dashboard over unsaved changes asks Save changes fir
     // Don't Save: the new spec, and Alpha was never written.
     a.reach(t, "a4");
     CHECK(a.spec()["id"] == "beta");
-    CHECK_FALSE(fs::exists(t.str("ws/applets/alpha")));
+    CHECK_FALSE(fs::exists(t.str("ws/instruments/alpha")));
     // Save: Beta is saved, then the new spec.
     a.reach(t, "a5");
     CHECK(a.spec()["id"] == "gamma");
-    CHECK(fs::exists(t.str("ws/applets/beta/beta.spec.toml")));
+    CHECK(fs::exists(t.str("ws/instruments/beta/beta.spec.toml")));
     CHECK(fs::exists(fs::path(shots) / (shot + ".png")));
     REQUIRE(script_ended(a.app, 30000));
     CHECK_MESSAGE(a.app.text.find("[ui] done") != std::string::npos, a.app.text);
@@ -761,7 +761,7 @@ TEST_CASE("app save: opening another dashboard from the landing over unsaved cha
     if (!env.ok) return;
     TempDir t("save-open");
     fs::create_directories(t.str("data"));
-    fs::create_directories(t.str("user-applets"));
+    fs::create_directories(t.str("user-instruments"));
     const std::string shots = env.shots.empty() ? t.str("") : env.shots;
     const std::string home = "key escape;wait 5;key escape;page landing;";
     const std::string open_two = "key cmd+k;wait 5;type Two;wait 5;key enter;";
@@ -771,10 +771,10 @@ TEST_CASE("app save: opening another dashboard from the landing over unsaved cha
     SaveApp a;
     if (!a.start(env, t, script, shots)) return;
     ok(a.port, a.token, "spec.new", {{"id", "one"}, {"title", "One"}});
-    ok(a.port, a.token, "applet.save");
+    ok(a.port, a.token, "instrument.save");
     ok(a.port, a.token, "spec.new", {{"id", "two"}, {"title", "Two"}});
-    ok(a.port, a.token, "applet.save");
-    CHECK(ok(a.port, a.token, "applet.open", {{"id", "one"}})["title"] == "One");
+    ok(a.port, a.token, "instrument.save");
+    CHECK(ok(a.port, a.token, "instrument.open", {{"id", "one"}})["title"] == "One");
     retitle(a, "One", "One edited");
     CHECK(a.spec()["dirty"] == true);
     go_on(t, "b0");
@@ -787,7 +787,7 @@ TEST_CASE("app save: opening another dashboard from the landing over unsaved cha
     a.reach(t, "b2");
     CHECK(a.spec()["id"] == "two");
     {
-        std::ifstream f(t.str("ws/applets/one/one.spec.toml"));
+        std::ifstream f(t.str("ws/instruments/one/one.spec.toml"));
         const std::string saved((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
         CHECK(saved.find("One edited") != std::string::npos);
     }
@@ -819,7 +819,7 @@ TEST_CASE("app save: closing the window over unsaved changes asks first; Cancel 
     if (!env.ok) return;
     TempDir t("save-close");
     fs::create_directories(t.str("data"));
-    fs::create_directories(t.str("user-applets"));
+    fs::create_directories(t.str("user-instruments"));
     const std::string shots = env.shots.empty() ? t.str("") : env.shots;
     const std::string script = "wait-file " + t.str("c0") + ";close;save until;touch " + t.str("c1") +
                                ";save cancel;wait 30;touch " + t.str("c2") + ";wait-file " + t.str("c2go") +
@@ -837,22 +837,22 @@ TEST_CASE("app save: closing the window over unsaved changes asks first; Cancel 
     go_on(t, "c2go");
     CHECK_MESSAGE(a.app.wait(60000) == 0, a.app.text);   // Don't Save: it quits
     CHECK(a.app.text.find("[save] Don't Save") != std::string::npos);
-    CHECK_FALSE(fs::exists(t.str("ws/applets/draft")));
+    CHECK_FALSE(fs::exists(t.str("ws/instruments/draft")));
 }
 
 // ---- an agent's launch of a dashboard over unsaved changes ----
 
 namespace {
 
-// POST /v0/applets/<id>/launch with `token`.
+// POST /v0/instruments/<id>/launch with `token`.
 Http launch_v0(uint16_t port, const std::string& token, const std::string& id) {
-    return http(port, "POST", "/v0/applets/" + id + "/launch", token);
+    return http(port, "POST", "/v0/instruments/" + id + "/launch", token);
 }
 
-// The app lists the workspace's applet `id` (after an applet.save it rescans).
+// The app lists the workspace's instrument `id` (after an instrument.save it rescans).
 bool lists(SaveApp& a, const std::string& id) {
     return eventually(a.app, [&] {
-        const Http r = http(a.port, "GET", "/v0/applets", a.token);
+        const Http r = http(a.port, "GET", "/v0/instruments", a.token);
         return r.status == 200 && r.body.find("\"" + id + "\"") != std::string::npos;
     });
 }
@@ -865,7 +865,7 @@ TEST_CASE("app save: closing the window while a command runs on the session's wo
     if (!env.ok) return;
     TempDir t("save-busy");
     fs::create_directories(t.str("data"));
-    fs::create_directories(t.str("user-applets"));
+    fs::create_directories(t.str("user-instruments"));
     const std::string script = "wait-file " + t.str("c0") + ";worker busy;close;wait 20;touch " + t.str("c1") +
                                ";worker idle;save until;touch " + t.str("c2") + ";save cancel;wait 10;touch " +
                                t.str("c3");
@@ -900,7 +900,7 @@ TEST_CASE("app launch: an outside agent's launch of a dashboard over unsaved cha
     if (!env.ok) return;
     TempDir t("launch-mcp");
     fs::create_directories(t.str("data"));
-    fs::create_directories(t.str("user-applets"));
+    fs::create_directories(t.str("user-instruments"));
     const std::string decisions = t.str("decisions");
     std::ofstream(decisions).flush();
     SaveApp a;
@@ -908,14 +908,14 @@ TEST_CASE("app launch: an outside agent's launch of a dashboard over unsaved cha
         std::vector<std::string> e = app_env(env, t, "wait 1", t.str(""));
         e.push_back("CALIPER_TEST_APPROVALS=" + decisions);
         REQUIRE(a.app.start(env.exe,
-                            {"--hidden", "--applets", env.applets, "--api", "--api-port", "0", "--workspace", t.str("ws")},
+                            {"--hidden", "--instruments", env.instruments, "--api", "--api-port", "0", "--workspace", t.str("ws")},
                             e));
         if (!has_metal(a.app)) {
             ::kill(a.app.pid, SIGTERM);
             a.app.wait(30000);
             return;
         }
-        REQUIRE_MESSAGE(a.app.read_until("[api] Spec applets in a browser", 60000), a.app.text);
+        REQUIRE_MESSAGE(a.app.read_until("[api] Instruments in a browser", 60000), a.app.text);
         const json api = json::parse(std::ifstream(t.str("data") + "/api.json"), nullptr, false);
         REQUIRE(api.is_object());
         a.port = api["port"].get<uint16_t>();
@@ -927,14 +927,14 @@ TEST_CASE("app launch: an outside agent's launch of a dashboard over unsaved cha
     const std::string mcp = api["token"].get<std::string>();
     REQUIRE(mcp != a.token);
     ok(a.port, a.token, "spec.new", {{"id", "one"}, {"title", "One"}});
-    ok(a.port, a.token, "applet.save");
+    ok(a.port, a.token, "instrument.save");
     ok(a.port, a.token, "spec.new", {{"id", "two"}, {"title", "Two"}});
-    ok(a.port, a.token, "applet.save");
+    ok(a.port, a.token, "instrument.save");
     REQUIRE(lists(a, "local.one"));
     REQUIRE(lists(a, "local.two"));
-    CHECK(ok(a.port, a.token, "applet.open", {{"id", "one"}})["title"] == "One");
+    CHECK(ok(a.port, a.token, "instrument.open", {{"id", "one"}})["title"] == "One");
     CHECK(a.spec()["dirty"] == false);
-    auto cards = [&](const std::string& origin) { return a.count("applet.open (" + origin + ") waiting"); };
+    auto cards = [&](const std::string& origin) { return a.count("instrument.open (" + origin + ") waiting"); };
 
     // Over a saved spec: an agent's launch opens at once, with no card.
     REQUIRE(launch_v0(a.port, mcp, "local.two").status == 200);
@@ -948,7 +948,7 @@ TEST_CASE("app launch: an outside agent's launch of a dashboard over unsaved cha
     REQUIRE_MESSAGE(eventually(a.app, [&] { return cards("mcp") == 1; }), a.app.text);
     CHECK(a.spec()["id"] == "two");
     CHECK(a.spec()["dirty"] == true);
-    std::ofstream(decisions, std::ios::app) << "approve applet.open mcp\n";
+    std::ofstream(decisions, std::ios::app) << "approve instrument.open mcp\n";
     CHECK(eventually(a.app, [&] { return a.spec()["id"] == "one"; }));
 
     // The same through the command layer's app.launch (caliper-mcp's way),
@@ -960,8 +960,8 @@ TEST_CASE("app launch: an outside agent's launch of a dashboard over unsaved cha
         CHECK_MESSAGE(json::parse(r.body)["ok"] == true, r.body);
     }
     REQUIRE_MESSAGE(eventually(a.app, [&] { return cards("mcp") == 2; }), a.app.text);
-    std::ofstream(decisions, std::ios::app) << "deny applet.open mcp\n";
-    CHECK(eventually(a.app, [&] { return a.app.text.find("applet.open (mcp) denied") != std::string::npos; }));
+    std::ofstream(decisions, std::ios::app) << "deny instrument.open mcp\n";
+    CHECK(eventually(a.app, [&] { return a.app.text.find("instrument.open (mcp) denied") != std::string::npos; }));
     CHECK(a.spec()["id"] == "one");
     CHECK(a.spec()["dirty"] == true);
 
@@ -994,7 +994,7 @@ TEST_CASE("app launch: the answer to an outside agent's launch over unsaved work
     if (!env.ok) return;
     TempDir t("launch-reply");
     fs::create_directories(t.str("data"));
-    fs::create_directories(t.str("user-applets"));
+    fs::create_directories(t.str("user-instruments"));
     const std::string decisions = t.str("decisions");
     std::ofstream(decisions).flush();
     SaveApp a;
@@ -1002,26 +1002,26 @@ TEST_CASE("app launch: the answer to an outside agent's launch over unsaved work
         std::vector<std::string> e = app_env(env, t, "wait 1", t.str(""));
         e.push_back("CALIPER_TEST_APPROVALS=" + decisions);
         REQUIRE(a.app.start(env.exe,
-                            {"--hidden", "--applets", env.applets, "--api", "--api-port", "0", "--workspace", t.str("ws")},
+                            {"--hidden", "--instruments", env.instruments, "--api", "--api-port", "0", "--workspace", t.str("ws")},
                             e));
         if (!has_metal(a.app)) {
             ::kill(a.app.pid, SIGTERM);
             a.app.wait(30000);
             return;
         }
-        REQUIRE_MESSAGE(a.app.read_until("[api] Spec applets in a browser", 60000), a.app.text);
+        REQUIRE_MESSAGE(a.app.read_until("[api] Instruments in a browser", 60000), a.app.text);
         a.port = json::parse(std::ifstream(t.str("data") + "/api.json"), nullptr, false)["port"].get<uint16_t>();
         a.token = start_token(a.app);
         REQUIRE(a.token.size() >= 22);
     }
     const std::string mcp = json::parse(std::ifstream(t.str("data") + "/api.json"), nullptr, false)["token"].get<std::string>();
     ok(a.port, a.token, "spec.new", {{"id", "one"}, {"title", "One"}});
-    ok(a.port, a.token, "applet.save");
+    ok(a.port, a.token, "instrument.save");
     ok(a.port, a.token, "spec.new", {{"id", "two"}, {"title", "Two"}});
-    ok(a.port, a.token, "applet.save");
+    ok(a.port, a.token, "instrument.save");
     REQUIRE(lists(a, "local.one"));
     REQUIRE(lists(a, "local.two"));
-    CHECK(ok(a.port, a.token, "applet.open", {{"id", "one"}})["title"] == "One");
+    CHECK(ok(a.port, a.token, "instrument.open", {{"id", "one"}})["title"] == "One");
 
     // Not held (a saved spec): the answer is as before.
     {
@@ -1033,7 +1033,7 @@ TEST_CASE("app launch: the answer to an outside agent's launch over unsaved work
     }
     CHECK(eventually(a.app, [&] { return a.spec()["id"] == "two"; }));
 
-    // Held, through POST /v0/applets/{id}/launch: PENDING_APPROVAL with a note,
+    // Held, through POST /v0/instruments/{id}/launch: PENDING_APPROVAL with a note,
     // and the card's approval is pending; approved, the spec is open.
     retitle(a, "Two", "Two edited");
     {
@@ -1046,18 +1046,18 @@ TEST_CASE("app launch: the answer to an outside agent's launch over unsaved work
         CHECK(j.value("note", std::string()).find("spec.get") != std::string::npos);
     }
     std::string id;
-    REQUIRE_MESSAGE(eventually(a.app, [&] { return !(id = waiting_card(a.app, "applet.open", "mcp")).empty(); }),
+    REQUIRE_MESSAGE(eventually(a.app, [&] { return !(id = waiting_card(a.app, "instrument.open", "mcp")).empty(); }),
                     a.app.text);
     {
         const Http r = http(a.port, "GET", "/v0/approvals/" + id, a.token);
         REQUIRE(r.status == 200);
         const json j = json::parse(r.body);
         CHECK(j["state"] == "pending");
-        CHECK(j["name"] == "applet.open");
+        CHECK(j["name"] == "instrument.open");
         CHECK(j["origin"] == "mcp");
     }
     CHECK(a.spec()["id"] == "two");
-    std::ofstream(decisions, std::ios::app) << "approve applet.open mcp\n";
+    std::ofstream(decisions, std::ios::app) << "approve instrument.open mcp\n";
     CHECK(eventually(a.app, [&] { return a.spec()["id"] == "one"; }));
     CHECK(eventually(a.app, [&] {
         return json::parse(http(a.port, "GET", "/v0/approvals/" + id, a.token).body)["state"] == "decided";
@@ -1075,11 +1075,11 @@ TEST_CASE("app launch: the answer to an outside agent's launch over unsaved work
     }
     std::string id2;
     REQUIRE_MESSAGE(eventually(a.app, [&] {
-                        id2 = waiting_card(a.app, "applet.open", "mcp");
+                        id2 = waiting_card(a.app, "instrument.open", "mcp");
                         return !id2.empty() && id2 != id;
                     }),
                     a.app.text);
-    std::ofstream(decisions, std::ios::app) << "deny applet.open mcp\n";
+    std::ofstream(decisions, std::ios::app) << "deny instrument.open mcp\n";
     CHECK(eventually(a.app, [&] {
         const json j = json::parse(http(a.port, "GET", "/v0/approvals/" + id2, a.token).body);
         return j["state"] == "decided" && j["result"]["ok"] == false;
@@ -1103,13 +1103,13 @@ TEST_CASE("app launch: an in-app agent's launch of a dashboard over unsaved chan
     if (!env.ok) return;
     TempDir t("launch-agent");
     fs::create_directories(t.str("data"));
-    fs::create_directories(t.str("user-applets"));
+    fs::create_directories(t.str("user-instruments"));
     // A first run saves the dashboard One into the workspace.
     {
         SaveApp first;
         if (!first.start(env, t, "wait 1", t.str(""))) return;
         ok(first.port, first.token, "spec.new", {{"id", "one"}, {"title", "One"}});
-        ok(first.port, first.token, "applet.save");
+        ok(first.port, first.token, "instrument.save");
         ::kill(first.app.pid, SIGTERM);
         REQUIRE(first.app.wait(30000) == 0);
     }
@@ -1124,16 +1124,16 @@ TEST_CASE("app launch: an in-app agent's launch of a dashboard over unsaved chan
     std::vector<std::string> e = app_env(env, t, "wait 1", t.str(""));
     e.push_back("CALIPER_COMMAND_SCRIPT=" + script);
     e.push_back("CALIPER_TEST_APPROVALS=" + decisions);
-    REQUIRE(app.start(env.exe, {"--hidden", "--applets", env.applets, "--api", "--api-port", "0", "--workspace", t.str("ws")},
+    REQUIRE(app.start(env.exe, {"--hidden", "--instruments", env.instruments, "--api", "--api-port", "0", "--workspace", t.str("ws")},
                       e));
-    REQUIRE_MESSAGE(app.read_until("[api] Spec applets in a browser", 60000), app.text);
+    REQUIRE_MESSAGE(app.read_until("[api] Instruments in a browser", 60000), app.text);
     const json api = json::parse(std::ifstream(t.str("data") + "/api.json"), nullptr, false);
     REQUIRE(api.is_object());
     const uint16_t port = api["port"].get<uint16_t>();
     const std::string token = start_token(app);
-    REQUIRE_MESSAGE(app_says(app, "applet.open (agent) waiting", 60000), app.text);
+    REQUIRE_MESSAGE(app_says(app, "instrument.open (agent) waiting", 60000), app.text);
     CHECK(ok(port, token, "spec.get")["id"] == "draft");
-    std::ofstream(decisions, std::ios::app) << "approve applet.open agent\n";
+    std::ofstream(decisions, std::ios::app) << "approve instrument.open agent\n";
     CHECK(eventually(app, [&] { return ok(port, token, "spec.get")["id"] == "one"; }));
     ::kill(app.pid, SIGTERM);
     CHECK_MESSAGE(app.wait(30000) == 0, app.text);
@@ -1142,9 +1142,9 @@ TEST_CASE("app launch: an in-app agent's launch of a dashboard over unsaved chan
 TEST_CASE("app live: attention entropy per layer, from a live stream, on the spec page while it trains") {
     const char* exe = std::getenv("CALIPER_TEST_CALIPER_EXE");
     const char* producer_exe = std::getenv("CALIPER_TEST_PRODUCER_EXE");
-    const char* applets = std::getenv("CALIPER_TEST_APPLETS");
-    if (!exe || !*exe || !producer_exe || !*producer_exe || !applets || !*applets) {
-        MESSAGE("CALIPER_TEST_CALIPER_EXE, CALIPER_TEST_PRODUCER_EXE or CALIPER_TEST_APPLETS is not set: run the "
+    const char* instruments = std::getenv("CALIPER_TEST_INSTRUMENTS");
+    if (!exe || !*exe || !producer_exe || !*producer_exe || !instruments || !*instruments) {
+        MESSAGE("CALIPER_TEST_CALIPER_EXE, CALIPER_TEST_PRODUCER_EXE or CALIPER_TEST_INSTRUMENTS is not set: run the "
                 "ctest entry caliper_app_live_entropy");
         return;
     }
@@ -1153,7 +1153,7 @@ TEST_CASE("app live: attention entropy per layer, from a live stream, on the spe
     TempDir t("app");
     const std::string ws = t.str("ws");
     const std::string data = t.str("data");
-    fs::create_directories(t.str("user-applets"));
+    fs::create_directories(t.str("user-instruments"));
 
     // The training script's stand-in: 6 layers of 8 heads over 64 tokens.
     Proc producer;
@@ -1165,11 +1165,11 @@ TEST_CASE("app live: attention entropy per layer, from a live stream, on the spe
 
     Proc app;
     REQUIRE(app.start(exe,
-                      {"--hidden", "--applets", applets, "--url", link, "--api", "--api-port", "0", "--workspace", ws},
-                      {"CALIPER_DATA_DIR=" + data, "CALIPER_USER_APPLETS_DIR=" + t.str("user-applets"),
+                      {"--hidden", "--instruments", instruments, "--url", link, "--api", "--api-port", "0", "--workspace", ws},
+                      {"CALIPER_DATA_DIR=" + data, "CALIPER_USER_INSTRUMENTS_DIR=" + t.str("user-instruments"),
                        std::string("CALIPER_WINDOW_SIZE=") + (window && *window ? window : "800x500")}));
     REQUIRE_MESSAGE(app.read_until("[api] Caliper API on ", 60000), app.text);
-    REQUIRE_MESSAGE(app.read_until("[api] Spec applets in a browser", 10000), app.text);   // after the start line
+    REQUIRE_MESSAGE(app.read_until("[api] Instruments in a browser", 10000), app.text);   // after the start line
     if (app.text.find("[renderer] metal") == std::string::npos) {
         MESSAGE("caliper --hidden: run skipped: no GPU (no Metal device)");
         ::kill(app.pid, SIGTERM);
@@ -1249,8 +1249,8 @@ TEST_CASE("app live: attention entropy per layer, from a live stream, on the spe
           {"nodes",
            {{{"id", "main"}, {"split", "vertical"}, {"ratio", 0.6}, {"children", {"top", "steps"}}},
             {{"id", "top"}, {"split", "horizontal"}, {"ratio", 0.5}, {"children", {"heads", "layers"}}}}}}}});
-    ok(port, token, "applet.save");
-    CHECK(ok(port, token, "applet.open", {{"id", "attention-entropy"}})["title"] == "Attention entropy");
+    ok(port, token, "instrument.save");
+    CHECK(ok(port, token, "instrument.open", {{"id", "attention-entropy"}})["title"] == "Attention entropy");
 
     // While it trains: two captures and two renders of the heatmap a moment
     // apart differ, and the source's newest snapshot moves on.
@@ -1280,7 +1280,7 @@ TEST_CASE("app live: attention entropy per layer, from a live stream, on the spe
         std::ofstream(fs::path(shots) / "live-entropy-b.png", std::ios::binary) << b.png;
     }
 
-    // Launching another applet keeps the stream attached: only Detach on the
+    // Launching another instrument keeps the stream attached: only Detach on the
     // live page ends it. The catalog keeps the live sources, which keep
     // arriving, and the spec opened again draws live data.
     CHECK(ok(port, token, "app.launch", {{"id", "dev.caliper.hello-world"}})["status"] == "ACTIVE");
@@ -1289,7 +1289,7 @@ TEST_CASE("app live: attention entropy per layer, from a live stream, on the spe
         return e.count("live:attn.entropy") && e.at("live:attn.entropy").value("updated_at", std::string()) != updated_b;
     }));
     CHECK(app.text.find("[live] detached") == std::string::npos);
-    CHECK(ok(port, token, "applet.open", {{"id", "attention-entropy"}})["title"] == "Attention entropy");
+    CHECK(ok(port, token, "instrument.open", {{"id", "attention-entropy"}})["title"] == "Attention entropy");
     const Image again = decode(ok(port, token, "panel.render", {{"id", "heads"}, {"width", 480}, {"height", 320}}));
     CHECK(again.colours() > 16);
     const Image page = decode(ok(port, token, "capture.frame"));
@@ -1299,7 +1299,7 @@ TEST_CASE("app live: attention entropy per layer, from a live stream, on the spe
     ::kill(app.pid, SIGTERM);
     CHECK_MESSAGE(app.wait(30000) == 0, app.text);
     CHECK(app.text.find("[live] detached") != std::string::npos);
-    CHECK(app.text.find("[session] command applet.open (api)") != std::string::npos);
+    CHECK(app.text.find("[session] command instrument.open (api)") != std::string::npos);
     ::kill(producer.pid, SIGTERM);
     CHECK(producer.wait(10000) == 0);
 }
@@ -1381,7 +1381,7 @@ TEST_CASE("app live: a right-button pan of a scene panel opens no menu, and the 
     if (!env.ok) return;
     TempDir t("pan");
     fs::create_directories(t.str("data"));
-    fs::create_directories(t.str("user-applets"));
+    fs::create_directories(t.str("user-instruments"));
     const std::string shots = env.shots.empty() ? t.str("") : env.shots;
     Proc producer;
     const std::string link = start_producer(producer, env);
@@ -1394,7 +1394,7 @@ TEST_CASE("app live: a right-button pan of a scene panel opens no menu, and the 
     e.push_back("CALIPER_FRAME_LOG=" + t.str("frames.tsv"));
     Proc app;
     REQUIRE(app.start(env.exe,
-                      {"--hidden", "--applets", env.applets, "--url", link, "--api", "--api-port", "0", "--workspace",
+                      {"--hidden", "--instruments", env.instruments, "--url", link, "--api", "--api-port", "0", "--workspace",
                        t.str("ws")},
                       e));
     if (!has_metal(app)) {
@@ -1404,7 +1404,7 @@ TEST_CASE("app live: a right-button pan of a scene panel opens no menu, and the 
         producer.wait(10000);
         return;
     }
-    REQUIRE_MESSAGE(app.read_until("[api] Spec applets in a browser", 60000), app.text);
+    REQUIRE_MESSAGE(app.read_until("[api] Instruments in a browser", 60000), app.text);
     const json api = json::parse(std::ifstream(t.str("data") + "/api.json"), nullptr, false);
     REQUIRE(api.is_object());
     const uint16_t port = api["port"].get<uint16_t>();
@@ -1419,8 +1419,8 @@ TEST_CASE("app live: a right-button pan of a scene panel opens no menu, and the 
     ok(port, token, "panel.create",
        {{"id", "world"}, {"primitive", "scene"}, {"title", "Attention"},
         {"entity", json::array({{{"path", "attn"}, {"draw", "surface"}, {"bind", "attn"}}})}});
-    ok(port, token, "applet.save");
-    ok(port, token, "applet.open", {{"id", "pan"}});
+    ok(port, token, "instrument.save");
+    ok(port, token, "instrument.open", {{"id", "pan"}});
     std::ofstream(t.str("spec-ready")).put('\n');
 
     // The first pan and orbit while the stream runs, the second after it ended.
@@ -1504,7 +1504,7 @@ TEST_CASE("app live: an orbit and a pan whose press comes before the pointer's m
     if (!env.ok) return;
     TempDir t("stale");
     fs::create_directories(t.str("data"));
-    fs::create_directories(t.str("user-applets"));
+    fs::create_directories(t.str("user-instruments"));
     const std::string shots = env.shots.empty() ? t.str("") : env.shots;
     Proc producer;
     const std::string link = start_producer(producer, env);
@@ -1516,7 +1516,7 @@ TEST_CASE("app live: an orbit and a pan whose press comes before the pointer's m
     e.push_back("CALIPER_FRAME_LOG=" + t.str("frames.tsv"));
     Proc app;
     REQUIRE(app.start(env.exe,
-                      {"--hidden", "--applets", env.applets, "--url", link, "--api", "--api-port", "0", "--workspace",
+                      {"--hidden", "--instruments", env.instruments, "--url", link, "--api", "--api-port", "0", "--workspace",
                        t.str("ws")},
                       e));
     if (!has_metal(app)) {
@@ -1526,7 +1526,7 @@ TEST_CASE("app live: an orbit and a pan whose press comes before the pointer's m
         producer.wait(10000);
         return;
     }
-    REQUIRE_MESSAGE(app.read_until("[api] Spec applets in a browser", 60000), app.text);
+    REQUIRE_MESSAGE(app.read_until("[api] Instruments in a browser", 60000), app.text);
     const json api = json::parse(std::ifstream(t.str("data") + "/api.json"), nullptr, false);
     REQUIRE(api.is_object());
     const uint16_t port = api["port"].get<uint16_t>();
@@ -1539,8 +1539,8 @@ TEST_CASE("app live: an orbit and a pan whose press comes before the pointer's m
     ok(port, token, "panel.create",
        {{"id", "world"}, {"primitive", "scene"}, {"title", "Attention"},
         {"entity", json::array({{{"path", "attn"}, {"draw", "surface"}, {"bind", "attn"}}})}});
-    ok(port, token, "applet.save");
-    ok(port, token, "applet.open", {{"id", "stale"}});
+    ok(port, token, "instrument.save");
+    ok(port, token, "instrument.open", {{"id", "stale"}});
     std::ofstream(t.str("spec-ready")).put('\n');
     REQUIRE_MESSAGE(eventually(app, [&] { return fs::exists(t.str("dragged")); }, 90000), app.text);
     REQUIRE(script_ended(app, 30000));
@@ -1629,7 +1629,7 @@ TEST_CASE("app live: a slow orbit and pan of a scene panel move the camera on th
     if (!env.ok) return;
     TempDir t("slow");
     fs::create_directories(t.str("data"));
-    fs::create_directories(t.str("user-applets"));
+    fs::create_directories(t.str("user-instruments"));
     const std::string shots = env.shots.empty() ? t.str("") : env.shots;
     Proc producer;
     const std::string link = start_producer(producer, env);
@@ -1651,7 +1651,7 @@ TEST_CASE("app live: a slow orbit and pan of a scene panel move the camera on th
     e.push_back("CALIPER_FRAME_LOG=" + t.str("frames.tsv"));
     Proc app;
     REQUIRE(app.start(env.exe,
-                      {"--hidden", "--applets", env.applets, "--url", link, "--api", "--api-port", "0", "--workspace",
+                      {"--hidden", "--instruments", env.instruments, "--url", link, "--api", "--api-port", "0", "--workspace",
                        t.str("ws")},
                       e));
     if (!has_metal(app)) {
@@ -1661,7 +1661,7 @@ TEST_CASE("app live: a slow orbit and pan of a scene panel move the camera on th
         producer.wait(10000);
         return;
     }
-    REQUIRE_MESSAGE(app.read_until("[api] Spec applets in a browser", 60000), app.text);
+    REQUIRE_MESSAGE(app.read_until("[api] Instruments in a browser", 60000), app.text);
     const json api = json::parse(std::ifstream(t.str("data") + "/api.json"), nullptr, false);
     REQUIRE(api.is_object());
     const uint16_t port = api["port"].get<uint16_t>();
@@ -1679,8 +1679,8 @@ TEST_CASE("app live: a slow orbit and pan of a scene panel move the camera on th
     ok(port, token, "layout.set",
        {{"layout", json::parse(R"({"root":"main","nodes":[{"id":"main","split":"horizontal","ratio":0.6,"children":["side","heat"]},)"
                                R"({"id":"side","split":"tabs","children":["world","spare"]}]})")}});
-    ok(port, token, "applet.save");
-    ok(port, token, "applet.open", {{"id", "slow"}});
+    ok(port, token, "instrument.save");
+    ok(port, token, "instrument.open", {{"id", "slow"}});
     std::ofstream(t.str("spec-ready")).put('\n');
     REQUIRE_MESSAGE(eventually(app, [&] { return fs::exists(t.str("menu")); }, 90000), app.text);
     REQUIRE(script_ended(app, 30000));

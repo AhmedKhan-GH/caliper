@@ -1,7 +1,7 @@
-// Docking by role on the applet page (src/host/ui/dock_layout.h), driven on a
+// Docking by role on the instrument page (src/host/ui/dock_layout.h), driven on a
 // headless ImGui context the way the host drives it: the dock space, then
-// apply(), then the applet's windows between begin_applet_frame() and
-// end_applet_frame(), with the hints an applet gives through caliper.ui.v1_1.
+// apply(), then the instrument's windows between begin_instrument_frame() and
+// end_instrument_frame(), with the hints an instrument gives through caliper.ui.v1_1.
 #include <doctest/doctest.h>
 #include "ui/dock_layout.h"
 #include <cmath>
@@ -32,15 +32,15 @@ struct Ui {
     }
     ~Ui() { ImGui::DestroyContext(ctx); }
 
-    // One frame of the applet page; `applet` draws the applet's windows.
-    void frame(const std::function<void()>& applet) {
+    // One frame of the instrument page; `instrument` draws the instrument's windows.
+    void frame(const std::function<void()>& instrument) {
         ImGui::NewFrame();
         dockspace = ImGui::DockSpaceOverViewport(0, ImGui::GetMainViewport(),
                                                  ImGuiDockNodeFlags_PassthruCentralNode);
         layout.apply(dockspace);
-        layout.begin_applet_frame();
-        applet();
-        layout.end_applet_frame();
+        layout.begin_instrument_frame();
+        instrument();
+        layout.end_instrument_frame();
         ImGui::Render();
         for (ImTextureData* tex : ImGui::GetPlatformIO().Textures) {
             if (tex->Status == ImTextureStatus_WantCreate ||
@@ -54,7 +54,7 @@ struct Ui {
         }
     }
 
-    // A window as an applet draws it, its hint before Begin() (role < 0: none).
+    // A window as an instrument draws it, its hint before Begin() (role < 0: none).
     void window(const char* title, int role, bool hint_after = false) {
         if (role >= 0 && !hint_after) layout.hint(title, (uint32_t)role);
         ImGui::SetNextWindowSize(ImVec2(300.0f, 200.0f), ImGuiCond_FirstUseEver);
@@ -79,18 +79,18 @@ constexpr int kBottom = CALIPER_DOCK_SIDE_BOTTOM;
 
 TEST_CASE("dock layout: roles tile a first run as the title lists did") {
     Ui ui;
-    auto applet = [&] {
+    auto instrument = [&] {
         ui.window("Main", kCentral);
         ui.window("Controls", kTop);
         ui.window("Details", kBottom);
         ui.window("More details", kBottom);
     };
-    ui.frame(applet);
+    ui.frame(instrument);
     // Hints given before Begin() dock in the frame the window first appears.
     CHECK(Ui::dock_of("Main") != 0);
     CHECK(Ui::dock_of("Controls") != 0);
     CHECK(Ui::dock_of("Details") != 0);
-    for (int i = 0; i < 3; i++) ui.frame(applet);
+    for (int i = 0; i < 3; i++) ui.frame(instrument);
 
     ImGuiWindow* main = Ui::find("Main");
     ImGuiWindow* top = Ui::find("Controls");
@@ -114,7 +114,7 @@ TEST_CASE("dock layout: roles tile a first run as the title lists did") {
     CHECK(bottom->Size.y == 360.0f);
 }
 
-TEST_CASE("dock layout: a central-only applet fills the work area") {
+TEST_CASE("dock layout: a central-only instrument fills the work area") {
     Ui ui;
     for (int i = 0; i < 3; i++) ui.frame([&] { ui.window("Only view", kCentral); });
     ImGuiWindow* w = Ui::find("Only view");
@@ -129,7 +129,7 @@ TEST_CASE("dock layout: an ordinary window without a hint docks in the centre") 
         ImGuiWindowFlags_NoDocking, ImGuiWindowFlags_NoSavedSettings,
         ImGuiWindowFlags_NoMove, ImGuiWindowFlags_NoResize,
         ImGuiWindowFlags_NoTitleBar, ImGuiWindowFlags_AlwaysAutoResize};
-    auto applet = [&] {
+    auto instrument = [&] {
         ui.window("Hinted", kCentral);
         ui.window("Unhinted", -1);
         for (ImGuiWindowFlags f : floating) {
@@ -143,9 +143,9 @@ TEST_CASE("dock layout: an ordinary window without a hint docks in the centre") 
         if (!ImGui::IsPopupOpen("Dialog")) ImGui::OpenPopup("Dialog");
         if (ImGui::BeginPopupModal("Dialog")) ImGui::EndPopup();
     };
-    ui.frame(applet);
+    ui.frame(instrument);
     CHECK(Ui::dock_of("Unhinted") == 0);   // found after the frame it began in
-    for (int i = 0; i < 2; i++) ui.frame(applet);
+    for (int i = 0; i < 2; i++) ui.frame(instrument);
     CHECK(Ui::dock_of("Unhinted") == Ui::dock_of("Hinted"));
     for (ImGuiWindowFlags f : floating) {
         CAPTURE(f);
@@ -157,13 +157,13 @@ TEST_CASE("dock layout: an ordinary window without a hint docks in the centre") 
 
 TEST_CASE("dock layout: a hinted NoSavedSettings window docks and writes no ini entry") {
     Ui ui;
-    auto applet = [&] {
+    auto instrument = [&] {
         ui.window("Main", kCentral);
         ui.layout.hint("Overlay", kTop);
         ImGui::Begin("Overlay", nullptr, ImGuiWindowFlags_NoSavedSettings);
         ImGui::End();
     };
-    for (int i = 0; i < 3; i++) ui.frame(applet);
+    for (int i = 0; i < 3; i++) ui.frame(instrument);
     CHECK(Ui::dock_of("Overlay") == ui.layout.node_for_role(kTop));
     const std::string ini = ImGui::SaveIniSettingsToMemory();
     CHECK(ini.find("[Window][Overlay]") == std::string::npos);
@@ -172,12 +172,12 @@ TEST_CASE("dock layout: a hinted NoSavedSettings window docks and writes no ini 
 
 TEST_CASE("dock layout: a hint after Begin() takes effect on the next frame") {
     Ui ui;
-    auto applet = [&] {
+    auto instrument = [&] {
         ui.window("Main", kCentral, true);
         ui.window("Controls", kTop, true);
     };
-    ui.frame(applet);
-    ui.frame(applet);
+    ui.frame(instrument);
+    ui.frame(instrument);
     CHECK(Ui::dock_of("Main") == ui.layout.node_for_role(kCentral));
     CHECK(Ui::dock_of("Controls") == ui.layout.node_for_role(kTop));
 }
@@ -209,14 +209,14 @@ TEST_CASE("dock layout: a saved layout wins over every hint") {
 
 TEST_CASE("dock layout: a window the user undocks stays undocked") {
     Ui ui;
-    auto applet = [&] {
+    auto instrument = [&] {
         ui.window("Main", kCentral);
         ui.window("Controls", kTop);
     };
-    for (int i = 0; i < 2; i++) ui.frame(applet);
+    for (int i = 0; i < 2; i++) ui.frame(instrument);
     REQUIRE(Ui::dock_of("Controls") != 0);
     ImGui::DockContextQueueUndockWindow(ImGui::GetCurrentContext(), Ui::find("Controls"));
-    for (int i = 0; i < 4; i++) ui.frame(applet);   // hinted every frame
+    for (int i = 0; i < 4; i++) ui.frame(instrument);   // hinted every frame
     CHECK(Ui::dock_of("Controls") == 0);
 }
 
@@ -250,16 +250,16 @@ TEST_CASE("dock layout: on a restored layout, windows of one role share its node
         ini = ImGui::SaveIniSettingsToMemory();
     }
     // Second run: the saved windows are where they were, and the windows new
-    // in this version of the applet join them as tabs, in the same column.
+    // in this version of the instrument join them as tabs, in the same column.
     Ui ui(ini.c_str());
-    auto applet = [&] {
+    auto instrument = [&] {
         ui.window("Main", kCentral);
         ui.window("Controls", kTop);
         ui.window("Details", kBottom);
         ui.window("New details", kBottom);
         ui.window("New controls", kTop);
     };
-    for (int i = 0; i < 3; i++) ui.frame(applet);
+    for (int i = 0; i < 3; i++) ui.frame(instrument);
     CHECK(Ui::dock_of("Main") != 0);
     CHECK(Ui::dock_of("Controls") != 0);
     CHECK(Ui::dock_of("Details") != 0);
@@ -289,12 +289,12 @@ TEST_CASE("dock layout: on a restored layout, a new side half joins the existing
     // The saved layout has a side column with an upper part only. A lower
     // window is split off that column, not off the centre as a second one.
     Ui ui(ini.c_str());
-    auto applet = [&] {
+    auto instrument = [&] {
         ui.window("Main", kCentral);
         ui.window("Controls", kTop);
         ui.window("New details", kBottom);
     };
-    for (int i = 0; i < 3; i++) ui.frame(applet);
+    for (int i = 0; i < 3; i++) ui.frame(instrument);
     ImGuiWindow* main = Ui::find("Main");
     ImGuiWindow* controls = Ui::find("Controls");
     ImGuiWindow* details = Ui::find("New details");

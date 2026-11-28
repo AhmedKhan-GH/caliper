@@ -1,11 +1,11 @@
-// What applet.save writes is what the loader accepts: an applet is built and
+// What instrument.save writes is what the loader accepts: an instrument is built and
 // saved through a builder Session over a temporary workspace
 // (design/builder-session.md), and the loader, told the workspace, lists it
-// as a Ready spec applet, validates it in full and reads back the same spec
-// (src/host/applet_spec.h). Built with CALIPER_WITH_BUILDER only.
+// as a Ready kind = "spec" instrument, validates it in full and reads back the same spec
+// (src/host/instrument_spec.h). Built with CALIPER_WITH_BUILDER only.
 #include <doctest/doctest.h>
-#include "applet_loader.h"
-#include "applet_spec.h"
+#include "instrument_loader.h"
+#include "instrument_spec.h"
 #include "test_temp.h"
 #include <caliper_builder/commands/command.h>
 #include <caliper_builder/session/session.h>
@@ -43,7 +43,7 @@ json run(caliper_builder::Session& s, const std::string& name, json args = json:
     return r.result;
 }
 
-int entry_of(const AppletLoader& L, const std::string& id) {
+int entry_of(const InstrumentLoader& L, const std::string& id) {
     for (int i = 0; i < L.count(); i++)
         if (L.at(i).manifest.id == id) return i;
     return -1;
@@ -51,7 +51,7 @@ int entry_of(const AppletLoader& L, const std::string& id) {
 
 } // namespace
 
-TEST_CASE("applet.save writes what the loader lists, validates and reads back") {
+TEST_CASE("instrument.save writes what the loader lists, validates and reads back") {
     TempDir t("round-trip");
     const fs::path ws = t.path / "workspace";
     fs::create_directories(ws / "data");
@@ -64,32 +64,32 @@ TEST_CASE("applet.save writes what the loader lists, validates and reads back") 
     run(s, "spec.new", {{"id", "loss_view"}, {"title", "Loss view"}, {"description", "Loss over steps."}});
     run(s, "source.add", {{"id", "m"}, {"catalog", "table:metrics"}});
     run(s, "panel.create", {{"id", "p"}, {"primitive", "series"}, {"bind", {{"x", "m.step"}, {"y", "m.loss"}}}});
-    run(s, "applet.save");
-    // A copy under a second id, and a compiled applet's files dropped into
+    run(s, "instrument.save");
+    // A copy under a second id, and a library instrument's files dropped into
     // the workspace's folder beside them, which the loader must refuse.
-    run(s, "applet.save", {{"id", "copy"}});
-    std::ofstream(ws / "applets" / "intruder.caliper.toml")
-        << "[applet]\nid=\"local.intruder\"\nname=\"I\"\nversion=\"0.1.0\"\n[compat]\nabi_epoch=3\n";
+    run(s, "instrument.save", {{"id", "copy"}});
+    std::ofstream(ws / "instruments" / "intruder.caliper.toml")
+        << "[instrument]\nid=\"local.intruder\"\nname=\"I\"\nversion=\"0.1.0\"\n[compat]\nabi_epoch=4\n";
     const caliper_builder::spec::Spec saved = s.open_spec()->spec;
     opened.session.reset();
 
-    AppletLoader L(host_caps(), (t.path / "data").string());
+    InstrumentLoader L(host_caps(), (t.path / "data").string());
     L.set_workspace(ws.string());
-    L.scan(applet_search_dirs({}, nullptr, "", "", ws.string()));
+    L.scan(instrument_search_dirs({}, nullptr, "", "", ws.string()));
     REQUIRE(L.count() == 3);
 
     // The workspace id loss_view is the manifest id local.loss-view.
     const int i = entry_of(L, "local.loss-view");
     REQUIRE(i >= 0);
-    const AppletEntry& a = L.at(i);
-    CHECK(a.manifest.kind == AppletKind::Spec);
-    CHECK(a.status == AppletStatus::Ready);
+    const InstrumentEntry& a = L.at(i);
+    CHECK(a.manifest.kind == InstrumentKind::Spec);
+    CHECK(a.status == InstrumentStatus::Ready);
     CHECK(a.status_text.empty());
     CHECK(a.manifest.name == "Loss view");
     CHECK(a.manifest.version == "0.1.0");
     CHECK(a.manifest.summary == "Loss over steps.");
-    CHECK(fs::path(a.folder) == ws / "applets" / "loss_view");
-    CHECK(fs::path(a.spec_path) == ws / "applets" / "loss_view" / "loss_view.spec.toml");
+    CHECK(fs::path(a.folder) == ws / "instruments" / "loss_view");
+    CHECK(fs::path(a.spec_path) == ws / "instruments" / "loss_view" / "loss_view.spec.toml");
 
     std::vector<SpecDiagnostic> found;
     CHECK(L.check_spec(i, &found));
@@ -101,22 +101,22 @@ TEST_CASE("applet.save writes what the loader lists, validates and reads back") 
 
     const int copy = entry_of(L, "local.copy");
     REQUIRE(copy >= 0);
-    CHECK(L.at(copy).status == AppletStatus::Ready);
+    CHECK(L.at(copy).status == InstrumentStatus::Ready);
     CHECK(L.check_spec(copy));
-    CHECK(read_spec_file(L.at(copy).spec_path).spec.applet.id == "copy");
+    CHECK(read_spec_file(L.at(copy).spec_path).spec.instrument.id == "copy");
 
     const int intruder = entry_of(L, "local.intruder");
     REQUIRE(intruder >= 0);
-    CHECK(L.at(intruder).status == AppletStatus::Refused);
+    CHECK(L.at(intruder).status == InstrumentStatus::Refused);
     CHECK(L.at(intruder).status_text == workspace_library_reason());
 
     // Launching opens nothing: the page belongs to the app.
     CHECK_FALSE(L.launch(i, CaliperHost{}));
-    CHECK(L.at(i).status == AppletStatus::Ready);
+    CHECK(L.at(i).status == InstrumentStatus::Ready);
     CHECK(L.at(i).status_text == kSpecPageUnavailable);
 }
 
-TEST_CASE("rescan_workspace lists an applet saved after the scan, at the workspace's place, and drops a deleted one") {
+TEST_CASE("rescan_workspace lists an instrument saved after the scan, at the workspace's place, and drops a deleted one") {
     TempDir t("rescan");
     const fs::path ws = t.path / "workspace";
     const fs::path user = t.path / "user";
@@ -126,49 +126,49 @@ TEST_CASE("rescan_workspace lists an applet saved after the scan, at the workspa
     caliper_builder::Session& s = *opened.session;
     run(s, "spec.new", {{"id", "first"}, {"title", "First"}});
     run(s, "panel.create", {{"id", "t"}, {"primitive", "text"}, {"options", {{"text", "one"}}}});
-    run(s, "applet.save");
+    run(s, "instrument.save");
 
-    AppletLoader L(host_caps(), (t.path / "data").string());
+    InstrumentLoader L(host_caps(), (t.path / "data").string());
     // Without a workspace there is nothing to list again.
     CHECK(L.rescan_workspace() == 0);
     L.set_workspace(ws.string());
-    L.scan(applet_search_dirs({}, nullptr, user.string(), "", ws.string()));
+    L.scan(instrument_search_dirs({}, nullptr, user.string(), "", ws.string()));
     REQUIRE(L.count() == 1);
-    // A spec applet the app marked Active is listed again as Ready.
-    L.at(0).status = AppletStatus::Active;
+    // A kind = "spec" instrument the app marked Active is listed again as Ready.
+    L.at(0).status = InstrumentStatus::Active;
 
-    // A second applet saved during the session appears without a new scan;
+    // A second instrument saved during the session appears without a new scan;
     // the first is not listed twice.
     run(s, "spec.new", {{"id", "second"}, {"title", "Second"}});
     run(s, "panel.create", {{"id", "t"}, {"primitive", "text"}, {"options", {{"text", "two"}}}});
-    run(s, "applet.save");
+    run(s, "instrument.save");
     CHECK(L.rescan_workspace() == 2);
     REQUIRE(L.count() == 2);
     REQUIRE(entry_of(L, "local.first") >= 0);
     REQUIRE(entry_of(L, "local.second") >= 0);
-    CHECK(L.at(entry_of(L, "local.first")).status == AppletStatus::Ready);
-    CHECK(L.at(entry_of(L, "local.second")).status == AppletStatus::Ready);
+    CHECK(L.at(entry_of(L, "local.first")).status == InstrumentStatus::Ready);
+    CHECK(L.at(entry_of(L, "local.second")).status == InstrumentStatus::Ready);
 
     // A copy of the same id in the user folder, which comes after the
     // workspace in the search order, stays shadowed after a rescan.
     fs::create_directories(user / "second");
-    fs::copy_file(ws / "applets" / "second" / "second.spec.toml", user / "second" / "second.spec.toml");
-    fs::copy_file(ws / "applets" / "second" / "second.caliper.toml", user / "second" / "second.caliper.toml");
-    AppletLoader M(host_caps(), (t.path / "data").string());
+    fs::copy_file(ws / "instruments" / "second" / "second.spec.toml", user / "second" / "second.spec.toml");
+    fs::copy_file(ws / "instruments" / "second" / "second.caliper.toml", user / "second" / "second.caliper.toml");
+    InstrumentLoader M(host_caps(), (t.path / "data").string());
     M.set_workspace(ws.string());
-    M.scan(applet_search_dirs({}, nullptr, user.string(), "", ws.string()));
+    M.scan(instrument_search_dirs({}, nullptr, user.string(), "", ws.string()));
     REQUIRE(M.count() == 3);
     CHECK(M.rescan_workspace() == 2);
     REQUIRE(M.count() == 3);
     const int chosen = M.find("local.second");
     REQUIRE(chosen >= 0);
-    CHECK(fs::path(M.at(chosen).folder).parent_path() == ws / "applets");
+    CHECK(fs::path(M.at(chosen).folder).parent_path() == ws / "instruments");
     int shadowed = 0;
-    for (int i = 0; i < M.count(); i++) shadowed += M.at(i).status == AppletStatus::Shadowed;
+    for (int i = 0; i < M.count(); i++) shadowed += M.at(i).status == InstrumentStatus::Shadowed;
     CHECK(shadowed == 1);
 
-    // A deleted applet goes.
-    fs::remove_all(ws / "applets" / "first");
+    // A deleted instrument goes.
+    fs::remove_all(ws / "instruments" / "first");
     CHECK(L.rescan_workspace() == 1);
     CHECK(L.count() == 1);
     CHECK(entry_of(L, "local.first") < 0);

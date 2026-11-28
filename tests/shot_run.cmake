@@ -3,8 +3,8 @@
 #   EXE       the caliper executable
 #   CHECK     caliper_png_check, which checks a PNG's size and that it is not
 #             one flat colour
-#   APPLETS   the --applets folder that holds the applet
-#   ID        the applet id to launch
+#   INSTRUMENTS the --instruments folder that holds the instrument
+#   ID          the instrument id to launch
 #   SIZE      <W>x<H>
 #   FRAMES    the number of frames
 #   WORK_DIR  a work folder; each run makes a folder of its own in it,
@@ -14,12 +14,12 @@
 #             folder, which must be gone after the run, and creates nothing
 #             in the app-data folder;
 #             data_dir: CALIPER_DATA_DIR on data/ in the run's folder, which must then
-#             hold the applet's data folder and no imgui.ini
-# The run's HOME, TMPDIR (TMP and TEMP on Windows) and user applets folder are
+#             hold the instrument's data folder and no imgui.ini
+# The run's HOME, TMPDIR (TMP and TEMP on Windows) and user instruments folder are
 # inside the run's folder, so it touches nothing of the user's own. When the
 # renderer cannot draw offscreen (no GPU) the run is reported as skipped,
 # unless CALIPER_REQUIRE_GPU=1 makes that a failure.
-foreach(var EXE CHECK APPLETS ID SIZE FRAMES WORK_DIR MODE)
+foreach(var EXE CHECK INSTRUMENTS ID SIZE FRAMES WORK_DIR MODE)
     if(NOT DEFINED ${var})
         message(FATAL_ERROR "shot_run.cmake needs -D${var}=...")
     endif()
@@ -27,12 +27,12 @@ endforeach()
 
 string(RANDOM LENGTH 12 ALPHABET "0123456789abcdef" run_id)
 set(WORK_DIR "${WORK_DIR}/run-${run_id}")
-foreach(dir tmp home user-applets)
+foreach(dir tmp home user-instruments)
     file(MAKE_DIRECTORY "${WORK_DIR}/${dir}")
 endforeach()
 set(out "${WORK_DIR}/shot.png")
-set(env --unset=CALIPER_APPLET_PATH --unset=CALIPER_CHROMELESS
-    "CALIPER_USER_APPLETS_DIR=${WORK_DIR}/user-applets"
+set(env --unset=CALIPER_INSTRUMENT_PATH --unset=CALIPER_CHROMELESS
+    "CALIPER_USER_INSTRUMENTS_DIR=${WORK_DIR}/user-instruments"
     "HOME=${WORK_DIR}/home" "TMPDIR=${WORK_DIR}/tmp"
     "TMP=${WORK_DIR}/tmp" "TEMP=${WORK_DIR}/tmp")
 if(MODE STREQUAL "temp")
@@ -45,7 +45,7 @@ endif()
 
 execute_process(
     COMMAND "${CMAKE_COMMAND}" -E env ${env}
-        "${EXE}" shot --applets "${APPLETS}" --launch "${ID}" --size "${SIZE}"
+        "${EXE}" shot --instruments "${INSTRUMENTS}" --launch "${ID}" --size "${SIZE}"
         --frames "${FRAMES}" --out "${out}"
     RESULT_VARIABLE code OUTPUT_VARIABLE stdout ERROR_VARIABLE stderr TIMEOUT 120)
 message(STATUS "caliper shot ${ID}\n--- stdout\n${stdout}--- stderr\n${stderr}--- exit ${code}")

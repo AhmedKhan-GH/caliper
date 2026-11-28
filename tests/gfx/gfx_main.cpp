@@ -1033,7 +1033,7 @@ TEST_CASE("gfx/Vulkan+CUDA: direct updates interleaved with frames stay in order
     bk.bridge->release_texture(id);
 }
 
-// The direct path's second image: the id an applet holds never changes, and what a frame
+// The direct path's second image: the id an instrument holds never changes, and what a frame
 // actually draws, read back from the draw list, is always the newest write. A
 // frame left drawing the old image would show training one update behind.
 TEST_CASE("gfx/Vulkan+CUDA: frames draw the newest image, under a stable id") {
@@ -1076,7 +1076,7 @@ TEST_CASE("gfx/Vulkan+CUDA: frames draw the newest image, under a stable id") {
         map_f32_to_rgba8(data.data(), w, h, colormap_lut(CALIPER_CMAP_VIRIDIS),
                          0.f, 250.f, ref.data());
         CHECK(bk.readback(drawn, w, h) == ref);   // what the frame drew
-        CHECK(bk.readback(id, w, h) == ref);      // what the applet's id names
+        CHECK(bk.readback(id, w, h) == ref);      // what the instrument's id names
     }
     CHECK(drawn_sets.size() == 2);   // the two images really did trade places
     bk.bridge->release_texture(id);
@@ -1296,14 +1296,14 @@ TEST_CASE("gfx/Vulkan+CUDA: timing — update cost by size") {
 }
 
 // Frame-thread hitch forensics (per-batch texture refresh report):
-// the applet's per-generation refresh does release+create for all 9 textures
+// the instrument's per-generation refresh does release+create for all 9 textures
 // (8x conv 48x48 + 1x embw 36x512). On the Vulkan+CUDA path a CREATE is the
 // full interop setup — vkCreateImage + exportable memory + cuImportExternalMemory
 // + timeline semaphore create/export/import — while an UPDATE is just a
 // stream-ordered copy + compute pass. This case times both patterns at the
-// applet's real sizes and prints µs/op so the fix (create-once + update) is
+// instrument's real sizes and prints µs/op so the fix (create-once + update) is
 // justified by measurement, not vibes.
-TEST_CASE("gfx/Vulkan+CUDA: timing — create+release cycle vs update, applet-shaped") {
+TEST_CASE("gfx/Vulkan+CUDA: timing — create+release cycle vs update, instrument-shaped") {
     if (!vk_env().ok) CALIPER_SKIP_NO_GPU("no Vulkan ICD");
     if (!vk_cuda_ready()) CALIPER_SKIP_NO_GPU("no CUDA interop / not single-GPU");
     Backend bk = vk_backend();
@@ -1326,7 +1326,7 @@ TEST_CASE("gfx/Vulkan+CUDA: timing — create+release cycle vs update, applet-sh
         t.ndim = 2; t.shape[0] = s.h; t.shape[1] = s.w; t.strides[0] = s.w; t.strides[1] = 1;
         t.device = CALIPER_DEV_CUDA;
 
-        // Pattern A: the applet today — release + create per generation.
+        // Pattern A: the instrument today — release + create per generation.
         using clk = std::chrono::steady_clock;
         CaliperTextureId id = bk.bridge->texture_from_tensor_mapped(
             &t, CALIPER_CMAP_VIRIDIS, 0.f, 250.f, 0);
@@ -1372,7 +1372,7 @@ TEST_CASE("gfx/Vulkan+CUDA: alloc_shared is device-backed and zero-copy, pixel-e
     REQUIRE(out.data != nullptr);
     CHECK(out.device == CALIPER_DEV_CUDA);          // literal zero-copy: device-backed
 
-    // The applet's kernels would write out.data (a CUDA device ptr) in place;
+    // The instrument's kernels would write out.data (a CUDA device ptr) in place;
     // stand in with a host->device copy. alloc_shared f32 defaults vmin=0,vmax=1.
     std::vector<float> data(n);
     for (int i = 0; i < n; ++i) data[i] = (float)i / (float)(n - 1);
@@ -1398,7 +1398,7 @@ TEST_CASE("gfx/Vulkan+CUDA: alloc_shared is device-backed and zero-copy, pixel-e
 namespace {
 
 // A cuMemCreate'd, granularity-padded, WIN32-shareable, mapped+RW device
-// allocation — the exact shape ExportablePool::alloc_block produces applet-side,
+// allocation — the exact shape ExportablePool::alloc_block produces instrument-side,
 // built here through the OPTIONAL VmmApi table so the test controls every byte.
 struct VmmBlock {
     const cudadrv::VmmApi* vmm = nullptr;
@@ -1664,7 +1664,7 @@ TEST_CASE("gfx/Vulkan+CUDA: imported u8 RGBA at offset 512 blit-imported; 3-chan
 }
 
 // Row 4 — release + reuse: update-after-release is false (the fallback
-// contract — the applet CPU-stages, never crashes), and a 50x import/release
+// contract — the instrument CPU-stages, never crashes), and a 50x import/release
 // loop yields strictly increasing ids (never reused while live).
 TEST_CASE("gfx/Vulkan+CUDA: imported alloc release contract + 50x import/release ids increase") {
     if (!vmm_rows_ready()) return;
