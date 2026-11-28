@@ -106,7 +106,7 @@ TEST_CASE("every command of the table says what it does, and the classes agree w
     for (const char* name : {"intervene.set", "intervene.clear"}) CHECK(cmd(name).effect == CommandEffect::run);
     CHECK(command_effect_from_name("run") == CommandEffect::run);
     // Replacing the open spec is not a plain edit.
-    for (const char* name : {"spec.new", "spec.open", "applet.open", "app.launch"})
+    for (const char* name : {"spec.new", "spec.open", "instrument.open", "app.launch"})
         CHECK(cmd(name).effect == CommandEffect::change);
     // The JSON form of the table carries the class, and an unset one reads as change.
     CommandDescriptor bare;
@@ -139,7 +139,7 @@ TEST_CASE("Accept edits applies an edit of the open spec and nothing else") {
     CHECK(edit.decision == ApprovalDecision::allow);
     CHECK(edit.allowed_by == "accept_edits");
     // A change, and a replacement of the open spec, still ask.
-    for (const char* name : {"loader.run", "loader.delete", "applet.save", "spec.new", "data.import"})
+    for (const char* name : {"loader.run", "loader.delete", "instrument.save", "spec.new", "data.import"})
         CHECK(decide(name, AgentMode::accept_edits, ApprovalDecision::ask).decision == ApprovalDecision::ask);
     // A run command is not an edit: it still asks.
     CHECK(decide("run.set_param", AgentMode::accept_edits, ApprovalDecision::ask).decision == ApprovalDecision::ask);
@@ -215,7 +215,7 @@ TEST_CASE("rules allow their command; Read only, content binding and a Python ru
     CHECK(decide("loader.delete", AgentMode::read_only, ApprovalDecision::ask, json::object(), c).decision ==
           ApprovalDecision::deny);
     c.bound = true;
-    CHECK(decide("applet.save", AgentMode::ask, ApprovalDecision::ask, json::object(), c).decision ==
+    CHECK(decide("instrument.save", AgentMode::ask, ApprovalDecision::ask, json::object(), c).decision ==
           ApprovalDecision::ask);
     c.bound = false;
     c.python = true;

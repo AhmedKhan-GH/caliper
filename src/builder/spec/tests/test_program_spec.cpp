@@ -7,7 +7,7 @@
 // piece alone in its JSON and piece.toml forms.
 #include <doctest/doctest.h>
 
-#include <caliper_builder/spec/instrument.h>
+#include <caliper_builder/spec/control.h>
 
 #include "helpers.h"
 
@@ -22,10 +22,10 @@ cs::ParseResult programs_fixture() {
     return r;
 }
 
-// A version 1 document with one scene panel `world`, a series panel `chart`
+// A version 2 document with one scene panel `world`, a series panel `chart`
 // and the given TOML after them.
 std::string with_panels(const std::string& rest) {
-    return "caliper_spec = 1\n[applet]\nid = \"a\"\n"
+    return "caliper_spec = 2\n[instrument]\nid = \"a\"\n"
            "[[source]]\nid = \"s\"\ncatalog = \"live:loss\"\n"
            "[[panel]]\nid = \"world\"\nprimitive = \"scene\"\nbind = { scene = \"live:model\" }\n"
            "[[panel]]\nid = \"chart\"\nprimitive = \"series\"\nbind = { y = \"s\" }\n" +
@@ -39,9 +39,9 @@ const char* const kProgram =
 
 }  // namespace
 
-TEST_CASE("a version 1 spec with programs and provenance parses into the expected spec") {
+TEST_CASE("a version 2 spec with programs and provenance parses into the expected spec") {
     const cs::Spec s = programs_fixture().spec;
-    CHECK(s.version == 1);
+    CHECK(s.version == 2);
     REQUIRE(s.programs.size() == 2);
     const cs::Program& rows = s.programs[0];
     CHECK(rows.id == "rows");
@@ -69,7 +69,7 @@ TEST_CASE("a version 1 spec with programs and provenance parses into the expecte
     REQUIRE(s.provenance.reviewed.size() == 1);
     CHECK(s.provenance.reviewed[0].target == "program:rows");
     CHECK(s.find_program("image") == &s.programs[1]);
-    CHECK(cs::required_version(s) == 1);
+    CHECK(cs::required_version(s) == 2);
     const cs::ValidationReport report = cs::validate(s);
     CHECK_MESSAGE(report.ok(), dump(report.diagnostics));
 }
@@ -102,10 +102,10 @@ TEST_CASE("programs and provenance round trip through canonical TOML and canonic
     CHECK(one.value == first.programs[0]);
 }
 
-TEST_CASE("the reader refuses the keys of programs in version 0 and the wrong keys in version 1") {
-    const std::string v0 = "caliper_spec = 0\n[applet]\nid = \"a\"\n";
-    CHECK(has(cs::parse_toml(v0 + kProgram).diagnostics, "spec.unknown_key", "program"));
-    CHECK(has(cs::parse_toml(v0 + "[provenance]\nforeign = true\n").diagnostics, "spec.unknown_key", "provenance"));
+TEST_CASE("the reader refuses older versions and wrong keys in programs and provenance") {
+    const std::string v0 = "caliper_spec = 0\n[instrument]\nid = \"a\"\n";
+    CHECK(has(cs::parse_toml(v0 + kProgram).diagnostics, "spec.unsupported_version", "caliper_spec"));
+    CHECK(has(cs::parse_toml(v0 + "[provenance]\nforeign = true\n").diagnostics, "spec.unsupported_version", "caliper_spec"));
     CHECK(cs::parse_toml(with_panels(kProgram)).ok());
 
     struct Case {
@@ -200,7 +200,7 @@ TEST_CASE("a toggle binds an intervention point or a parameter, and takes no opt
     CHECK_FALSE(cs::control_takes_target(cs::ControlKind::slider, *t));
     CHECK_FALSE(cs::control_takes_target(cs::ControlKind::button, *t));
 
-    const std::string head = "caliper_spec = 1\n[applet]\nid = \"a\"\n[[control]]\nid = \"k\"\nkind = \"toggle\"\n";
+    const std::string head = "caliper_spec = 2\n[instrument]\nid = \"a\"\n[[control]]\nid = \"k\"\nkind = \"toggle\"\n";
     for (const char* bind : {"intervene:blocks.0.attn", "param:use_bias"}) {
         CAPTURE(bind);
         const cs::ValidationReport r = cs::check_toml(head + "bind = \"" + bind + "\"\n");
@@ -209,11 +209,11 @@ TEST_CASE("a toggle binds an intervention point or a parameter, and takes no opt
     CHECK(has(cs::check_toml(head + "bind = \"run:pause\"\n").diagnostics, "spec.control_mismatch", "control[0].bind"));
     CHECK(has(cs::check_toml(head + "bind = \"param:x\"\noptions = { min = 0 }\n").diagnostics, "spec.control_mismatch",
               "control[0].options.min"));
-    CHECK(has(cs::check_toml("caliper_spec = 1\n[applet]\nid = \"a\"\n[[control]]\nid = \"k\"\nkind = \"slider\"\n"
+    CHECK(has(cs::check_toml("caliper_spec = 2\n[instrument]\nid = \"a\"\n[[control]]\nid = \"k\"\nkind = \"slider\"\n"
                              "bind = \"intervene:blocks.0\"\n")
                   .diagnostics,
               "spec.control_mismatch", "control[0].bind"));
-    CHECK(has(cs::check_toml("caliper_spec = 1\n[applet]\nid = \"a\"\n[[control]]\nid = \"k\"\nkind = \"transport\"\n"
+    CHECK(has(cs::check_toml("caliper_spec = 2\n[instrument]\nid = \"a\"\n[[control]]\nid = \"k\"\nkind = \"transport\"\n"
                              "bind = \"value\"\n")
                   .diagnostics,
               "spec.control_mismatch", "control[0].bind"));
@@ -477,9 +477,9 @@ TEST_CASE("one piece reads and writes as JSON and as piece.toml with the same ha
 
 #include "schema_check.h"
 
-TEST_CASE("the schema of version 1 takes inline pieces and instances, and refuses a mixed program") {
+TEST_CASE("the schema of version 2 takes inline pieces and instances, and refuses a mixed program") {
     const SchemaChecker checker(
-        json::parse(read_file(std::string(CALIPER_SPEC_FIXTURES) + "/../../schema/caliper-spec-v1.schema.json")));
+        json::parse(read_file(std::string(CALIPER_SPEC_FIXTURES) + "/../../schema/caliper-spec-v2.schema.json")));
     const auto r = field_spec();
     REQUIRE(r.ok());
     json doc = cs::to_json(r.spec);
@@ -519,7 +519,7 @@ TEST_CASE("a spec that names a stage gets spec.stage_replaced, which says how to
 
 TEST_CASE("a spec that still holds a stage table opens, with spec.stage_replaced as a warning and without the stage") {
     const std::string stage = "[[stage]]\npanel = \"world\"\nentity = \"e\"\nkind = \"vertex\"\nwgsl = \"x\"\n";
-    const std::string head = "caliper_spec = 1\n[applet]\nid = \"a\"\n";
+    const std::string head = "caliper_spec = 2\n[instrument]\nid = \"a\"\n";
     const auto r = cs::parse_toml(head + stage + stage);
     REQUIRE_MESSAGE(r.ok(), dump(r.diagnostics));
     int warnings = 0;
@@ -532,7 +532,7 @@ TEST_CASE("a spec that still holds a stage table opens, with spec.stage_replaced
     CHECK(has(r.diagnostics, "spec.stage_replaced", "stage[1]"));
     CHECK(cs::to_toml(r.spec).find("[[stage]]") == std::string::npos);
 
-    const auto j = cs::from_json(json::parse(R"({"caliper_spec": 1, "applet": {"id": "a"},
+    const auto j = cs::from_json(json::parse(R"({"caliper_spec": 2, "instrument": {"id": "a"},
                                                   "stage": [{"panel": "w", "entity": "e", "kind": "material", "wgsl": "x"}]})"));
     REQUIRE_MESSAGE(j.ok(), dump(j.diagnostics));
     CHECK(has(j.diagnostics, "spec.stage_replaced", "stage[0]"));
@@ -540,7 +540,7 @@ TEST_CASE("a spec that still holds a stage table opens, with spec.stage_replaced
 
 TEST_CASE("old stage review hashes do not prevent a spec from opening") {
     const std::string hash(64, 'a');
-    const json document = {{"caliper_spec", 1}, {"applet", {{"id", "a"}}},
+    const json document = {{"caliper_spec", 2}, {"instrument", {{"id", "a"}}},
                            {"stage", {{{"panel", "world"}, {"entity", "e"}, {"kind", "material"}, {"wgsl", "x"}}}},
                            {"provenance", {{"foreign", true},
                                            {"reviewed", {{{"target", "stage:world/e/material"}, {"sha256", hash}},

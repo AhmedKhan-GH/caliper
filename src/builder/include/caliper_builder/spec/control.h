@@ -1,19 +1,16 @@
 #pragma once
-// caliper_builder::spec: the value types that spec version 1 adds for
-// instruments (design/instruments.md): the `scene` primitive bound to a live
-// scene, with its options, and the `control` table.
+// caliper_builder::spec: the value types for scene panels and controls
+// (design/instruments.md): the `scene` primitive bound to a live scene, with
+// its options, and the `control` table.
 //
-// Version 1 is version 0 with three additions: the primitive `scene`, the
-// top-level array `control` and, later, binding references.
-// A version 0 document stays valid and reads the same way. Spec::controls
-// holds the controls (spec.h); a scene panel is a Panel whose primitive is
-// scene, whose slot `scene` holds "live:<scene name>" and whose options hold
-// a SceneOptions. Controls and panels share one set of ids, and a layout leaf
-// names either one.
+// Spec::controls holds the controls (spec.h); a scene panel is a Panel whose
+// primitive is scene, whose slot `scene` holds "live:<scene name>" and whose
+// options hold a SceneOptions. Controls and panels share one set of ids, and a
+// layout leaf names either one.
 //
 // The spec library reads and writes these types, and the control edits and
-// the spec runtime edit and draw them. The functions are declared here and defined in
-// src/builder/spec/instrument.cpp. Nothing here throws.
+// the spec runtime edit and draw them. The functions are declared here and
+// defined in src/builder/spec/control.cpp. Nothing here throws.
 #include <nlohmann/json.hpp>
 
 #include <cstddef>
@@ -28,9 +25,6 @@
 #include <caliper_builder/spec/reference.h>
 
 namespace caliper_builder::spec {
-
-// The format version that adds instruments.
-inline constexpr std::int64_t kInstrumentVersion = 1;
 
 namespace limits {
 inline constexpr std::size_t kControls = 64;           // spec.too_many

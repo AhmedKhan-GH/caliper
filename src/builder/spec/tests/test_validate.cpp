@@ -14,14 +14,14 @@ using nlohmann::json;
 
 namespace {
 
-// A spec around a body of sources and panels, with an applet table.
-std::string spec_text(const std::string& body) { return "caliper_spec = 0\n[applet]\nid = \"t\"\n" + body; }
+// A spec around a body of sources and panels, with an instrument table.
+std::string spec_text(const std::string& body) { return "caliper_spec = 2\n[instrument]\nid = \"t\"\n" + body; }
 
 cs::ValidationReport check(const std::string& body) { return cs::check_toml(spec_text(body), fixture_resolver()); }
 
 // The same, with root keys (such as `layout = "p"`) before the first table.
 cs::ValidationReport check_root(const std::string& root, const std::string& body) {
-    return cs::check_toml("caliper_spec = 0\n" + root + "\n[applet]\nid = \"t\"\n" + body, fixture_resolver());
+    return cs::check_toml("caliper_spec = 2\n" + root + "\n[instrument]\nid = \"t\"\n" + body, fixture_resolver());
 }
 
 // A tabs node nested `levels` times around the panel p.
@@ -324,8 +324,8 @@ TEST_CASE("a resolver that throws is reported, and one that contradicts the id i
 
 TEST_CASE("validation checks a spec built in code") {
     cs::Spec s;
-    s.applet.id = "built";
-    s.applet.title = std::string("bad \xC3 byte");
+    s.instrument.id = "built";
+    s.instrument.title = std::string("bad \xC3 byte");
     cs::Source src;
     src.id = "a";
     src.catalog = "tensor:a";
@@ -349,7 +349,7 @@ TEST_CASE("validation checks a spec built in code") {
     s.layout = root;
     s.x = json::array();
     auto r = cs::validate(s);
-    CHECK(has(r.diagnostics, "spec.bad_value", "applet.title"));
+    CHECK(has(r.diagnostics, "spec.bad_value", "instrument.title"));
     CHECK(has(r.diagnostics, "spec.unknown_key", "source[0].transform[0].fn"));
     CHECK(has(r.diagnostics, "spec.wrong_type", "panel[0].bind.values"));
     CHECK(has(r.diagnostics, "spec.unknown_option", "panel[0].options.bins"));
@@ -412,12 +412,12 @@ TEST_CASE("every documented code is reported at least once") {
         a + m + hist + "[layout]\ntabs = [\"p\"]\n" + panel("q", "histogram", "values = \"a\""),  // unused, unplaced
     };
     for (const std::string& body : bodies) note(check(body).diagnostics);
-    note(cs::check_toml("caliper_spec = = 0").diagnostics);                       // syntax
+    note(cs::check_toml("caliper_spec = = 2").diagnostics);                       // syntax
     note(cs::check_toml(std::string(cs::limits::kTextBytes + 1, '#')).diagnostics);  // too_large
-    note(cs::check_toml("caliper_spec = 2\n").diagnostics);                       // unsupported_version
+    note(cs::check_toml("caliper_spec = 3\n").diagnostics);                       // unsupported_version
     {
         cs::Spec s;
-        s.applet.id = "Bad";
+        s.instrument.id = "Bad";
         note(cs::validate(s).diagnostics);  // bad_id
     }
     {
@@ -506,13 +506,13 @@ TEST_CASE("a full report keeps its errors before its warnings") {
     CHECK(has(r.diagnostics, "spec.unknown_source", "panel[9].bind.values"));
 }
 
-// ---- spec version 1 (design/instruments.md) ---------------------------------
+// ---- scene panels and controls (design/instruments.md) ----------------------
 
 namespace {
 
-// A version 1 spec around a body of panels, controls and a layout.
-cs::ValidationReport check_v1(const std::string& body, const cs::SourceResolver& resolver = fixture_resolver()) {
-    return cs::check_toml("caliper_spec = 1\n[applet]\nid = \"t\"\n" + body, resolver);
+// A version 2 spec around a body of panels, controls and a layout.
+cs::ValidationReport check_v2(const std::string& body, const cs::SourceResolver& resolver = fixture_resolver()) {
+    return cs::check_toml("caliper_spec = 2\n[instrument]\nid = \"t\"\n" + body, resolver);
 }
 
 std::string control(const std::string& id, const std::string& kind, const std::string& bind,
@@ -526,7 +526,7 @@ const char* kScene = "[[panel]]\nid = \"w\"\nprimitive = \"scene\"\nbind = { sce
 
 }  // namespace
 
-TEST_CASE("the version 1 fixture is valid, and a scene the script does not send is a warning") {
+TEST_CASE("the instruments fixture is valid, and a scene the script does not send is a warning") {
     auto known = cs::check_toml(fixture("instruments.spec.toml"), [](const std::string& id) {
         std::optional<cs::ResolvedSource> r;
         if (id == "live:model") r = cs::ResolvedSource{"live", std::nullopt, "", std::nullopt, false};
@@ -540,115 +540,114 @@ TEST_CASE("the version 1 fixture is valid, and a scene the script does not send 
     CHECK(cs::check_toml(fixture("instruments.spec.toml")).diagnostics.empty());
 }
 
-TEST_CASE("the three error codes of version 1") {
+TEST_CASE("the control error codes") {
     // spec.unknown_control_kind is the parser's.
-    CHECK(has(check_v1(control("k", "knob", "value")).diagnostics, "spec.unknown_control_kind", "control[0].kind"));
+    CHECK(has(check_v2(control("k", "knob", "value")).diagnostics, "spec.unknown_control_kind", "control[0].kind"));
     // Every kind is drawn, so none gives spec.unsupported_control any more.
     for (const char* kind : {"range", "picker", "text", "segmented", "transport", "readout"}) {
         CAPTURE(kind);
-        CHECK_FALSE(has(check_v1(control("k", kind, "value")).diagnostics, "spec.unsupported_control",
+        CHECK_FALSE(has(check_v2(control("k", kind, "value")).diagnostics, "spec.unsupported_control",
                         "control[0].kind"));
     }
-    CHECK(has(check_v1(control("k", "slider", "action:save")).diagnostics, "spec.control_mismatch",
+    CHECK(has(check_v2(control("k", "slider", "action:save")).diagnostics, "spec.control_mismatch",
               "control[0].bind"));
-    CHECK(has(check_v1(control("k", "slider", "run:pause")).diagnostics, "spec.control_mismatch",
+    CHECK(has(check_v2(control("k", "slider", "run:pause")).diagnostics, "spec.control_mismatch",
               "control[0].bind"));
-    CHECK(has(check_v1(control("k", "button", "param:lr")).diagnostics, "spec.control_mismatch",
+    CHECK(has(check_v2(control("k", "button", "param:lr")).diagnostics, "spec.control_mismatch",
               "control[0].bind"));
-    CHECK(has(check_v1(control("k", "button", "value")).diagnostics, "spec.control_mismatch", "control[0].bind"));
-    CHECK(has(check_v1(control("k", "button", "run:pause", "min = 0")).diagnostics, "spec.control_mismatch",
+    CHECK(has(check_v2(control("k", "button", "value")).diagnostics, "spec.control_mismatch", "control[0].bind"));
+    CHECK(has(check_v2(control("k", "button", "run:pause", "min = 0")).diagnostics, "spec.control_mismatch",
               "control[0].options.min"));
     for (const std::string& ok : {control("k", "slider", "param:lr", "min = 0.001, max = 1, log = true, step = 0.01"),
                                   control("k", "slider", "value", "min = 0, max = 10, value = 3"),
                                   control("k", "button", "action:save"), control("k", "button", "run:pause")}) {
         CAPTURE(ok);
-        auto r = check_v1(ok);
+        auto r = check_v2(ok);
         CHECK_MESSAGE(r.ok(), dump(r.diagnostics));
     }
 }
 
-TEST_CASE("controls and scene panels use the codes of version 0 for their other errors") {
+TEST_CASE("controls and scene panels use standard error codes for their other errors") {
     auto first = [](const cs::ValidationReport& r) { return dump(r.diagnostics); };
     for (const char* bind : {"param:", "intervene:", "run:step", "lr"}) {
         CAPTURE(bind);
-        CHECK(has(check_v1(control("k", "slider", bind)).diagnostics, "spec.bad_binding", "control[0].bind"));
+        CHECK(has(check_v2(control("k", "slider", bind)).diagnostics, "spec.bad_binding", "control[0].bind"));
     }
-    CHECK(has(check_v1(control("k", "slider", "param:" + std::string(64, 'a'))).diagnostics, "spec.bad_binding",
+    CHECK(has(check_v2(control("k", "slider", "param:" + std::string(64, 'a'))).diagnostics, "spec.bad_binding",
               "control[0].bind"));
     auto scene_bind = [&](const std::string& b) {
-        return check_v1("[[panel]]\nid = \"w\"\nprimitive = \"scene\"\nbind = { scene = \"" + b + "\" }\n");
+        return check_v2("[[panel]]\nid = \"w\"\nprimitive = \"scene\"\nbind = { scene = \"" + b + "\" }\n");
     };
     CHECK(has(scene_bind("model").diagnostics, "spec.bad_binding", "panel[0].bind.scene"));
     CHECK(has(scene_bind("live:").diagnostics, "spec.bad_binding", "panel[0].bind.scene"));
     CHECK(has(scene_bind("tensor:model").diagnostics, "spec.bad_binding", "panel[0].bind.scene"));
-    CHECK(has(check_v1("[[panel]]\nid = \"w\"\nprimitive = \"scene\"\n").diagnostics, "spec.missing_slot",
+    CHECK(has(check_v2("[[panel]]\nid = \"w\"\nprimitive = \"scene\"\n").diagnostics, "spec.missing_slot",
               "panel[0].bind.scene"));
     // A scene panel where an instance of a piece draws needs no scene: it holds its programs alone.
     const std::string alone =
         "[[panel]]\nid = \"w\"\nprimitive = \"scene\"\n"
         "[[program]]\nid = \"arcs\"\npanel = \"w\"\nbind = { attn = \"live:attn\" }\n"
         "piece = { name = \"arcs\", version = 1, from = \"workspace\", hash = \"sha256:" + std::string(64, 'a') + "\" }\n";
-    CHECK_MESSAGE(!has(check_v1(alone).diagnostics, "spec.missing_slot", "panel[0].bind.scene"),
-                  first(check_v1(alone)));
-    CHECK(has(check_v1(std::string(kScene) + control("w", "button", "run:pause")).diagnostics, "spec.duplicate_id",
+    CHECK_MESSAGE(!has(check_v2(alone).diagnostics, "spec.missing_slot", "panel[0].bind.scene"),
+                  first(check_v2(alone)));
+    CHECK(has(check_v2(std::string(kScene) + control("w", "button", "run:pause")).diagnostics, "spec.duplicate_id",
               "control[0].id"));
-    CHECK(has(check_v1(control("k", "button", "run:pause") + control("k", "button", "action:a")).diagnostics,
+    CHECK(has(check_v2(control("k", "button", "run:pause") + control("k", "button", "action:a")).diagnostics,
               "spec.duplicate_id", "control[1].id"));
-    CHECK(has(check_v1(control("Bad", "button", "run:pause")).diagnostics, "spec.bad_id", "control[0].id"));
-    CHECK(has(check_v1(control("k", "slider", "value", "min = 1, max = 1")).diagnostics, "spec.out_of_range",
+    CHECK(has(check_v2(control("Bad", "button", "run:pause")).diagnostics, "spec.bad_id", "control[0].id"));
+    CHECK(has(check_v2(control("k", "slider", "value", "min = 1, max = 1")).diagnostics, "spec.out_of_range",
               "control[0].options.min"));
-    CHECK(has(check_v1(control("k", "slider", "value", "step = 0")).diagnostics, "spec.out_of_range",
+    CHECK(has(check_v2(control("k", "slider", "value", "step = 0")).diagnostics, "spec.out_of_range",
               "control[0].options.step"));
-    CHECK(has(check_v1(control("k", "slider", "param:lr", "log = true, min = 0")).diagnostics, "spec.out_of_range",
+    CHECK(has(check_v2(control("k", "slider", "param:lr", "log = true, min = 0")).diagnostics, "spec.out_of_range",
               "control[0].options.min"));
-    CHECK(has(check_v1(control("k", "slider", "value", "min = 0, max = 1e308")).diagnostics, "spec.out_of_range",
+    CHECK(has(check_v2(control("k", "slider", "value", "min = 0, max = 1e308")).diagnostics, "spec.out_of_range",
               "control[0].options.max"));
-    CHECK(has(check_v1(control("k", "slider", "value", "value = -2e15")).diagnostics, "spec.out_of_range",
+    CHECK(has(check_v2(control("k", "slider", "value", "value = -2e15")).diagnostics, "spec.out_of_range",
               "control[0].options.value"));
-    CHECK(has(check_v1(control("k", "slider", "value", "step = 1e300")).diagnostics, "spec.out_of_range",
+    CHECK(has(check_v2(control("k", "slider", "value", "step = 1e300")).diagnostics, "spec.out_of_range",
               "control[0].options.step"));
     std::string many;
     for (int i = 0; i < 65; ++i) many += control("c" + std::to_string(i), "button", "run:pause");
-    CHECK_MESSAGE(has(check_v1(many).diagnostics, "spec.too_many", "control"), first(check_v1(many)));
+    CHECK_MESSAGE(has(check_v2(many).diagnostics, "spec.too_many", "control"), first(check_v2(many)));
     std::string patterns;
     for (int i = 0; i < 65; ++i) patterns += std::string(i ? ", " : "") + "\"m" + std::to_string(i) + "\"";
-    CHECK(has(check_v1(std::string(kScene) + "options = { include = [" + patterns + "] }\n").diagnostics,
+    CHECK(has(check_v2(std::string(kScene) + "options = { include = [" + patterns + "] }\n").diagnostics,
               "spec.too_many", "panel[0].options.include"));
-    CHECK(has(check_v1(std::string(kScene) + "options = { view_camera = { elevation = 90 } }\n").diagnostics,
+    CHECK(has(check_v2(std::string(kScene) + "options = { view_camera = { elevation = 90 } }\n").diagnostics,
               "spec.out_of_range", "panel[0].options.view_camera.elevation"));
-    CHECK(has(check_v1(std::string(kScene) + "options = { view_camera = { distance = -1 } }\n").diagnostics,
+    CHECK(has(check_v2(std::string(kScene) + "options = { view_camera = { distance = -1 } }\n").diagnostics,
               "spec.out_of_range", "panel[0].options.view_camera.distance"));
-    CHECK(has(check_v1(std::string(kScene) + "options = { exclude = [\"\"] }\n").diagnostics, "spec.bad_value",
+    CHECK(has(check_v2(std::string(kScene) + "options = { exclude = [\"\"] }\n").diagnostics, "spec.bad_value",
               "panel[0].options.exclude[0]"));
 }
 
 TEST_CASE("a layout leaf names a panel or a control") {
     const std::string body = std::string(kScene) + control("lr", "slider", "param:lr") + control("go", "button", "run:pause");
-    auto placed = check_v1(body + "[layout]\nsplit = \"vertical\"\nchildren = [\"w\", { split = \"horizontal\", "
+    auto placed = check_v2(body + "[layout]\nsplit = \"vertical\"\nchildren = [\"w\", { split = \"horizontal\", "
                                   "children = [\"lr\", \"go\"] }]\n");
     CHECK_MESSAGE(placed.ok(), dump(placed.diagnostics));
     CHECK_FALSE(has(placed.diagnostics, "spec.unplaced_panel"));
-    auto unplaced = check_v1(body + "[layout]\nsplit = \"vertical\"\nchildren = [\"w\", \"lr\"]\n");
+    auto unplaced = check_v2(body + "[layout]\nsplit = \"vertical\"\nchildren = [\"w\", \"lr\"]\n");
     CHECK(unplaced.ok());
     CHECK(has(unplaced.diagnostics, "spec.unplaced_panel", "control[1]"));
-    auto unknown = check_v1(body + "[layout]\nsplit = \"vertical\"\nchildren = [\"w\", \"nothing\"]\n");
+    auto unknown = check_v2(body + "[layout]\nsplit = \"vertical\"\nchildren = [\"w\", \"nothing\"]\n");
     CHECK(has(unknown.diagnostics, "spec.unknown_panel", "layout.children[1]"));
-    auto twice = check_v1(body + "[layout]\nsplit = \"vertical\"\nchildren = [\"w\", \"lr\", \"go\", \"lr\"]\n");
+    auto twice = check_v2(body + "[layout]\nsplit = \"vertical\"\nchildren = [\"w\", \"lr\", \"go\", \"lr\"]\n");
     CHECK(has(twice.diagnostics, "spec.duplicate_placement", "layout.children[3]"));
     // Without a layout, nothing is unplaced.
-    CHECK(check_v1(body, {}).diagnostics.empty());
+    CHECK(check_v2(body, {}).diagnostics.empty());
 }
 
-TEST_CASE("a Spec of version 0 that holds what version 1 adds gets the errors of version 0") {
+TEST_CASE("a Spec with a retired or unsupported version fails validation with spec.unsupported_version") {
     auto parsed = cs::parse_toml(fixture("instruments.spec.toml"));
     REQUIRE(parsed.ok());
-    cs::Spec s = parsed.spec;
-    s.version = 0;
-    auto r = cs::validate(s);
-    CHECK(has(r.diagnostics, "spec.unknown_primitive", "panel[0].primitive"));
-    CHECK(has(r.diagnostics, "spec.unknown_key", "control"));
-    s.version = 2;
-    r = cs::validate(s);
-    REQUIRE(r.diagnostics.size() == 1);
-    CHECK(r.diagnostics[0].code == "spec.unsupported_version");
+    for (std::int64_t bad_version : {0, 1, 3}) {
+        CAPTURE(bad_version);
+        cs::Spec s = parsed.spec;
+        s.version = bad_version;
+        auto r = cs::validate(s);
+        REQUIRE(r.diagnostics.size() == 1);
+        CHECK(r.diagnostics[0].code == "spec.unsupported_version");
+    }
 }

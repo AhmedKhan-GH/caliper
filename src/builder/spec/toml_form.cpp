@@ -247,8 +247,8 @@ public:
         if (layout != j.end() && layout->is_string()) line("layout", *layout, false);
         if (auto x = j.find("x"); x != j.end()) line("x", *x, false);
 
-        out_ += "\n[applet]\n";
-        table(j.at("applet"), {"id", "title", "description", "layout_locked", "x"}, false, "");
+        out_ += "\n[instrument]\n";
+        table(j.at("instrument"), {"id", "title", "description", "layout_locked", "x"}, false, "");
 
         if (auto sources = j.find("source"); sources != j.end()) {
             for (const json& s : *sources) {

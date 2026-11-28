@@ -116,13 +116,11 @@ public:
         if (spec_.version < kFormatVersion || spec_.version > kLatestFormatVersion) {
             sink_.error("spec.unsupported_version",
                         "This spec has format version " + std::to_string(spec_.version) +
-                            ", and this reader knows the versions " + std::to_string(kFormatVersion) + " to " +
-                            std::to_string(kLatestFormatVersion) + ".",
+                            ", and this reader knows format version " + std::to_string(kFormatVersion) + ".",
                         "caliper_spec");
             return;
         }
-        applet();
-        version_keys();
+        instrument();
         ids();
         const std::size_t n = spec_.sources.size();
         report_.sources.resize(n);
@@ -146,9 +144,8 @@ public:
 
 private:
     // The checks of design/instrument-interface.md, each in its own file
-    // (validate_additions.h). A version 0 spec holds none of their keys.
+    // (validate_additions.h).
     void additions() {
-        if (spec_.version < kInstrumentVersion) return;
         const AdditionsCheck c{spec_, resolver_, report_, sink_};
         validate_states(c);
         validate_references(c);
@@ -203,41 +200,16 @@ private:
         check_values(x, path, depth, x_values_, sink_);
     }
 
-    // ---- the applet and the ids -----------------------------------------------
+    // ---- the instrument and the ids -------------------------------------------
 
-    void applet() {
-        id(spec_.applet.id, "applet.id");
-        if (spec_.applet.title) text(*spec_.applet.title, "applet.title", limits::kTitleChars, TextKind::line, false);
-        if (spec_.applet.description)
-            text(*spec_.applet.description, "applet.description", limits::kDescriptionChars, TextKind::long_text,
-                 true);
-        extension(spec_.applet.x, "applet.x");
-    }
-
-    // A Spec of an older version that holds what a later version adds gets the
-    // errors that its version's reader gives (design/instruments.md).
-    void version_keys() {
-        for (std::size_t i = 0; i < spec_.panels.size(); ++i) {
-            const Primitive p = spec_.panels[i].primitive;
-            if (primitive_version(p) > spec_.version)
-                sink_.error("spec.unknown_primitive",
-                            quote(to_string(p)) + " is not a primitive of format version " +
-                                std::to_string(spec_.version) + "; raise caliper_spec to " +
-                                std::to_string(primitive_version(p)) + ".",
-                            index_path("panel", i) + ".primitive");
-        }
-        using Table = std::pair<const char*, bool>;
-        const Table tables[] = {{"control", !spec_.controls.empty()},
-                                {"state", !spec_.states.empty()},
-                                {"program", !spec_.programs.empty()},
-                                {"provenance", !spec_.provenance.empty()}};
-        for (const Table& t : tables)
-            if (t.second && spec_.version < kInstrumentVersion)
-                sink_.error("spec.unknown_key",
-                            "\"" + std::string(t.first) + "\" is not a key of a spec of format version " +
-                                std::to_string(spec_.version) + "; raise caliper_spec to " +
-                                std::to_string(kInstrumentVersion) + ".",
-                            t.first);
+    void instrument() {
+        id(spec_.instrument.id, "instrument.id");
+        if (spec_.instrument.title)
+            text(*spec_.instrument.title, "instrument.title", limits::kTitleChars, TextKind::line, false);
+        if (spec_.instrument.description)
+            text(*spec_.instrument.description, "instrument.description", limits::kDescriptionChars,
+                 TextKind::long_text, true);
+        extension(spec_.instrument.x, "instrument.x");
     }
 
     void ids() {

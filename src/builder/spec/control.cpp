@@ -1,8 +1,8 @@
-// The value types of spec version 1 (instrument.h, design/instruments.md).
+// The value types for scene panels and controls (control.h, design/instruments.md).
 //
 // The comparisons, the names of the kinds, the bind grammar of a control and
 // the binding of a scene slot.
-#include <caliper_builder/spec/instrument.h>
+#include <caliper_builder/spec/control.h>
 
 #include "internal.h"
 

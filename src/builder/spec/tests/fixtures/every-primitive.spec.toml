@@ -1,9 +1,9 @@
 # Every primitive, every option, every transform and extension tables at
 # several levels.
-caliper_spec = 0
+caliper_spec = 2
 x = { editor = { zoom = 1.5, open = ["a", "b"] } }
 
-[applet]
+[instrument]
 id = "every_primitive"
 title = "Every primitive"
 description = "Line one.\n\tLine two, with a tab and \"quotes\" and a backslash \\."
@@ -106,7 +106,7 @@ bind = { rows = "feed" }
 [[panel]]
 id = "note"
 primitive = "text"
-options = { text = "Notes about this applet." }
+options = { text = "Notes about this instrument." }
 
 [[panel]]
 id = "last"

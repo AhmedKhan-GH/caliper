@@ -35,10 +35,10 @@
 // What no mode and no rule changes: the registry refuses before any policy a
 // viewer's change and history.undo or history.redo from an agent; a data-loss
 // card always asks, Allow all included: an approval bound to the content it
-// would lose (an overwrite of a saved applet, the replacement of an open spec
-// with unsaved changes), since the card shows what is lost. A command that
-// deletes or overwrites saved work keeps its card under Allow all by binding
-// its approval to that content in the session, as applet.save does. A rule
+// would lose (an overwrite of a saved instrument, the replacement of an open
+// spec with unsaved changes), since the card shows what is lost. A command
+// that deletes or overwrites saved work keeps its card under Allow all by
+// binding its approval to that content in the session, as instrument.save does. A rule
 // never covers running Python code (a Python loader, a managed run's start or
 // fork), which only a card or Allow all lets run; and Read only beats every
 // rule. Nothing an agent sends sets a mode or a rule: there is no command for

@@ -189,7 +189,7 @@ const std::pair<const char*, const char*> kFragments[] = {
         "values": {"$use": "reference", "type": ["string", "object"], "minLength": 1, "maxLength": 320, "pattern": "^[a-z][a-z0-9_-]{0,63}([.].+)?$", "description": "heatmap: a rank-2 tensor; histogram: the values to count; image: a tensor [H, W], [H, W, 3] or [H, W, 4]. A reference to a text state whose choices are source ids also works."},
         "rows": {"$use": "reference", "type": ["string", "object"], "minLength": 1, "maxLength": 64, "pattern": "^[a-z][a-z0-9_-]{0,63}$", "description": "table: the id of a tabular source whose rows are shown. A reference to a text state whose choices are source ids also works."},
         "value": {"$use": "reference", "type": ["string", "object"], "minLength": 1, "maxLength": 320, "pattern": "^[a-z][a-z0-9_-]{0,63}([.].+)?$", "description": "text: a column, shown as its last value, or a tensor of one element. A reference to a text state whose choices are source ids also works."},
-        "scene": {"$use": "reference", "type": ["string", "object"], "minLength": 6, "maxLength": 256, "pattern": "^live:.+$", "description": "scene (spec version 1): the live scene of the attached script, as live:<scene name>, such as live:model; catalog.list names the scenes. A reference to a text state whose choices are source ids also works."}}})json"},
+        "scene": {"$use": "reference", "type": ["string", "object"], "minLength": 6, "maxLength": 256, "pattern": "^live:.+$", "description": "scene: the live scene of the attached script, as live:<scene name>, such as live:model; catalog.list names the scenes. A reference to a text state whose choices are source ids also works."}}})json"},
 
     {"options", R"json({
       "type": "object", "additionalProperties": false, "required": [],
@@ -219,9 +219,9 @@ const std::pair<const char*, const char*> kFragments[] = {
         "labels": {"type": "boolean", "description": "scene: whether the entities' labels are drawn; true by default."},
         "axes": {"type": "boolean", "description": "scene: whether the axes and the ground grid are drawn; true by default."},
         "scale_bar": {"type": "boolean", "description": "scene: whether a scale bar in the scene's units is drawn; false by default."},
-        "legend": {"type": ["string", "boolean"], "enum": ["auto", true, false], "description": "Spec version 1: auto, true or false; auto shows a legend for two series or more, or a colormap."},
-        "box": {"type": ["string", "array"], "minLength": 4, "maxLength": 4, "minItems": 3, "maxItems": 3, "items": {"type": "number", "minimum": 0}, "description": "Spec version 1, scene with entities: the data box, auto or three positive proportions of its x, y and z sides."},
-        "views": {"type": "array", "maxItems": 16, "description": "Spec version 1, scene: the saved views, each with a unique name.",
+        "legend": {"type": ["string", "boolean"], "enum": ["auto", true, false], "description": "auto, true or false; auto shows a legend for two series or more, or a colormap."},
+        "box": {"type": ["string", "array"], "minLength": 4, "maxLength": 4, "minItems": 3, "maxItems": 3, "items": {"type": "number", "minimum": 0}, "description": "scene with entities: the data box, auto or three positive proportions of its x, y and z sides."},
+        "views": {"type": "array", "maxItems": 16, "description": "scene: the saved views, each with a unique name.",
                   "items": {"type": "object", "additionalProperties": false, "required": ["name"],
                             "properties": {
                               "name": {"type": "string", "minLength": 1, "maxLength": 64, "description": "The view's name, unique in the panel."},
@@ -229,13 +229,13 @@ const std::pair<const char*, const char*> kFragments[] = {
                               "distance": {"type": "number", "minimum": 0, "description": "The distance from the target."},
                               "azimuth": {"type": "number", "description": "The orbit's azimuth in degrees."},
                               "elevation": {"type": "number", "minimum": -89, "maximum": 89, "description": "The orbit's elevation in degrees."}}}},
-        "select": {"type": "object", "additionalProperties": false, "required": ["state", "field"], "description": "Spec version 1: a pick on the panel writes one of its fields into a state variable.",
+        "select": {"type": "object", "additionalProperties": false, "required": ["state", "field"], "description": "A pick on the panel writes one of its fields into a state variable.",
                    "properties": {
                      "state": {"type": "string", "minLength": 1, "maxLength": 64, "description": "The state variable that the pick writes."},
                      "field": {"type": "string", "minLength": 1, "maxLength": 32, "description": "The pick field it writes, such as column, row, index or value."},
                      "entity": {"type": "string", "minLength": 1, "maxLength": 255, "description": "Only a pick on this entity writes."}}},
-        "format": {"type": "string", "minLength": 1, "maxLength": 1024, "description": "Spec version 1, text: a bound text in the format language, in place of text."},
-        "fields": {"description": "Spec version 1, text: a JSON object that gives each name of the format a reference or a source id."}}})json"},
+        "format": {"type": "string", "minLength": 1, "maxLength": 1024, "description": "text: a bound text in the format language, in place of text."},
+        "fields": {"description": "text: a JSON object that gives each name of the format a reference or a source id."}}})json"},
 
     {"panel", R"json({
       "type": "object", "additionalProperties": false, "required": ["id", "primitive", "title", "bind", "options"],
@@ -243,7 +243,7 @@ const std::pair<const char*, const char*> kFragments[] = {
         "id": {"$use": "id", "description": "The panel's id."},
         "primitive": {"type": "string", "enum": ["series", "heatmap", "points", "histogram", "table", "image", "text", "scene"], "description": "What the panel draws."},
         "title": {"type": ["string", "null"], "description": "The panel's title, or null when it has none."},
-        "closable": {"type": "boolean", "description": "Spec version 1: whether the person or a command can close or remove the panel; true when absent."},
+        "closable": {"type": "boolean", "description": "Whether the person or a command can close or remove the panel; true when absent."},
         "bind": {"$use": "bind", "description": "The panel's bindings, by slot."},
         "options": {"$use": "options", "description": "The panel's options."}}})json"},
 
@@ -257,12 +257,12 @@ const std::pair<const char*, const char*> kFragments[] = {
                               "id": {"$use": "id", "description": "The node's id; it must not be a panel's or a control's id."},
                               "split": {"type": "string", "enum": ["horizontal", "vertical", "tabs"], "description": "horizontal puts the children side by side, vertical one above another, tabs in tabs."},
                               "ratio": {"type": ["number", "null"], "minimum": 0.05, "maximum": 0.95, "description": "For a split of exactly two children, the share of the first, from 0.05 to 0.95; null for an even split and for tabs."},
-                              "shares": {"type": "array", "minItems": 2, "maxItems": 64, "items": {"type": "number", "minimum": 0}, "description": "Spec version 1: one positive share for each child of a split, in place of ratio; each child first gets its minimum and the rest goes by the shares."},
-                              "mins": {"description": "Spec version 1: a JSON object that gives a panel or control child, by its id, its minimum size as [columns, lines] of the text scale, each an integer from 4 to 400."},
+                              "shares": {"type": "array", "minItems": 2, "maxItems": 64, "items": {"type": "number", "minimum": 0}, "description": "One positive share for each child of a split, in place of ratio; each child first gets its minimum and the rest goes by the shares."},
+                              "mins": {"description": "A JSON object that gives a panel or control child, by its id, its minimum size as [columns, lines] of the text scale, each an integer from 4 to 400."},
                               "title": {"type": ["string", "null"], "minLength": 1, "maxLength": 256, "description": "The node's tab label when it is a child of tabs, or null."},
-                              "children": {"type": "array", "minItems": 1, "maxItems": 64, "items": {"$use": "id"}, "description": "Panel ids, control ids (spec version 1) and node ids, in order: 2 to 64 for a split, 1 to 64 for tabs; each node is used once."}}}}}})json"},
+                              "children": {"type": "array", "minItems": 1, "maxItems": 64, "items": {"$use": "id"}, "description": "Panel ids, control ids and node ids, in order: 2 to 64 for a split, 1 to 64 for tabs; each node is used once."}}}}}})json"},
 
-    // Spec version 1 controls (design/instruments.md, Control Table).
+    // Controls (design/instruments.md, Control Table).
     {"control_bind", R"json({"type": "string", "minLength": 5, "maxLength": 320, "pattern": "^(param:.{1,63}|action:.{1,63}|run:pause|value|state:[a-z][a-z0-9_-]{0,63}|cursor|intervene:.{1,255})$",
       "description": "The one target of the control: param:<name> for a parameter the script registered with caliper.param, action:<name> for an action it registered with caliper.action, run:pause for the run's pause and resume, value for a value the spec holds, state:<id> for a state variable of the spec, cursor for the time cursor, or intervene:<point> for an intervention point that intervene.points lists. A slider or text binds param:, value or state:; a range, a picker and a segmented group bind value or state:; a button binds action: or run:pause; a toggle binds intervene:<point>, param:<name>, value or state:; a transport binds cursor. run.state lists the names of parameters and actions."})json"},
 
@@ -387,7 +387,7 @@ const std::pair<const char*, const char*> kFragments[] = {
         "script": {"type": "string", "description": "run with change attach: the attached script's name."},
         "command": {"type": "string", "description": "spec and approval: the command, such as panel.create."},
         "event": {"type": "string", "enum": ["do", "undo", "redo"], "description": "spec: whether the command was done, undone or redone."},
-        "applet": {"type": "string", "description": "spec: the open spec's applet id."},
+        "instrument": {"type": "string", "description": "spec: the open spec's instrument id."},
         "approval": {"type": "string", "description": "approval: the approval's id."},
         "target": {"type": "string", "description": "approval of a run command: the parameter or the action it names."},
         "run": {"type": "string", "description": "run with change runner: the managed run's id."},
@@ -629,51 +629,51 @@ constexpr const char* kNoArgs = R"json({"type": "object", "additionalProperties"
 const Row kRows[] = {
     // app
     {"app.info", false, false, false,
-     "Describes the running Caliper app: its version, the ABI epoch its applets must be built for, the services it "
+     "Describes the running Caliper app: its version, the ABI epoch its instrument libraries must be built for, the services it "
      "offers, and the versions of the SDK, libtorch and its interface libraries. It changes nothing.",
      kNoArgs,
      R"json({"type": "object", "additionalProperties": false, "required": ["abi_epoch", "host", "libtorch", "sdk", "services", "ui_stack"],
       "properties": {
-        "abi_epoch": {"type": "integer", "description": "The ABI epoch that compiled applets must be built for."},
+        "abi_epoch": {"type": "integer", "description": "The ABI epoch that instrument libraries must be built for."},
         "host": {"type": "string", "description": "The app's version."},
         "libtorch": {"type": ["string", "null"], "description": "The libtorch version, or null when the app has none."},
         "sdk": {"type": ["string", "null"], "description": "The Caliper SDK version, or null when it is not known."},
-        "services": {"type": "array", "items": {"type": "string"}, "description": "The service ids the app offers to applets, such as caliper.data.v1."},
+        "services": {"type": "array", "items": {"type": "string"}, "description": "The service ids the app offers to instruments, such as caliper.data.v1."},
         "ui_stack": {"type": ["string", "null"], "description": "A fingerprint of the interface libraries, or null."}}})json",
      "{}"},
-    {"app.applets", false, false, true,
-     "Lists the applets the app found, as caliper list shows them: each applet's manifest id, its version, its "
+    {"app.instruments", false, false, true,
+     "Lists the instruments the app found, as caliper list shows them: each instrument's manifest id, its version, its "
      "kind (library or spec), its folder, its status (READY, ACTIVE for the one open now, REFUSED, SHADOWED) and "
      "the reason when it cannot run. "
      "The id is what app.launch takes. It changes nothing.",
      kNoArgs,
-     R"json({"type": "object", "additionalProperties": false, "required": ["applets"],
-      "properties": {"applets": {"type": "array", "description": "The applets, in the app's search order.",
+     R"json({"type": "object", "additionalProperties": false, "required": ["instruments"],
+      "properties": {"instruments": {"type": "array", "description": "The instruments, in the app's search order.",
         "items": {"type": "object", "additionalProperties": false, "required": ["folder", "id", "reason", "status", "version"],
           "properties": {
-            "folder": {"type": "string", "description": "The folder the applet was found in."},
-            "kind": {"type": "string", "enum": ["library", "spec"], "description": "library for a compiled applet, spec for a spec applet."},
-            "id": {"type": "string", "description": "The applet's manifest id."},
-            "reason": {"type": "string", "description": "Why the applet cannot run; empty for a READY applet."},
+            "folder": {"type": "string", "description": "The folder the instrument was found in."},
+            "kind": {"type": "string", "enum": ["library", "spec"], "description": "library for an instrument with a library, spec for an instrument written as a spec."},
+            "id": {"type": "string", "description": "The instrument's manifest id."},
+            "reason": {"type": "string", "description": "Why the instrument cannot run; empty for a READY instrument."},
             "status": {"type": "string", "description": "READY, ACTIVE, REFUSED or SHADOWED, as caliper list prints it."},
-            "version": {"type": "string", "description": "The applet's version."}}}}}})json",
+            "version": {"type": "string", "description": "The instrument's version."}}}}}})json",
      "{}"},
     {"app.launch", false, false, true,
-     "Opens the page of one applet, as a click on its row on the app's landing screen does; an attached live "
-     "session stays attached. The id is an applet's manifest id from app.applets. A compiled applet's page replaces "
-     "the page shown at once. A dashboard of the workspace opens with an applet.open from your origin, and the page "
-     "changes only when that has run: when it would replace the open spec's unsaved changes it waits for the "
-     "person's approval, the status is PENDING_APPROVAL rather than ACTIVE, its note says how to check whether it "
-     "opened, and if the person denies it nothing changes.",
+     "Opens the page of one instrument, as a click on its row on the app's landing screen does; an attached live "
+     "session stays attached. The id is an instrument's manifest id from app.instruments. An instrument with a library "
+     "replaces the page shown at once. An instrument written as a spec in the workspace opens with an instrument.open "
+     "from your origin, and the page changes only when that has run: when it would replace the open spec's unsaved "
+     "changes it waits for the person's approval, the status is PENDING_APPROVAL rather than ACTIVE, its note says how "
+     "to check whether it opened, and if the person denies it nothing changes.",
      R"json({"type": "object", "additionalProperties": false, "required": ["id"],
       "properties": {"id": {"type": "string", "pattern": "^[A-Za-z0-9._-]{1,128}$", "minLength": 1, "maxLength": 128,
-                            "description": "The applet's manifest id, such as com.example.my-viewer, from app.applets."}}})json",
+                            "description": "The instrument's manifest id, such as com.example.my-viewer, from app.instruments."}}})json",
      R"json({"type": "object", "additionalProperties": false, "required": ["already_open", "id", "status", "version"],
       "properties": {
-        "already_open": {"type": "boolean", "description": "Whether the applet's page was already open."},
-        "id": {"type": "string", "description": "The applet's manifest id."},
-        "status": {"type": "string", "description": "The applet's status after the launch: ACTIVE when it opened; PENDING_APPROVAL when its open waits for the person's approval, because it would replace the open spec's unsaved changes; PENDING when the app cannot tell yet whether it will."},
-        "version": {"type": "string", "description": "The applet's version."},
+        "already_open": {"type": "boolean", "description": "Whether the instrument's page was already open."},
+        "id": {"type": "string", "description": "The instrument's manifest id."},
+        "status": {"type": "string", "description": "The instrument's status after the launch: ACTIVE when it opened; PENDING_APPROVAL when its open waits for the person's approval, because it would replace the open spec's unsaved changes; PENDING when the app cannot tell yet whether it will."},
+        "version": {"type": "string", "description": "The instrument's version."},
         "note": {"type": "string", "description": "With PENDING_APPROVAL or PENDING: what the launch waits for, and that spec.get names the open spec once it has opened."}}})json",
      R"json({"id": "com.example.my-viewer"})json"},
 
@@ -867,47 +867,47 @@ const Row kRows[] = {
     // spec
     {"spec.new", true, false, true,
      "Starts a new, empty spec and makes it the open spec: the one the builder shows and that the source, panel and "
-     "layout commands edit. A spec is the text that describes an applet built from data: its sources, its panels "
-     "and their layout. The id names the applet, in lower case with digits, - and _. Undo returns to the spec that "
+     "layout commands edit. A spec is the text that describes an instrument built from data: its sources, its panels "
+     "and their layout. The id names the instrument, in lower case with digits, - and _. Undo returns to the spec that "
      "was open before.",
      R"json({"type": "object", "additionalProperties": false, "required": ["id"],
       "properties": {
-        "id": {"$use": "id", "description": "The applet's id, such as attention-entropy."},
-        "title": {"type": "string", "minLength": 1, "maxLength": 256, "description": "The applet's title for a person."},
-        "description": {"type": "string", "maxLength": 4096, "description": "What the applet shows, in a sentence or two."},
-        "layout_locked": {"type": "boolean", "description": "Spec version 1: whether the whole layout is locked, making every component non-closable and fixing its layout; false when absent."}}})json",
+        "id": {"$use": "id", "description": "The instrument's id, such as attention-entropy."},
+        "title": {"type": "string", "minLength": 1, "maxLength": 256, "description": "The instrument's title for a person."},
+        "description": {"type": "string", "maxLength": 4096, "description": "What the instrument shows, in a sentence or two."},
+        "layout_locked": {"type": "boolean", "description": "Whether the whole layout is locked, making every component non-closable and fixing its layout; false when absent."}}})json",
      R"json({"type": "object", "additionalProperties": false, "required": ["id", "text"],
       "properties": {
-        "id": {"type": "string", "description": "The applet's id."},
+        "id": {"type": "string", "description": "The instrument's id."},
         "text": {"type": "string", "description": "The new spec's TOML text."}}})json",
      R"json({"id": "attention-entropy", "title": "Attention entropy", "description": "Entropy of each attention head while the model trains."})json"},
     {"spec.open", true, false, true,
      "Opens a spec file of the workspace as the open spec. The path is relative to the workspace and ends in "
-     ".spec.toml, such as applets/attention-entropy/attention-entropy.spec.toml. To open a saved applet by its id, "
-     "use applet.open. Undo returns to the spec that was open before, with its unsaved changes.",
+     ".spec.toml, such as instruments/attention-entropy/attention-entropy.spec.toml. To open a saved instrument by its id, "
+     "use instrument.open. Undo returns to the spec that was open before, with its unsaved changes.",
      R"json({"type": "object", "additionalProperties": false, "required": ["path"],
       "properties": {"path": {"type": "string", "minLength": 1, "maxLength": 1024, "pattern": "\\.spec\\.toml$", "description": "The spec file, relative to the workspace."}}})json",
      R"json({"type": "object", "additionalProperties": false, "required": ["id", "path", "warnings"],
       "properties": {
-        "id": {"type": "string", "description": "The applet id of the spec opened."},
+        "id": {"type": "string", "description": "The instrument id of the spec opened."},
         "path": {"type": "string", "description": "The file opened, relative to the workspace."},
         "warnings": {"type": "array", "items": {"$use": "diagnostic"}, "description": "What the validator warns about, such as a source with no wire form."}}})json",
-     R"json({"path": "applets/attention-entropy/attention-entropy.spec.toml"})json"},
+     R"json({"path": "instruments/attention-entropy/attention-entropy.spec.toml"})json"},
     {"spec.get", false, false, true,
-     "Returns the open spec as its TOML text and as its canonical JSON form, with its applet id, the file it was "
-     "saved to or opened from, and whether it has unsaved changes. With applet, it returns that saved spec applet's "
-     "spec instead, read from its files without opening it. When no spec is open and no applet is named, it answers "
+     "Returns the open spec as its TOML text and as its canonical JSON form, with its instrument id, the file it was "
+     "saved to or opened from, and whether it has unsaved changes. With instrument, it returns that saved instrument's "
+     "spec instead, read from its files without opening it. When no spec is open and no instrument is named, it answers "
      "open false and nothing else, which is not an error: make one with spec.new or open one with spec.open or "
-     "applet.open. It changes nothing.",
+     "instrument.open. It changes nothing.",
      R"json({"type": "object", "additionalProperties": false, "required": [],
-      "properties": {"applet": {"$use": "id", "description": "A saved spec applet's id, from applet.list; the open spec when absent."}}})json",
+      "properties": {"instrument": {"$use": "id", "description": "A saved instrument's id, from instrument.list; the open spec when absent."}}})json",
      R"json({"type": "object", "additionalProperties": false, "required": ["open"],
       "properties": {
-        "open": {"type": "boolean", "description": "True with a spec in the result, the open one or the named applet's; false when no applet is named and no spec is open, and then no other field is given."},
-        "id": {"type": "string", "description": "The spec's applet id."},
+        "open": {"type": "boolean", "description": "True with a spec in the result, the open one or the named instrument's; false when no instrument is named and no spec is open, and then no other field is given."},
+        "id": {"type": "string", "description": "The spec's instrument id."},
         "path": {"type": ["string", "null"], "description": "Its file, relative to the workspace, or null when it was never saved."},
         "dirty": {"type": "boolean", "description": "Whether it has changes that are not saved."},
-        "open_in_app": {"type": "boolean", "description": "With applet: whether the app has that applet open, so that its live sources, values and kept steps reach panel.data; a saved applet that is not open shows no live data."},
+        "open_in_app": {"type": "boolean", "description": "With instrument: whether the app has that instrument open, so that its live sources, values and kept steps reach panel.data; a saved instrument that is not open shows no live data."},
         "text": {"type": "string", "description": "The spec as TOML text, in canonical form."},
         "json": {"type": "object", "additionalProperties": true, "description": "The spec's canonical JSON form: the TOML tables as JSON objects, as the spec format's JSON Schema describes them."}}})json",
      "{}"},
@@ -916,15 +916,15 @@ const Row kRows[] = {
      "open spec stays as it was. Use spec.validate first to see every error. Undo restores the previous text. The result holds the change as a diff; with dry_run true the change is only checked and not applied.",
      R"json({"type": "object", "additionalProperties": false, "required": ["text"],
       "properties": {
-        "text": {"type": "string", "minLength": 1, "maxLength": 262144, "description": "The whole spec as TOML text, with caliper_spec = 0, an [applet] table, [[source]] and [[panel]] tables and a [layout] table."},
+        "text": {"type": "string", "minLength": 1, "maxLength": 262144, "description": "The whole spec as TOML text, with caliper_spec = 2, an [instrument] table, [[source]] and [[panel]] tables and a [layout] table."},
         "dry_run": {"$use": "dry_run"}}})json",
      R"json({"type": "object", "additionalProperties": false, "required": ["id", "warnings", "diff", "applied"],
       "properties": {
-        "id": {"type": "string", "description": "The spec's applet id."},
+        "id": {"type": "string", "description": "The spec's instrument id."},
         "warnings": {"$use": "warnings"},
         "diff": {"$use": "diff"},
         "applied": {"$use": "applied"}}})json",
-     R"json({"text": "caliper_spec = 0\n[applet]\nid = \"loss\"\ntitle = \"Loss\"\n[[source]]\nid = \"loss\"\nsql = \"SELECT step, loss FROM run42_metrics ORDER BY step\"\n[[panel]]\nid = \"loss\"\nprimitive = \"series\"\nbind = { x = \"loss.step\", y = [\"loss.loss\"] }\n[layout]\nchildren = [\"loss\"]\n"})json"},
+     R"json({"text": "caliper_spec = 2\n[instrument]\nid = \"loss\"\ntitle = \"Loss\"\n[[source]]\nid = \"loss\"\nsql = \"SELECT step, loss FROM run42_metrics ORDER BY step\"\n[[panel]]\nid = \"loss\"\nprimitive = \"series\"\nbind = { x = \"loss.step\", y = [\"loss.loss\"] }\n[layout]\nchildren = [\"loss\"]\n"})json"},
     {"spec.validate", false, false, true,
      "Checks a spec and lists its errors and warnings, each with a code, a message and where it is. It checks the "
      "given text, or the open spec when no text is given. An invalid spec is reported in the result, not as an "
@@ -1001,9 +1001,9 @@ const Row kRows[] = {
      R"json({"type": "object", "additionalProperties": false, "required": ["id", "primitive"],
       "properties": {
         "id": {"$use": "id", "description": "The new panel's id."},
-        "primitive": {"type": "string", "enum": ["series", "heatmap", "points", "histogram", "table", "image", "text", "scene"], "description": "What the panel draws. Required slots: series y; heatmap values; points x and y, or positions; histogram values; table rows; image values; text none; scene scene (spec version 1)."},
+        "primitive": {"type": "string", "enum": ["series", "heatmap", "points", "histogram", "table", "image", "text", "scene"], "description": "What the panel draws. Required slots: series y; heatmap values; points x and y, or positions; histogram values; table rows; image values; text none; scene scene."},
         "title": {"type": "string", "minLength": 1, "maxLength": 256, "description": "The panel's title; the id when absent."},
-        "closable": {"type": "boolean", "description": "Spec version 1: whether the panel can be closed or removed; true when absent."},
+        "closable": {"type": "boolean", "description": "Whether the panel can be closed or removed; true when absent."},
         "bind": {"$use": "bind", "description": "The bindings by slot: a spec source id, or <source>.<column> for one column of a tabular source."},
         "entity": {"type": "array", "maxItems": 256, "items": {"description": "An entity table, a JSON object."}, "description": "scene: the entities of the panel's scene, as a list of entity tables."},
         "annotation": {"type": "array", "maxItems": 256, "items": {"description": "An annotation table, a JSON object."}, "description": "The annotations of the panel, as a list of annotation tables."},
@@ -1033,7 +1033,7 @@ const Row kRows[] = {
                   "description": "The keys to change; null removes one.",
                   "properties": {
                     "title": {"type": ["string", "null"], "minLength": 1, "maxLength": 256, "description": "The panel's title."},
-                    "closable": {"type": ["boolean", "null"], "description": "Spec version 1: whether the panel can be closed or removed; null restores the default (true)."},
+                    "closable": {"type": ["boolean", "null"], "description": "Whether the panel can be closed or removed; null restores the default (true)."},
                     "primitive": {"type": "string", "enum": ["series", "heatmap", "points", "histogram", "table", "image", "text", "scene"], "description": "What the panel draws."},
                     "bind": {"$patch": "bind", "description": "Slots to bind, or null to unbind one."},
                     "options": {"$patch": "options", "description": "Options to set, or null to clear one."},
@@ -1079,11 +1079,11 @@ const Row kRows[] = {
      "within the bounds of what a panel can show (long lines as a min/max envelope, large grids and clouds sampled "
      "at a stride, a histogram's bin counts, the first 1,000 rows of a table), with a version. Pass the version you "
      "have as known, and the answer is unchanged, with no data, until the panel's sources, the spec or the catalog "
-     "change. It reads a saved spec applet with applet, else the open spec. It changes nothing.",
+     "change. It reads a saved instrument with instrument, else the open spec. It changes nothing.",
      R"json({"type": "object", "additionalProperties": false, "required": ["panel"],
       "properties": {
         "panel": {"$use": "id", "description": "The panel's id in the spec."},
-        "applet": {"$use": "id", "description": "A saved spec applet's id, from applet.list; the open spec when absent."},
+        "instrument": {"$use": "id", "description": "A saved instrument's id, from instrument.list; the open spec when absent."},
         "known": {"type": "string", "maxLength": 64, "description": "The version of the data you have, from an earlier answer."}}})json",
      R"json({"type": "object", "additionalProperties": false,
       "required": ["panel", "primitive", "version", "unchanged", "error", "state", "bounds", "data"],
@@ -1106,7 +1106,7 @@ const Row kRows[] = {
         "bounds": {"type": "array", "items": {"type": "string"}, "description": "The bounds that applied, in plain words, such as a line decimated or a table cut."},
         "data": {"type": ["object", "null"], "additionalProperties": true,
           "description": "The primitive's data, null with an error, a state or unchanged. Arrays of numbers are objects of dtype (f32 or f64), shape and base64, the little-endian bytes; tables, cells and counts are JSON. series: x_index, steps and lines of binding, row, count, last, x and y. heatmap: source_rows, source_cols, stride_rows, stride_cols and values. image: source_rows, source_cols, stride, channels, float and values. points: three_d, total, stride, x, y, z, color, color_integer and size. histogram: lo, hi, total, outside and counts. table: columns, rows, total_rows and truncated. text: value."}}})json",
-     R"json({"panel": "curves", "applet": "run42-dashboard"})json"},
+     R"json({"panel": "curves", "instrument": "run42-dashboard"})json"},
 
     // layout
     {"layout.place", true, false, true,
@@ -1116,7 +1116,7 @@ const Row kRows[] = {
      " The result holds the change as a diff; with dry_run true the change is only checked and not applied.",
      R"json({"type": "object", "additionalProperties": false, "required": ["panel", "target", "where"],
       "properties": {
-        "panel": {"$use": "id", "description": "The id of the panel, or of the control (spec version 1), to place."},
+        "panel": {"$use": "id", "description": "The id of the panel, or of the control, to place."},
         "target": {"$use": "id", "description": "The id of the panel or control to place it next to."},
         "where": {"type": "string", "enum": ["beside", "above", "below", "tabbed"], "description": "Where to place it, relative to the target."},
         "ratio": {"type": "number", "minimum": 0.05, "maximum": 0.95, "default": 0.5, "description": "The share of the space the placed panel gets; 0.5 when absent."},
@@ -1225,43 +1225,43 @@ const Row kRows[] = {
         "edits": {"type": "integer", "description": "How many edits were dropped."}}})json",
      R"json({"id": "widget-1"})json"},
 
-    // applet
-    {"applet.save", true, true, true,
-     "Saves the open spec as a spec applet of the workspace: the folder applets/<id>/ with a manifest "
-     "<id>.caliper.toml and the spec <id>.spec.toml. The id is the spec's applet id unless one is given. Saving over "
-     "an existing applet needs overwrite set to true. It writes files, so an agent's call needs the person's "
+    // instrument
+    {"instrument.save", true, true, true,
+     "Saves the open spec as an instrument of the workspace: the folder instruments/<id>/ with a manifest "
+     "<id>.caliper.toml and the spec <id>.spec.toml. The id is the spec's instrument id unless one is given. Saving over "
+     "an existing instrument needs overwrite set to true. It writes files, so an agent's call needs the person's "
      "approval, and it cannot be undone.",
      R"json({"type": "object", "additionalProperties": false, "required": [],
       "properties": {
-        "id": {"$use": "id", "description": "The applet's id; the spec's own applet id when absent."},
-        "overwrite": {"type": "boolean", "default": false, "description": "Whether to replace a saved applet of the same id; false when absent."}}})json",
+        "id": {"$use": "id", "description": "The instrument's id; the spec's own instrument id when absent."},
+        "overwrite": {"type": "boolean", "default": false, "description": "Whether to replace a saved instrument of the same id; false when absent."}}})json",
      R"json({"type": "object", "additionalProperties": false, "required": ["id", "manifest", "spec"],
       "properties": {
-        "id": {"type": "string", "description": "The saved applet's id."},
+        "id": {"type": "string", "description": "The saved instrument's id."},
         "manifest": {"type": "string", "description": "The manifest's path, relative to the workspace."},
         "spec": {"type": "string", "description": "The spec's path, relative to the workspace."}}})json",
      R"json({"id": "attention-entropy"})json"},
-    {"applet.open", true, false, true,
-     "Opens a saved spec applet of the workspace by its id, from applet.list, as the open spec, so that it can be "
+    {"instrument.open", true, false, true,
+     "Opens a saved instrument of the workspace by its id, from instrument.list, as the open spec, so that it can be "
      "edited. Undo returns to the spec that was open before.",
      R"json({"type": "object", "additionalProperties": false, "required": ["id"],
-      "properties": {"id": {"$use": "id", "description": "The applet's id, from applet.list."}}})json",
+      "properties": {"id": {"$use": "id", "description": "The instrument's id, from instrument.list."}}})json",
      R"json({"type": "object", "additionalProperties": false, "required": ["id", "title", "warnings"],
       "properties": {
-        "id": {"type": "string", "description": "The applet's id."},
-        "title": {"type": "string", "description": "The applet's title."},
+        "id": {"type": "string", "description": "The instrument's id."},
+        "title": {"type": "string", "description": "The instrument's title."},
         "warnings": {"type": "array", "items": {"$use": "diagnostic"}, "description": "What the validator warns about."}}})json",
      R"json({"id": "attention-entropy"})json"},
-    {"applet.list", false, false, false,
-     "Lists the spec applets saved in the workspace, with each one's id, title, folder and the time it was last "
-     "saved. The id is what applet.open takes. It changes nothing.",
+    {"instrument.list", false, false, false,
+     "Lists the instruments written as specs and saved in the workspace, with each one's id, title, folder and the time it was last "
+     "saved. The id is what instrument.open takes. It changes nothing.",
      kNoArgs,
-     R"json({"type": "object", "additionalProperties": false, "required": ["applets"],
-      "properties": {"applets": {"type": "array", "description": "The saved spec applets, sorted by id.",
+     R"json({"type": "object", "additionalProperties": false, "required": ["instruments"],
+      "properties": {"instruments": {"type": "array", "description": "The saved instruments, sorted by id.",
         "items": {"type": "object", "additionalProperties": false, "required": ["id", "title", "path", "updated_at"],
           "properties": {
-            "id": {"type": "string", "description": "The applet's id."},
-            "title": {"type": "string", "description": "The applet's title."},
+            "id": {"type": "string", "description": "The instrument's id."},
+            "title": {"type": "string", "description": "The instrument's title."},
             "path": {"type": "string", "description": "Its folder, relative to the workspace."},
             "updated_at": {"type": ["string", "null"], "description": "When it was last saved, in UTC ISO 8601."}}}}}})json",
      "{}"},
@@ -1287,7 +1287,7 @@ const Row kRows[] = {
      "does. It changes nothing.",
      kNoArgs, R"json({"$use": "png"})json", "{}"},
 
-    // control (spec version 1; design/instruments.md)
+    // control (design/instruments.md)
     {"control.create", true, false, true,
      "Adds a control to the open spec: a slider, a button or a toggle that the person and you can use. bind names its "
      "one target: param:<name> for a parameter of the running script, action:<name> for an action of it, run:pause "
@@ -2071,7 +2071,7 @@ json expand(const json& v, const std::map<std::string, json>& fragments, std::ve
 using E = CommandEffect;
 const std::pair<const char*, CommandEffect> kEffects[] = {
     {"app.info", E::read},
-    {"app.applets", E::read},
+    {"app.instruments", E::read},
     {"app.launch", E::change},  // changes the page the app shows, and may replace the open spec
     {"catalog.list", E::read},
     {"catalog.describe", E::read},
@@ -2104,9 +2104,9 @@ const std::pair<const char*, CommandEffect> kEffects[] = {
     {"preview.diff", E::read},
     {"preview.commit", E::edit},
     {"preview.discard", E::read},
-    {"applet.save", E::change},
-    {"applet.open", E::change},
-    {"applet.list", E::read},
+    {"instrument.save", E::change},
+    {"instrument.open", E::change},
+    {"instrument.list", E::read},
     {"review.status", E::read},
     {"capture.frame", E::read},
     {"control.create", E::edit},

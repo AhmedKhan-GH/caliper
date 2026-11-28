@@ -17,10 +17,10 @@ using nlohmann::json;
 
 namespace {
 
-// One document that uses every new key, with the examples of the design page.
-const char* kInstrumentDocument = R"toml(caliper_spec = 1
+// One document that uses every interactive key, with the examples of the design page.
+const char* kInstrumentDocument = R"toml(caliper_spec = 2
 
-[applet]
+[instrument]
 id = "terrain-demo"
 title = "Terrain Demo"
 
@@ -237,12 +237,12 @@ cs::ParseResult parse(const std::string& text) { return cs::parse_toml(text); }
 
 }  // namespace
 
-TEST_CASE("a version 1 document with every new key reads into the expected values") {
+TEST_CASE("a version 2 document with every interactive key reads into the expected values") {
     auto r = parse(kInstrumentDocument);
     REQUIRE_MESSAGE(r.ok(), dump(r.diagnostics));
     const cs::Spec& s = r.spec;
-    CHECK(s.version == 1);
-    CHECK(cs::required_version(s) == 1);
+    CHECK(s.version == 2);
+    CHECK(cs::required_version(s) == 2);
 
     REQUIRE(s.sources.size() == 5);
     CHECK(s.sources[0].history == std::optional<std::int64_t>(2048));
@@ -398,11 +398,11 @@ TEST_CASE("a version 1 document with every new key reads into the expected value
     CHECK_FALSE(s.layout->children[0].children[1].min.has_value());
 }
 
-TEST_CASE("the document with every new key round trips through canonical TOML") {
+TEST_CASE("the document with every interactive key round trips through canonical TOML") {
     auto first = parse(kInstrumentDocument);
     REQUIRE_MESSAGE(first.ok(), dump(first.diagnostics));
     const std::string text = cs::to_toml(first.spec);
-    CHECK(text.find("caliper_spec = 1\n") == 0);
+    CHECK(text.find("caliper_spec = 2\n") == 0);
     CHECK(text.find("\n[[state]]\nid = \"token\"\n") != std::string::npos);
     CHECK(text.find("[[state]]") < text.find("[[panel]]"));
     CHECK(text.find("[[panel]]\nid = \"world\"") < text.find("  [[panel.entity]]\n  path = \"terrain\"\n"));
@@ -414,7 +414,7 @@ TEST_CASE("the document with every new key round trips through canonical TOML") 
     CHECK(cs::to_toml(second.spec) == text);  // the writer reaches a fixed point at once
 }
 
-TEST_CASE("the document with every new key round trips through canonical JSON") {
+TEST_CASE("the document with every interactive key round trips through canonical JSON") {
     auto parsed = parse(kInstrumentDocument);
     REQUIRE(parsed.ok());
     const json j = cs::to_json(parsed.spec);
@@ -429,7 +429,7 @@ TEST_CASE("the document with every new key round trips through canonical JSON") 
     CHECK(cs::to_json_text(from_text.spec) == text);
     CHECK(json::parse(text) == j);
 
-    // The JSON form of the new keys.
+    // The JSON form of the interactive keys.
     CHECK(j.at("state").size() == 5);
     CHECK(j.at("source")[1].at("transform")[0].at("start") == (json{{"control", "window"}, {"field", "lo"}}));
     CHECK(j.at("panel")[0].at("entity").size() == 2);
@@ -468,38 +468,18 @@ TEST_CASE("the item decoders and writers of state, entity and annotation agree w
     CHECK(has(missing.diagnostics, "spec.missing_key", "state.type"));
 }
 
-TEST_CASE("a version 0 document keeps the new keys unknown") {
-    const std::string head = "caliper_spec = 0\n[applet]\nid = \"a\"\n";
-    auto state = parse(head + "[[state]]\nid = \"t\"\ntype = \"number\"\n");
-    CHECK(has(state.diagnostics, "spec.unknown_key", "state"));
-
-    auto history = parse(head + "[[source]]\nid = \"s\"\ncatalog = \"live:x\"\nhistory = 4\n");
-    CHECK(has(history.diagnostics, "spec.unknown_key", "source[0].history"));
-
-    auto window = parse(head + "[[source]]\nid = \"s\"\nfrom = \"t\"\n  [[source.transform]]\n  op = \"window\"\n");
-    CHECK(has(window.diagnostics, "spec.unknown_transform", "source[0].transform[0].op"));
-
-    auto reference = parse(head + "[[source]]\nid = \"s\"\nfrom = \"t\"\n  [[source.transform]]\n  op = \"slice\"\n"
-                                  "  axis = 0\n  index = { state = \"t\" }\n");
-    CHECK(has(reference.diagnostics, "spec.wrong_type", "source[0].transform[0].index"));
-    CHECK_FALSE(has(reference.diagnostics, "spec.bad_reference"));
-
-    auto option = parse(head + "[[panel]]\nid = \"p\"\nprimitive = \"series\"\nbind = { x = \"a.x\", y = \"a.y\" }\n"
-                               "options = { legend = true }\n");
-    CHECK(has(option.diagnostics, "spec.unknown_option", "panel[0].options.legend"));
-
-    auto entity = parse(head + "[[panel]]\nid = \"p\"\nprimitive = \"series\"\n  [[panel.entity]]\n  path = \"a\"\n");
-    CHECK(has(entity.diagnostics, "spec.unknown_key", "panel[0].entity"));
-
-    auto layout = parse(head + "[layout]\nsplit = \"horizontal\"\nshares = [1, 1]\nchildren = [\"a\", \"b\"]\n");
-    CHECK(has(layout.diagnostics, "spec.unknown_key", "layout.shares"));
-
-    // The same state table as version 1 reads.
-    CHECK(parse("caliper_spec = 1\n[applet]\nid = \"a\"\n[[state]]\nid = \"t\"\ntype = \"number\"\n").ok());
+TEST_CASE("retired spec versions are refused") {
+    for (int v : {0, 1, 3}) {
+        CAPTURE(v);
+        auto r = parse("caliper_spec = " + std::to_string(v) + "\n[instrument]\nid = \"a\"\n"
+                       "[[state]]\nid = \"t\"\ntype = \"number\"\n");
+        CHECK(has(r.diagnostics, "spec.unsupported_version", "caliper_spec"));
+    }
+    CHECK(parse("caliper_spec = 2\n[instrument]\nid = \"a\"\n[[state]]\nid = \"t\"\ntype = \"number\"\n").ok());
 }
 
 TEST_CASE("a table that looks like a reference but is not one gives spec.bad_reference") {
-    const std::string head = "caliper_spec = 1\n[applet]\nid = \"a\"\n";
+    const std::string head = "caliper_spec = 2\n[instrument]\nid = \"a\"\n";
     auto slice = [&](const std::string& index) {
         return parse(head + "[[source]]\nid = \"s\"\nfrom = \"t\"\n  [[source.transform]]\n  op = \"slice\"\n"
                             "  axis = 0\n  index = " +
@@ -537,14 +517,14 @@ TEST_CASE("a table that looks like a reference but is not one gives spec.bad_ref
     CHECK(has(fields.diagnostics, "spec.bad_reference", "control[0].options.fields.a"));
 }
 
-TEST_CASE("the types of the new keys are checked") {
-    const std::string head = "caliper_spec = 1\n[applet]\nid = \"a\"\n";
+TEST_CASE("the types of the interactive keys are checked") {
+    const std::string head = "caliper_spec = 2\n[instrument]\nid = \"a\"\n";
     auto diagnostics = [&](const std::string& body) { return parse(head + body).diagnostics; };
     CHECK(has(diagnostics("[[state]]\nid = \"t\"\ntype = \"vector\"\n"), "spec.bad_value", "state[0].type"));
     CHECK(has(diagnostics("[[state]]\nid = \"t\"\n"), "spec.missing_key", "state[0].type"));
     CHECK(has(diagnostics("[[state]]\nid = \"t\"\ntype = \"text\"\nchoices = \"a\"\n"), "spec.wrong_type",
               "state[0].choices"));
-    CHECK(has(parse("caliper_spec = 1\nstate = 3\n[applet]\nid = \"a\"\n").diagnostics, "spec.wrong_type", "state"));
+    CHECK(has(parse("caliper_spec = 2\nstate = 3\n[instrument]\nid = \"a\"\n").diagnostics, "spec.wrong_type", "state"));
     CHECK(has(diagnostics("[[source]]\nid = \"s\"\ncatalog = \"live:x\"\nhistory = \"many\"\n"), "spec.wrong_type",
               "source[0].history"));
     CHECK(has(diagnostics("[[panel]]\nid = \"p\"\nprimitive = \"scene\"\noptions = { views = [{ name = \"v\" }] }\n"),
@@ -588,42 +568,23 @@ TEST_CASE("the types of the new keys are checked") {
               "spec.missing_key", "program[0].output.shape"));
 }
 
-TEST_CASE("a spec built in code needs version 1 for each new key") {
+TEST_CASE("a spec built in code uses format version 2") {
     auto base = [] {
         cs::Spec s;
-        s.applet.id = "a";
+        s.instrument.id = "a";
         return s;
     };
-    CHECK(cs::required_version(base()) == 0);
+    CHECK(base().version == 2);
+    CHECK(cs::required_version(base()) == 2);
 
     cs::Spec with_state = base();
     with_state.states.push_back(cs::StateVar{});
-    CHECK(cs::required_version(with_state) == 1);
+    CHECK(cs::required_version(with_state) == 2);
 
     cs::Spec with_history = base();
     with_history.sources.emplace_back();
     with_history.sources[0].history = 4;
-    CHECK(cs::required_version(with_history) == 1);
-
-    cs::Spec with_reference = base();
-    with_reference.sources.emplace_back();
-    with_reference.sources[0].transforms.emplace_back();
-    CHECK(cs::required_version(with_reference) == 0);
-    with_reference.sources[0].transforms[0].references["index"] = cs::Reference{};
-    CHECK(cs::required_version(with_reference) == 1);
-
-    cs::Spec with_legend = base();
-    with_legend.panels.emplace_back();
-    with_legend.panels[0].primitive = cs::Primitive::series;
-    CHECK(cs::required_version(with_legend) == 0);
-    with_legend.panels[0].options.legend = true;
-    CHECK(cs::required_version(with_legend) == 1);
-
-    cs::Spec with_shares = base();
-    with_shares.layout = cs::LayoutNode::of_panel("p");
-    CHECK(cs::required_version(with_shares) == 0);
-    with_shares.layout->min = std::array<std::int64_t, 2>{4, 4};
-    CHECK(cs::required_version(with_shares) == 1);
+    CHECK(cs::required_version(with_history) == 2);
 }
 
 TEST_CASE("the validator refuses no key of the instrument document as not built") {

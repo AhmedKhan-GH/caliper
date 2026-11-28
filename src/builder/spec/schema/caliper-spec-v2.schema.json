@@ -1,14 +1,14 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "urn:caliper:schema:spec:v1",
-  "title": "Caliper spec, version 1, canonical JSON form",
-  "description": "The structure, types, keys, enumerations, ranges, slots and options of a spec. References, cycles, layout placement, shapes and columns are checked by the spec library's validator, not by this schema. Version 1 is version 0 with the primitive scene, the control table, the GPU programs, the provenance table, and the interface layer of design/instrument-interface.md (state, references, history, entities, operators, annotations, shares); a version 0 document with caliper_spec set to 1 is a valid version 1 document. See design/spec-format.md, design/instruments.md and design/gpu-programs.md.",
+  "$id": "urn:caliper:schema:spec:v2",
+  "title": "Caliper spec, version 2, canonical JSON form",
+  "description": "The structure, types, keys, enumerations, ranges, slots and options of a spec in version 2. References, cycles, layout placement, shapes and columns are checked by the spec library's validator, not by this schema. See design/spec-format.md, design/instruments.md and design/gpu-programs.md.",
   "type": "object",
   "additionalProperties": false,
-  "required": ["caliper_spec", "applet"],
+  "required": ["caliper_spec", "instrument"],
   "properties": {
-    "caliper_spec": { "const": 1 },
-    "applet": { "$ref": "#/$defs/applet" },
+    "caliper_spec": { "const": 2 },
+    "instrument": { "$ref": "#/$defs/instrument" },
     "source": { "type": "array", "maxItems": 64, "items": { "$ref": "#/$defs/source" } },
     "panel": { "type": "array", "maxItems": 64, "items": { "$ref": "#/$defs/panel" } },
     "layout": { "$ref": "#/$defs/layout_node" },
@@ -119,7 +119,7 @@
         "x": { "$ref": "#/$defs/extension" }
       }
     },
-    "applet": {
+    "instrument": {
       "type": "object",
       "additionalProperties": false,
       "required": ["id"],

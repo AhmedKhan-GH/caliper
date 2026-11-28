@@ -128,7 +128,7 @@ std::vector<CommandDescriptor> history_command_descriptors() {
         "history.undo",
         "Undoes the most recent change to the workspace, or the given number of steps. A step is one command, "
         "several commands sent with the same group, or a run of commands merged by a merge key, such as a slider "
-        "drag. Undo restores the open spec and the saved loader recipes; it does not undo saving an applet or "
+        "drag. Undo restores the open spec and the saved loader recipes; it does not undo saving an instrument or "
         "running a loader. Undo is the person's tool: the app's UI, the builder and programs over Caliper API "
         "may undo, and an agent may not; an agent takes back a change with an edit. history.list shows the "
         "steps first.",
@@ -462,8 +462,8 @@ CommandResult CommandRegistry::park(const CommandInvocation& inv, const Entry& e
         parked.review.is_null()
             ? " needs the person's approval in Caliper, because it deletes or overwrites saved data or runs a Python "
               "loader. It runs once they approve it."
-        : inv.name == "applet.save"
-            ? " overwrites a saved applet, and the person reviews the content it writes in Caliper first. It runs "
+        : inv.name == "instrument.save"
+            ? " overwrites a saved instrument, and the person reviews the content it writes in Caliper first. It runs "
               "once they approve it."
             : " changes the open spec, and the person reviews such changes in Caliper before they apply. It runs "
               "once they approve it.";

@@ -63,13 +63,10 @@ struct Decoded {
 Decoded<Source> source_from_json(const nlohmann::json& item, const std::string& path = "source");
 Decoded<Panel> panel_from_json(const nlohmann::json& item, const std::string& path = "panel");
 Decoded<LayoutNode> layout_from_json(const nlohmann::json& item, const std::string& path = "layout");
-// One control (spec version 1, instrument.h), for control.create and
-// control.patch. The item decoders take the keys and primitives of the newest
-// version; an edit that adds a scene panel or a control to a version 0 spec
-// raises its version (required_version() in spec.h).
+// One control (control.h), for control.create and control.patch.
 Decoded<Control> control_from_json(const nlohmann::json& item, const std::string& path = "control");
-// One program (spec version 1, program.h), for program.create and
-// program.patch, with the checks of a whole document.
+// One program (program.h), for program.create and program.patch, with the
+// checks of a whole document.
 Decoded<Program> program_from_json(const nlohmann::json& item, const std::string& path = "program");
 // What the reader gives for each item of the top-level array `stage` of an old spec, because
 // pieces replaced stages: the warning spec.stage_replaced at the stage's path. The spec still

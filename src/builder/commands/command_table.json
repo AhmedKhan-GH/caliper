@@ -20,7 +20,7 @@
         "additionalProperties": false,
         "properties": {
           "abi_epoch": {
-            "description": "The ABI epoch that compiled applets must be built for.",
+            "description": "The ABI epoch that instrument libraries must be built for.",
             "type": "integer"
           },
           "host": {
@@ -42,7 +42,7 @@
             ]
           },
           "services": {
-            "description": "The service ids the app offers to applets, such as caliper.data.v1.",
+            "description": "The service ids the app offers to instruments, such as caliper.data.v1.",
             "items": {
               "type": "string"
             },
@@ -66,7 +66,7 @@
         ],
         "type": "object"
       },
-      "summary": "Describes the running Caliper app: its version, the ABI epoch its applets must be built for, the services it offers, and the versions of the SDK, libtorch and its interface libraries. It changes nothing."
+      "summary": "Describes the running Caliper app: its version, the ABI epoch its instrument libraries must be built for, the services it offers, and the versions of the SDK, libtorch and its interface libraries. It changes nothing."
     },
     {
       "agents": true,
@@ -83,25 +83,25 @@
       ],
       "frame_thread": true,
       "mutates": false,
-      "name": "app.applets",
+      "name": "app.instruments",
       "result": {
         "additionalProperties": false,
         "properties": {
-          "applets": {
-            "description": "The applets, in the app's search order.",
+          "instruments": {
+            "description": "The instruments, in the app's search order.",
             "items": {
               "additionalProperties": false,
               "properties": {
                 "folder": {
-                  "description": "The folder the applet was found in.",
+                  "description": "The folder the instrument was found in.",
                   "type": "string"
                 },
                 "id": {
-                  "description": "The applet's manifest id.",
+                  "description": "The instrument's manifest id.",
                   "type": "string"
                 },
                 "kind": {
-                  "description": "library for a compiled applet, spec for a spec applet.",
+                  "description": "library for an instrument with a library, spec for an instrument written as a spec.",
                   "enum": [
                     "library",
                     "spec"
@@ -109,7 +109,7 @@
                   "type": "string"
                 },
                 "reason": {
-                  "description": "Why the applet cannot run; empty for a READY applet.",
+                  "description": "Why the instrument cannot run; empty for a READY instrument.",
                   "type": "string"
                 },
                 "status": {
@@ -117,7 +117,7 @@
                   "type": "string"
                 },
                 "version": {
-                  "description": "The applet's version.",
+                  "description": "The instrument's version.",
                   "type": "string"
                 }
               },
@@ -134,11 +134,11 @@
           }
         },
         "required": [
-          "applets"
+          "instruments"
         ],
         "type": "object"
       },
-      "summary": "Lists the applets the app found, as caliper list shows them: each applet's manifest id, its version, its kind (library or spec), its folder, its status (READY, ACTIVE for the one open now, REFUSED, SHADOWED) and the reason when it cannot run. The id is what app.launch takes. It changes nothing."
+      "summary": "Lists the instruments the app found, as caliper list shows them: each instrument's manifest id, its version, its kind (library or spec), its folder, its status (READY, ACTIVE for the one open now, REFUSED, SHADOWED) and the reason when it cannot run. The id is what app.launch takes. It changes nothing."
     },
     {
       "agents": true,
@@ -146,7 +146,7 @@
         "additionalProperties": false,
         "properties": {
           "id": {
-            "description": "The applet's manifest id, such as com.example.my-viewer, from app.applets.",
+            "description": "The instrument's manifest id, such as com.example.my-viewer, from app.instruments.",
             "maxLength": 128,
             "minLength": 1,
             "pattern": "^[A-Za-z0-9._-]{1,128}$",
@@ -172,11 +172,11 @@
         "additionalProperties": false,
         "properties": {
           "already_open": {
-            "description": "Whether the applet's page was already open.",
+            "description": "Whether the instrument's page was already open.",
             "type": "boolean"
           },
           "id": {
-            "description": "The applet's manifest id.",
+            "description": "The instrument's manifest id.",
             "type": "string"
           },
           "note": {
@@ -184,11 +184,11 @@
             "type": "string"
           },
           "status": {
-            "description": "The applet's status after the launch: ACTIVE when it opened; PENDING_APPROVAL when its open waits for the person's approval, because it would replace the open spec's unsaved changes; PENDING when the app cannot tell yet whether it will.",
+            "description": "The instrument's status after the launch: ACTIVE when it opened; PENDING_APPROVAL when its open waits for the person's approval, because it would replace the open spec's unsaved changes; PENDING when the app cannot tell yet whether it will.",
             "type": "string"
           },
           "version": {
-            "description": "The applet's version.",
+            "description": "The instrument's version.",
             "type": "string"
           }
         },
@@ -200,7 +200,7 @@
         ],
         "type": "object"
       },
-      "summary": "Opens the page of one applet, as a click on its row on the app's landing screen does; an attached live session stays attached. The id is an applet's manifest id from app.applets. A compiled applet's page replaces the page shown at once. A dashboard of the workspace opens with an applet.open from your origin, and the page changes only when that has run: when it would replace the open spec's unsaved changes it waits for the person's approval, the status is PENDING_APPROVAL rather than ACTIVE, its note says how to check whether it opened, and if the person denies it nothing changes."
+      "summary": "Opens the page of one instrument, as a click on its row on the app's landing screen does; an attached live session stays attached. The id is an instrument's manifest id from app.instruments. An instrument with a library replaces the page shown at once. An instrument written as a spec in the workspace opens with an instrument.open from your origin, and the page changes only when that has run: when it would replace the open spec's unsaved changes it waits for the person's approval, the status is PENDING_APPROVAL rather than ACTIVE, its note says how to check whether it opened, and if the person denies it nothing changes."
     },
     {
       "agents": true,
@@ -1728,23 +1728,23 @@
         "additionalProperties": false,
         "properties": {
           "description": {
-            "description": "What the applet shows, in a sentence or two.",
+            "description": "What the instrument shows, in a sentence or two.",
             "maxLength": 4096,
             "type": "string"
           },
           "id": {
-            "description": "The applet's id, such as attention-entropy.",
+            "description": "The instrument's id, such as attention-entropy.",
             "maxLength": 64,
             "minLength": 1,
             "pattern": "^[a-z][a-z0-9_-]{0,63}$",
             "type": "string"
           },
           "layout_locked": {
-            "description": "Spec version 1: whether the whole layout is locked, making every component non-closable and fixing its layout; false when absent.",
+            "description": "Whether the whole layout is locked, making every component non-closable and fixing its layout; false when absent.",
             "type": "boolean"
           },
           "title": {
-            "description": "The applet's title for a person.",
+            "description": "The instrument's title for a person.",
             "maxLength": 256,
             "minLength": 1,
             "type": "string"
@@ -1771,7 +1771,7 @@
         "additionalProperties": false,
         "properties": {
           "id": {
-            "description": "The applet's id.",
+            "description": "The instrument's id.",
             "type": "string"
           },
           "text": {
@@ -1785,7 +1785,7 @@
         ],
         "type": "object"
       },
-      "summary": "Starts a new, empty spec and makes it the open spec: the one the builder shows and that the source, panel and layout commands edit. A spec is the text that describes an applet built from data: its sources, its panels and their layout. The id names the applet, in lower case with digits, - and _. Undo returns to the spec that was open before."
+      "summary": "Starts a new, empty spec and makes it the open spec: the one the builder shows and that the source, panel and layout commands edit. A spec is the text that describes an instrument built from data: its sources, its panels and their layout. The id names the instrument, in lower case with digits, - and _. Undo returns to the spec that was open before."
     },
     {
       "agents": true,
@@ -1809,7 +1809,7 @@
       "effect": "change",
       "examples": [
         {
-          "path": "applets/attention-entropy/attention-entropy.spec.toml"
+          "path": "instruments/attention-entropy/attention-entropy.spec.toml"
         }
       ],
       "frame_thread": true,
@@ -1819,7 +1819,7 @@
         "additionalProperties": false,
         "properties": {
           "id": {
-            "description": "The applet id of the spec opened.",
+            "description": "The instrument id of the spec opened.",
             "type": "string"
           },
           "path": {
@@ -1861,15 +1861,15 @@
         ],
         "type": "object"
       },
-      "summary": "Opens a spec file of the workspace as the open spec. The path is relative to the workspace and ends in .spec.toml, such as applets/attention-entropy/attention-entropy.spec.toml. To open a saved applet by its id, use applet.open. Undo returns to the spec that was open before, with its unsaved changes."
+      "summary": "Opens a spec file of the workspace as the open spec. The path is relative to the workspace and ends in .spec.toml, such as instruments/attention-entropy/attention-entropy.spec.toml. To open a saved instrument by its id, use instrument.open. Undo returns to the spec that was open before, with its unsaved changes."
     },
     {
       "agents": true,
       "args": {
         "additionalProperties": false,
         "properties": {
-          "applet": {
-            "description": "A saved spec applet's id, from applet.list; the open spec when absent.",
+          "instrument": {
+            "description": "A saved instrument's id, from instrument.list; the open spec when absent.",
             "maxLength": 64,
             "minLength": 1,
             "pattern": "^[a-z][a-z0-9_-]{0,63}$",
@@ -1895,7 +1895,7 @@
             "type": "boolean"
           },
           "id": {
-            "description": "The spec's applet id.",
+            "description": "The spec's instrument id.",
             "type": "string"
           },
           "json": {
@@ -1904,11 +1904,11 @@
             "type": "object"
           },
           "open": {
-            "description": "True with a spec in the result, the open one or the named applet's; false when no applet is named and no spec is open, and then no other field is given.",
+            "description": "True with a spec in the result, the open one or the named instrument's; false when no instrument is named and no spec is open, and then no other field is given.",
             "type": "boolean"
           },
           "open_in_app": {
-            "description": "With applet: whether the app has that applet open, so that its live sources, values and kept steps reach panel.data; a saved applet that is not open shows no live data.",
+            "description": "With instrument: whether the app has that instrument open, so that its live sources, values and kept steps reach panel.data; a saved instrument that is not open shows no live data.",
             "type": "boolean"
           },
           "path": {
@@ -1928,7 +1928,7 @@
         ],
         "type": "object"
       },
-      "summary": "Returns the open spec as its TOML text and as its canonical JSON form, with its applet id, the file it was saved to or opened from, and whether it has unsaved changes. With applet, it returns that saved spec applet's spec instead, read from its files without opening it. When no spec is open and no applet is named, it answers open false and nothing else, which is not an error: make one with spec.new or open one with spec.open or applet.open. It changes nothing."
+      "summary": "Returns the open spec as its TOML text and as its canonical JSON form, with its instrument id, the file it was saved to or opened from, and whether it has unsaved changes. With instrument, it returns that saved instrument's spec instead, read from its files without opening it. When no spec is open and no instrument is named, it answers open false and nothing else, which is not an error: make one with spec.new or open one with spec.open or instrument.open. It changes nothing."
     },
     {
       "agents": true,
@@ -1941,7 +1941,7 @@
             "type": "boolean"
           },
           "text": {
-            "description": "The whole spec as TOML text, with caliper_spec = 0, an [applet] table, [[source]] and [[panel]] tables and a [layout] table.",
+            "description": "The whole spec as TOML text, with caliper_spec = 2, an [instrument] table, [[source]] and [[panel]] tables and a [layout] table.",
             "maxLength": 262144,
             "minLength": 1,
             "type": "string"
@@ -1956,7 +1956,7 @@
       "effect": "edit",
       "examples": [
         {
-          "text": "caliper_spec = 0\n[applet]\nid = \"loss\"\ntitle = \"Loss\"\n[[source]]\nid = \"loss\"\nsql = \"SELECT step, loss FROM run42_metrics ORDER BY step\"\n[[panel]]\nid = \"loss\"\nprimitive = \"series\"\nbind = { x = \"loss.step\", y = [\"loss.loss\"] }\n[layout]\nchildren = [\"loss\"]\n"
+          "text": "caliper_spec = 2\n[instrument]\nid = \"loss\"\ntitle = \"Loss\"\n[[source]]\nid = \"loss\"\nsql = \"SELECT step, loss FROM run42_metrics ORDER BY step\"\n[[panel]]\nid = \"loss\"\nprimitive = \"series\"\nbind = { x = \"loss.step\", y = [\"loss.loss\"] }\n[layout]\nchildren = [\"loss\"]\n"
         }
       ],
       "frame_thread": true,
@@ -1974,7 +1974,7 @@
             "type": "string"
           },
           "id": {
-            "description": "The spec's applet id.",
+            "description": "The spec's instrument id.",
             "type": "string"
           },
           "warnings": {
@@ -3483,7 +3483,7 @@
               },
               "scene": {
                 "additionalProperties": false,
-                "description": "scene (spec version 1): the live scene of the attached script, as live:<scene name>, such as live:model; catalog.list names the scenes. A reference to a text state whose choices are source ids also works.",
+                "description": "scene: the live scene of the attached script, as live:<scene name>, such as live:model; catalog.list names the scenes. A reference to a text state whose choices are source ids also works.",
                 "maxLength": 256,
                 "minLength": 6,
                 "pattern": "^live:.+$",
@@ -3796,7 +3796,7 @@
             "type": "object"
           },
           "closable": {
-            "description": "Spec version 1: whether the panel can be closed or removed; true when absent.",
+            "description": "Whether the panel can be closed or removed; true when absent.",
             "type": "boolean"
           },
           "dry_run": {
@@ -3834,7 +3834,7 @@
                 "type": "integer"
               },
               "box": {
-                "description": "Spec version 1, scene with entities: the data box, auto or three positive proportions of its x, y and z sides.",
+                "description": "scene with entities: the data box, auto or three positive proportions of its x, y and z sides.",
                 "items": {
                   "minimum": 0,
                   "type": "number"
@@ -3893,10 +3893,10 @@
                 "type": "array"
               },
               "fields": {
-                "description": "Spec version 1, text: a JSON object that gives each name of the format a reference or a source id."
+                "description": "text: a JSON object that gives each name of the format a reference or a source id."
               },
               "format": {
-                "description": "Spec version 1, text: a bound text in the format language, in place of text.",
+                "description": "text: a bound text in the format language, in place of text.",
                 "maxLength": 1024,
                 "minLength": 1,
                 "type": "string"
@@ -3917,7 +3917,7 @@
                 "type": "boolean"
               },
               "legend": {
-                "description": "Spec version 1: auto, true or false; auto shows a legend for two series or more, or a colormap.",
+                "description": "auto, true or false; auto shows a legend for two series or more, or a colormap.",
                 "enum": [
                   "auto",
                   true,
@@ -3979,7 +3979,7 @@
               },
               "select": {
                 "additionalProperties": false,
-                "description": "Spec version 1: a pick on the panel writes one of its fields into a state variable.",
+                "description": "A pick on the panel writes one of its fields into a state variable.",
                 "properties": {
                   "entity": {
                     "description": "Only a pick on this entity writes.",
@@ -4061,7 +4061,7 @@
                 ]
               },
               "views": {
-                "description": "Spec version 1, scene: the saved views, each with a unique name.",
+                "description": "scene: the saved views, each with a unique name.",
                 "items": {
                   "additionalProperties": false,
                   "properties": {
@@ -4257,7 +4257,7 @@
             "type": "object"
           },
           "primitive": {
-            "description": "What the panel draws. Required slots: series y; heatmap values; points x and y, or positions; histogram values; table rows; image values; text none; scene scene (spec version 1).",
+            "description": "What the panel draws. Required slots: series y; heatmap values; points x and y, or positions; histogram values; table rows; image values; text none; scene scene.",
             "enum": [
               "series",
               "heatmap",
@@ -4571,7 +4571,7 @@
                   },
                   "scene": {
                     "additionalProperties": false,
-                    "description": "scene (spec version 1): the live scene of the attached script, as live:<scene name>, such as live:model; catalog.list names the scenes. A reference to a text state whose choices are source ids also works.",
+                    "description": "scene: the live scene of the attached script, as live:<scene name>, such as live:model; catalog.list names the scenes. A reference to a text state whose choices are source ids also works.",
                     "maxLength": 256,
                     "minLength": 6,
                     "pattern": "^live:.+$",
@@ -4996,7 +4996,7 @@
                 "type": "object"
               },
               "closable": {
-                "description": "Spec version 1: whether the panel can be closed or removed; null restores the default (true).",
+                "description": "Whether the panel can be closed or removed; null restores the default (true).",
                 "type": [
                   "boolean",
                   "null"
@@ -5034,7 +5034,7 @@
                     ]
                   },
                   "box": {
-                    "description": "Spec version 1, scene with entities: the data box, auto or three positive proportions of its x, y and z sides.",
+                    "description": "scene with entities: the data box, auto or three positive proportions of its x, y and z sides.",
                     "items": {
                       "minimum": 0,
                       "type": "number"
@@ -5104,10 +5104,10 @@
                     ]
                   },
                   "fields": {
-                    "description": "Spec version 1, text: a JSON object that gives each name of the format a reference or a source id."
+                    "description": "text: a JSON object that gives each name of the format a reference or a source id."
                   },
                   "format": {
-                    "description": "Spec version 1, text: a bound text in the format language, in place of text.",
+                    "description": "text: a bound text in the format language, in place of text.",
                     "maxLength": 1024,
                     "minLength": 1,
                     "type": [
@@ -5137,7 +5137,7 @@
                     ]
                   },
                   "legend": {
-                    "description": "Spec version 1: auto, true or false; auto shows a legend for two series or more, or a colormap.",
+                    "description": "auto, true or false; auto shows a legend for two series or more, or a colormap.",
                     "enum": [
                       "auto",
                       true,
@@ -5220,7 +5220,7 @@
                   },
                   "select": {
                     "additionalProperties": false,
-                    "description": "Spec version 1: a pick on the panel writes one of its fields into a state variable.",
+                    "description": "A pick on the panel writes one of its fields into a state variable.",
                     "properties": {
                       "entity": {
                         "description": "Only a pick on this entity writes.",
@@ -5331,7 +5331,7 @@
                     ]
                   },
                   "views": {
-                    "description": "Spec version 1, scene: the saved views, each with a unique name.",
+                    "description": "scene: the saved views, each with a unique name.",
                     "items": {
                       "additionalProperties": false,
                       "properties": {
@@ -5742,7 +5742,7 @@
                   },
                   "scene": {
                     "additionalProperties": false,
-                    "description": "scene (spec version 1): the live scene of the attached script, as live:<scene name>, such as live:model; catalog.list names the scenes. A reference to a text state whose choices are source ids also works.",
+                    "description": "scene: the live scene of the attached script, as live:<scene name>, such as live:model; catalog.list names the scenes. A reference to a text state whose choices are source ids also works.",
                     "maxLength": 256,
                     "minLength": 6,
                     "pattern": "^live:.+$",
@@ -6055,7 +6055,7 @@
                 "type": "object"
               },
               "closable": {
-                "description": "Spec version 1: whether the person or a command can close or remove the panel; true when absent.",
+                "description": "Whether the person or a command can close or remove the panel; true when absent.",
                 "type": "boolean"
               },
               "id": {
@@ -6080,7 +6080,7 @@
                     "type": "integer"
                   },
                   "box": {
-                    "description": "Spec version 1, scene with entities: the data box, auto or three positive proportions of its x, y and z sides.",
+                    "description": "scene with entities: the data box, auto or three positive proportions of its x, y and z sides.",
                     "items": {
                       "minimum": 0,
                       "type": "number"
@@ -6139,10 +6139,10 @@
                     "type": "array"
                   },
                   "fields": {
-                    "description": "Spec version 1, text: a JSON object that gives each name of the format a reference or a source id."
+                    "description": "text: a JSON object that gives each name of the format a reference or a source id."
                   },
                   "format": {
-                    "description": "Spec version 1, text: a bound text in the format language, in place of text.",
+                    "description": "text: a bound text in the format language, in place of text.",
                     "maxLength": 1024,
                     "minLength": 1,
                     "type": "string"
@@ -6163,7 +6163,7 @@
                     "type": "boolean"
                   },
                   "legend": {
-                    "description": "Spec version 1: auto, true or false; auto shows a legend for two series or more, or a colormap.",
+                    "description": "auto, true or false; auto shows a legend for two series or more, or a colormap.",
                     "enum": [
                       "auto",
                       true,
@@ -6225,7 +6225,7 @@
                   },
                   "select": {
                     "additionalProperties": false,
-                    "description": "Spec version 1: a pick on the panel writes one of its fields into a state variable.",
+                    "description": "A pick on the panel writes one of its fields into a state variable.",
                     "properties": {
                       "entity": {
                         "description": "Only a pick on this entity writes.",
@@ -6307,7 +6307,7 @@
                     ]
                   },
                   "views": {
-                    "description": "Spec version 1, scene: the saved views, each with a unique name.",
+                    "description": "scene: the saved views, each with a unique name.",
                     "items": {
                       "additionalProperties": false,
                       "properties": {
@@ -6696,8 +6696,8 @@
       "args": {
         "additionalProperties": false,
         "properties": {
-          "applet": {
-            "description": "A saved spec applet's id, from applet.list; the open spec when absent.",
+          "instrument": {
+            "description": "A saved instrument's id, from instrument.list; the open spec when absent.",
             "maxLength": 64,
             "minLength": 1,
             "pattern": "^[a-z][a-z0-9_-]{0,63}$",
@@ -6725,7 +6725,7 @@
       "effect": "read",
       "examples": [
         {
-          "applet": "run42-dashboard",
+          "instrument": "run42-dashboard",
           "panel": "curves"
         }
       ],
@@ -6832,7 +6832,7 @@
         ],
         "type": "object"
       },
-      "summary": "Returns the data of one panel as the browser viewer draws it: the panel's data after its sources' transforms, within the bounds of what a panel can show (long lines as a min/max envelope, large grids and clouds sampled at a stride, a histogram's bin counts, the first 1,000 rows of a table), with a version. Pass the version you have as known, and the answer is unchanged, with no data, until the panel's sources, the spec or the catalog change. It reads a saved spec applet with applet, else the open spec. It changes nothing."
+      "summary": "Returns the data of one panel as the browser viewer draws it: the panel's data after its sources' transforms, within the bounds of what a panel can show (long lines as a min/max envelope, large grids and clouds sampled at a stride, a histogram's bin counts, the first 1,000 rows of a table), with a version. Pass the version you have as known, and the answer is unchanged, with no data, until the panel's sources, the spec or the catalog change. It reads a saved instrument with instrument, else the open spec. It changes nothing."
     },
     {
       "agents": true,
@@ -6845,7 +6845,7 @@
             "type": "boolean"
           },
           "panel": {
-            "description": "The id of the panel, or of the control (spec version 1), to place.",
+            "description": "The id of the panel, or of the control, to place.",
             "maxLength": 64,
             "minLength": 1,
             "pattern": "^[a-z][a-z0-9_-]{0,63}$",
@@ -6917,7 +6917,7 @@
                   "additionalProperties": false,
                   "properties": {
                     "children": {
-                      "description": "Panel ids, control ids (spec version 1) and node ids, in order: 2 to 64 for a split, 1 to 64 for tabs; each node is used once.",
+                      "description": "Panel ids, control ids and node ids, in order: 2 to 64 for a split, 1 to 64 for tabs; each node is used once.",
                       "items": {
                         "maxLength": 64,
                         "minLength": 1,
@@ -6936,7 +6936,7 @@
                       "type": "string"
                     },
                     "mins": {
-                      "description": "Spec version 1: a JSON object that gives a panel or control child, by its id, its minimum size as [columns, lines] of the text scale, each an integer from 4 to 400."
+                      "description": "A JSON object that gives a panel or control child, by its id, its minimum size as [columns, lines] of the text scale, each an integer from 4 to 400."
                     },
                     "ratio": {
                       "description": "For a split of exactly two children, the share of the first, from 0.05 to 0.95; null for an even split and for tabs.",
@@ -6948,7 +6948,7 @@
                       ]
                     },
                     "shares": {
-                      "description": "Spec version 1: one positive share for each child of a split, in place of ratio; each child first gets its minimum and the rest goes by the shares.",
+                      "description": "One positive share for each child of a split, in place of ratio; each child first gets its minimum and the rest goes by the shares.",
                       "items": {
                         "minimum": 0,
                         "type": "number"
@@ -7058,7 +7058,7 @@
                   "additionalProperties": false,
                   "properties": {
                     "children": {
-                      "description": "Panel ids, control ids (spec version 1) and node ids, in order: 2 to 64 for a split, 1 to 64 for tabs; each node is used once.",
+                      "description": "Panel ids, control ids and node ids, in order: 2 to 64 for a split, 1 to 64 for tabs; each node is used once.",
                       "items": {
                         "maxLength": 64,
                         "minLength": 1,
@@ -7077,7 +7077,7 @@
                       "type": "string"
                     },
                     "mins": {
-                      "description": "Spec version 1: a JSON object that gives a panel or control child, by its id, its minimum size as [columns, lines] of the text scale, each an integer from 4 to 400."
+                      "description": "A JSON object that gives a panel or control child, by its id, its minimum size as [columns, lines] of the text scale, each an integer from 4 to 400."
                     },
                     "ratio": {
                       "description": "For a split of exactly two children, the share of the first, from 0.05 to 0.95; null for an even split and for tabs.",
@@ -7089,7 +7089,7 @@
                       ]
                     },
                     "shares": {
-                      "description": "Spec version 1: one positive share for each child of a split, in place of ratio; each child first gets its minimum and the rest goes by the shares.",
+                      "description": "One positive share for each child of a split, in place of ratio; each child first gets its minimum and the rest goes by the shares.",
                       "items": {
                         "minimum": 0,
                         "type": "number"
@@ -7200,7 +7200,7 @@
                   "additionalProperties": false,
                   "properties": {
                     "children": {
-                      "description": "Panel ids, control ids (spec version 1) and node ids, in order: 2 to 64 for a split, 1 to 64 for tabs; each node is used once.",
+                      "description": "Panel ids, control ids and node ids, in order: 2 to 64 for a split, 1 to 64 for tabs; each node is used once.",
                       "items": {
                         "maxLength": 64,
                         "minLength": 1,
@@ -7219,7 +7219,7 @@
                       "type": "string"
                     },
                     "mins": {
-                      "description": "Spec version 1: a JSON object that gives a panel or control child, by its id, its minimum size as [columns, lines] of the text scale, each an integer from 4 to 400."
+                      "description": "A JSON object that gives a panel or control child, by its id, its minimum size as [columns, lines] of the text scale, each an integer from 4 to 400."
                     },
                     "ratio": {
                       "description": "For a split of exactly two children, the share of the first, from 0.05 to 0.95; null for an even split and for tabs.",
@@ -7231,7 +7231,7 @@
                       ]
                     },
                     "shares": {
-                      "description": "Spec version 1: one positive share for each child of a split, in place of ratio; each child first gets its minimum and the rest goes by the shares.",
+                      "description": "One positive share for each child of a split, in place of ratio; each child first gets its minimum and the rest goes by the shares.",
                       "items": {
                         "minimum": 0,
                         "type": "number"
@@ -7708,7 +7708,7 @@
         "additionalProperties": false,
         "properties": {
           "id": {
-            "description": "The applet's id; the spec's own applet id when absent.",
+            "description": "The instrument's id; the spec's own instrument id when absent.",
             "maxLength": 64,
             "minLength": 1,
             "pattern": "^[a-z][a-z0-9_-]{0,63}$",
@@ -7716,7 +7716,7 @@
           },
           "overwrite": {
             "default": false,
-            "description": "Whether to replace a saved applet of the same id; false when absent.",
+            "description": "Whether to replace a saved instrument of the same id; false when absent.",
             "type": "boolean"
           }
         },
@@ -7732,12 +7732,12 @@
       ],
       "frame_thread": true,
       "mutates": true,
-      "name": "applet.save",
+      "name": "instrument.save",
       "result": {
         "additionalProperties": false,
         "properties": {
           "id": {
-            "description": "The saved applet's id.",
+            "description": "The saved instrument's id.",
             "type": "string"
           },
           "manifest": {
@@ -7756,7 +7756,7 @@
         ],
         "type": "object"
       },
-      "summary": "Saves the open spec as a spec applet of the workspace: the folder applets/<id>/ with a manifest <id>.caliper.toml and the spec <id>.spec.toml. The id is the spec's applet id unless one is given. Saving over an existing applet needs overwrite set to true. It writes files, so an agent's call needs the person's approval, and it cannot be undone."
+      "summary": "Saves the open spec as an instrument of the workspace: the folder instruments/<id>/ with a manifest <id>.caliper.toml and the spec <id>.spec.toml. The id is the spec's instrument id unless one is given. Saving over an existing instrument needs overwrite set to true. It writes files, so an agent's call needs the person's approval, and it cannot be undone."
     },
     {
       "agents": true,
@@ -7764,7 +7764,7 @@
         "additionalProperties": false,
         "properties": {
           "id": {
-            "description": "The applet's id, from applet.list.",
+            "description": "The instrument's id, from instrument.list.",
             "maxLength": 64,
             "minLength": 1,
             "pattern": "^[a-z][a-z0-9_-]{0,63}$",
@@ -7785,16 +7785,16 @@
       ],
       "frame_thread": true,
       "mutates": true,
-      "name": "applet.open",
+      "name": "instrument.open",
       "result": {
         "additionalProperties": false,
         "properties": {
           "id": {
-            "description": "The applet's id.",
+            "description": "The instrument's id.",
             "type": "string"
           },
           "title": {
-            "description": "The applet's title.",
+            "description": "The instrument's title.",
             "type": "string"
           },
           "warnings": {
@@ -7832,7 +7832,7 @@
         ],
         "type": "object"
       },
-      "summary": "Opens a saved spec applet of the workspace by its id, from applet.list, as the open spec, so that it can be edited. Undo returns to the spec that was open before."
+      "summary": "Opens a saved instrument of the workspace by its id, from instrument.list, as the open spec, so that it can be edited. Undo returns to the spec that was open before."
     },
     {
       "agents": true,
@@ -7849,17 +7849,17 @@
       ],
       "frame_thread": false,
       "mutates": false,
-      "name": "applet.list",
+      "name": "instrument.list",
       "result": {
         "additionalProperties": false,
         "properties": {
-          "applets": {
-            "description": "The saved spec applets, sorted by id.",
+          "instruments": {
+            "description": "The saved instruments, sorted by id.",
             "items": {
               "additionalProperties": false,
               "properties": {
                 "id": {
-                  "description": "The applet's id.",
+                  "description": "The instrument's id.",
                   "type": "string"
                 },
                 "path": {
@@ -7867,7 +7867,7 @@
                   "type": "string"
                 },
                 "title": {
-                  "description": "The applet's title.",
+                  "description": "The instrument's title.",
                   "type": "string"
                 },
                 "updated_at": {
@@ -7890,11 +7890,11 @@
           }
         },
         "required": [
-          "applets"
+          "instruments"
         ],
         "type": "object"
       },
-      "summary": "Lists the spec applets saved in the workspace, with each one's id, title, folder and the time it was last saved. The id is what applet.open takes. It changes nothing."
+      "summary": "Lists the instruments written as specs and saved in the workspace, with each one's id, title, folder and the time it was last saved. The id is what instrument.open takes. It changes nothing."
     },
     {
       "agents": true,
@@ -11995,10 +11995,6 @@
                   "description": "pick: the id of the annotation that was picked.",
                   "type": "string"
                 },
-                "applet": {
-                  "description": "spec: the open spec's applet id.",
-                  "type": "string"
-                },
                 "approval": {
                   "description": "approval: the approval's id.",
                   "type": "string"
@@ -12150,6 +12146,10 @@
                     "integer",
                     "array"
                   ]
+                },
+                "instrument": {
+                  "description": "spec: the open spec's instrument id.",
+                  "type": "string"
                 },
                 "item": {
                   "description": "pick of a piece's item: the element index in the item map's resource.",
@@ -19430,7 +19430,7 @@
         ],
         "type": "object"
       },
-      "summary": "Undoes the most recent change to the workspace, or the given number of steps. A step is one command, several commands sent with the same group, or a run of commands merged by a merge key, such as a slider drag. Undo restores the open spec and the saved loader recipes; it does not undo saving an applet or running a loader. Undo is the person's tool: the app's UI, the builder and programs over Caliper API may undo, and an agent may not; an agent takes back a change with an edit. history.list shows the steps first."
+      "summary": "Undoes the most recent change to the workspace, or the given number of steps. A step is one command, several commands sent with the same group, or a run of commands merged by a merge key, such as a slider drag. Undo restores the open spec and the saved loader recipes; it does not undo saving an instrument or running a loader. Undo is the person's tool: the app's UI, the builder and programs over Caliper API may undo, and an agent may not; an agent takes back a change with an edit. history.list shows the steps first."
     },
     {
       "agents": false,

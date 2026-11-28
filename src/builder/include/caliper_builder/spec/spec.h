@@ -1,11 +1,11 @@
 #pragma once
-// caliper_builder::spec: the value types of a spec, format version 0
+// caliper_builder::spec: the value types of a spec, format version 2
 // (design/spec-format.md).
 //
-// A spec describes an applet built from data: its sources, its panels and their
-// layout. `Spec` is the parsed document, a plain value that can be copied,
-// compared and edited. Reading and writing it are in format.h, checking it in
-// validate.h and merge patches in patch.h.
+// A spec describes an instrument built from data: its sources, its panels, its
+// controls, its programs and their layout. `Spec` is the parsed document, a
+// plain value that can be copied, compared and edited. Reading and writing it
+// are in format.h, checking it in validate.h and merge patches in patch.h.
 //
 // A `Spec` keeps what the document holds and no more: an optional key that was
 // not written is empty, and a key written with its default value keeps it, so
@@ -29,23 +29,19 @@
 
 #include <caliper_builder/error.h>
 #include <caliper_builder/spec/annotation.h>
+#include <caliper_builder/spec/control.h>
 #include <caliper_builder/spec/entity.h>
-#include <caliper_builder/spec/instrument.h>
 #include <caliper_builder/spec/program.h>
 #include <caliper_builder/spec/reference.h>
 #include <caliper_builder/spec/state.h>
 
 namespace caliper_builder::spec {
 
-// The format version of a new Spec (`caliper_spec`). The writers write the
-// version a Spec holds and never raise it.
-inline constexpr std::int64_t kFormatVersion = 0;
-// The newest format version this library reads and writes: version 1 adds
-// the scene primitive and the control table (instrument.h). The reader knows
-// the versions kFormatVersion to kLatestFormatVersion.
-inline constexpr std::int64_t kLatestFormatVersion = kInstrumentVersion;
+// The format version of a Spec (`caliper_spec`).
+inline constexpr std::int64_t kFormatVersion = 2;
+inline constexpr std::int64_t kLatestFormatVersion = 2;
 
-// The limits of version 0. Each one has the error code the design page lists.
+// The limits of the spec format. Each one has the error code the design page lists.
 namespace limits {
 inline constexpr std::size_t kTextBytes = 512 * 1024;        // spec.too_large
 inline constexpr std::size_t kValues = 65536;                 // spec.too_many
@@ -217,18 +213,17 @@ struct Panel {
     nlohmann::json x;
 };
 
-// A layout node: a panel id, a split or tabs. From spec version 1 a leaf's
-// `panel` may also name a control (instrument.h), since panels and controls
-// share one set of ids.
+// A layout node: a panel id, a split or tabs. A leaf's `panel` may also name a
+// control (control.h), since panels and controls share one set of ids.
 struct LayoutNode {
     enum class Kind { panel, split, tabs };
     Kind kind = Kind::panel;
     std::string panel;                         // Kind::panel
     SplitDirection split = SplitDirection::horizontal;  // Kind::split
     std::optional<double> ratio;               // Kind::split, two children only
-    std::vector<double> shares;                // Kind::split, version 1: one positive share per child
-    // Kind::panel, version 1: the minimum size in columns and lines of the
-    // text scale, written as the leaf table { panel, min }.
+    std::vector<double> shares;                // Kind::split: one positive share per child
+    // Kind::panel: the minimum size in columns and lines of the text scale,
+    // written as the leaf table { panel, min }.
     std::optional<std::array<std::int64_t, 2>> min;
     std::vector<LayoutNode> children;          // the children of a split, or the tabs
     std::optional<std::string> title;          // Kind::split and Kind::tabs
@@ -237,25 +232,25 @@ struct LayoutNode {
     static LayoutNode of_panel(std::string id);
 };
 
-struct Applet {
+struct Instrument {
     std::string id;
     std::optional<std::string> title;
     std::optional<std::string> description;
-    std::optional<bool> layout_locked;       // version 1: default false when absent
+    std::optional<bool> layout_locked;       // default false when absent
     nlohmann::json x;
 };
 
 struct Spec {
     std::int64_t version = kFormatVersion;   // `caliper_spec`
-    Applet applet;
+    Instrument instrument;
     std::vector<Source> sources;
     std::vector<Panel> panels;
     std::optional<LayoutNode> layout;
-    std::vector<Control> controls;   // `control`, spec version 1 (instrument.h); empty in version 0
-    std::vector<Program> programs;   // `program`, spec version 1 (program.h); empty in version 0
-    std::vector<Piece> pieces;       // `piece`, inline pieces (piece.h), spec version 1
-    std::vector<StateVar> states;    // `state`, spec version 1 (state.h); empty in version 0
-    Provenance provenance;           // `provenance`, spec version 1 (program.h); empty for the person's own spec
+    std::vector<Control> controls;   // `control` (control.h)
+    std::vector<Program> programs;   // `program` (program.h)
+    std::vector<Piece> pieces;       // `piece`, inline pieces (piece.h)
+    std::vector<StateVar> states;    // `state` (state.h)
+    Provenance provenance;           // `provenance` (program.h); empty for the person's own spec
     nlohmann::json x;
 
     // The first source, panel or control with this id, or null.
@@ -266,13 +261,9 @@ struct Spec {
     const StateVar* find_state(std::string_view id) const;
 };
 
-// The lowest format version that holds `spec`: 1 when it has a scene panel, a
-// control, a program, a provenance table or any key of
-// design/instrument-interface.md, else 0. An edit that adds
-// one of them to a version 0 spec raises the version to this one in the same
-// step.
+// The format version of a spec (always kFormatVersion).
 std::int64_t required_version(const Spec& spec);
-// The first version whose documents may use the primitive.
+// The format version of a primitive (always kFormatVersion).
 std::int64_t primitive_version(Primitive p);
 
 bool operator==(const Transform& a, const Transform& b);
@@ -281,7 +272,7 @@ bool operator==(const SlotValue& a, const SlotValue& b);
 bool operator==(const Options& a, const Options& b);
 bool operator==(const Panel& a, const Panel& b);
 bool operator==(const LayoutNode& a, const LayoutNode& b);
-bool operator==(const Applet& a, const Applet& b);
+bool operator==(const Instrument& a, const Instrument& b);
 bool operator==(const Spec& a, const Spec& b);
 inline bool operator!=(const Transform& a, const Transform& b) { return !(a == b); }
 inline bool operator!=(const Source& a, const Source& b) { return !(a == b); }
@@ -289,7 +280,7 @@ inline bool operator!=(const SlotValue& a, const SlotValue& b) { return !(a == b
 inline bool operator!=(const Options& a, const Options& b) { return !(a == b); }
 inline bool operator!=(const Panel& a, const Panel& b) { return !(a == b); }
 inline bool operator!=(const LayoutNode& a, const LayoutNode& b) { return !(a == b); }
-inline bool operator!=(const Applet& a, const Applet& b) { return !(a == b); }
+inline bool operator!=(const Instrument& a, const Instrument& b) { return !(a == b); }
 inline bool operator!=(const Spec& a, const Spec& b) { return !(a == b); }
 
 enum class Severity { error, warning };

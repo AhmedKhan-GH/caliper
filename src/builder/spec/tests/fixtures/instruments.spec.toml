@@ -1,8 +1,8 @@
-# Spec version 1: a scene panel bound to a live scene and two controls, as
+# Spec version 2: a scene panel bound to a live scene and two controls, as
 # design/instruments.md describes them.
-caliper_spec = 1
+caliper_spec = 2
 
-[applet]
+[instrument]
 id = "playground"
 title = "Playground"
 

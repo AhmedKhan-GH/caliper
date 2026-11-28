@@ -96,7 +96,6 @@ PatchResult patch_item(const Spec& spec, Item item, std::string_view id, const j
             }
             next.sources[index] = std::move(decoded.value);
         }
-        // A patch that makes a panel a scene raises a version 0 spec to version 1 in the same step.
         next.version = std::max(next.version, required_version(next));
         ValidationReport report = validate(next, resolver);
         r.applied = true;
