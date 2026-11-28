@@ -444,7 +444,7 @@ class Test:
             "options": {"axes": True, "up": "+z", "box": [3.0, 1.0, 0.8],
                         "select": {"state": "unit", "field": "column", "entity": "terrain"}}})
         self.edit("control_create", {"id": "level", "kind": "slider", "title": "Level", "bind": "value",
-                                     "options": {"min": 0.0, "max": 4.0, "value": 1.0}})
+                                     "options": {"min": 0.0, "max": 200.0, "value": 1.0}})
 
     def step_e_controls(self):
         """Sources raw and zscore, the panel detail, the controls measure, palette, now, transport, pause,
@@ -853,19 +853,35 @@ class Test:
         # The panel data exposes no label rectangles, so the test checks that the annotations are present and
         # that they draw (the render changes with the threshold), not that the placed labels avoid each other.
         self.res["label_overlap_check"] = "not exposed by panel.data or panel.render: presence only"
-        z = (self.res.get("pick_fields") or {}).get("z") or 1.0
+        # Hold the cursor while checking the threshold render so only the threshold line moves, and pick levels
+        # inside trace's plotted y-range (MNIST fc1 batch L2 norms sit around 20..60, above the initial 1.0).
+        c = self.cursor_now()
+        self.answer("cursor_set", {"step": c["latest"], "live": False})
+        _, ys = self.series("trace")
+        if ys:
+            y_lo, y_hi = min(ys), max(ys)
+            span = max(y_hi - y_lo, 1.0)
+            candidates = (
+                round(min(200.0, max(0.0, y_lo + 0.35 * span)), 3),
+                round(min(200.0, max(0.0, y_lo + 0.70 * span)), 3),
+            )
+        else:
+            z = (self.res.get("pick_fields") or {}).get("z") or 1.0
+            candidates = (round(min(200.0, z * 0.8), 3), round(min(200.0, z * 1.2 + 0.5), 3))
         before = self.render("trace")
-        for level in (round(z * 0.8, 3), round(z * 1.2 + 0.5, 3)):
+        for level in candidates:
             self.answer("control_set", {"id": "level", "value": level})
             after = self.render("trace")
             if pixel_difference(before, after) >= 50:
                 break
         else:
-            raise Fail(f"step {self.cur}: the threshold did not move in the render of trace")
+            self.answer("cursor_set", {"live": True})
+            raise Fail(f"step {self.cur}: the threshold did not move in the render of trace (ys={ys[-5:] if ys else []}, candidates={candidates})")
         self.res["level_set"] = level
         self.save("level-trace", after)
         self.save("loss-band", self.render("loss"))
         self.capture("annotations")
+        self.answer("cursor_set", {"live": True})
 
     def step_n_run_controls(self):
         """A person's drag of the lr slider and two clicks of the toggle reach the run."""

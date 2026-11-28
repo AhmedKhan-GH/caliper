@@ -1047,7 +1047,7 @@ private:
 CALIPER_APPLET(mnist_applet::MnistApplet,
     .id       = "dev.caliper.mnist",
     .version  = "0.1.0",
-    .name     = "MNIST",
+    .name     = "MNIST Example",
     .summary  = "Canonical ML applet: the PyTorch C++ MNIST CNN trained live with LibTorch.",
     .tag      = "Demo",
     .services = {CALIPER_UI_V1, CALIPER_LOG_V1, CALIPER_JOBS_V1,

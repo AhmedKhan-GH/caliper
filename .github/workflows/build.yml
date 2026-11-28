@@ -118,7 +118,7 @@ jobs:
       # fetchable, and the fallback is a newer slang that needs C++20, so CI skips configuring it.
       # The Metal backend is Objective-C++, so the OBJC/OBJCXX launchers are set as well.
       # The core build compiles no applets. The caliper_sdk_install test installs
-      # the SDK and builds a copy of examples/hello in CALIPER_SDK_PROBE_DIR,
+      # the SDK and builds a copy of examples/hello_world in CALIPER_SDK_PROBE_DIR,
       # outside the checkout. The caliper_embed_install test installs the embed
       # package and builds a copy of examples/embed_host against it in
       # CALIPER_EMBED_PROBE_DIR, outside the checkout, then runs the copy in its
@@ -164,6 +164,12 @@ jobs:
           python3 scripts/check_macos_min.py 14.0
           cmake-build-release/caliper cmake-build-release/caliper_viewer
           cmake-build-release/libcaliper_embed.dylib
+      # Cache the torchvision MNIST dataset across runs before CTest and acceptance suites so CI does
+      # not depend on a live mirror more than once.
+      - uses: actions/cache@v5
+        with:
+          path: ~/.cache/caliper/mnist
+          key: mnist-dataset-v1
       # The GPU suites (gfx, export, embed, torch) skip without a device and
       # report that as Skipped, not Passed. A hosted runner's Metal
       # availability is not guaranteed, so skips are accepted here; a lane
@@ -264,9 +270,9 @@ jobs:
             echo "::error::Instrument building acceptance: neither passed nor skipped for lack of Metal"
             exit 1
           fi
-      # The programmable graphics acceptance test on its own. The agent builds the Attention Arc Tower from
-      # pieces through caliper-mcp on a managed run of tests/acceptance/arc_tower_train.py, with the same two build
-      # folders as the step above. It picks an arc, ablates a head, forks the run from a past step and stops a
+      # The programmable graphics acceptance test on its own. The agent builds the MNIST probe dashboard from
+      # pieces through caliper-mcp on a managed run of examples/mnist/train.py, with the same two build
+      # folders as the step above. It picks a digit column, ablates fc1, forks the run from an early step and warns on a
       # draw that is over its time. A skip because the runner has no Metal device is accepted. Any other skip,
       # and any outcome that is neither a pass nor a Metal skip, is a setup error.
       - name: Programmable graphics acceptance test
@@ -336,11 +342,6 @@ jobs:
         run: >-
           "$RUNNER_TEMP/acceptance-py/bin/python" -m pytest -q -rs -p no:cacheprovider
           python/tests -m "not gpu and not window and not notebook and not timing" --strict-markers
-      # Cache the torchvision MNIST dataset across runs so CI does not depend on a live mirror more than once.
-      - uses: actions/cache@v5
-        with:
-          path: ~/.cache/caliper/mnist
-          key: mnist-dataset-v1
       # Canonical MNIST example check: run --mode none for 20 steps (fewer than the published 14 epochs
       # for CI speed on a GPU-less hosted runner) and check that the printed result is finite and
       # improves over 10-class uniform random chance (loss < ln(10), accuracy > 10%).
@@ -489,12 +490,12 @@ jobs:
             grep -q "comparison skipped: no Metal device" "$log"
             echo "Draw parity: the browser side RAN and passed; the comparison SKIPPED because the runner has no Metal device"
           fi
-          # The whole Attention Arc Tower dashboard, app against the browser's spec page, on the recording in
+          # The whole MNIST probe dashboard, app against the browser's spec page, on the recording in
           # tests/draw_parity/dashboard: the app's spec runtime on Metal, the page with the module just built.
           cd ..
           dash="$RUNNER_TEMP/dashboard-parity"
           set +e
-          cmake-build-release/caliper_dashboard_parity_app tests/draw_parity/dashboard tests/acceptance/arc_tower "$dash" \
+          cmake-build-release/caliper_dashboard_parity_app tests/draw_parity/dashboard tests/draw_parity/pieces "$dash" \
             | tee "$RUNNER_TEMP/dashboard-parity-app.log"
           dapp=$?
           set -e
@@ -536,7 +537,7 @@ jobs:
           name: macos-ctest-log
           path: cmake-build-release/Testing/Temporary/LastTest.log
           if-no-files-found: ignore
-      # Install the SDK and build hello and every scope against it
+      # Install the SDK and build hello_world and the MNIST applet against it
       # in their own build folders, as a developer outside this repository would.
       - run: scripts/build_applets_against_sdk.sh cmake-build-release "$RUNNER_TEMP/applets"
         env:
@@ -544,12 +545,12 @@ jobs:
           CMAKE_C_COMPILER_LAUNCHER: sccache
           CMAKE_CXX_COMPILER_LAUNCHER: sccache
       # What was built against the installed packages carries their minimum
-      # macOS too: the applets above, and the copies of examples/hello and
+      # macOS too: the applets above, and the copies of examples/hello_world and
       # examples/embed_host that the install tests built.
       - run: >-
           python3 scripts/check_macos_min.py 14.0
           "$RUNNER_TEMP"/applets/build/*/applets/*.dylib
-          "$RUNNER_TEMP/sdk-probe/hello-build/applets/libhello.dylib"
+          "$RUNNER_TEMP/sdk-probe/hello_world-build/applets/libhello_world.dylib"
           "$RUNNER_TEMP/embed-probe/embed_host-build/embed_host"
       # The host must name no applet: no applet id, name or window title may
       # appear as a string literal in src/ or include/.
@@ -603,13 +604,10 @@ jobs:
           name: windows-ctest-log
           path: cmake-build-release/Testing/Temporary/LastTest.log
           if-no-files-found: ignore
-      # The same applets against the installed SDK, except embed_scope and
-      # gpt_scope: they need curl and zlib, which Windows provides only inside
-      # the core build.
+      # Build hello_world and the MNIST applet against the installed SDK, as on macOS.
       - run: >-
           scripts/build_applets_against_sdk.sh cmake-build-release
           "$(cygpath -m "$RUNNER_TEMP")/applets"
-          examples/hello applets/pulse_scope
         env:
           CMAKE_GENERATOR: Ninja
           CMAKE_C_COMPILER_LAUNCHER: sccache
