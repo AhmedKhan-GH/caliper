@@ -240,13 +240,15 @@ TEST_CASE("live_views/heatmap: CPU payload at an offset is byte-exact; telemetry
     CaliperTensor t = tensor(blob.data(), CALIPER_DT_F32, {H, W}, CALIPER_DEV_CPU);
     CaliperLiveSnapshot s = snap("act", CALIPER_LIVE_KIND_HEATMAP, &t, 16, CALIPER_LIVE_APPLY_RAW);
     s.seq = 7;
-    s.stamp_ns = now_ns() - 2000000;   // 2 ms ago
+    const uint64_t ago_ns = 2000000;
+    s.stamp_ns = now_ns() - ago_ns;   // 2 ms ago
     REQUIRE_MESSAGE(caliper_core_live_apply(c.core, &s) == 1, c.err());
 
     CHECK(caliper_core_live_view_count(c.core) == 1);
     CHECK(caliper_core_view_count(c.core) == 1);   // it IS a v1.2 view of the same name
     int ok = 0;
     CaliperLiveViewInfo vi = info(c.core, "act", &ok);
+    const double since_stamp_ms = (double)(now_ns() - s.stamp_ns) * 1e-6;
     REQUIRE(ok == 1);
     CHECK(vi.kind == CALIPER_LIVE_KIND_HEATMAP);
     CHECK(std::string(vi.path) == "cpu-staged");
@@ -258,8 +260,11 @@ TEST_CASE("live_views/heatmap: CPU payload at an offset is byte-exact; telemetry
     CHECK(vi.seq == 7);
     CHECK(vi.imported == 0);
     CHECK(vi.read_done == 1);
-    CHECK(vi.latency_ms >= 2.0);
-    CHECK(vi.latency_ms < 1000.0);
+    // The latency runs from the stamp to the apply on the same clock
+    // (CLOCK_UPTIME_RAW), thus it is at least the age of the stamp and at most
+    // the time from the stamp to the read of the info.
+    CHECK(vi.latency_ms >= (double)ago_ns * 1e-6);
+    CHECK(vi.latency_ms <= since_stamp_ms);
     CHECK(caliper_core_live_view_read_done(c.core, "act") == 1);
 
     const std::vector<uint8_t> ref = map_ref(r, W, H, 0, 0.0f, 1.0f);
@@ -1593,6 +1598,8 @@ TEST_CASE("live_views/copies: each route counts its known copies; METAL payloads
     // Every view so far is zero-copy, and so is every frame that drew them.
     c.frames(2);
     REQUIRE(caliper_stats::frame_copies(c.core, &fc, true));
+    // The test drew five frames itself (three and two) in the fresh window, and
+    // wait_read_done draws one more for each check that found the read not done.
     CHECK(fc.window_frames >= 5);
     CHECK(fc.window.copies == 0);
     CHECK(fc.window.bytes == 0);
@@ -1700,6 +1707,8 @@ TEST_CASE("live_views/frame stats: CALIPER_METAL_STATS records frame and GPU tim
             std::this_thread::sleep_for(std::chrono::milliseconds(5));
         }
         REQUIRE(caliper_stats::frame_stats(c.core, &fs, true));
+        // The loop drew five frames, and wait_read_done draws one more for each
+        // check that found the read not done.
         CHECK(fs.frames >= 5);
         CHECK(fs.frame_ms_p50 > 0.0);
         CHECK(fs.frame_ms_p99 >= fs.frame_ms_p50);
@@ -1711,7 +1720,9 @@ TEST_CASE("live_views/frame stats: CALIPER_METAL_STATS records frame and GPU tim
         CHECK(fs.draw_gpu_n >= 1);
         CHECK(fs.frame_gpu_n >= 1);
         std::map<std::string, uint64_t> upd(fs.updates.begin(), fs.updates.end());
-        CHECK(upd["compute-imported"] >= 5);
+        // Each of the five applies of the METAL heatmap encodes its one update
+        // at once (MetalRenderer::stats_update), thus the count is exact.
+        CHECK(upd["compute-imported"] == 5);
         // The points draw through the graphics layer, not as a renderer update: their GPU time
         // reaches the view-draw series above (HostRenderer::note_draw_gpu_ms), and no update by path.
         CHECK(upd.count("primitives-imported") == 0);

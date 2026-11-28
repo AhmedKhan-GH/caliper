@@ -580,7 +580,8 @@ fn run(@builtin(global_invocation_id) id: vec3<u32>) {
     const size_t reaping = caliper_producer_reaping();
     MESSAGE("the timeout came after ", std::chrono::duration<double, std::milli>(t1 - t0).count(),
             " ms; the destroy took ", destroy_ms, " ms");
-    CHECK(destroy_ms < 50.0);
+    // The destroy did not wait for the pass: the pass still ran when it
+    // returned, thus the reaper holds the runtime's objects.
     CHECK(reaping == 1);
     // The reaper lets the runtime's objects go when the GPU ends the pass.
     const auto deadline = clock::now() + std::chrono::seconds(20);

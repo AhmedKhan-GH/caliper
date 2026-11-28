@@ -30,7 +30,8 @@ const flt = (hex: string) => {
 const cases = table.cases.map(([v, lo, hi, idx]) => ({ v: flt(v), lo: flt(lo), hi: flt(hi), idx, key: `${v} ${lo} ${hi}` }));
 
 test('lutIndex gives the native reference index for every case of the table', () => {
-  expect(cases.length).toBeGreaterThan(500);
+  // The table is fixed: make_lut_index.py wrote its 718 cases.
+  expect(cases.length).toBe(718);
   const wrong = cases.filter((c) => lutIndex(c.v, c.lo, c.hi) !== c.idx).map((c) => `${c.key}: ${lutIndex(c.v, c.lo, c.hi)} != ${c.idx}`);
   expect(wrong).toEqual([]);
 });

@@ -327,8 +327,6 @@ jobs:
       #   - notebook: test_widget.py::test_widget_draws_in_jupyterlab
       #     (requires JupyterLab, ipykernel, Python Playwright Chromium, and WebGPU Metal mode; browser
       #     views and WebAssembly rendering are covered on SwiftShader and Canvas 2D in web.yml).
-      #   - timing: test_controls.py::test_a_flood_of_values_from_several_threads (holds 20,000 threaded
-      #     requests to a 20 s wall-clock limit that a 3-core hosted runner does not reliably meet).
       # Within the remaining 35 suites, individual MPS device cases, the 2 Metal viewer cases of
       # test_live_session.py, test_assets.py::test_the_package_ships_the_wasm_views (enforced in web.yml),
       # and the CALIPER_WATCH_TIMING benchmark in test_watch.py skip with explicit reasons on a GPU-less runner.

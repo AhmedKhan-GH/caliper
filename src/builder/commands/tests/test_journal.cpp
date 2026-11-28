@@ -180,7 +180,9 @@ TEST_CASE("large values are replaced by their SHA-256 and length") {
     out = cb::redact_journal_args(wide);
     REQUIRE(out.contains("$redacted"));
     CHECK(out.size() == 1);
-    CHECK(out.dump().size() < 200);
+    // The marker of the whole object: its hash and its size as JSON text.
+    const std::string wide_text = wide.dump();
+    CHECK(out == json{{"$redacted", {{"sha256", cb::command_sha256_hex(wide_text)}, {"bytes", wide_text.size()}}}});
 
     // A value under the limit, in arguments under the limit, stays.
     out = cb::redact_journal_args({{"text", std::string(65000, 'e')}});
@@ -238,7 +240,15 @@ TEST_CASE("the journal rotates by size, keeps its files and continues the seq") 
     }
     auto reopened = CommandJournal::open(path, options);
     REQUIRE(reopened.error.ok());
-    CHECK(reopened.journal->last_seq() > 50);
+    // The seq continues from the last event of the newest rotated file.
+    std::uint64_t rotated_last = 0;
+    {
+        std::istringstream lines(read_file(cb::journal_rotated_path(path, 1)));
+        for (std::string line; std::getline(lines, line);)
+            if (!line.empty()) rotated_last = json::parse(line).at("seq").get<std::uint64_t>();
+    }
+    CHECK(rotated_last > 0);
+    CHECK(reopened.journal->last_seq() == rotated_last);
 
     const auto read = cb::read_journal(path);
     REQUIRE(!read.events.empty());

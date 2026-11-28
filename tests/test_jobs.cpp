@@ -191,9 +191,10 @@ TEST_CASE("jobs: cancel_all_and_join gives up on a worker that ignores cancel") 
     // static so the detached thread has something valid to touch until it
     // really ends (we wait for that below so the case leaves nothing behind).
     static std::atomic<bool> s_exited{false};
+    static constexpr int kDeafMs = 600;
     s_exited.store(false);
     auto fn = [](void* user, const CaliperJobControl*) {
-        std::this_thread::sleep_for(milliseconds(600));   // deaf to cancel
+        std::this_thread::sleep_for(milliseconds(kDeafMs));   // deaf to cancel
         static_cast<std::atomic<bool>*>(user)->store(true);
     };
     auto t0 = steady_clock::now();
@@ -205,7 +206,9 @@ TEST_CASE("jobs: cancel_all_and_join gives up on a worker that ignores cancel") 
         CHECK_FALSE(s_exited.load());                     // it really was deaf
     }   // ~JobSystem: nothing left to wait for
     const auto waited = duration_cast<milliseconds>(steady_clock::now() - t0);
-    CHECK(waited.count() < 450);                          // bounded, not 600+
+    // The deaf job ends kDeafMs after its submit, which came after t0, thus a
+    // join or a destructor that waited for it would last at least that long.
+    CHECK(waited.count() < kDeafMs);
     CHECK(wait_until([&] { return s_exited.load(); }, milliseconds(2000)));
 }
 

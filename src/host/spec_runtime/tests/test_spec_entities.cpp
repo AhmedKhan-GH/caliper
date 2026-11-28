@@ -1182,6 +1182,8 @@ std::string camera_now(const caliper_live_views::SceneView& v) {
     return t.substr(0, t.find(" target_px"));
 }
 
+constexpr int kReadBackEvery = 15;   // drag() reads the picture back after every 15th frame
+
 // A left drag across the panel from 25 % to 75 % of its width, one move a frame, and what each frame
 // drew. `before` runs before each frame of the drag with its index, from 1. The frames of the drag
 // read nothing back, as the app's frames do not.
@@ -1214,7 +1216,7 @@ std::vector<DragFrame> drag(ArcsPanel& p, caliper_live_views::SceneView& view, i
         f.camera = camera_now(view);
         f.drawn = view.drawn_camera_text();
         f.program_clip = view.program_clip();
-        if (k % 15 == 0) {   // a read back after the frame's time was taken
+        if (k % kReadBackEvery == 0) {   // a read back after the frame's time was taken
             std::string why;
             REQUIRE_MESSAGE(view.read_pixels(&f.pixels, &why), why);
         }
@@ -1229,8 +1231,8 @@ std::vector<DragFrame> drag(ArcsPanel& p, caliper_live_views::SceneView& view, i
 
 // Each frame of the drag drew the scene and the program once, with the camera of that frame, which
 // the drag moved: the scene's camera and the programs' clip matrix change at every frame.
-void check_each_frame(const std::vector<DragFrame>& frames) {
-    REQUIRE(frames.size() > 4);
+void check_each_frame(const std::vector<DragFrame>& frames, int moves) {
+    REQUIRE(frames.size() == (std::size_t)moves);   // drag() keeps one frame per move
     for (std::size_t i = 1; i < frames.size(); ++i) {
         CAPTURE(i);
         CHECK(frames[i].scene == frames[i - 1].scene + 1);
@@ -1251,7 +1253,8 @@ void check_each_frame(const std::vector<DragFrame>& frames) {
         }
         last = &f.pixels;
     }
-    CHECK(compared >= 4);
+    // drag() reads back every kReadBackEvery-th frame, and each read back but the first is compared.
+    CHECK(compared == moves / kReadBackEvery - 1);
 }
 
 // The 95th percentile of the frame times, printed with its target. Above the target the test warns,
@@ -1296,7 +1299,7 @@ TEST_CASE("programs: a drag in a panel of programs draws each frame with that fr
     caliper_live_views::SceneView* view = p.running();
     REQUIRE(view != nullptr);
     const std::vector<DragFrame> frames = drag(p, *view, 90);
-    check_each_frame(frames);
+    check_each_frame(frames, 90);
     CHECK(view->draw_runtimes()[0]->resource_step("arcs") == 0);
     const char* why_not = "";
     check_frame_time(frames, usable_gpu(c, &why_not), why_not);
@@ -1316,7 +1319,7 @@ TEST_CASE("programs: a drag in a panel of programs draws each frame with that fr
         for (ex::Arc& a : arcs) a.weight *= 0.99f;
         keep_version(p.history, "arcs", arcs, ++step);
     });
-    check_each_frame(frames);
+    check_each_frame(frames, 90);
     CHECK(step == 4);
     CHECK(view->draw_runtimes()[0]->resource_step("arcs") == step);
 }

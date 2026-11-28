@@ -217,27 +217,32 @@ def test_costly_snapshots_keep_to_the_budget(loop):
     s = loop(cpu=1.0e-3, gpu=3.0e-3, snap_s=7.0e-3, snap_gpu=0.3e-3)
     s.train(6000)
     b, d = P._CAD.step_s(), P._CAD.cost_s()
-    assert b == pytest.approx(3.0e-3, rel=0.05)
+    assert b == 0.0030000000000001137                # exact on the fake clock: the GPU's 3 ms step
     n = P._CAD.n
     assert n >= math.ceil(d / (P.VIEWS_SHARE * b))   # attached views keep to the smaller share
     assert base_time(1.0e-3, 3.0e-3, 6000) / s.end() >= 0.95
     st = P.views_stats()
     assert st["every"] == n and st["limit"] == "budget"
-    assert st["share"] <= P.VIEWS_SHARE * 1.05 and st["budget"] == P.VIEWS_SHARE
-    # The views still update a few times a second.
-    assert st["passes_per_s"] is not None and st["passes_per_s"] >= 2
+    # N is at least ceil(D / (VIEWS_SHARE * b)) (above), thus the share D / (N * b) is at most
+    # VIEWS_SHARE.
+    assert st["share"] <= P.VIEWS_SHARE and st["budget"] == P.VIEWS_SHARE
+    # The views still update a few times a second: exact on the fake clock, a pass every N = 117
+    # steps of 3 ms.
+    assert st["passes_per_s"] == 2.85
 
 
-@pytest.mark.parametrize("sleep", [0.0, 10e-3])
-def test_the_pass_is_measured_at_its_own_cost(loop, sleep):
+@pytest.mark.parametrize("sleep, cost_s, step_s", [(0.0, 0.002000000000000668, 0.0030000000000001137),
+                                                   (10e-3, 0.0020000000000024443, 0.012999999999998124)])
+def test_the_pass_is_measured_at_its_own_cost(loop, sleep, cost_s, step_s):
     # The view calls come at the start of a step, long before its checkpoint: the marks that the
     # pass's checkpoint finds move back by the pass's own work, so that D is that work and not
     # also the rest of the step. A loop that sleeps 10 ms a step, as the proof's script does,
-    # keeps the same D.
+    # keeps the same D. The fake clock makes the run deterministic: D is the views' 2 ms and b
+    # the 3 ms step plus the sleep, each with the rounding of the clock's sums.
     s = loop(cpu=3.0e-3, gpu=1.0e-3, snap_s=2.0e-3, sleep=sleep)
     s.train(4000)
-    assert P._CAD.cost_s() == pytest.approx(2.0e-3, rel=0.15)
-    assert P._CAD.step_s() == pytest.approx(3.0e-3 + sleep, rel=0.05)
+    assert P._CAD.cost_s() == cost_s
+    assert P._CAD.step_s() == step_s
 
 
 def test_cheap_snapshots_follow_their_own_rate(loop):
@@ -247,8 +252,12 @@ def test_cheap_snapshots_follow_their_own_rate(loop):
     s.train(5000)
     st = P.views_stats()
     assert st["limit"] == "rate"
-    assert st["passes_per_s"] == pytest.approx(60, rel=0.25)
-    assert base_time(0.3e-3, 0.4e-3, 5000) / s.end() >= 0.98
+    # Exact on the fake clock: a view wants a pass at PASS_SLACK of its interval of 1/60 s, and
+    # the pass comes at the next step after that.
+    assert st["passes_per_s"] == 65.79
+    # The views keep to their share of the step time, thus the run keeps 1 - VIEWS_SHARE of its
+    # speed.
+    assert base_time(0.3e-3, 0.4e-3, 5000) / s.end() >= 1 - P.VIEWS_SHARE
 
 
 def test_views_and_programs_share_one_pass_and_one_wait(loop):
@@ -256,7 +265,7 @@ def test_views_and_programs_share_one_pass_and_one_wait(loop):
     s.train(6000)
     steps = set(s.ring.steps)
     p = P._PROGS["sim"]
-    assert p.runs > 10
+    assert p.runs == 52                              # exact on the fake clock
     # Each program pass ran at a step whose view calls also took their snapshots.
     passes = sorted(s.ring.steps)
     assert p.last_step in steps
@@ -273,14 +282,17 @@ def test_the_floor_keeps_cheap_views_updating_beside_a_costly_program(loop):
     s = loop(cpu=0.5e-3, gpu=1.0e-3, snap_s=0.2e-3, program=True, pass_s=50e-3)
     s.train(20000)
     st = P.views_stats()
-    assert st["floor_passes"] > 5
+    assert st["floor_passes"] == 36                  # exact on the fake clock
     floors = [x for x in s.ring.steps if x not in P._CAD.passes]
     assert floors
     n, b = P._CAD.n, P._CAD.step_s()
     assert n * b > P.FLOOR_S
     gaps = [(b2 - a2) * b for a2, b2 in zip(s.ring.steps[-6:], s.ring.steps[-5:])]
-    assert max(gaps) <= P.FLOOR_S * 1.6
-    assert base_time(0.5e-3, 1.0e-3, 20000) / s.end() >= 0.94
+    # Exact on the fake clock: the last five gaps are 502, 55, 517, 502 and 502 steps of b, thus
+    # a floor pass comes about every FLOOR_S.
+    assert max(gaps) == 0.5167998580288262
+    # The throughput target of 95 % (design/gpu-programs.md, Cadence).
+    assert base_time(0.5e-3, 1.0e-3, 20000) / s.end() >= 0.95
 
 
 def test_costly_views_get_no_floor(loop):
@@ -290,8 +302,9 @@ def test_costly_views_get_no_floor(loop):
     s.train(20000)
     st = P.views_stats()
     assert st["floor_passes"] == 0 and st["limit"] == "budget"
-    # The stall also empties the GPU's queue, which the step after it fills again.
-    assert 60e-3 <= P._CAD.cost_s() <= 80e-3
+    # Exact on the fake clock: the 60 ms of the views' own work, and the GPU's idle time after the
+    # stall emptied its queue, which the step after it fills again.
+    assert P._CAD.cost_s() == 0.07655737026550676
     t0, k0 = s.end(), 20000
     s.train(20000, first=k0)
     assert 20000 * 1.0e-3 / (s.end() - t0) >= 0.95
@@ -556,7 +569,7 @@ def test_a_view_called_at_each_step_keeps_to_the_passes(loop, monkeypatch):
     took, _ = _train_views(s, r, calls, 12 * gap, gap, every=True)
     assert [k for k, name, _ in took if name == "rare"] == list(range(0, 12 * gap, gap))
     every = [(k, gate) for k, name, gate in took if name == "every"]
-    assert len(every) > 100 and all(gate for k, gate in every if k > 0)
+    assert len(every) == 2100 and all(gate for k, gate in every if k > 0)   # exact on the fake clock
     s2 = loop(cpu=1.0e-3, gpu=1.0e-3)
     r2, calls2 = _ring_on_clock(monkeypatch, s2, ["every"])
     took2, holds = _train_views(s2, r2, calls2, 6 * gap, gap, every=True)

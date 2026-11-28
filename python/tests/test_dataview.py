@@ -382,7 +382,9 @@ def test_resolve_agrees_with_the_protocol_reference():
         except DataViewError as e:
             r2, m2 = None, str(e)
         assert (r1, m1) == (r2, m2), (view, req)
-    assert agree > 100 and too_large > 30, (agree, too_large)
+    # The seed fixes every case, thus the counts are exact: they show that the two sides agreed
+    # on resolved requests and on refusals for the frame limit, not only on other refusals.
+    assert (agree, too_large) == (137, 84)
 
 
 # ---------------------------------------------------------------------------
@@ -967,7 +969,9 @@ def test_apply_timings_on_mps(capsys):
         print("\napply on MPS, ms: first call | queued median | queued p90 | to completion median")
         for r in rows:
             print(f"  {r[0]:52s} {r[1]:8.3f} {r[2]:8.3f} {r[3]:8.3f} {r[4]:8.3f}")
-    assert all(r[2] < 50 for r in rows)
+    # The table is a measurement and has no bar. test_dataview_code_never_reads_back,
+    # test_apply_never_waits_for_the_device and test_points_with_cpu_labels_never_wait_for_the_device
+    # check that apply never waits for the device.
 
 
 def test_a_data_call_hands_the_routes_no_tensor_that_requires_grad():

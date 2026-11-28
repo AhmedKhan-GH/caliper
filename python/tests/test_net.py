@@ -8,7 +8,6 @@ import asyncio
 import gc
 import json
 import os
-import resource
 import socket
 import subprocess
 import sys
@@ -770,22 +769,68 @@ def test_remove_ends_subscriptions(server):
 # ---------------------------------------------------------------------------
 # flow control
 # ---------------------------------------------------------------------------
-def _rss_mb() -> float:
-    r = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
-    return r / (1 << 20) if sys.platform == "darwin" else r / 1024
+def _rss_now_mb() -> float:
+    out = subprocess.run(["ps", "-o", "rss=", "-p", str(os.getpid())], capture_output=True,
+                         text=True).stdout
+    return int(out.strip()) / 1024
+
+
+def _memory_now_mb():
+    """The RSS and the physical footprint in MB, sampled together."""
+    from footprint import footprint_mb
+    return _rss_now_mb(), footprint_mb()
+
+
+def _held_mb(frame_bytes, views=1):
+    """The MB that ``views`` subscriptions with frames of at most ``frame_bytes`` can hold in this
+    process at once. On the producer's side each holds its pending snapshot (latest wins) and the
+    frame in the socket write, and the next frame goes only when less than WRITE_LIMIT bytes are
+    queued. On the side of the test's viewer it holds at most the queued frame of max_queue=1 and
+    the frame that the viewer reads."""
+    return views * (4 * frame_bytes + _net.WRITE_LIMIT) / 2**20
+
+
+def _growth_check(samples, held_mb):
+    """The scaling rule of the memory checks, in its high-water form. ``samples`` holds pairs of
+    RSS and physical footprint in MB, after the warm-up (r0), after a short window (r1) and after
+    a long window twice as long (r2). The rule judges the footprint where macOS gives one, because
+    RSS also counts reusable pages (footprint.py), and RSS elsewhere.
+    The short window grew max(r1 - r0, 0), and the long window grew r2 - max(r0, r1), from the
+    highest sample before it. The rule fails only when the long window grew more than the short
+    one by more than ``held_mb``, what can be in flight at once. A leak at rate r grows the long
+    window by r times the short window's length more, and fails. Memory that the short window
+    released and the long window used again gives a long growth of at most zero, and passes.
+    Returns the growth of both windows."""
+    def windows(r):
+        return max(r[1] - r[0], 0.0), r[2] - max(r[0], r[1])
+
+    rss = [s[0] for s in samples]
+    footprint = [s[1] for s in samples]
+    line = (f"RSS {rss[0]:.2f}, {rss[1]:.2f}, {rss[2]:.2f} MB: {windows(rss)[0]:+.2f} MB, then "
+            f"{windows(rss)[1]:+.2f} MB")
+    # The rule judges the physical footprint, because RSS also counts reusable pages (footprint.py).
+    judged = rss if None in footprint else footprint
+    if judged is footprint:
+        line += (f"; physical footprint {footprint[0]:.2f}, {footprint[1]:.2f}, {footprint[2]:.2f} MB: "
+                 f"{windows(footprint)[0]:+.2f} MB, then {windows(footprint)[1]:+.2f} MB")
+    short, long = windows(judged)
+    print(f"\n{line} (bound on the difference {held_mb:.1f} MB)")
+    assert long - short <= held_mb, (line, held_mb)
+    return short, long
 
 
 @pytest.mark.parametrize("device", DEVICES)
 def test_slow_viewer_latest_wins(server, device):
     """A viewer that stops reading: no view call waits for it (newer snapshots
     replace older ones instead), the producer's memory does not grow, and the
-    viewer gets a recent snapshot when it reads again."""
+    viewer gets the latest snapshot when it reads again."""
     W = torch.randn(1024, 1024, device=device)
     show = lambda: caliper.show(W, name="big", rate=0)  # noqa: E731
+    stall_s = 2.0                                       # the first window of the stall
 
     def steps(seconds):
         """The slowest view call in ``seconds`` of steps: a call that waited for
-        the socket would take as long as the viewer stays stalled."""
+        the socket would not return before the viewer reads again, after the stall."""
         worst, end = 0.0, time.perf_counter() + seconds
         while time.perf_counter() < end:
             W.add_(1e-3)
@@ -804,35 +849,42 @@ def test_slow_viewer_latest_wins(server, device):
                 while True:
                     await c.ws.recv()
             reader = asyncio.ensure_future(drain())
-            base = await loop.run_in_executor(None, steps, 1.0)
+            await loop.run_in_executor(None, steps, 1.0)            # warm-up, the viewer reads
             reader.cancel()
             await asyncio.sleep(0.1)
             sent0 = server.stats()["connections"][0]["snapshots_sent"]
-            rss0 = _rss_mb()
-            slow = await loop.run_in_executor(None, steps, 2.0)     # the viewer reads nothing
-            rss1 = _rss_mb()
+            rss, slow = [], 0.0
+            for seconds in (0.0, stall_s, 2 * stall_s):              # the viewer reads nothing
+                slow = max(slow, await loop.run_in_executor(None, steps, seconds))
+                gc.collect()
+                rss.append(_memory_now_mb())
             st = server.stats()["connections"][0]
             seq_last = server.stats()["views"]["big"]["seq"]
-            last, end = None, time.monotonic() + 5
-            while time.monotonic() < end:
-                try:
-                    m = await c.recv(0.5)
-                except asyncio.TimeoutError:
-                    break
-                if isinstance(m, w.Snapshot):
-                    last = m
-            return base, slow, rss1 - rss0, st, st["snapshots_sent"] - sent0, seq_last, last
-    base, slow, grew, st, sent, seq_last, last = run(go(), 60)
-    assert slow < max(1.0, 10 * base), (slow, base)  # no call waits for the stalled socket
+            # Latest wins: once the viewer reads again it gets the last snapshot taken. The
+            # wait for it is a fence with no clock (expect's timeout is the hang guard).
+            last = await c.expect(w.Snapshot, pred=lambda m: m.seq == seq_last)
+            return slow, rss, st, st["snapshots_sent"] - sent0, last
+    slow, rss, st, sent, last = run(go(), 60)
+    assert slow < stall_s, slow                     # no call waits for the stalled socket
     assert st["superseded"] > 0 and sent < 20      # stalled sends; newer snapshots replaced older
-    assert grew < 100, grew                          # MB; nothing queues up
-    assert last is not None and last.seq >= seq_last - 3
+    # Nothing queues up: the long window grows no more than the short one, but for what can be in
+    # flight (_growth_check). The frame is the whole 1024 x 1024 float32 tensor (max_extent 1024),
+    # thus the bound is 16.1 MB. Measured on Apple silicon on 2026-11-28 in 5 runs of each case,
+    # with each window taken from the sample just before it: the first window grew 0.00 to
+    # 15.83 MB, the second -56.69 to 11.14 MB, and the second grew at most 3.55 MB more than the
+    # first. In 3 more runs of each case with the high-water form, the short window grew 0.00 to
+    # 10.61 MB, the long -0.02 to 2.78 MB, and the long grew at most 0.30 MB more than the short.
+    # Judged by the physical footprint, three runs of both devices on 2026-11-28 (Apple silicon): the
+    # long window grew at most 4.03 MB more than the short one.
+    _growth_check(rss, _held_mb(W.numel() * 4))
+    assert last.view == "big"
 
 
 def test_series_coalesced_never_dropped(server):
     async def go():
         async with Client(server) as c:
             caliper.series(0.0, name="s")
+            start = time.monotonic()
             await c.subscribe(1, "s", max_rate=5)       # at most 5 messages a second
             n = 20_000
             for i in range(1, n):
@@ -841,8 +893,11 @@ def test_series_coalesced_never_dropped(server):
             while sum(len(x) for x in got) < n:
                 m = await c.expect(w.Series)
                 got.append(m.values.array().copy())
+            elapsed = time.monotonic() - start
             assert np.array_equal(np.concatenate(got), np.arange(n, dtype=np.float32))
-            assert len(got) < 20                          # coalesced
+            # Coalesced: max_rate=5 lets at most one message go every 0.2 s, and every message
+            # counted here went out after the subscription and arrived before the end.
+            assert len(got) <= 1 + 5 * elapsed, (len(got), elapsed)
     run(go())
 
 
@@ -1087,16 +1142,11 @@ def test_flood_of_control_messages(server):
     assert len(server.events()) <= w.MAX_QUEUED_EVENTS
 
 
-def _rss_now_mb() -> float:
-    out = subprocess.run(["ps", "-o", "rss=", "-p", str(os.getpid())], capture_output=True,
-                         text=True).stdout
-    return int(out.strip()) / 1024
-
-
 def test_memory_flat_long_run(server):
     W = torch.randn(1024, 1024, device=DEV)
     Z = torch.randn(100_000, 3, device=DEV)
     L = torch.randint(0, 4, (100_000,), device=DEV).float()
+    views = ("w", "z", "loss")
 
     def step(i=[0]):
         i[0] += 1
@@ -1107,13 +1157,14 @@ def test_memory_flat_long_run(server):
 
     async def go():
         async with Client(server, max_queue=1) as c:
-            for v in ("w", "z", "loss"):
+            for v in views:
                 await c.subscribe(len(c.views) + hash(v) % 1000, v, pump=step)
             loop = asyncio.get_running_loop()
+            largest = [0]
 
             async def drain():
                 while True:
-                    await c.ws.recv()
+                    largest[0] = max(largest[0], len(await c.ws.recv()))
             reader = asyncio.ensure_future(drain())
 
             def run_for(seconds):
@@ -1121,15 +1172,27 @@ def test_memory_flat_long_run(server):
                 while time.monotonic() < end:
                     step()
             await loop.run_in_executor(None, run_for, 2.0)          # warm-up
-            gc.collect()
-            rss0 = _rss_now_mb()
-            await loop.run_in_executor(None, run_for, 6.0)
-            gc.collect()
-            rss1 = _rss_now_mb()
+            rss = []
+            for seconds in (0.0, 6.0, 12.0):                        # a window of 6 s, then 12 s
+                await loop.run_in_executor(None, run_for, seconds)
+                gc.collect()
+                rss.append(_memory_now_mb())
             reader.cancel()
-            return rss0, rss1
-    rss0, rss1 = run(go(), 90)
-    assert rss1 - rss0 < 40, (rss0, rss1)
+            return rss, largest[0]
+    rss, largest = run(go(), 90)
+    # The long window grows no more than the short one, but for what can be in flight
+    # (_growth_check). The frames of the three views take at most _held_mb of the largest frame
+    # that the viewer received, which is the 1.6 MB frame of the 100,000 points and their labels:
+    # 18.5 MB. The series takes at most 4 MiB more, because the producer retains up to
+    # SERIES_RETAIN (1 << 20) of its float32 values by design. Thus the bound is 22.5 MB here.
+    # Measured on Apple silicon on 2026-11-28 in 5 runs of each sender, with each window taken
+    # from the sample just before it: the first window grew -0.02 to 1.70 MB, the second -94.73 to
+    # 3.88 MB, and the second grew at most 3.77 MB more than the first. In 3 more runs of each
+    # sender with the high-water form, the short window grew 0.00 to 5.06 MB, the long -93.19 to
+    # 0.80 MB, and the long grew at most 0.78 MB more than the short.
+    # Judged by the physical footprint, three runs of both devices on 2026-11-28 (Apple silicon): the
+    # long window grew at most 4.03 MB more than the short one.
+    _growth_check(rss, _held_mb(largest, len(views)) + 4 * _net.SERIES_RETAIN / 2**20)
 
 
 # ---------------------------------------------------------------------------
@@ -1410,11 +1473,17 @@ def test_views_share_one_tick(server, device):
             return taken, ticks, el, got
     taken, ticks, el, got = run(go())
     # w and z share the ticks (a tick lacks one only when the pump has not yet
-    # freed its staging buffers, which a loaded machine can cause)
+    # freed its staging buffers, which a loaded machine can cause), and a tick serves each of
+    # the two snapshot views at most once.
     assert ticks >= 10 and ticks <= taken <= 2 * ticks
-    assert ticks <= 60 * el + 2
+    # Ticks open at least 1 / DEFAULT_RATE_HZ apart: at most rate * el + 1 open in the window, and
+    # one more that was open when it began.
+    import caliper._net_ring as R
+    assert ticks <= R.DEFAULT_RATE_HZ * el + 2
     if device == "mps":
-        assert len(events) <= ticks + 2                  # one event per tick (the series rides in it)
+        # The tick's close records its one event (the series rides in it), and nothing else in
+        # the window records one: a tick that took nothing records none.
+        assert len(events) <= ticks
 
 
 @pytest.mark.parametrize("device", DEVICES)
@@ -1432,16 +1501,19 @@ def test_slower_rates_hold_with_ticks(server, device):
             caliper.show(B_, name="b")
 
     def take(n):
-        """Steps until view a has taken n more snapshots: the time of each (the
-        step it came in, to within one step) and how many b took meanwhile."""
+        """Steps until view a has taken n more snapshots: the ring's own time of
+        each take (the group's last, which its due rule compares) and how many b
+        took meanwhile."""
         ring = server.ring
         a0, b0 = ring.views["a"].seq, ring.views["b"].seq if "b" in ring.views else 0
         times, last = [], a0
         while len(times) < n:
             step()
-            if ring.views["a"].seq != last:
-                last = ring.views["a"].seq
-                times.append(time.perf_counter())
+            v = ring.views["a"]
+            if v.seq != last:
+                last = v.seq
+                with ring.lock:
+                    times.append(max(g.last for g in v.groups.values()))
         b = (ring.views["b"].seq if "b" in ring.views else 0) - b0
         return min(y - x for x, y in zip(times, times[1:])), b
 
@@ -1458,10 +1530,15 @@ def test_slower_rates_hold_with_ticks(server, device):
             gap_20, b = take(10)
             return gap_30, gap_20, b
     gap_30, gap_20, b = run(go())
-    # never above the rate (a slower machine only widens the gaps), and b at the
-    # session's rate takes more snapshots than a at 20 a second meanwhile
-    assert gap_30 >= 1 / 30 - 0.003, gap_30
-    assert gap_20 >= 1 / 20 - 0.003, gap_20
+    print(f"\nshortest gaps on the ring's times: {gap_30 * 1e3:.2f} ms at rate=30, "
+          f"{gap_20 * 1e3:.2f} ms at max_rate=20; b took {b}")
+    # The due rule of the ring (caliper/_net_ring.py, _group_due) on the ring's own times: a group
+    # takes its next snapshot once its interval has passed, less a slack. Alone, view a opens
+    # each tick itself, which allows 1 ms. Beside b at the session's rate, a can join a tick that
+    # b holds open, which allows half a tick.
+    assert gap_30 >= 1 / 30 - 0.001, gap_30
+    assert gap_20 >= 1 / 20 - server.ring.tick_interval / 2, gap_20
+    # b at the session's rate takes more snapshots than a at 20 a second meanwhile
     assert b >= 2 * 9, b
 
 
@@ -1524,6 +1601,7 @@ def test_calls_spread_in_a_step_share_a_tick(server, device):
                 steps += 1
             return ring.counters["taken"] - n0, ring.counters["ticks"] - k0
     taken, ticks = run(go())
+    # a tick serves each of the two snapshot views at most once
     assert ticks >= 10 and ticks <= taken <= 2 * ticks, (taken, ticks)
 
 

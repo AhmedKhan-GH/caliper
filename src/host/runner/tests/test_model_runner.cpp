@@ -603,13 +603,11 @@ TEST_CASE("runner: a managed run starts, forks from a checkpoint with a lower lr
     REQUIRE(!runner.logs("base", 3, &lines));
     REQUIRE(lines.size() >= 1);
     CHECK(lines.back().find("stopped at step") == 0);
-    // The series stay after the runs end.
-    CHECK(values_of(runner, "run:base/loss").size() >= 20);
+    // The series stay after the runs end, with every value the run had sent.
+    CHECK(values_of(runner, "run:base/loss").size() >= parent.size());
     // The runner events gave each state in order.
     const std::vector<std::string> seen = events.states("base");
-    REQUIRE(seen.size() >= 3);
-    CHECK(seen.front() == "starting");
-    CHECK(seen.back() == "exited");
+    CHECK(seen == std::vector<std::string>{"starting", "running", "exited"});
     // A finished run has no control.
     CHECK(runner.control_of("base", &err) == nullptr);
     CHECK(err.code == cb::kRunNotReady);
@@ -966,7 +964,7 @@ TEST_CASE("runner: a fork with a step starts at once from the newest kept checkp
         return real >= 3;
     }, 60000));
     const std::vector<float> forked = values_of(runner, "run:" + fork.id + "/loss");
-    REQUIRE(forked.size() > 15);
+    REQUIRE(forked.size() >= 15 + 3);   // the 15 NaN values and the three the wait above saw
     for (std::size_t i = 0; i < 15; ++i) CHECK(std::isnan(forked[i]));
     CHECK_FALSE(std::isnan(forked[15]));
     std::vector<std::string> lines;

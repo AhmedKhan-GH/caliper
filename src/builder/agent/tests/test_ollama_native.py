@@ -19,6 +19,7 @@ from conftest import AgentProcess, message_text, statuses, widget_meta
 from fake_openai import HYBRID_27B_INFO, FakeOpenAI
 from test_probe import run_probe_cli
 
+from caliper_agent.loop import CONTEXT_RESERVE_MAX
 from caliper_agent.ollama_native import native_chat_url, native_context, native_request
 from caliper_agent.presets import PRESETS
 
@@ -239,7 +240,9 @@ def test_the_reply_asks_for_no_more_than_the_context_leaves(ollama_agent, calipe
     first, second = server.native_requests
     assert first["options"]["num_predict"] <= 8192   # at most half the context, and what the first prompt leaves
     assert 13000 + second["options"]["num_predict"] <= 16384
-    assert second["options"]["num_predict"] >= 2048   # the least reply worth asking for
+    # The least reply worth asking for: the sidecar sends no request that leaves less room than
+    # min(CONTEXT_RESERVE_MAX, context // 8) (caliper_agent/loop.py, check_context).
+    assert second["options"]["num_predict"] >= min(CONTEXT_RESERVE_MAX, 16384 // 8)
 
 
 def test_a_reply_cut_at_the_end_of_the_context_is_a_limit_even_with_a_tool_call(ollama_agent, caliper):

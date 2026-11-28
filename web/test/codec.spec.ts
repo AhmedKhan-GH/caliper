@@ -21,8 +21,9 @@ const names = [
 const typeName = (id: number) => Object.entries(MSG).find(([, v]) => v === id)?.[0] ?? null;
 
 test('the golden frames are there, with the 3.1 frames', () => {
-  expect(names.length).toBeGreaterThanOrEqual(20);
-  expect(names.filter((n) => n.startsWith('v3_1/')).length).toBeGreaterThanOrEqual(16);
+  // The fixture is fixed: tests/fixtures/wire_v3 holds 22 frames of 3.0 and its v3_1 folder 17 frames of 3.1.
+  expect(names.length).toBe(39);
+  expect(names.filter((n) => n.startsWith('v3_1/')).length).toBe(17);
 });
 
 for (const name of names) {
@@ -78,7 +79,8 @@ for (const name of names) {
 
 test('rejects every invalid frame with its reason and close code', () => {
   const expected: Record<string, { reason: string; close_code: number }> = JSON.parse(fs.readFileSync(path.join(dir, 'invalid', 'expect.json'), 'utf8'));
-  expect(Object.keys(expected).length).toBeGreaterThanOrEqual(10);
+  // The fixture's invalid/expect.json names 17 invalid frames.
+  expect(Object.keys(expected).length).toBe(17);
   for (const [file, want] of Object.entries(expected)) {
     const buf = new Uint8Array(fs.readFileSync(path.join(dir, 'invalid', file)));
     let err: unknown = null;

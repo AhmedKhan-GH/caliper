@@ -90,7 +90,10 @@ TEST_CASE("chat markdown: every prefix of the summary, as it streams in, shows n
         CHECK_FALSE(raw_marks(plain));
         ++checked;
     }
-    CHECK(checked > 500);
+    // One prefix ends before each character, and one is the whole text.
+    size_t characters = 0;
+    for (unsigned char c : text) characters += (c & 0xC0) != 0x80;
+    CHECK(checked == characters + 1);
     // Mid-stream: an opening mark with no closing one yet, and a closing mark half there.
     CHECK(chat_markdown_plain("- **Spe") == "\xE2\x80\xA2 Spe");
     CHECK(chat_markdown_plain("- **Spec*") == "\xE2\x80\xA2 Spec");
@@ -177,9 +180,10 @@ TEST_CASE("chat markdown: hostile text is bounded and falls back to plain text")
     const auto n = chat_markdown_blocks(nested);
     REQUIRE(n.size() == 1);
     CHECK(spans_text(n[0]).size() < nested.size() / 2);
-    // Only the lone marks where the lines join, "a * **a" read as "2 * 3", stay.
+    // Only the lone marks where the lines join, "a * **a" read as "2 * 3", stay:
+    // the last mark of each of the five lines.
     const std::string kept = spans_text(n[0]);
-    CHECK(std::count(kept.begin(), kept.end(), '*') <= 5);
+    CHECK(std::count(kept.begin(), kept.end(), '*') == 5);
     std::string stars(7000, '*');
     CHECK(chat_markdown_blocks("x " + stars + " y").size() == 1);
     std::string ticks;

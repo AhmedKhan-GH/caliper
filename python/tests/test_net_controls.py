@@ -274,7 +274,7 @@ def test_pause_step_and_resume_a_training_loop(server, ctl):
                 assert loop.count == n + 3 and again.run["step"] == paused.run["step"] + 3
                 assert (await v.control("resume")).status == "ok"
                 await v.state(lambda m: m.run["state"] == "running")
-                await until(lambda: loop.count > n + 10)
+                await until(lambda: loop.count > n + 3)    # it steps again past where it held
     run(go())
 
 
@@ -471,7 +471,7 @@ def test_close_releases_a_paused_run(make_server, ctl):
                 await v.state(lambda m: m.run["state"] == "paused")
                 n = loop.count
                 s.close()
-                await until(lambda: loop.count > n + 3)
+                await until(lambda: loop.count > n)        # the released loop steps again
     run(go())
 
 

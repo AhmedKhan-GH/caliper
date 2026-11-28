@@ -160,11 +160,14 @@ TEST_CASE("calls time out, deadlines move and late answers are reported") {
     a.start();
     b.start();
 
+    const int timeout_ms = 150;
     const auto t0 = std::chrono::steady_clock::now();
-    RpcResult r = a.call_sync("slow", json::object(), 150);
+    RpcResult r = a.call_sync("slow", json::object(), timeout_ms);
     const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - t0).count();
     CHECK(r.error.code == "rpc.timeout");
-    CHECK(ms >= 140);
+    // The peer expires a call when its steady clock reaches the deadline, thus
+    // never before the timeout.
+    CHECK(ms >= timeout_ms);
     CHECK(ms < 2000);
 
     // A late answer to the expired call is dropped and reported.
@@ -183,7 +186,14 @@ TEST_CASE("calls time out, deadlines move and late answers are reported") {
         done = true;
     });
     REQUIRE(id > 0);
-    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+    // The peer has the call, and the call is still pending. The reader loop
+    // sweeps expired calls once a poll, thus a wait of two polls gives the
+    // sweep the time to run before the check.
+    CHECK(eventually([&] {
+        std::lock_guard<std::mutex> lock(m);
+        return ids.size() == 2;
+    }));
+    std::this_thread::sleep_for(std::chrono::milliseconds(2 * JsonRpcOptions{}.poll_ms));
     CHECK_FALSE(done.load());
     CHECK(a.set_call_timeout(id, 100));
     CHECK(eventually([&] { return done.load(); }));

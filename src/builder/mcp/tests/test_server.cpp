@@ -386,7 +386,6 @@ TEST_CASE("resources are listed in pages and read by URI") {
     // the files of the built-in library of pieces.
     std::size_t library = 0;
     for (const std::string& uri : seen) library += uri.rfind(kLibraryUriPrefix, 0) == 0;
-    CHECK(library >= 4);
     CHECK(library == caliper_builder::programs::library_files().size());
     CHECK(seen.size() - library == 453);
     CHECK(seen.count(std::string(kLibraryUriPrefix) + "lib/colormap/1.wgsl") == 1);

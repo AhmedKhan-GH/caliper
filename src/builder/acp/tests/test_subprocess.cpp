@@ -151,11 +151,13 @@ TEST_CASE("terminate escalates to SIGKILL after the grace period") {
     REQUIRE(read_first_line(*p) == "ready");
     ExitStatus st;
     CHECK_FALSE(p->try_wait(&st));
+    const int grace_ms = 300;
     const auto t0 = std::chrono::steady_clock::now();
-    st = p->terminate(300);
+    st = p->terminate(grace_ms);
     const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - t0).count();
     CHECK(st.signal == SIGKILL);
-    CHECK(ms >= 290);
+    // SIGKILL comes only when the steady clock reaches the end of the grace.
+    CHECK(ms >= grace_ms);
     CHECK(ms < 5000);
     // Terminating again is harmless.
     CHECK(p->terminate(300).signal == SIGKILL);

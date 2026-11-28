@@ -134,7 +134,9 @@ def test_rate_limit(fake, monkeypatch):
     for _ in range(500):                            # 500 calls, 1 ms apart: 0.5 s
         taken += bool(caliper.show(x, "rl", rate=20))
         clock.now += 0.001
-    assert 8 <= taken <= 12, taken                  # 20 Hz over 0.5 s (first call immediate)
+    # 20 Hz on the test clock: a take at call 0 and then at every 51st call (the float sum of the
+    # 1 ms steps lands just below the 50 ms interval at call 50), thus 10 takes in 500 calls.
+    assert taken == 10, taken
     n0 = len(fake.published)
     for _ in range(50):
         assert caliper.show(x, "rl0", rate=0) is True   # rate=0: every call
@@ -276,13 +278,19 @@ def test_histogram_counts_match_histc(fake, device):
 
 
 @pytest.mark.parametrize("device", DEVICES)
-def test_series_appends_every_call_and_wraps(fake, device):
+def test_series_appends_every_call_and_wraps(fake, device, monkeypatch):
     n = SERIES_CAPACITY + 904
     vals = torch.arange(n, dtype=torch.float32, device=device)
-    for i in range(n):
-        caliper.series(vals[i] if device == "mps" else float(i), "loss", rate=1)   # 1 Hz publishes
+    with monkeypatch.context() as m:
+        m.setattr(caliper, "time", _Clock())           # the test clock stands still
+        for i in range(n):
+            caliper.series(vals[i] if device == "mps" else float(i), "loss", rate=1)   # 1 Hz publishes
     pubs = [p for p in fake.published if p[0] == "loss"]
-    assert len(pubs) <= 2                              # rate limited
+    # Rate limited: at 1 Hz on a clock that stands still only the first call is due. Its snapshot
+    # is published at once on the CPU, and on MPS once its event completed.
+    assert len(pubs) <= 1
+    if device == "cpu":
+        assert len(pubs) == 1
     _flush()                                           # the final snapshot
     _, idx, meta, payload, _, _ = [p for p in fake.published if p[0] == "loss"][-1]
     assert meta.kind == _ring.KIND_SERIES and meta.series_total == n and idx == 0

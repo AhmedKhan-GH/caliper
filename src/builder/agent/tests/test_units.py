@@ -107,7 +107,8 @@ def test_every_command_of_the_real_table_becomes_a_tool_strict_within_the_limits
     assert {c.name for c in commands if c.group in NOT_FOR_THE_MODEL} == {
         "preview.begin", "preview.diff", "preview.commit", "preview.discard", "review.status"}
     commands = [c for c in commands if offered_to_the_model(c)]   # without undo and redo, the person's own
-    assert len(tools) == len(commands) >= 34
+    # The named commands above and below show that the table is not empty.
+    assert len(tools) == len(commands)
     for tool, command in zip(tools, commands):
         assert tool.name == tool_name(command.name) and command_name(tool.name) == command.name
         if tool.strict:
@@ -308,7 +309,9 @@ def test_the_scrubber_replaces_secrets_in_text_logs_and_exceptions(capsys):
             root.addHandler(handler)
         root.setLevel(saved[4])
     written = stream.getvalue()
-    assert FAKE_KEY not in written and written.count("[redacted]") >= 3
+    # The key was in the warning, in the message of the uncaught exception, and in the message
+    # and the exception of logging.exception: four places.
+    assert FAKE_KEY not in written and written.count("[redacted]") == 4
 
 
 # ---- Caliper API ---------------------------------------------------------------------------

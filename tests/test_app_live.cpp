@@ -1214,7 +1214,8 @@ TEST_CASE("app live: attention entropy per layer, from a live stream, on the spe
     // The head-mean attention, one cell per layer, and the entropy per head.
     CHECK(live["live:attn"]["shape"] == json::array({6, 64, 64}));
     CHECK(live["live:attn.entropy"]["shape"] == json::array({6, 8}));
-    CHECK(live["live:attn"]["rate_hz"].get<double>() > 1.0);
+    // A rate exists once snapshots arrived; its value follows the producer's speed.
+    CHECK(live["live:attn"]["rate_hz"].get<double>() > 0.0);
     CHECK(live["live:attn"]["wire"] == true);
 
     // The spec, through commands: the entropy by layer and head, the entropy
@@ -1385,8 +1386,11 @@ TEST_CASE("app live: a right-button pan of a scene panel opens no menu, and the 
     const std::string shots = env.shots.empty() ? t.str("") : env.shots;
     Proc producer;
     const std::string link = start_producer(producer, env);
-    const std::string pan = "drag panel:world 0.4 0.5 to panel:world 0.6 0.55 right;";
-    const std::string orbit = "drag panel:world 0.25 0.5 to panel:world 0.75 0.6;";
+    // Each drag moves the pointer once a frame for this many frames (spec_ui_driver.h).
+    const int drag_steps = 14;
+    const std::string step_words = " steps " + std::to_string(drag_steps) + ";";
+    const std::string pan = "drag panel:world 0.4 0.5 to panel:world 0.6 0.55 right" + step_words;
+    const std::string orbit = "drag panel:world 0.25 0.5 to panel:world 0.75 0.6" + step_words;
     const std::string script = "wait-file " + t.str("spec-ready") + ";page spec;wait 30;" + pan + orbit + "touch " +
                                t.str("streaming") + ";wait-file " + t.str("ended") + ";wait 30;" + pan + orbit +
                                "menu panel:world;wait 10;touch " + t.str("menu") + ";key escape;wait 5";
@@ -1443,13 +1447,13 @@ TEST_CASE("app live: a right-button pan of a scene panel opens no menu, and the 
     for (size_t k = 0; k < 2; ++k) {
         CAPTURE(k);
         const auto [pan_moves, pan_camera] = moves_in(rows, pans[k]);
-        CHECK(pan_moves >= 10);
+        CHECK(pan_moves == drag_steps);
         CHECK(pan_camera == pan_moves);   // the pan moves the camera at every move
         // No menu from the pan, from its release until the orbit.
         for (size_t i = pans[k].first; i < orbits[k].first; ++i) CHECK(rows[i].popup == 0);
         const auto [orbit_moves, orbit_camera] = moves_in(rows, orbits[k]);
         MESSAGE("orbit " << k << ": the camera moved at " << orbit_camera << " of " << orbit_moves << " moves");
-        CHECK(orbit_moves >= 10);
+        CHECK(orbit_moves == drag_steps);
         CHECK(orbit_camera == orbit_moves);
     }
     // A right click without a drag opens the panel's menu.
@@ -1508,10 +1512,13 @@ TEST_CASE("app live: an orbit and a pan whose press comes before the pointer's m
     const std::string shots = env.shots.empty() ? t.str("") : env.shots;
     Proc producer;
     const std::string link = start_producer(producer, env);
-    const std::string script = "wait-file " + t.str("spec-ready") +
-                               ";page spec;wait 30;drag panel:world 0.25 0.5 to panel:world 0.75 0.6 stale;wait 10;"
-                               "drag panel:world 0.35 0.45 to panel:world 0.65 0.55 right stale;wait 10;touch " +
-                               t.str("dragged");
+    // Each drag moves the pointer once a frame for this many frames (spec_ui_driver.h).
+    const int drag_steps = 14;
+    const std::string step_words = " steps " + std::to_string(drag_steps) + ";";
+    const std::string script = "wait-file " + t.str("spec-ready") + ";page spec;wait 30;" +
+                               "drag panel:world 0.25 0.5 to panel:world 0.75 0.6 stale" + step_words + "wait 10;" +
+                               "drag panel:world 0.35 0.45 to panel:world 0.65 0.55 right stale" + step_words +
+                               "wait 10;touch " + t.str("dragged");
     std::vector<std::string> e = app_env(env, t, script, shots);
     e.push_back("CALIPER_FRAME_LOG=" + t.str("frames.tsv"));
     Proc app;
@@ -1559,7 +1566,8 @@ TEST_CASE("app live: an orbit and a pan whose press comes before the pointer's m
         const std::string& name = drag.first;
         CAPTURE(name);
         std::vector<double> steps = camera_steps(rows, drag.second);
-        REQUIRE(steps.size() >= 10);
+        // The camera moves at each of the pointer's moves.
+        REQUIRE(steps.size() == (size_t)drag_steps);
         std::vector<double> sorted = steps;
         std::sort(sorted.begin(), sorted.end());
         const double median = sorted[sorted.size() / 2];

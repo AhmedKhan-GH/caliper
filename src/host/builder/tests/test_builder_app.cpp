@@ -297,7 +297,9 @@ TEST_CASE("builder app: the dashboard built by hand in the hidden app, saved and
     }
     CHECK(made);
     CHECK(imported);
-    CHECK(built > 20);
+    // The script's edits make 38 commands of the builder origin, 15 of them
+    // layout.set from its drags.
+    CHECK(built == 38);
     CHECK(saved_line);
     CHECK(reopened);
 
@@ -754,7 +756,9 @@ TEST_CASE("builder app: Open in browser gives the viewer's link, with the API it
         CHECK(url.find("/v0/spec?") != std::string::npos);
         CHECK(query_value(url, "instrument") == "run42-dashboard");
         token = query_value(url, "token");
-        CHECK(token.size() >= 22);
+        // caliper_net::random_token() makes each token: 32 characters of
+        // base64url from 24 random bytes (src/host/net/hub.h).
+        CHECK(token.size() == 32);
         // It opens the page, and reads the dashboard's spec from the viewer origin.
         const std::string target = url.substr(url.find("/v0/spec"));
         const Answer page = http(port, "GET", target);
@@ -794,7 +798,7 @@ TEST_CASE("builder app: Open in browser gives the viewer's link, with the API it
     // prints; the person's session token is on that line and not in the link.
     CHECK(run.err.find("[browser] Caliper API started on 127.0.0.1:" + std::to_string(port)) != std::string::npos);
     const std::string person = token_after(run.out, "with the session token ");
-    CHECK(person.size() >= 22);
+    CHECK(person.size() == 32);   // caliper_net::random_token(), as above
     CHECK(person != token);
     CHECK(url.find(person) == std::string::npos);
     // The token is never written to standard error or into Activity's lines.

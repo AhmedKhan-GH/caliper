@@ -135,7 +135,8 @@ TEST_CASE("caliper-chat-shot: the side chat's scenario, the agent adding a panel
     CHECK(s["permission"]["options"] == json::array({"allow_once", "reject_once"}));
     // ... drawn as the compact diff of the inline surface and the approval cards.
     const json& compact = s["permission"]["compact"];
-    REQUIRE(compact.size() >= 4);
+    // A row for each of the five fields of the new panel, and one for its layout.
+    REQUIRE(compact.size() == 6);
     CHECK(compact[0] == json::array({"primitive", "\"series\""}));
     CHECK(compact[1] == json::array({"title", "\"Learning rate\""}));
     CHECK(compact.back()[0] == "layout");

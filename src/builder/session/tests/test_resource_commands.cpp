@@ -101,17 +101,11 @@ TEST_CASE("resources: a resource keeps every version until its ring is full, the
     h.append_resource("tower", "arcs", 8, {}, version_at(100));
     CHECK(kept_steps_of(h, "tower/arcs") == std::vector<std::int64_t>{0, 20, 40, 60, 80, 100});
     for (std::int64_t step = 110; step <= 400; step += 10) h.append_resource("tower", "arcs", 8, {}, version_at(step));
+    // The kept versions span the run evenly. The ring is full again at steps
+    // 160 and 320, and each time every second version goes and the stride
+    // doubles, to 40 and then to 80 steps.
     const std::vector<std::int64_t> kept = kept_steps_of(h, "tower/arcs");
-    REQUIRE(kept.size() <= 9);
-    CHECK(kept.front() == 0);
-    CHECK(kept.back() == 400);
-    // The kept versions span the run evenly: no gap is more than twice another, the newest aside.
-    std::int64_t lo = 1 << 30, hi = 0;
-    for (std::size_t i = 1; i + 1 < kept.size(); ++i) {
-        lo = std::min(lo, kept[i] - kept[i - 1]);
-        hi = std::max(hi, kept[i] - kept[i - 1]);
-    }
-    CHECK(hi <= 2 * lo);
+    CHECK(kept == std::vector<std::int64_t>{0, 80, 160, 240, 320, 400});
     // The cursor moves over the versions, and a version is the newest at or before the cursor.
     CHECK(h.cursor().latest == 400);
     CHECK(h.cursor().first == 0);

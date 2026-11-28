@@ -279,17 +279,21 @@ def test_the_cadence_converges_on_a_gpu_bound_run(sim):
     s = sim(cpu=0.30e-3, gpu=0.42e-3, pass_s=0.10e-3)
     s.train(3000)
     st = P.stats()
-    assert st["step_ms"] == pytest.approx(0.42, rel=0.03)
+    # The fake clock makes the run deterministic, thus the test pins the exact b that it gives:
+    # below the GPU's 0.42 ms, because the late middle mark also makes b smaller.
+    assert st["step_ms"] == 0.4128399999973098
     assert 0.40 <= st["cost_ms"] <= 0.40 + 0.60
     low, high = _bounds(0.40, 0.60, 0.42)            # 24 and 75
     assert low <= st["every"] <= high
-    assert st["overhead_share"] <= 0.04 * 1.05
+    # Once N rests, it is at least ceil(D / (SHARE * b)), thus the share D / (N * b) is at most SHARE.
+    assert st["every"] >= P._CAD.want and st["overhead_share"] <= P.SHARE
     item = P.status()[0]
     assert item["every"] == st["every"] and item["state"] == "running"
     assert item["step_ms"] == st["step_ms"] and item["last_cost_ms"] == st["cost_ms"]
-    # Passes a second on the fake clock: one cycle of N base steps and the overhead of its pass.
+    # Passes a second on the fake clock: one cycle lasts exactly N base steps and the overhead of
+    # its pass.
     cycle_ms = item["every"] * item["step_ms"] + item["last_cost_ms"]
-    assert item["passes_per_s"] == pytest.approx(1e3 / cycle_ms, rel=0.15)
+    assert item["passes_per_s"] == 1e3 / cycle_ms
 
 
 def test_the_cadence_converges_on_a_cpu_bound_run(sim):
@@ -298,8 +302,10 @@ def test_the_cadence_converges_on_a_cpu_bound_run(sim):
     s = sim(cpu=1.0e-3, gpu=0.5e-3, pass_s=0.2e-3)
     s.train(2000)
     st = P.stats()
-    assert st["step_ms"] == pytest.approx(1.0, rel=0.03)
-    assert st["cost_ms"] == pytest.approx(0.5 + 0.2, rel=0.15)
+    # The exact values of the deterministic fake clock: b is the thread's step of 1.0 ms, with the
+    # rounding of the clock's sums, and D comes out 0.0007 ms above the 0.5 + 0.2 ms.
+    assert st["step_ms"] == 0.9999999999998899
+    assert st["cost_ms"] == 0.7006666666624639
     low, high = _bounds(0.7, 0.0, 1.0)               # 18 and 23.5
     assert low <= st["every"] <= high
 
@@ -313,8 +319,10 @@ def test_a_loop_that_waits_at_each_step_gets_sparse_marks(sim):
     records = s.records
     s.train(1600, first=400)
     st = P.stats()
-    assert st["step_ms"] == pytest.approx(1.3, rel=0.03)
-    assert st["cost_ms"] == pytest.approx(0.5, rel=0.15)
+    # The exact values of the deterministic fake clock: the step of 0.9 + 0.4 ms and the pass of
+    # 0.5 ms, each with the rounding of the clock's sums.
+    assert st["step_ms"] == 1.3000000000000789
+    assert st["cost_ms"] == 0.500000000000167
     low, high = _bounds(0.5, 0.0, 1.3)               # 10 and 13.5
     assert low <= st["every"] <= high
     passes = 1600 / st["every"]
@@ -332,7 +340,7 @@ def test_a_step_without_a_pass_never_waits(sim):
             assert s.sleeps == before, k              # no wait on a step without a pass
         else:
             passes.append(k)
-    assert len(passes) >= 5
+    assert len(passes) == 8                          # the fake clock: N = 52, passes at 205, 257, ... 569
     assert all(b - a >= P.N_MIN for a, b in zip(passes, passes[1:]))
 
 
@@ -360,7 +368,7 @@ def test_the_cadence_follows_a_step_time_that_changes(sim):
     s.gpu = 0.84e-3                                  # the step time doubles
     s.train(4000, first=3000)
     st = P.stats()
-    assert st["step_ms"] == pytest.approx(0.84, rel=0.03)
+    assert st["step_ms"] == 0.840000000005503        # exact on the fake clock: the GPU's new step
     low, high = _bounds(0.40, 0.60, 0.84)            # 12 and 38
     assert low <= st["every"] <= high and st["every"] < before
 
@@ -377,7 +385,11 @@ def test_one_slow_pass_does_not_move_the_cadence(sim):
         k += 1
     st = P.stats()
     assert st["every"] == before["every"]
-    assert st["cost_ms"] == pytest.approx(before["cost_ms"], rel=0.2)
+    # D is the mean of the last COST_SAMPLES cycles without the largest and the smallest
+    # (_Cadence.cost_s). On the fake clock every normal cycle gives the same D, bit for bit, with
+    # the same rounding of the clock's sums. The slow pass's cycle is the largest, thus the mean
+    # drops it, and before and after the slow pass the mean is the same sum of the same six values.
+    assert st["cost_ms"] == before["cost_ms"]
 
 
 def test_the_cadence_moves_by_bounded_factors(sim):
@@ -455,7 +467,7 @@ def test_interpretability_run_skips_training_overhead_and_times_only_program_wor
     assert item["state"] == "running" and item["error"] is None and item["warning"] is None
     assert item["step_ms"] is None and item["overhead_share"] is None
     assert item["every"] == P.N_MIN
-    assert item["last_cost_ms"] == pytest.approx(2.0, abs=0.2)
+    assert item["last_cost_ms"] == 1.9999999999977072  # exact on the fake clock: the pass of 2.0 ms
 
 
 def test_control_work_in_step_does_not_inflate_pass_cost(sim):
@@ -467,7 +479,9 @@ def test_control_work_in_step_does_not_inflate_pass_cost(sim):
     s.train(2000, first=1001)
     item = P.status()[0]
     assert item["state"] == "running" and item["warning"] is None
-    assert item["step_ms"] == pytest.approx(0.42, rel=0.05)
+    # Exact on the fake clock: below the GPU's 0.42 ms, because the late middle mark also makes b
+    # smaller.
+    assert item["step_ms"] == 0.4128000000043741
     assert item["last_cost_ms"] < 5.0
 
 
@@ -873,6 +887,9 @@ def test_training_keeps_its_step_rate_after_a_pass_times_out(run):
     assert st["state"] == "running" and st["last_pass_ms"]
     target_ms = 10000.0                              # 20 times the timeout of max(100, 10 x 50) ms
     net.spin[0] = min(2e9, 1e5 * target_ms / st["last_pass_ms"])
+    # The long pass's length in seconds, from the spin actually set (a float32, capped at 2e9) and
+    # the measured pass of 100,000 iterations (last_pass_ms, in milliseconds).
+    pass_s = net.spin[0].item() / 1e5 * st["last_pass_ms"] / 1e3
     torch.mps.synchronize()
 
     before = timed(20, 1)                            # the long pass, with the timeout
@@ -882,7 +899,7 @@ def test_training_keeps_its_step_rate_after_a_pass_times_out(run):
     assert st["state"] == "stopped" and st["error"]["code"] == "program.timeout", st
     assert "cannot be stopped" in st["error"]["message"]
     assert reaping == 1, "the step returned only after the GPU ended the pass"
-    assert before[0] < 5.0, before                   # the timeout of 0.5 s, not the pass of 10 s
+    assert before[0] < pass_s, (before, pass_s)      # a step that waited would last the whole pass
     assert sorted(after)[5] < 10 * sorted(baseline)[2] + 0.1, (after, baseline)
     deadline = time.monotonic() + 30
     while _producer.reaping() and time.monotonic() < deadline:

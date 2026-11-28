@@ -303,8 +303,13 @@ test('shares split the space by weight, after the row of controls', () => {
     const l = lay(s, w, h);
     checkTiling(l, w, h);
     const world = rectOf(l, 'world')!, detail = rectOf(l, 'detail')!, loss = rectOf(l, 'loss')!, lr = rectOf(l, 'lr')!;
-    expect(Math.abs(world.h / loss.h - 2)).toBeLessThan(0.02);
-    expect(Math.abs(world.w / (world.w + detail.w + 1) - 0.6)).toBeLessThan(0.01);
+    // The row of controls takes its height first, and the two gaps of the split are left out.
+    // World's split and loss share the rest 6:3, in whole pixels at the rounded running edge (layoutShares).
+    const tall = h - 2 * m.gap - m.controlRowH, worldH = Math.round((tall * 6) / 9);
+    expect([world.h, loss.h]).toEqual([worldH, tall - worldH]);
+    // World and detail share the width less their gap 3:2.
+    const wide = w - m.gap, worldW = Math.round((wide * 3) / 5);
+    expect([world.w, detail.w]).toEqual([worldW, wide - worldW]);
     expect(world.w).toBeGreaterThanOrEqual(Math.round(48 * m.charW));
     expect(world.h).toBeGreaterThanOrEqual(Math.round(20 * m.lineH));
     expect(lr.h).toBe(m.controlRowH);
@@ -313,9 +318,9 @@ test('shares split the space by weight, after the row of controls', () => {
 
 test('a share below its minimum keeps the minimum, and the others share the rest by weight', () => {
   const s = layoutShares(1000, [50, 50, 200], 0.5, [6, 3, 1]);
-  expect(s[2]).toBe(200);
-  expect(Math.abs(s[0] - 533)).toBeLessThanOrEqual(533 * 0.01);
-  expect(s[0] + s[1] + s[2]).toBe(1000);
+  // The third keeps its 200, and the other two share the 800 left 6:3 (533.3 and 266.7): the
+  // running edge rounds to 533, then 800.
+  expect(s).toEqual([533, 267, 200]);
   expect(layoutShares(900, [10, 10], 0.5, [1, 2])).toEqual([300, 600]);
   expect(layoutShares(300, [200, 400], 0.5, [5, 1])).toEqual([100, 200]);
   expect(layoutShares(300, [10, 10, 10], 0.5, [])).toEqual(layoutShares(300, [10, 10, 10], 0.5));
@@ -325,8 +330,7 @@ test('a leaf minimum is in characters and lines of the text scale', () => {
   const one = metricsForTextScale(1), two = metricsForTextScale(2);
   const a = layoutMinSize({ panel: 'world', min: [48, 20] }, one), b = layoutMinSize({ panel: 'world', min: [48, 20] }, two);
   expect(a).toEqual({ w: Math.round(48 * one.charW), h: Math.round(20 * one.lineH) });
-  expect(b.w).toBeGreaterThan(1.9 * a.w);
-  expect(b.h).toBeGreaterThan(1.9 * a.h);
+  expect(b).toEqual({ w: Math.round(48 * two.charW), h: Math.round(20 * two.lineH) });
 });
 
 test('the MNIST dashboard fills the window over its row of controls', () => {

@@ -75,7 +75,10 @@ TEST_CASE("the harness runs an edit end to end and allows it") {
     REQUIRE(t.run.error.ok());
     CHECK(t.run.status.code == 0);
     const auto types = t.types();
-    REQUIRE(types.size() >= 8);
+    // The stub's edit turn: one tool call, its permission and two updates, then the message.
+    REQUIRE(types == std::vector<std::string>{"harness", "initialized", "session", "prompt", "tool_call",
+                                              "permission_request", "permission_answer", "tool_call_update",
+                                              "tool_call_update", "agent_message_chunk", "turn_ended", "result"});
     CHECK(types[0] == "harness");
     CHECK(types[1] == "initialized");
     CHECK(types[2] == "session");

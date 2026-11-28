@@ -369,6 +369,7 @@ TEST_CASE("net/hub 3.2: scene messages reach the subscription's viewers; a late 
     subscribe(*c, 1, "world");
     REQUIRE(w.until([&] { return c->scene_log(1).size() == 3; }));
     // The hub publishes its counters at the end of a loop round: wait for them, not for a time.
+    // The logs above hold 14 scene messages: six for a, five for b and three for c.
     REQUIRE(w.until([&] { return h.hub->stats().scenes_out >= 14; }));
     CHECK(c->scene_log(1) == std::vector<std::string>{"reset", ":lines", "world/cloud:points"});
     const caliper_net::HubStats st = h.hub->stats();
@@ -533,8 +534,14 @@ namespace {
 size_t stall(World32& w, const Runner& h, SceneProducer& p, Client& slow, uint32_t sub) {
     w.peers.erase(std::find(w.peers.begin(), w.peers.end(), &slow));
     const uint64_t out = h.hub->stats().scenes_out;
-    p.points("big", std::vector<float>(3 * 2000000, 0.25f));
-    REQUIRE(w.until([&] { return h.hub->stats().scenes_out > out && h.hub->stats().queued_bytes > (8u << 20); }));
+    const std::vector<float> big(3 * 2000000, 0.25f);
+    p.points("big", big);
+    // Loopback TCP holds at most the sender's and the receiver's socket buffers, which macOS
+    // autotunes to at most 4 MiB each (net.inet.tcp.autosndbufmax and autorcvbufmax). The rest of
+    // the batch waits in the hub's queue.
+    const uint64_t kernel_bytes = 2 * (uint64_t(4) << 20);
+    const uint64_t waiting = big.size() * sizeof(float) - kernel_bytes;
+    REQUIRE(w.until([&] { return h.hub->stats().scenes_out > out && h.hub->stats().queued_bytes >= waiting; }));
     return slow.scene_log(sub).size();
 }
 // Reads `slow` again until `done` holds for its scene log of `sub`.
@@ -1189,7 +1196,9 @@ TEST_CASE("net/hub 3.2: a scene program's RESOURCE travels with the update in th
     p->points("world/cloud", {4, 5, 6});
     REQUIRE(w.until([&] { return a->scene_log(5).size() == 5; }));
     CHECK(a->scene_log(5).back() == "world/cloud:points");
+    // The hub drops exactly the two updates above: one with no version and one with another count.
     REQUIRE(w.until([&] { return h.hub->stats().scene_pieces_dropped >= 2; }));
+    CHECK(h.hub->stats().scene_pieces_dropped == 2);
 }
 
 

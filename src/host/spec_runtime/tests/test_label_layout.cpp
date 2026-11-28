@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <map>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -83,8 +84,9 @@ TEST_CASE("a crowded anchor gets a leader line, then only its anchor") {
         else if (p.leader) ++leader;
         else ++near;
     }
-    CHECK(near >= 2);
-    CHECK(leader >= 2);
+    // The placement is deterministic: six labels fit near the anchor and six more on leaders.
+    CHECK(near == 6);
+    CHECK(leader == 6);
     CHECK(hidden > 0);
     CHECK(near + leader + hidden == 40);
     // The near labels are the first in priority, the leaders come after them.
@@ -144,6 +146,8 @@ TEST_CASE("a label larger than the panel, a label off the panel and bad numbers 
 
 TEST_CASE("many random labels never overlap, and the same input gives the same placement") {
     const LabelRect panel{0, 0, 2560, 1440};
+    // The placement is deterministic: the labels it shows of the 300 for each seed.
+    const std::map<std::uint32_t, int> shown_for = {{1u, 300}, {7u, 297}, {42u, 299}};
     for (std::uint32_t seed : {1u, 7u, 42u}) {
         Lcg g{seed};
         std::vector<LabelBox> boxes;
@@ -161,7 +165,7 @@ TEST_CASE("many random labels never overlap, and the same input gives the same p
         }
         int shown = 0;
         for (const PlacedLabel& p : a) shown += p.shown;
-        CHECK(shown > 250);
+        CHECK(shown == shown_for.at(seed));
     }
 }
 
@@ -314,7 +318,9 @@ TEST_CASE("a cut text of 1,024 bytes takes few measures and gives what a search 
     for (float limit : {40.0f, 333.0f, 2000.0f, 5000.0f}) {
         measures = 0;
         const std::string got = fit_with_ellipsis(text, limit, width);
-        CHECK(measures <= 14);
+        // The whole text, the ellipsis, and a binary search over fewer places
+        // to cut than the text has bytes, which takes at most log2 of that.
+        CHECK(measures <= 2 + (int)std::ceil(std::log2((double)text.size())));
         // The longest prefix that fits, found from the end as before.
         std::string want;
         for (std::size_t n = text.size(); n > 0 && want.empty(); --n) {
