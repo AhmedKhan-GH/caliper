@@ -11,11 +11,11 @@ This page describes the `caliper` subcommands that list, check, install, create 
 Lists every instrument in the search folders, without opening any library. Instruments are ordered by the position of their folder in the [search order](cli.md#search-order), then by id, then from the highest version down. Each instrument takes one line, with its status, id, version, kind and folder in columns. The kind is `library` for an instrument with a library and `spec` for an [instrument written as a spec](../instruments/manifest.md#spec-based-instruments), whose folder is the instrument's own folder. A refused, failed or shadowed instrument has its reason on the next line, indented under the id:
 
 ```text
-READY     dev.caliper.mnist        0.1.0  library  <development folder>
-SHADOWED  dev.caliper.mnist        0.1.0  library  <user instruments folder>
+READY     ai.caliperapp.mnist        0.1.0  library  <development folder>
+SHADOWED  ai.caliperapp.mnist        0.1.0  library  <user instruments folder>
           Version 0.1.0 in <development folder> is used instead.
-READY     local.loss-view          0.1.0  spec     <user instruments folder>/loss_view
-READY     dev.caliper.hello-world  0.1.0  library  <instruments folder beside the executable>
+READY     local.loss-view            0.1.0  spec     <user instruments folder>/loss_view
+READY     ai.caliperapp.hello-world  0.1.0  library  <instruments folder beside the executable>
 ```
 
 `--workspace <dir>` names the workspace whose spec-based instruments `list` shows. Without it, `list` shows those of `CALIPER_WORKSPACE` or of the default workspace, as the app does.
@@ -27,7 +27,7 @@ The status is `READY`, `REFUSED`, `FAILED` or `SHADOWED`, and the reasons are th
 Runs the checks that the host makes before it opens a library on every instrument in one folder, and only that folder. It uses this host's capabilities (see `caliper info`) and opens no library. The data-schema check reads the stamps in the app-data folder. The output is the same lines as `list`, then a summary:
 
 ```text
-READY  dev.caliper.mnist  0.1.0  library  <folder>
+READY  ai.caliperapp.mnist  0.1.0  library  <folder>
 1 of 1 instruments pass the checks
 ```
 
@@ -35,7 +35,7 @@ When `<folder>` is a build folder whose instruments are in its `instruments/` su
 
 ```text
 using the instruments in <folder>/instruments
-READY  dev.caliper.mnist  0.1.0  library  <folder>/instruments
+READY  ai.caliperapp.mnist  0.1.0  library  <folder>/instruments
 1 of 1 instruments pass the checks
 ```
 
@@ -64,7 +64,7 @@ Runs the same checks on a local folder. When every instrument passes, it copies 
 The install is all or nothing for the whole folder. Every file and asset folder is first copied to a hidden temporary name beside its destination. Then each one is renamed into place, each manifest after its library and assets, so the host never sees half a library or a manifest without its library. If a step fails, `install` removes what it placed, puts back what it replaced, and leaves the user instruments folder as it was. The output is the lines of `check`, then one line per instrument:
 
 ```text
-installed dev.caliper.mnist 0.1.0 in <user instruments folder>
+installed ai.caliperapp.mnist 0.1.0 in <user instruments folder>
 ```
 
 If any instrument fails a check, `install` copies nothing, prints `caliper: nothing installed; N of M instruments do not pass the checks`, and exits with 1. `install` does not take instruments written as specs, which live in a workspace. When the folder holds one, it copies nothing, prints `caliper: nothing installed; <id> is written as a spec, which install does not take`, and exits with 1.

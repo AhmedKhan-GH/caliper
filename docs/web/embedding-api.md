@@ -14,7 +14,7 @@ An embedder drives the core with five calls and pumps frames from its own event 
 
 1. `caliper_core_create` creates the core: renderer, services and loader.
 2. `caliper_core_attach_canvas` gives the core the native view (`NSView*` or `HWND`) to paint, or selects an offscreen target.
-3. `caliper_core_load_instrument` launches one instrument by manifest id, for example `dev.caliper.hello-world`. Attach a canvas first, because the first frame of an instrument touches the ImGui backend of the renderer. Loading before attach is a refusal, not a crash.
+3. `caliper_core_load_instrument` launches one instrument by manifest id, for example `ai.caliperapp.hello-world`. Attach a canvas first, because the first frame of an instrument touches the ImGui backend of the renderer. Loading before attach is a refusal, not a crash.
 4. `caliper_core_frame` and `caliper_core_event` pump exactly one frame from your loop (a timer, a `CVDisplayLink` or a Win32 message loop) and forward your toolkit input as `CaliperInputEvent` values.
 5. `caliper_core_shutdown` tears everything down in the reverse order of create and clears the one-core-per-process lock.
 
@@ -28,7 +28,7 @@ canvas.mode = CALIPER_CANVAS_WINDOW;           /* native_view is an NSView* / HW
 canvas.width = w; canvas.height = h; canvas.content_scale = scale;
 caliper_core_attach_canvas(core, native_view, &canvas);
 
-caliper_core_load_instrument(core, "dev.caliper.hello-world");
+caliper_core_load_instrument(core, "ai.caliperapp.hello-world");
 
 /* ... from YOUR event loop, once per frame: */
 caliper_core_frame(core);
@@ -287,7 +287,7 @@ With `CALIPER_EMBED_OFFSCREEN=1`, `embed_host` runs without a window. `main()` t
 
 ```sh
 CALIPER_EMBED_OFFSCREEN=1 CALIPER_EMBED_INSTRUMENTS=<instruments> \
-    <work>/embed_host-build/embed_host dev.caliper.hello-world
+    <work>/embed_host-build/embed_host ai.caliperapp.hello-world
 ```
 
 The test `caliper_embed_install` (label `embed`) runs this whole path in a work folder, with `HOME` and the user instruments folder inside it. When the canvas cannot attach, as on a machine without a GPU, the test reports Skipped, and `CALIPER_REQUIRE_GPU=1` makes that a failure. `CALIPER_EMBED_PROBE_DIR` sets the work folder.

@@ -69,7 +69,7 @@ private:
 };
 
 CALIPER_INSTRUMENT(HelloWorldInstrument,
-    .id       = "dev.caliper.hello-world",
+    .id       = "ai.caliperapp.hello-world",
     .version  = "0.1.0",
     .name     = "Hello World",
     .summary  = "Smallest torch-free instrument: sugar demo and loader-test substrate.",

@@ -45,7 +45,7 @@ static int count_log(const caliper::testing::FixtureHost& fx, const std::string&
 TEST_CASE("loader: scan finds hello_world via manifest, status Ready") {
     InstrumentLoader L(caps(), CALIPER_TEST_DATA_ROOT);
     L.scan(CALIPER_TEST_INSTRUMENTS_DIR);
-    int i = find_by_id(L, "dev.caliper.hello-world");
+    int i = find_by_id(L, "ai.caliperapp.hello-world");
     REQUIRE(i >= 0);
     CHECK(L.at(i).status == InstrumentStatus::Ready);
     CHECK_FALSE(L.at(i).dylib_path.empty());
@@ -55,7 +55,7 @@ TEST_CASE("loader: full lifecycle, hooks called exactly once") {
     caliper::testing::FixtureHost fx;
     InstrumentLoader L(caps(), CALIPER_TEST_DATA_ROOT);
     L.scan(CALIPER_TEST_INSTRUMENTS_DIR);
-    int i = find_by_id(L, "dev.caliper.hello-world");
+    int i = find_by_id(L, "ai.caliperapp.hello-world");
     REQUIRE(i >= 0);
     REQUIRE(L.launch(i, *fx.host()));
     CHECK(L.at(i).status == InstrumentStatus::Active);
@@ -70,7 +70,7 @@ TEST_CASE("loader: relaunch tears down the old instance first") {
     caliper::testing::FixtureHost fx;
     InstrumentLoader L(caps(), CALIPER_TEST_DATA_ROOT);
     L.scan(CALIPER_TEST_INSTRUMENTS_DIR);
-    int i = find_by_id(L, "dev.caliper.hello-world");
+    int i = find_by_id(L, "ai.caliperapp.hello-world");
     REQUIRE(L.launch(i, *fx.host()));
     REQUIRE(L.launch(i, *fx.host()));
     CHECK(count_log(fx, "hello_world.on_init") == 2);
@@ -86,7 +86,7 @@ TEST_CASE("loader: descriptor/manifest agreement is enforced") {
     fs::copy_file(fs::path(CALIPER_TEST_INSTRUMENTS_DIR) / lib_name("hello_world"),
                   dir / lib_name("hello_world"), fs::copy_options::overwrite_existing);
     std::ofstream(dir / "hello_world.caliper.toml") <<
-        "[instrument]\nid=\"dev.caliper.hello-world\"\nname=\"Hello World\"\nversion=\"9.9.9\"\n"
+        "[instrument]\nid=\"ai.caliperapp.hello-world\"\nname=\"Hello World\"\nversion=\"9.9.9\"\n"
         "[compat]\nabi_epoch=4\n[services]\nrequired=[\"caliper.ui.v1\"]\n";
     InstrumentLoader L(caps(), CALIPER_TEST_DATA_ROOT);
     L.scan(dir.string());
@@ -136,7 +136,7 @@ TEST_CASE("loader: fault in frame() quarantines, host survives") {
     setenv("CALIPER_HELLO_WORLD_CRASH", "1", 1);
     InstrumentLoader L(caps(), CALIPER_TEST_DATA_ROOT);
     L.scan(CALIPER_TEST_INSTRUMENTS_DIR);
-    int i = find_by_id(L, "dev.caliper.hello-world");
+    int i = find_by_id(L, "ai.caliperapp.hello-world");
     REQUIRE(L.launch(i, *fx.host()));
     CaliperFrameInfo fi{}; fi.struct_size = sizeof fi;
     CHECK_FALSE(L.frame(i, fi));                       // fault -> quarantined
@@ -192,7 +192,7 @@ TEST_CASE("loader: descriptor-required service missing refuses with the friendly
     fs::copy_file(fs::path(CALIPER_TEST_INSTRUMENTS_DIR) / lib_name("hello_world"),
                   dir / lib_name("hello_world"), fs::copy_options::overwrite_existing);
     std::ofstream(dir / "hello_world.caliper.toml") <<
-        "[instrument]\nid=\"dev.caliper.hello-world\"\nname=\"Hello World\"\nversion=\"0.1.0\"\n"
+        "[instrument]\nid=\"ai.caliperapp.hello-world\"\nname=\"Hello World\"\nversion=\"0.1.0\"\n"
         "[compat]\nabi_epoch=4\n[services]\nrequired=[\"caliper.ui.v1\"]\n";
     InstrumentLoader L(HostCaps{4, "0.6.0", {"caliper.ui.v1"}}, CALIPER_TEST_DATA_ROOT);
     L.scan(dir.string());
@@ -228,14 +228,14 @@ struct TempDir {
 };
 
 // Copies the hello_world fixture's library into `dir` as <stem> beside a manifest
-// for dev.caliper.hello-world 0.1.0 (what its descriptor says) plus `extra` TOML.
+// for ai.caliperapp.hello-world 0.1.0 (what its descriptor says) plus `extra` TOML.
 static void hello_world_copy(const fs::path& dir, const std::string& stem,
                              const std::string& extra = "") {
     fs::create_directories(dir);
     fs::copy_file(fs::path(CALIPER_TEST_INSTRUMENTS_DIR) / lib_name("hello_world"),
                   dir / lib_name(stem), fs::copy_options::overwrite_existing);
     std::ofstream(dir / (stem + ".caliper.toml")) <<
-        "[instrument]\nid=\"dev.caliper.hello-world\"\nname=\"Hello World\"\nversion=\"0.1.0\"\n"
+        "[instrument]\nid=\"ai.caliperapp.hello-world\"\nname=\"Hello World\"\nversion=\"0.1.0\"\n"
         "[compat]\nabi_epoch=4\n[services]\nrequired=[\"caliper.ui.v1\"]\n" << extra;
 }
 
@@ -289,7 +289,7 @@ TEST_CASE("data stamp: raised before initialize(), even when it fails") {
     CHECK_FALSE(L.launch(0, *fx.host()));
     unsetenv("CALIPER_HELLO_WORLD_INIT_FAIL");
     CHECK(L.at(0).status_text == "initialize() returned false");
-    CHECK(read_data_schema_stamp(data_root + "/dev.caliper.hello-world") == 2);
+    CHECK(read_data_schema_stamp(data_root + "/ai.caliperapp.hello-world") == 2);
     L.close_all();
 }
 
@@ -301,8 +301,8 @@ TEST_CASE("data stamp: an instrument without a schema writes no stamp") {
     InstrumentLoader L(caps(), data_root);
     L.scan((t.path / "instruments").string());
     REQUIRE(L.launch(0, *fx.host()));
-    CHECK(fs::is_directory(data_root + "/dev.caliper.hello-world"));
-    CHECK_FALSE(fs::exists(fs::path(data_root) / "dev.caliper.hello-world" / kDataStampName));
+    CHECK(fs::is_directory(data_root + "/ai.caliperapp.hello-world"));
+    CHECK_FALSE(fs::exists(fs::path(data_root) / "ai.caliperapp.hello-world" / kDataStampName));
     L.close_all();
 }
 
@@ -331,7 +331,7 @@ TEST_CASE("data stamp: checked again at launch, before dlopen") {
     L.scan((t.path / "instruments").string());
     REQUIRE(L.at(0).status == InstrumentStatus::Ready);
     // Another copy (or process) raised the stamp after the scan.
-    REQUIRE(raise_data_schema_stamp(data_root + "/dev.caliper.hello-world", 4));
+    REQUIRE(raise_data_schema_stamp(data_root + "/ai.caliperapp.hello-world", 4));
     CHECK_FALSE(L.launch(0, *fx.host()));
     CHECK(L.at(0).status == InstrumentStatus::Refused);
     CHECK(L.at(0).status_text == "Stored data is schema 4; this instrument reads schema 2.");

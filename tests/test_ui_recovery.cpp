@@ -148,7 +148,7 @@ struct Stacks {
 
 int find_throwing(InstrumentLoader& L) {
     for (int k = 0; k < L.count(); k++)
-        if (L.at(k).manifest.id == "dev.caliper.throwing") return k;
+        if (L.at(k).manifest.id == "ai.caliperapp.test.throwing") return k;
     return -1;
 }
 

@@ -70,7 +70,7 @@ Run the application from a terminal so its standard error is visible:
 .\cmake-build-release\caliper.exe
 ```
 
-Open an instrument that trains on CUDA, such as `dev.caliper.mnist`. The host and the Vulkan backend print these lines.
+Open an instrument that trains on CUDA, such as `ai.caliperapp.mnist`. The host and the Vulkan backend print these lines.
 
 | Line | Meaning |
 |---|---|

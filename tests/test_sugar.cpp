@@ -26,7 +26,7 @@ private:
 } // namespace
 
 CALIPER_INSTRUMENT(TinyInstrument,
-    .id       = "dev.caliper.tiny",
+    .id       = "ai.caliperapp.test.tiny",
     .version  = "0.1.0",
     .name     = "Tiny",
     .summary  = "sugar test instrument",
@@ -38,7 +38,7 @@ TEST_CASE("sugar: macro-generated descriptor matches meta") {
     REQUIRE(d != nullptr);
     CHECK(d->struct_size == sizeof(CaliperInstrumentDescriptor));
     CHECK(d->abi_epoch == CALIPER_ABI_EPOCH);
-    CHECK(std::string(d->id) == "dev.caliper.tiny");
+    CHECK(std::string(d->id) == "ai.caliperapp.test.tiny");
     CHECK(std::string(d->version) == "0.1.0");
     CHECK(std::string(d->name) == "Tiny");
     CHECK(std::string(d->tag) == "Test");

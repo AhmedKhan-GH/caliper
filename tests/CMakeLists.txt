@@ -362,7 +362,7 @@ if(TARGET caliper)
     caliper_cli_test(shot_needs_launch ARGS "shot|--out|${_cli_work}/x.png" EXIT 2
         ERROR "shot needs --launch <id>")
     caliper_cli_test(shot_bad_size
-        ARGS "shot|--launch|dev.caliper.hello-world|--size|0x10|--out|${_cli_work}/x.png" EXIT 2
+        ARGS "shot|--launch|ai.caliperapp.hello-world|--size|0x10|--out|${_cli_work}/x.png" EXIT 2
         ERROR "--size takes <W>x<H>")
     caliper_cli_test(shot_option_elsewhere ARGS "list|--frames|3" EXIT 2
         ERROR "--frames applies only to shot")
@@ -389,11 +389,11 @@ if(TARGET caliper)
     caliper_cli_test(app_renderer_gl ARGS "--hidden" EXIT 1 EMPTY_DATA_DIR
         ENV "CALIPER_RENDERER=gl|CALIPER_EXIT_AFTER=2" ERROR "caliper: ${_gl_removed}")
     caliper_cli_test(shot_no_renderer
-        ARGS "shot|--instruments|${CMAKE_BINARY_DIR}/instruments|--launch|dev.caliper.hello-world|--out|${CMAKE_CURRENT_BINARY_DIR}/x.png"
+        ARGS "shot|--instruments|${CMAKE_BINARY_DIR}/instruments|--launch|ai.caliperapp.hello-world|--out|${CMAKE_CURRENT_BINARY_DIR}/x.png"
         EXIT 1 EMPTY_DATA_DIR ENV "--unset=CALIPER_RENDERER|CALIPER_TEST_RENDERER_FAIL=1"
         ERROR "caliper: shot cannot draw offscreen: ${_no_renderer}")
     caliper_cli_test(shot_renderer_gl
-        ARGS "shot|--instruments|${CMAKE_BINARY_DIR}/instruments|--launch|dev.caliper.hello-world|--out|${CMAKE_CURRENT_BINARY_DIR}/x.png"
+        ARGS "shot|--instruments|${CMAKE_BINARY_DIR}/instruments|--launch|ai.caliperapp.hello-world|--out|${CMAKE_CURRENT_BINARY_DIR}/x.png"
         EXIT 1 EMPTY_DATA_DIR ENV "CALIPER_RENDERER=gl"
         ERROR "caliper: shot cannot draw offscreen: ${_gl_removed}")
 
@@ -411,7 +411,7 @@ if(TARGET caliper)
             "-DEXE=$<TARGET_FILE:caliper>"
             "-DCHECK=$<TARGET_FILE:caliper_png_check>"
             "-DINSTRUMENTS=${CMAKE_BINARY_DIR}/instruments"
-            "-DID=dev.caliper.hello-world" "-DSIZE=640x400" "-DFRAMES=10"
+            "-DID=ai.caliperapp.hello-world" "-DSIZE=640x400" "-DFRAMES=10"
             "-DWORK_DIR=${CMAKE_CURRENT_BINARY_DIR}/shot-work-${mode}" "-DMODE=${mode}"
             -P "${CMAKE_CURRENT_SOURCE_DIR}/shot_run.cmake")
         set_tests_properties(${name} PROPERTIES LABELS "cli;shot" TIMEOUT 180
@@ -480,7 +480,7 @@ if(TARGET caliper)
         caliper_cli_test(windows_api ARGS "--api|--api-port|0" EXIT 1
             ERROR "Caliper API \\(--api\\) is not available on Windows yet")
         caliper_cli_test(windows_shot_api
-            ARGS "shot|--launch|dev.caliper.hello-world|--out|${_cli_work}/x.png|--api" EXIT 1
+            ARGS "shot|--launch|ai.caliperapp.hello-world|--out|${_cli_work}/x.png|--api" EXIT 1
             ERROR "Caliper API \\(--api\\) is not available on Windows yet")
         caliper_cli_test(windows_url ARGS "--url|ws://127.0.0.1:9/v3/stream?token=x" EXIT 1
             ERROR "attaching to a stream \\(--url\\) is not available on Windows yet")

@@ -146,7 +146,7 @@ caliper_instrument_descriptor(void) {
     static const CaliperInstrumentDescriptor kDesc = {
         sizeof(CaliperInstrumentDescriptor),
         CALIPER_ABI_EPOCH,
-        "dev.caliper.throwing",
+        "ai.caliperapp.test.throwing",
         "0.1.0",
         "Throwing",
         "Test fixture: throws a C++ exception across the C ABI.",

@@ -1,5 +1,5 @@
 [instrument]
-id      = "dev.caliper.hello-world"
+id      = "ai.caliperapp.hello-world"
 name    = "Hello World"
 version = "0.1.0"
 summary = "Smallest torch-free instrument: sugar demo and loader-test substrate."

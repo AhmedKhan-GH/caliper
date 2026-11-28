@@ -171,7 +171,7 @@ execute_process(
         "CALIPER_EMBED_INSTRUMENTS=${instruments}"
         "CALIPER_USER_INSTRUMENTS_DIR=${WORK_DIR}/user-instruments"
         "HOME=${WORK_DIR}/home"
-        "${host_exe}" dev.caliper.hello-world
+        "${host_exe}" ai.caliperapp.hello-world
     RESULT_VARIABLE rc OUTPUT_VARIABLE out ERROR_VARIABLE out TIMEOUT 120)
 message(STATUS "embed_host output:\n${out}")
 if(rc EQUAL 0)

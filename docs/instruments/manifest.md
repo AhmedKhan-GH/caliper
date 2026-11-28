@@ -31,7 +31,7 @@ To install an instrument with a library, put its manifest and library in the use
 
 | Section        | Key         | Type              | Required | Meaning                                                                 |
 |----------------|-------------|-------------------|----------|-------------------------------------------------------------------------|
-| `[instrument]` | `id`        | string            | Yes      | Lowercase reverse-DNS identity, e.g. `dev.caliper.mnist`. See [Instrument IDs](#instrument-ids). |
+| `[instrument]` | `id`        | string            | Yes      | Lowercase reverse-DNS identity, e.g. `ai.caliperapp.mnist`. See [Instrument IDs](#instrument-ids). |
 | `[instrument]` | `name`      | string            | Yes      | Human-readable display name. Must be non-empty.                         |
 | `[instrument]` | `version`   | string            | Yes      | Instrument version, strict semver `x.y.z` (three numeric parts).        |
 | `[instrument]` | `summary`   | string            | No       | Short one-line description shown in the landing screen's Inspector.     |
@@ -113,7 +113,7 @@ The `id` names the instrument's data folder (`data/<id>/` under the app-data roo
 - Dot-separated segments, none empty: no leading or trailing dot, no `..`.
 - At most 128 characters.
 
-`dev.caliper.mnist` is valid. `Dev.Example.App` (uppercase), `dev.example.my_app` (underscore), `dev/app`, `a..b` and `../../escape` are not. A manifest with an invalid id is listed as `FAILED` with the message `instrument.id is not a valid instrument id (lowercase reverse-DNS, [a-z0-9.-]): <id>` (see [Refusal Messages](../reference/refusal-messages.md#failed-messages)). The host creates no data folder for it.
+`ai.caliperapp.mnist` is valid. `Dev.Example.App` (uppercase), `dev.example.my_app` (underscore), `dev/app`, `a..b` and `../../escape` are not. A manifest with an invalid id is listed as `FAILED` with the message `instrument.id is not a valid instrument id (lowercase reverse-DNS, [a-z0-9.-]): <id>` (see [Refusal Messages](../reference/refusal-messages.md#failed-messages)). The host creates no data folder for it.
 
 ## Worked Example
 
