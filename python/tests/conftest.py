@@ -41,7 +41,7 @@ _GPU_CASES = frozenset({
 _WINDOW_SUITES = frozenset({"test_window_real.py"})
 _NOTEBOOK_SUITES: frozenset[str] = frozenset()
 _NOTEBOOK_CASES = frozenset({("test_widget.py", "test_widget_draws_in_jupyterlab")})
-_TIMING_CASES = frozenset({("test_controls.py", "test_a_flood_of_values_from_several_threads")})
+_TIMING_CASES: frozenset[tuple[str, str]] = frozenset()
 
 
 def pytest_collection_modifyitems(items):
