@@ -117,10 +117,10 @@ The `id` names the applet's data folder (`data/<id>/` under the app-data root). 
 
 ## Worked Example
 
-The minimal manifest below is the one that the **hello** fixture applet ships. The page embeds it from the source, so it cannot drift:
+The minimal manifest below is the one that the **Hello World** fixture applet ships. The page embeds it from the source, so it cannot drift:
 
 ```toml
---8<-- "examples/hello/hello.caliper.toml"
+--8<-- "examples/hello_world/hello_world.caliper.toml"
 ```
 
 See [First Applet](first-applet.md) for a full walk of the applet that this manifest belongs to.

@@ -2,9 +2,9 @@
 #   1. install the SDK component of the core build to <WORK_DIR>/prefix, check
 #      that it holds none of the embed headers, and with WITH_EMBED=ON install
 #      the embed component into the same prefix;
-#   2. copy this folder and examples/hello to <WORK_DIR> and build each copy
+#   2. copy this folder and examples/hello_world to <WORK_DIR> and build each copy
 #      with only -DCMAKE_PREFIX_PATH=<WORK_DIR>/prefix;
-#   3. run the probe's doctest binary, check that hello's library and stamped
+#   3. run the probe's doctest binary, check that hello_world's library and stamped
 #      manifest exist, and check that neither build refers to the source tree;
 #   4. build a copy of no_embed/, an applet source that includes caliper/embed.h
 #      against every SDK target, and check that it fails because the header is
@@ -103,21 +103,21 @@ build_copy(probe tests/sdk_install_probe)
 check_no_source_refs(probe)
 run("Running the probe" "${WORK_DIR}/probe-build/probe${EXE_SUFFIX}")
 
-build_copy(hello examples/hello)
-check_no_source_refs(hello)
-set(applets "${WORK_DIR}/hello-build/applets")
-set(library "${applets}/${LIB_PREFIX}hello${LIB_SUFFIX}")
-set(manifest "${applets}/hello.caliper.toml")
+build_copy(hello_world examples/hello_world)
+check_no_source_refs(hello_world)
+set(applets "${WORK_DIR}/hello_world-build/applets")
+set(library "${applets}/${LIB_PREFIX}hello_world${LIB_SUFFIX}")
+set(manifest "${applets}/hello_world.caliper.toml")
 foreach(path "${library}" "${manifest}")
     if(NOT EXISTS "${path}")
-        message(FATAL_ERROR "hello: ${path} was not built")
+        message(FATAL_ERROR "hello_world: ${path} was not built")
     endif()
 endforeach()
 file(READ "${manifest}" stamped)
 foreach(line "[build]" "sdk = \"${EXPECT_SDK_VERSION}\"" "ui_stack = \"${EXPECT_UI_STACK_HASH}\"")
     string(FIND "${stamped}" "${line}" at)
     if(at EQUAL -1)
-        message(FATAL_ERROR "hello: the stamped manifest lacks the line: ${line}")
+        message(FATAL_ERROR "hello_world: the stamped manifest lacks the line: ${line}")
     endif()
 endforeach()
 

@@ -1,8 +1,8 @@
 [applet]
-id      = "dev.caliper.hello"
-name    = "Hello"
+id      = "dev.caliper.hello-world"
+name    = "Hello World"
 version = "0.1.0"
-summary = "Epoch-2 fixture applet: sugar demo + loader-test substrate."
+summary = "Smallest torch-free applet: sugar demo and loader-test substrate."
 tag     = "Demo"
 
 [compat]

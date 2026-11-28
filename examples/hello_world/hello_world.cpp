@@ -1,21 +1,21 @@
-// Epoch-2 fixture applet (docs/applets/in-tree-applets.md): loader-test substrate and the
-// "hello world" of the sugar layer. Kept deliberately tiny.
+// Smallest torch-free applet (docs/applets/first-applet.md): sugar demo and
+// loader-test substrate. Kept deliberately tiny.
 #include <caliper/caliper.hpp>
 #include <cmath>
 #include <cstdlib>
 #include <vector>
 
-class HelloApplet final : public caliper::Applet {
+class HelloWorldApplet final : public caliper::Applet {
 public:
     bool on_init(caliper::Host& host) override {
         host_ = &host;
-        crash_on_frame_ = std::getenv("CALIPER_HELLO_CRASH") != nullptr;
+        crash_on_frame_ = std::getenv("CALIPER_HELLO_WORLD_CRASH") != nullptr;
         // Test hook: fail launch cleanly (initialize() returns false) so hosts
         // can exercise the failed-load path without a crash. on_cleanup is NOT
         // called for a false return (the loader destroys the raw instance), so
         // this logs nothing.
-        if (std::getenv("CALIPER_HELLO_INIT_FAIL") != nullptr) return false;
-        host.log_info("hello.on_init");
+        if (std::getenv("CALIPER_HELLO_WORLD_INIT_FAIL") != nullptr) return false;
+        host.log_info("hello_world.on_init");
         return true;
     }
 
@@ -26,8 +26,8 @@ public:
         }
         ImGui::SetNextWindowPos({40, 60}, ImGuiCond_FirstUseEver);
         ImGui::SetNextWindowSize({520, 360}, ImGuiCond_FirstUseEver);
-        caliper::ui::dock_hint(host_, "Hello, Caliper", CALIPER_DOCK_CENTRAL);
-        ImGui::Begin("Hello, Caliper");
+        caliper::ui::dock_hint(host_, "Hello World", CALIPER_DOCK_CENTRAL);
+        ImGui::Begin("Hello World");
         ImGui::Text("ABI epoch %d applet via CALIPER_APPLET macro", CALIPER_ABI_EPOCH);
         ImGui::Text("framebuffer: %d x %d px   dpi_scale: %.1f",
                     f.fb_width, f.fb_height, f.dpi_scale);
@@ -58,7 +58,7 @@ public:
     }
 
     void on_cleanup() override {
-        if (host_) host_->log_info("hello.on_cleanup");
+        if (host_) host_->log_info("hello_world.on_cleanup");
     }
 
 private:
@@ -68,10 +68,10 @@ private:
     bool  playing_ = true;    // Play/Pause state — starts running
 };
 
-CALIPER_APPLET(HelloApplet,
-    .id       = "dev.caliper.hello",
+CALIPER_APPLET(HelloWorldApplet,
+    .id       = "dev.caliper.hello-world",
     .version  = "0.1.0",
-    .name     = "Hello",
-    .summary  = "Epoch-2 fixture applet: sugar demo + loader-test substrate.",
+    .name     = "Hello World",
+    .summary  = "Smallest torch-free applet: sugar demo and loader-test substrate.",
     .tag      = "Demo",
     .services = {CALIPER_UI_V1, CALIPER_LOG_V1})
