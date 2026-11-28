@@ -7,7 +7,7 @@
 // and records the pick, which runs the panel's `select` write. With `clear` it
 // clears the panel's selection and pushes a `select` event that names no
 // entity. selection.get gives the fields of the panel's last pick.
-#include <caliper_builder/session/instrument_commands.h>
+#include <caliper_builder/session/interactive_commands.h>
 #include <caliper_builder/session/history.h>
 #include <caliper_builder/session/piece_commands.h>
 #include <caliper_builder/programs/pieces.h>
@@ -131,7 +131,7 @@ Error item_fields(const EntityData& e, std::int64_t index, PickFields* out) {
 // the item map's resource in the version at the cursor, with the map's fields by name, as a
 // person's pick in the panel gives them. The program must draw in the panel and pin a piece
 // with an item map; the item must lie within the version's valid count and its bytes.
-CommandOutput program_pick(const CommandContext& ctx, InstrumentContext& ic, const std::string& panel_id) {
+CommandOutput program_pick(const CommandContext& ctx, InteractiveContext& ic, const std::string& panel_id) {
     const json& args = ctx.invocation.args;
     const std::string id = str_arg(args, "program");
     const spec::Program* program = nullptr;
@@ -216,7 +216,7 @@ CommandOutput program_pick(const CommandContext& ctx, InstrumentContext& ic, con
     return CommandOutput::ok(json{{"fields", all}});
 }
 
-CommandOutput selection_set(const CommandContext& ctx, InstrumentContext& ic) {
+CommandOutput selection_set(const CommandContext& ctx, InteractiveContext& ic) {
     const json& args = ctx.invocation.args;
     const std::string panel_id = str_arg(args, "panel");
     const spec::Panel* panel = ic.spec.find_panel(panel_id);
@@ -286,7 +286,7 @@ CommandOutput selection_set(const CommandContext& ctx, InstrumentContext& ic) {
     return CommandOutput::ok(json{{"fields", all}});
 }
 
-CommandOutput selection_get(const CommandContext& ctx, InstrumentContext& ic) {
+CommandOutput selection_get(const CommandContext& ctx, InteractiveContext& ic) {
     const std::string panel_id = str_arg(ctx.invocation.args, "panel");
     if (!ic.spec.find_panel(panel_id))
         return CommandOutput::fail(Error("panel.not_found", "The open spec has no panel " + panel_id + ".", "args.panel"));
@@ -296,7 +296,7 @@ CommandOutput selection_get(const CommandContext& ctx, InstrumentContext& ic) {
 
 }  // namespace
 
-CommandOutput selection_command(const CommandContext& ctx, InstrumentContext& ic) {
+CommandOutput selection_command(const CommandContext& ctx, InteractiveContext& ic) {
     if (!ic.spec_open) return CommandOutput::fail(Error("spec.no_open_spec", "No spec is open."));
     if (ctx.invocation.name == "selection.set") return selection_set(ctx, ic);
     if (ctx.invocation.name == "selection.get") return selection_get(ctx, ic);

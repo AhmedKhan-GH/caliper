@@ -50,7 +50,7 @@ SpecEdit apply_annotation_edit(const spec::Spec& spec, std::string_view name, co
 
 // What the session commands read and change. `spec` is a copy of the open
 // spec taken under the document's lock; it is empty when no spec is open.
-struct InstrumentContext {
+struct InteractiveContext {
     const spec::Spec& spec;
     bool spec_open = false;
     ValueStore& values;
@@ -65,10 +65,10 @@ struct InstrumentContext {
 };
 
 // state_commands.cpp: state.set, state.get and control.set.
-CommandOutput state_command(const CommandContext& ctx, InstrumentContext& ic);
+CommandOutput state_command(const CommandContext& ctx, InteractiveContext& ic);
 // selection_commands.cpp: selection.set and selection.get.
-CommandOutput selection_command(const CommandContext& ctx, InstrumentContext& ic);
+CommandOutput selection_command(const CommandContext& ctx, InteractiveContext& ic);
 // cursor_commands.cpp: cursor.get, cursor.set and cursor.step.
-CommandOutput cursor_command(const CommandContext& ctx, InstrumentContext& ic);
+CommandOutput cursor_command(const CommandContext& ctx, InteractiveContext& ic);
 
 }  // namespace caliper_builder

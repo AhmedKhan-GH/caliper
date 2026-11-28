@@ -1,4 +1,4 @@
-#include "applet_files.h"
+#include "instrument_files.h"
 
 #include <cstdio>
 #include <exception>
@@ -12,8 +12,8 @@ namespace caliper_builder::session_detail {
 ManifestInfo read_manifest(const std::string& path) {
     ManifestInfo out;
     std::string text;
-    if (Error e = read_file_bounded(path, kMaxManifestBytes, &text, "applet.not_spec")) {
-        out.error = e.code == "session.io" ? Error("applet.not_found", "The applet's manifest could not be read.", path) : e;
+    if (Error e = read_file_bounded(path, kMaxManifestBytes, &text, "instrument.not_spec")) {
+        out.error = e.code == "session.io" ? Error("instrument.not_found", "The instrument's manifest could not be read.", path) : e;
         return out;
     }
     toml::table table;
@@ -21,27 +21,27 @@ ManifestInfo read_manifest(const std::string& path) {
     try {
         table = toml::parse(text);
     } catch (const toml::parse_error& e) {
-        out.error = Error("applet.not_spec", "The manifest is not valid TOML: " + std::string(e.description()) + ".", path);
+        out.error = Error("instrument.not_spec", "The manifest is not valid TOML: " + std::string(e.description()) + ".", path);
         return out;
     }
 #else
     toml::parse_result parsed = toml::parse(text);
     if (!parsed) {
-        out.error = Error("applet.not_spec", "The manifest is not valid TOML.", path);
+        out.error = Error("instrument.not_spec", "The manifest is not valid TOML.", path);
         return out;
     }
     table = std::move(parsed).table();
 #endif
-    const toml::table* applet = table["applet"].as_table();
-    if (!applet) {
-        out.error = Error("applet.not_spec", "The manifest has no [applet] table.", path);
+    const toml::table* instrument = table["instrument"].as_table();
+    if (!instrument) {
+        out.error = Error("instrument.not_spec", "The manifest has no [instrument] table.", path);
         return out;
     }
-    auto text_of = [&](const char* key) { return (*applet)[key].value<std::string>().value_or(std::string()); };
+    auto text_of = [&](const char* key) { return (*instrument)[key].value<std::string>().value_or(std::string()); };
     out.id = text_of("id");
     out.name = text_of("name");
     out.version = text_of("version");
-    out.kind = (*applet)["kind"] ? text_of("kind") : std::string("library");
+    out.kind = (*instrument)["kind"] ? text_of("kind") : std::string("library");
     out.spec = text_of("spec");
     return out;
 }
@@ -70,7 +70,7 @@ std::string toml_quote(const std::string& text) {
 
 std::string manifest_text(const std::string& manifest_id, const std::string& name, const std::string& version,
                           const std::optional<std::string>& summary, const std::string& spec_file) {
-    std::string out = "[applet]\n";
+    std::string out = "[instrument]\n";
     out += "id = " + toml_quote(manifest_id) + "\n";
     out += "name = " + toml_quote(name) + "\n";
     out += "version = " + toml_quote(version) + "\n";

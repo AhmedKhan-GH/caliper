@@ -7,7 +7,7 @@
 #include <string>
 #include <vector>
 
-#include <caliper_builder/session/instrument_commands.h>
+#include <caliper_builder/session/interactive_commands.h>
 #include <caliper_builder/session/panel_data.h>
 #include <caliper_builder/spec/format.h>
 
@@ -20,7 +20,7 @@ namespace {
 // and two sources.
 spec::Spec make_spec() {
     const std::string text =
-        "caliper_spec = 1\n[applet]\nid = \"a\"\n"
+        "caliper_spec = 2\n[instrument]\nid = \"a\"\n"
         "[[source]]\nid = \"grid\"\ncatalog = \"tensor:grid\"\n"
         "[[source]]\nid = \"cloud\"\ncatalog = \"tensor:cloud\"\n"
         "[[panel]]\nid = \"world\"\nprimitive = \"scene\"\nbind = { scene = \"live:model\" }\n"

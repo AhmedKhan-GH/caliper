@@ -9,9 +9,9 @@
 // that holds the whole descriptor table, and a CommandQueue over it. It binds
 // a handler for every command that needs no window: catalog.*, data.*,
 // loader.*, spec.*, source.*, panel.create, panel.patch, panel.remove,
-// layout.*, preview.*, applet.*, review.status (the history commands come
+// layout.*, preview.*, instrument.*, review.status (the history commands come
 // with the registry).
-// app.info, app.applets, app.launch, panel.render and capture.frame stay
+// app.info, app.instruments, app.launch, panel.render and capture.frame stay
 // unbound until set_host() gives a SessionHost, which the app implements.
 //
 // The open spec. At most one spec is open; the spec, source, panel and layout
@@ -78,8 +78,8 @@
 //   but ui and builder, each time. The handler passes RunOptions::allow_python
 //   to the store only for ui and builder, or for an invocation that the policy
 //   asked about and the person approved; a redo never runs a script.
-// - applet.save from agent, mcp or api asks only when it would overwrite a
-//   saved applet, since writing a new one destroys nothing.
+// - instrument.save from agent, mcp or api asks only when it would overwrite a
+//   saved instrument, since writing a new one destroys nothing.
 // - run.start and run.fork (runner_commands.h) start a managed run, which runs
 //   Python code: they ask for every origin, ui and builder too, and no rule
 //   removes their card; only Allow all of a governed agent, and a request
@@ -142,10 +142,10 @@ class SessionHost {
 public:
     virtual ~SessionHost() = default;
     virtual CommandOutput app_info() = 0;
-    virtual CommandOutput app_applets() = 0;
+    virtual CommandOutput app_instruments() = 0;
     virtual CommandOutput app_launch(const std::string& id) = 0;
     // The same with the origin of the app.launch that asked, so that what the
-    // launch does in the workspace (a spec applet's applet.open) is sent from
+    // launch does in the workspace (an instrument's instrument.open) is sent from
     // that origin and reviewed as that origin's own command would be. The
     // session calls this one; the default ignores the origin.
     virtual CommandOutput app_launch(const std::string& id, CommandOrigin origin) {
@@ -274,7 +274,7 @@ public:
     // Runs one invocation on the calling thread (registry().invoke()).
     CommandResult invoke(CommandInvocation invocation);
 
-    // Binds app.info, app.applets, app.launch, panel.render and capture.frame
+    // Binds app.info, app.instruments, app.launch, panel.render and capture.frame
     // to the host, or leaves them unbound (command.not_bound) for null.
     void set_host(std::shared_ptr<SessionHost> host);
 
@@ -393,10 +393,10 @@ private:
 };
 
 // Replays the journal of a workspace onto an empty open spec: the spec,
-// source, panel and layout edits and spec.new, spec.open and applet.open that
+// source, panel and layout edits and spec.new, spec.open and instrument.open that
 // are in effect after every undo and redo, in order (dry runs and the
 // commands that do not touch the open spec are passed by). spec.open and
-// applet.open read the files as they are now. The result is the open spec the
+// instrument.open read the files as they are now. The result is the open spec the
 // session would have, or nothing when no spec was opened.
 struct SpecReplay {
     Error error;

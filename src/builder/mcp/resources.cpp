@@ -11,12 +11,6 @@
 namespace caliper_builder::mcp {
 
 namespace fs = std::filesystem;
-
-namespace detail {
-// The schema of spec version 1, compiled in (spec_schema_v1_embed.cpp, which
-// src/builder/mcp/CMakeLists.txt generates).
-extern const char* const kSpecSchemaV1Text;
-}  // namespace detail
 using nlohmann::json;
 
 namespace {
@@ -117,11 +111,6 @@ std::string checked_resource_path(std::string_view encoded) {
 
 Error ResourceStore::open(const ResourceOptions& options) {
     options_ = options;
-    if (options_.spec_schema_text.empty()) {
-        options_.spec_schema_v1_text.clear();
-    } else if (options_.spec_schema_v1_text.empty() && detail::kSpecSchemaV1Text) {
-        options_.spec_schema_v1_text = detail::kSpecSchemaV1Text;
-    }
     docs_root_.clear();
     sdk_root_.clear();
     Error error;
@@ -184,22 +173,12 @@ std::vector<ResourceEntry> ResourceStore::list(bool* truncated) const {
     if (!options_.spec_schema_text.empty()) {
         ResourceEntry r;
         r.uri = kSpecSchemaUri;
-        r.name = "caliper-spec-v0.schema.json";
-        r.title = "Spec format v0 JSON Schema";
-        r.description = "The JSON Schema of the canonical JSON form of a spec, format version 0.";
+        r.name = "caliper-spec-v2.schema.json";
+        r.title = "Spec format v2 JSON Schema";
+        r.description = "The JSON Schema of the canonical JSON form of a spec, format version 2: instruments, "
+                        "sources, panels including the scene primitive, controls, GPU programs, and provenance.";
         r.mime_type = "application/schema+json";
         r.size = options_.spec_schema_text.size();
-        out.push_back(std::move(r));
-    }
-    if (!options_.spec_schema_v1_text.empty()) {
-        ResourceEntry r;
-        r.uri = kSpecSchemaV1Uri;
-        r.name = "caliper-spec-v1.schema.json";
-        r.title = "Spec format v1 JSON Schema";
-        r.description = "The JSON Schema of the canonical JSON form of a spec, format version 1: version 0 with the "
-                        "scene primitive, the control table, the GPU programs, and the provenance table.";
-        r.mime_type = "application/schema+json";
-        r.size = options_.spec_schema_v1_text.size();
         out.push_back(std::move(r));
     }
     if (options_.library) {
@@ -271,11 +250,6 @@ ResourceContent ResourceStore::read(const std::string& uri) const {
         return read_file(sdk_root_, uri, std::string_view(uri).substr(sdk.size()), kSdkExtensions);
     ResourceContent out;
     out.uri = uri;
-    if (uri == kSpecSchemaV1Uri && !options_.spec_schema_v1_text.empty()) {
-        out.mime_type = "application/schema+json";
-        out.text = options_.spec_schema_v1_text;
-        return out;
-    }
     const std::string library = kLibraryUriPrefix;
     if (options_.library && uri.compare(0, library.size(), library) == 0) {
         const std::string_view path = std::string_view(uri).substr(library.size());

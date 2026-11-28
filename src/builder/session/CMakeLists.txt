@@ -17,7 +17,7 @@ endif()
 find_package(Threads REQUIRED)
 
 add_library(caliper_builder_session STATIC
-    applet_files.cpp
+    instrument_files.cpp
     context_bundle.cpp
     control_edit.cpp
     event_ring.cpp
@@ -40,7 +40,7 @@ add_library(caliper_builder_session STATIC
     session_permissions.cpp
     spec_edit.cpp
     util.cpp
-    instrument_commands.cpp
+    interactive_commands.cpp
     state_commands.cpp
     selection_commands.cpp
     cursor_commands.cpp
@@ -106,7 +106,7 @@ caliper_builder_add_tests(session
         tests/test_command_server.cpp
         tests/test_acceptance.cpp
         tests/test_agent_modes.cpp
-        tests/test_instrument_commands.cpp
+        tests/test_interactive_commands.cpp
         tests/test_entity_commands.cpp
         tests/test_references.cpp
         tests/test_state.cpp

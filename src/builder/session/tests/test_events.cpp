@@ -381,7 +381,7 @@ TEST_CASE("events: the session feeds spec events from its journal") {
     CHECK(spec[0]["command"] == "spec.new");
     CHECK(spec[0]["event"] == "do");
     CHECK(spec[0]["panel"].is_null());
-    for (const json& e : spec) CHECK(e["applet"] == "dash");   // the open spec's applet id
+    for (const json& e : spec) CHECK(e["instrument"] == "dash");   // the open spec's instrument id
     CHECK(spec[1]["command"] == "source.add");
     CHECK(spec[2]["command"] == "panel.create");
     CHECK(spec[2]["panel"] == "loss");

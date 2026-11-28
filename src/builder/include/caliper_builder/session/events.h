@@ -165,8 +165,8 @@ private:
 // The feed from the journal: a do, undo or redo of a command that edits the
 // open spec becomes a spec event, and a decided approval an approval event.
 // The session calls it from the journal's on_append, on the appending thread,
-// with the applet id of the spec open after the command ("" for none), which a
-// spec event carries as `applet`.
-void note_journal_event(EventSink& sink, const JournalEvent& event, const std::string& applet = {});
+// with the instrument id of the spec open after the command ("" for none), which a
+// spec event carries as `instrument`.
+void note_journal_event(EventSink& sink, const JournalEvent& event, const std::string& instrument = {});
 
 }  // namespace caliper_builder

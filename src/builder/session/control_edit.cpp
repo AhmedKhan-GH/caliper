@@ -13,7 +13,7 @@
 // one undo step.
 #include <caliper_builder/session/spec_edit.h>
 
-#include <caliper_builder/spec/instrument.h>
+#include <caliper_builder/spec/control.h>
 
 #include <cmath>
 #include <utility>
@@ -389,7 +389,7 @@ std::size_t control_index(const spec::Spec& s, const std::string& id) {
 }
 
 void raise_version(spec::Spec& s) {
-    if (s.version < spec::kInstrumentVersion) s.version = spec::kInstrumentVersion;
+    s.version = std::max(s.version, spec::kFormatVersion);
 }
 
 // A control as the result of control.patch shows it: id, kind, title (null
@@ -444,11 +444,11 @@ json control_result_json(const Control& c) {
 }
 
 SpecEdit control_create(const spec::Spec& s, const json& args, const spec::SourceResolver& resolver) {
-    if (s.applet.layout_locked.value_or(false))
+    if (s.instrument.layout_locked.value_or(false))
         return refuse(fail("layout.locked",
                            "The instrument's layout is locked, so you cannot add a control; unlock the layout with "
                            "layout.lock first.",
-                           "applet.layout_locked"));
+                           "instrument.layout_locked"));
     const std::string id = str_arg(args, "id");
     if (s.find_control(id))
         return refuse(fail("control.exists", "The spec already has a control " + id + "; choose another id.", "args.id"));
@@ -530,11 +530,11 @@ SpecEdit control_remove(const spec::Spec& s, const json& args, const spec::Sourc
     const std::string id = str_arg(args, "id");
     const std::size_t index = control_index(s, id);
     if (index == s.controls.size()) return refuse(fail("control.not_found", "The spec has no control " + id + ".", "args.id"));
-    if (s.applet.layout_locked.value_or(false))
+    if (s.instrument.layout_locked.value_or(false))
         return refuse(fail("layout.locked",
                            "The instrument's layout is locked, so you cannot remove a control; unlock the layout with "
                            "layout.lock first.",
-                           "applet.layout_locked"));
+                           "instrument.layout_locked"));
     if (!s.controls[index].closable.value_or(true))
         return refuse(fail("control.not_closable",
                            "The control " + id + " is not closable; set closable to true before removing it.",

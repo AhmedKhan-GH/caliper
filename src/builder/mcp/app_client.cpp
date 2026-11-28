@@ -68,7 +68,7 @@ Error status_error(const HttpResponse& r, const std::string& what) {
     }
 }
 
-bool applet_id_ok(const std::string& id) {
+bool instrument_id_ok(const std::string& id) {
     if (id.empty() || id.size() > 128) return false;
     for (char c : id) {
         const bool ok = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '.' ||
@@ -220,22 +220,22 @@ json AppClient::call(const CommandDescriptor& d, const json& sent, const std::at
     HttpLimits limits;
     limits.max_body_bytes = options_.max_response_bytes;
     limits.read_timeout_ms = limits.total_timeout_ms = options_.app_timeout_ms;
-    enum class Route { info, applets, launch, capture, command } route = Route::command;
+    enum class Route { info, instruments, launch, capture, command } route = Route::command;
     if (d.name == "app.info") {
         route = Route::info;
         req.target = "/v0/info";
-    } else if (d.name == "app.applets") {
-        route = Route::applets;
-        req.target = "/v0/applets";
+    } else if (d.name == "app.instruments") {
+        route = Route::instruments;
+        req.target = "/v0/instruments";
     } else if (d.name == "app.launch") {
         route = Route::launch;
         const auto id = args.find("id");
-        if (id == args.end() || !id->is_string() || !applet_id_ok(id->get<std::string>()))
+        if (id == args.end() || !id->is_string() || !instrument_id_ok(id->get<std::string>()))
             return tool_error_result({"command.invalid_args",
-                                      "An applet id is 1 to 128 characters of A-Z, a-z, 0-9, '.', '_' and '-'.",
+                                      "An instrument id is 1 to 128 characters of A-Z, a-z, 0-9, '.', '_' and '-'.",
                                       "args.id"});
         req.method = "POST";
-        req.target = "/v0/applets/" + id->get<std::string>() + "/launch";
+        req.target = "/v0/instruments/" + id->get<std::string>() + "/launch";
     } else if (d.name == "capture.frame") {
         route = Route::capture;
         req.target = "/v0/capture.png";
@@ -281,12 +281,12 @@ json AppClient::call(const CommandDescriptor& d, const json& sent, const std::at
     if (route == Route::command && r.status == 404)
         return tool_error_result({"mcp.no_command_layer",
                                   "This version of the app has no command layer yet, so " + d.name +
-                                      " cannot run. Only app_info, app_applets, app_launch and capture_frame work "
+                                      " cannot run. Only app_info, app_instruments, app_launch and capture_frame work "
                                       "against it.",
                                   "POST /v0/commands/" + d.name});
     if (route == Route::launch && r.status != 200) {
         const std::string msg = server_message(r);
-        if (r.status == 404) return tool_error_result({"app.applet_not_found", msg, "args.id"});
+        if (r.status == 404) return tool_error_result({"app.instrument_not_found", msg, "args.id"});
         if (r.status == 409) return tool_error_result({"app.launch_refused", msg, "args.id"});
         if (r.status == 400) return tool_error_result({"command.invalid_args", msg, "args.id"});
     }

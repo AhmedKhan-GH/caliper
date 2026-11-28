@@ -197,7 +197,7 @@ struct ValueStore::Impl {
 
     mutable std::mutex mutex;
     bool opened = false;
-    std::string applet;
+    std::string instrument;
     std::map<std::string, spec::StateVar> states;
     std::map<std::string, spec::Control> controls;
     std::map<std::string, std::string> control_states;   // control id to the state it binds
@@ -493,11 +493,11 @@ ValueStore::~ValueStore() = default;
 void ValueStore::reset(const spec::Spec& spec) {
     std::lock_guard<std::mutex> lock(impl_->mutex);
     Impl& m = *impl_;
-    // Another applet starts over; an edit of the same one keeps each value
+    // Another instrument starts over; an edit of the same one keeps each value
     // that the new spec still has with the same type.
-    const bool same = m.opened && m.applet == spec.applet.id;
+    const bool same = m.opened && m.instrument == spec.instrument.id;
     m.opened = true;
-    m.applet = spec.applet.id;
+    m.instrument = spec.instrument.id;
     const auto old_states = std::move(m.states);
     const auto old_controls = std::move(m.controls);
     const auto old_state_values = std::move(m.state_values);

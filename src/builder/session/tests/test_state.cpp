@@ -2,7 +2,7 @@
 // (design/instrument-interface.md, Shared State and Commands).
 #include <doctest/doctest.h>
 
-#include <caliper_builder/session/instrument_commands.h>
+#include <caliper_builder/session/interactive_commands.h>
 #include <caliper_builder/session/history.h>
 #include <caliper_builder/session/session.h>
 #include <caliper_builder/session/values.h>
@@ -52,8 +52,8 @@ struct Recorder final : EventSink {
     }
 };
 
-spec::Spec parse(const std::string& body, const std::string& applet = "a") {
-    auto parsed = spec::parse_toml("caliper_spec = 1\n[applet]\nid = \"" + applet + "\"\n" + body);
+spec::Spec parse(const std::string& body, const std::string& instrument = "a") {
+    auto parsed = spec::parse_toml("caliper_spec = 2\n[instrument]\nid = \"" + instrument + "\"\n" + body);
     REQUIRE_MESSAGE(parsed.ok(), body);
     return parsed.spec;
 }
@@ -430,7 +430,7 @@ options = { min = { state = "cursor", field = "first" }, max = { state = "cursor
     CHECK(values.control_value("window") == json::array({3100, 3200}));
 }
 
-// A reset for the same applet keeps a state's value, and one for another applet starts at the default.
+// A reset for the same instrument keeps a state's value, and one for another instrument starts at the default.
 TEST_CASE("state: reset") {
     const std::string body = "[[state]]\nid = \"token\"\ntype = \"integer\"\nmin = 0\nmax = 63\n";
     ValueStore values;
@@ -506,7 +506,7 @@ bind = { scene = "live:model" }
     StepHistory history;
     history.configure(sp);
     Recorder recorder;
-    InstrumentContext ic{sp, true, values, history, &recorder};
+    InteractiveContext ic{sp, true, values, history, &recorder};
     const auto run = [&](const char* name, const json& args) {
         CommandInvocation inv;
         inv.name = name;

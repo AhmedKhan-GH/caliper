@@ -12,7 +12,7 @@
 #include <caliper_builder/loaders/inference.h>
 #include <caliper_builder/loaders/loader.h>
 #include <caliper_builder/loaders/paths.h>
-#include <caliper_builder/session/instrument_commands.h>
+#include <caliper_builder/session/interactive_commands.h>
 #include <caliper_builder/session/intervene_commands.h>
 #include <caliper_builder/session/line_diff.h>
 #include <caliper_builder/session/panel_data.h>
@@ -39,7 +39,7 @@
 #include <utility>
 #include <vector>
 
-#include "applet_files.h"
+#include "instrument_files.h"
 #include "util.h"
 
 namespace caliper_builder {
@@ -50,7 +50,7 @@ namespace fs = std::filesystem;
 using nlohmann::json;
 
 inline constexpr std::size_t kMaxQueryJson = std::size_t(8) << 20;  // data.query rows, as the table says
-inline constexpr std::size_t kMaxAppletFolders = 4096;
+inline constexpr std::size_t kMaxInstrumentFolders = 4096;
 
 inline CommandOutput fail(std::string code, std::string message, std::string where = {}) {
     return CommandOutput::fail(Error(std::move(code), std::move(message), std::move(where)));
@@ -205,7 +205,7 @@ struct Session::Impl {
     std::mutex review_mutex;
     std::deque<Reviewed> reviewed;
     std::pair<std::string, nlohmann::json> last_review;
-    // Approvals bound to content (an overwrite of a saved applet, or the
+    // Approvals bound to content (an overwrite of a saved instrument, or the
     // replacement of an open spec with unsaved changes): the document and the
     // digest of what the card showed, by invocation key, oldest first out.
     struct Bound {
@@ -265,11 +265,11 @@ struct Session::Impl {
     std::filesystem::path ws() const;
     std::string spec_label() const;
     LoadedSpec load_spec_file(const std::string& rel_path, const spec::SourceResolver& res) const;
-    LoadedSpec load_applet(const std::string& id, const spec::SourceResolver& res) const;
+    LoadedSpec load_instrument(const std::string& id, const spec::SourceResolver& res) const;
     void refuse_unresolved_pins(const spec::Spec& s);
     UndoRecord replace_document(Document next);
     UndoRecord change_spec(spec::Spec after, bool merging, std::size_t bytes);
-    bool applet_saved(const std::string& id) const;
+    bool instrument_saved(const std::string& id) const;
     CommandOutput panel_render(const CommandContext& ctx);
     CommandOutput run_cmd(const CommandContext& ctx);
     CommandOutput runner_cmd(const CommandContext& ctx);
@@ -279,13 +279,13 @@ struct Session::Impl {
     CommandOutput piece_save(const CommandContext& ctx);
     CommandOutput resource_cmd(const CommandContext& ctx);
     CommandOutput program_cmd(const CommandContext& ctx);
-    CommandOutput instrument_cmd(const CommandContext& ctx);
+    CommandOutput interactive_cmd(const CommandContext& ctx);
     ChainContext chain_context() const;
     void reset_instruments();
     CommandOutput interpretation_cmd(const CommandContext& ctx);
     CommandOutput intervene_cmd(const CommandContext& ctx);
     void approval_event(const PendingApproval& p, std::string_view state);
-    std::string open_applet_id() const;
+    std::string open_instrument_id() const;
     void reconcile_hosts();
     void bind_all();
 
@@ -310,19 +310,19 @@ struct Session::Impl {
     CommandOutput loader_run(const CommandContext& ctx);
     CommandOutput loader_delete(const CommandContext& ctx);
 
-    // ---- open spec, applets and panel data (session_spec.cpp) ----
+    // ---- open spec, instruments and panel data (session_spec.cpp) ----
     CommandOutput no_open_spec();
     CommandOutput spec_new(const CommandContext& ctx);
     CommandOutput open_loaded(LoadedSpec loaded, nlohmann::json result);
     CommandOutput spec_open(const CommandContext& ctx);
-    CommandOutput applet_open(const CommandContext& ctx);
-    Error view_spec(const std::string& applet, const std::string& preview, spec::Spec* out);
+    CommandOutput instrument_open(const CommandContext& ctx);
+    Error view_spec(const std::string& instrument, const std::string& preview, spec::Spec* out);
     CommandOutput spec_get(const CommandContext& ctx);
     CommandOutput spec_validate(const CommandContext& ctx);
     SpecEdit edit_spec(const spec::Spec& s, const std::string& name, nlohmann::json& args);
     CommandOutput spec_edit(const CommandContext& ctx);
-    CommandOutput applet_save(const CommandContext& ctx);
-    CommandOutput applet_list(const CommandContext& ctx);
+    CommandOutput instrument_save(const CommandContext& ctx);
+    CommandOutput instrument_list(const CommandContext& ctx);
     CommandOutput panel_data(const CommandContext& ctx);
 
     // ---- review of spec edits and stacked previews (session_preview.cpp) ----

@@ -18,7 +18,7 @@ using namespace session_test;
 
 namespace {
 
-const std::vector<std::string>& instrument_commands() {
+const std::vector<std::string>& interactive_commands() {
     static const std::vector<std::string> names = {
         "state.create",  "state.patch",   "state.remove",   "state.set",         "state.get",  "control.set",
         "selection.set", "selection.get", "entity.set",     "entity.remove",     "annotation.set",
@@ -29,11 +29,11 @@ const std::vector<std::string>& instrument_commands() {
 
 }  // namespace
 
-TEST_CASE("the eighteen instrument commands are in the table and reach their handlers") {
-    const std::string ws = fresh_dir("instrument-commands");
+TEST_CASE("the eighteen interactive commands are in the table and reach their handlers") {
+    const std::string ws = fresh_dir("interactive-commands");
     auto s = open_session(ws);
     ok(*s, "spec.new", {{"id", "bench"}});
-    for (const std::string& name : instrument_commands()) {
+    for (const std::string& name : interactive_commands()) {
         CAPTURE(name);
         const auto& table = command_table();
         const auto d = std::find_if(table.begin(), table.end(), [&](const auto& c) { return c.name == name; });

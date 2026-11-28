@@ -138,7 +138,7 @@ SpecEdit finish(spec::Spec next, const spec::SourceResolver& resolver, json resu
 }
 
 void raise_version(spec::Spec& s) {
-    if (s.version < spec::kInstrumentVersion) s.version = spec::kInstrumentVersion;
+    s.version = std::max(s.version, spec::kFormatVersion);
 }
 
 std::size_t program_index(const spec::Spec& s, const std::string& id) {

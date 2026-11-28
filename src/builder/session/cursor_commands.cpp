@@ -3,7 +3,7 @@
 // Events). They read and move the cursor of the session's StepHistory, copy
 // it into the value store for references to the built-in state `cursor`,
 // and add one `cursor` event for each change that a command makes.
-#include <caliper_builder/session/instrument_commands.h>
+#include <caliper_builder/session/interactive_commands.h>
 
 #include <cstdint>
 #include <limits>
@@ -48,7 +48,7 @@ void push_cursor_event(EventSink* events, const CursorState& c, const std::strin
 
 }  // namespace
 
-CommandOutput cursor_command(const CommandContext& ctx, InstrumentContext& ic) {
+CommandOutput cursor_command(const CommandContext& ctx, InteractiveContext& ic) {
     const std::string& name = ctx.invocation.name;
     const json& args = ctx.invocation.args;
     StepHistory& history = ic.history;

@@ -92,7 +92,7 @@ TEST_CASE("the store lists the served files and nothing else") {
     CHECK_FALSE(truncated);
     std::set<std::string> want = {"caliper://docs/index.md", "caliper://docs/references/api.md",
                                   "caliper://docs/plans/deep/page.md", "caliper://sdk/include/caliper/sdk.h",
-                                  "caliper://sdk/include/caliper/detail.hpp", kSpecSchemaUri, kSpecSchemaV1Uri};
+                                  "caliper://sdk/include/caliper/detail.hpp", kSpecSchemaUri};
 #ifndef _WIN32
     want.insert("caliper://docs/alias.md");   // a link that stays inside
 #endif
@@ -148,7 +148,7 @@ TEST_CASE("the store without folders serves the schema only, and a bad folder is
     ResourceOptions o;
     o.spec_schema_text = "{}";
     REQUIRE(store.open(o).ok());
-    CHECK(store.list().size() == 2);   // the schemas of version 0 and version 1
+    CHECK(store.list().size() == 1);   // the spec format v2 schema
     CHECK(store.templates().empty());
     CHECK(store.read("caliper://docs/index.md").error.code == "mcp.resource_not_found");
 
@@ -185,41 +185,26 @@ TEST_CASE("listing stops at its bounds") {
     CHECK(all.size() == 30);   // deep.md is below the depth bound
 }
 
-TEST_CASE("the schema of spec version 1 is a second resource beside version 0's") {
+TEST_CASE("the spec format v2 schema resource serves its text and disappears when empty") {
     ResourceStore store;
     ResourceOptions o;
-    o.spec_schema_text = "{}";
+    o.spec_schema_text = "{\"$id\": \"urn:caliper:schema:spec:v2\"}";
     REQUIRE(store.open(o).ok());
     const auto entries = store.list();
-    REQUIRE(entries.size() == 2);
+    REQUIRE(entries.size() == 1);
     CHECK(entries[0].uri == kSpecSchemaUri);
-    CHECK(entries[1].uri == kSpecSchemaV1Uri);
-    CHECK(entries[1].mime_type == "application/schema+json");
-    const ResourceContent v1 = store.read(kSpecSchemaV1Uri);
-    REQUIRE(v1.error.ok());
-    CHECK(entries[1].size == v1.text.size());
-    const nlohmann::json schema = nlohmann::json::parse(v1.text, nullptr, false);
-    REQUIRE(schema.is_object());
-    CHECK(schema.at("$id") == "urn:caliper:schema:spec:v1");
-    CHECK(schema.at("properties").at("caliper_spec").at("const") == 1);
-    CHECK(schema.at("$defs").contains("panel_scene"));
-    CHECK(schema.at("$defs").contains("control"));
-    // The GPU programs and the provenance table (design/gpu-programs.md).
-    for (const char* key : {"program", "provenance"}) {
-        CAPTURE(key);
-        CHECK(schema.at("properties").contains(key));
-        CHECK(schema.at("$defs").contains(key));
-    }
-    CHECK(entries[1].description.find("GPU programs") != std::string::npos);
+    CHECK(entries[0].name == "caliper-spec-v2.schema.json");
+    CHECK(entries[0].mime_type == "application/schema+json");
+    const ResourceContent v2 = store.read(kSpecSchemaUri);
+    REQUIRE(v2.error.ok());
+    CHECK(entries[0].size == v2.text.size());
+    CHECK(v2.text == o.spec_schema_text);
+    CHECK(entries[0].description.find("GPU programs") != std::string::npos);
 
-    // A text of its own replaces the compiled-in one; without version 0's schema there is none.
-    o.spec_schema_v1_text = "{\"v\": 1}";
-    REQUIRE(store.open(o).ok());
-    CHECK(store.read(kSpecSchemaV1Uri).text == "{\"v\": 1}");
     ResourceStore none;
     REQUIRE(none.open(ResourceOptions{}).ok());
     CHECK(none.list().empty());
-    CHECK(none.read(kSpecSchemaV1Uri).error.code == "mcp.resource_not_found");
+    CHECK(none.read(kSpecSchemaUri).error.code == "mcp.resource_not_found");
 }
 
 TEST_CASE("the built-in library of pieces is served read-only under caliper://library/") {

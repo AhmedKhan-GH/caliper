@@ -1,6 +1,6 @@
 // The shared parts of the commands of design/instrument-interface.md
-// (instrument_commands.h).
-#include <caliper_builder/session/instrument_commands.h>
+// (interactive_commands.h).
+#include <caliper_builder/session/interactive_commands.h>
 
 #include <caliper_builder/session/session.h>
 

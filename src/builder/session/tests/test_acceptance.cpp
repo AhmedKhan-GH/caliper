@@ -44,10 +44,10 @@ void write_data(const std::string& dir) {
 // The commands that build a spec from nothing, item by item.
 std::vector<std::pair<std::string, json>> build_commands(const spec::Spec& s) {
     std::vector<std::pair<std::string, json>> out;
-    json applet{{"id", s.applet.id}};
-    if (s.applet.title) applet["title"] = *s.applet.title;
-    if (s.applet.description) applet["description"] = *s.applet.description;
-    out.emplace_back("spec.new", applet);
+    json instrument{{"id", s.instrument.id}};
+    if (s.instrument.title) instrument["title"] = *s.instrument.title;
+    if (s.instrument.description) instrument["description"] = *s.instrument.description;
+    out.emplace_back("spec.new", instrument);
     for (const auto& src : s.sources) out.emplace_back("source.add", source_command_args(src));
     for (const auto& p : s.panels) out.emplace_back("panel.create", panel_command_args(p));
     if (s.layout) out.emplace_back("layout.set", json{{"layout", layout_to_flat(*s.layout, s)}});
@@ -142,8 +142,8 @@ TEST_CASE("acceptance in process: import, build the dashboard, undo, resolve, sa
 
         summaries = check_dashboard_data([&](const std::string& id) { return s->resolve(id); });
 
-        const json saved = ok(*s, "applet.save");
-        CHECK(saved["spec"] == "applets/run42-dashboard/run42-dashboard.spec.toml");
+        const json saved = ok(*s, "instrument.save");
+        CHECK(saved["spec"] == "instruments/run42-dashboard/run42-dashboard.spec.toml");
         const std::string manifest = read_text(ws + "/" + saved["manifest"].get<std::string>());
         CHECK(manifest.find("kind = \"spec\"") != std::string::npos);
         CHECK(manifest.find("spec = \"run42-dashboard.spec.toml\"") != std::string::npos);
@@ -152,12 +152,12 @@ TEST_CASE("acceptance in process: import, build the dashboard, undo, resolve, sa
         s->close();
     }
 
-    // A new session over the same workspace finds the applet and its data.
+    // A new session over the same workspace finds the instrument and its data.
     {
         auto s = open_session(ws);
         CHECK(!s->open_spec());
-        CHECK(ok(*s, "applet.list")["applets"][0]["id"] == "run42-dashboard");
-        const json opened = ok(*s, "applet.open", {{"id", "run42-dashboard"}});
+        CHECK(ok(*s, "instrument.list")["instruments"][0]["id"] == "run42-dashboard");
+        const json opened = ok(*s, "instrument.open", {{"id", "run42-dashboard"}});
         CHECK(opened["title"] == "Run 42");
         CHECK(s->open_spec()->spec == dashboard);
         CHECK(s->open_spec()->dirty == false);
@@ -313,13 +313,13 @@ TEST_CASE("acceptance over HTTP: the same dashboard through caliper-builder-host
         CHECK(got["text"] == spec::to_toml(dashboard));
         CHECK(got["dirty"] == true);
 
-        // A new applet is saved without approval; overwriting it waits.
-        CHECK(host.ok_call("applet.save", json::object())["id"] == "run42-dashboard");
-        CHECK(host.call("applet.save", json::object())["error"]["code"] == "applet.exists");
+        // A new instrument is saved without approval; overwriting it waits.
+        CHECK(host.ok_call("instrument.save", json::object())["id"] == "run42-dashboard");
+        CHECK(host.call("instrument.save", json::object())["error"]["code"] == "instrument.exists");
         // The agent takes a change back with an edit that reverts it.
         host.ok_call("panel.patch", {{"id", "rows"}, {"patch", {{"title", "Metrics"}}}});
         host.ok_call("panel.patch", {{"id", "rows"}, {"patch", {{"title", nullptr}}}});
-        const json overwritten = host.call_with_approval("applet.save", {{"overwrite", true}}, "allow");
+        const json overwritten = host.call_with_approval("instrument.save", {{"overwrite", true}}, "allow");
         CHECK(overwritten["ok"] == true);
 
         // SIGTERM stops the host cleanly and removes its API file.
@@ -335,10 +335,10 @@ TEST_CASE("acceptance over HTTP: the same dashboard through caliper-builder-host
     for (const auto& e : read.events) all_mcp = all_mcp && e.origin == CommandOrigin::mcp;
     CHECK(all_mcp);
 
-    // The workspace the host left behind holds the same applet and data.
+    // The workspace the host left behind holds the same instrument and data.
     {
         auto s = open_session(ws);
-        ok(*s, "applet.open", {{"id", "run42-dashboard"}});
+        ok(*s, "instrument.open", {{"id", "run42-dashboard"}});
         CHECK(s->open_spec()->spec == dashboard);
         check_dashboard_data([&](const std::string& id) { return s->resolve(id); });
     }

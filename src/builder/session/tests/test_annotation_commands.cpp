@@ -2,7 +2,7 @@
 // (design/instrument-interface.md, Commands).
 #include <doctest/doctest.h>
 
-#include <caliper_builder/session/instrument_commands.h>
+#include <caliper_builder/session/interactive_commands.h>
 #include <caliper_builder/session/spec_edit.h>
 #include <caliper_builder/spec/format.h>
 
@@ -13,9 +13,9 @@ namespace spec = caliper_builder::spec;
 
 namespace {
 
-spec::Spec base(int version = 1) {
+spec::Spec base(int version = 2) {
     const std::string text = "caliper_spec = " + std::to_string(version) +
-                             "\n[applet]\nid = \"a\"\n[[source]]\nid = \"w\"\ncatalog = \"tensor:w\"\n"
+                             "\n[instrument]\nid = \"a\"\n[[source]]\nid = \"w\"\ncatalog = \"tensor:w\"\n"
                              "[[panel]]\nid = \"loss\"\nprimitive = \"series\"\nbind = { y = \"w\" }\n"
                              "[[panel]]\nid = \"note\"\nprimitive = \"text\"\noptions = { text = \"Note\" }\n";
     spec::ParseResult r = spec::parse_toml(text);
@@ -50,12 +50,12 @@ TEST_CASE("annotation.set adds an annotation, then replaces it in place by id") 
     CHECK(list[1].id == "band");
 }
 
-TEST_CASE("annotation.set raises a version 0 spec to version 1") {
-    const spec::Spec s = base(0);
-    REQUIRE(s.version == 0);
+TEST_CASE("annotation.set keeps the spec at format version 2") {
+    const spec::Spec s = base();
+    REQUIRE(s.version == spec::kFormatVersion);
     SpecEdit a = apply_spec_edit(s, "annotation.set", {{"panel", "loss"}, {"annotation", threshold("floor", 0.1)}});
     REQUIRE_MESSAGE(!a.error, a.error.message);
-    CHECK(a.spec.version == spec::kInstrumentVersion);
+    CHECK(a.spec.version == spec::kFormatVersion);
 }
 
 TEST_CASE("annotation.set refuses an unknown panel, a malformed table and an invalid annotation") {

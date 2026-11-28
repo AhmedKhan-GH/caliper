@@ -501,9 +501,9 @@ TEST_CASE("a protected file is found by its path resolved, by a link, a case var
     fs::create_directories(ws);
     fs::create_symlink(file, ws / "link.spec.toml");
     CHECK(touches_protected_file((ws / "link.spec.toml").string()));
-    fs::create_directory_symlink(settings, ws / "applets");
-    CHECK(touches_protected_file((ws / "applets" / "agent-permissions.json").string()));
-    CHECK_FALSE(touches_protected_file((ws / "applets" / "dash" / "dash.spec.toml").string()));
+    fs::create_directory_symlink(settings, ws / "instruments");
+    CHECK(touches_protected_file((ws / "instruments" / "agent-permissions.json").string()));
+    CHECK_FALSE(touches_protected_file((ws / "instruments" / "dash" / "dash.spec.toml").string()));
     fs::create_hard_link(file, ws / "hard.spec.toml");
     CHECK(touches_protected_file((ws / "hard.spec.toml").string()));
     // A link to a file that does not exist yet, under a protected name.

@@ -31,9 +31,9 @@ class RenderHost : public SessionHost {
 public:
     int renders = 0;
     CommandOutput app_info() override { return CommandOutput::fail(Error("app.unavailable", "Not in this test.")); }
-    CommandOutput app_applets() override { return CommandOutput::ok({{"applets", json::array()}}); }
+    CommandOutput app_instruments() override { return CommandOutput::ok({{"instruments", json::array()}}); }
     CommandOutput app_launch(const std::string&) override {
-        return CommandOutput::fail(Error("app.applet_not_found", "No such applet."));
+        return CommandOutput::fail(Error("app.instrument_not_found", "No such instrument."));
     }
     CommandOutput render_panel(const spec::Spec&, const PanelData&, int width, int height) override {
         ++renders;
@@ -150,7 +150,7 @@ TEST_CASE("a panel's bundle holds its fragment, its sources' entries and samples
     CHECK(has(b.scope, "panel.patch"));
     CHECK(has(b.scope, "panel.render"));
     CHECK_FALSE(has(b.scope, "preview.commit"));
-    CHECK_FALSE(has(b.scope, "applet.save"));
+    CHECK_FALSE(has(b.scope, "instrument.save"));
     CHECK(b.meta["caliper"]["widget"]["target"] == json{{"kind", "panel"}, {"panel", "curves"}});
     CHECK(b.meta["caliper"]["widget"]["preview"] == "widget-curves");
     CHECK(b.meta["caliper"]["widget"]["scope"] == json(expected));

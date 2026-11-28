@@ -10,7 +10,7 @@
 // state.set, state.get and control.set change or read the session's values:
 // they have no undo step and no journal entry, and they add the same `state`
 // and `control` events that a person's edit adds, with the caller's origin.
-#include <caliper_builder/session/instrument_commands.h>
+#include <caliper_builder/session/interactive_commands.h>
 
 #include <caliper_builder/spec/state.h>
 
@@ -104,7 +104,7 @@ SpecEdit state_create(const spec::Spec& s, const json& args, const spec::SourceR
         if (Error e = set_key(v, key, value, "args." + key)) return refuse(std::move(e));
     }
     spec::Spec next = s;
-    if (next.version < spec::kInstrumentVersion) next.version = spec::kInstrumentVersion;
+    next.version = std::max(next.version, spec::kFormatVersion);
     next.states.push_back(std::move(v));
     return finish(std::move(next), resolver, json{{"id", id}});
 }
@@ -152,7 +152,7 @@ SpecEdit state_remove(const spec::Spec& s, const json& args, const spec::SourceR
 
 CommandOutput no_spec() { return CommandOutput::fail(Error("spec.no_open_spec", "No spec is open.")); }
 
-CommandOutput state_set(const CommandContext& ctx, InstrumentContext& ic) {
+CommandOutput state_set(const CommandContext& ctx, InteractiveContext& ic) {
     const json& args = ctx.invocation.args;
     const std::string id = str_arg(args, "id");
     spec::Reference ref;
@@ -165,7 +165,7 @@ CommandOutput state_set(const CommandContext& ctx, InstrumentContext& ic) {
     return CommandOutput::ok(json{{"value", ic.values.value(ref)}, {"previous", previous}});
 }
 
-CommandOutput state_get(const CommandContext& ctx, InstrumentContext& ic) {
+CommandOutput state_get(const CommandContext& ctx, InteractiveContext& ic) {
     const json& args = ctx.invocation.args;
     json all = ic.values.describe_states(ic.spec);
     if (!args.contains("ids") || !args["ids"].is_array()) return CommandOutput::ok(json{{"states", std::move(all)}});
@@ -187,7 +187,7 @@ CommandOutput state_get(const CommandContext& ctx, InstrumentContext& ic) {
     return CommandOutput::ok(json{{"states", std::move(out)}});
 }
 
-CommandOutput control_set(const CommandContext& ctx, InstrumentContext& ic) {
+CommandOutput control_set(const CommandContext& ctx, InteractiveContext& ic) {
     const json& args = ctx.invocation.args;
     const std::string id = str_arg(args, "id");
     const spec::Control* c = ic.spec.find_control(id);
@@ -218,7 +218,7 @@ SpecEdit apply_state_edit(const spec::Spec& spec, std::string_view name, const n
     return refuse(not_implemented(name));
 }
 
-CommandOutput state_command(const CommandContext& ctx, InstrumentContext& ic) {
+CommandOutput state_command(const CommandContext& ctx, InteractiveContext& ic) {
     if (!ic.spec_open) return no_spec();
     const std::string& name = ctx.invocation.name;
     if (name == "state.set") return state_set(ctx, ic);

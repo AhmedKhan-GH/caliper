@@ -3,7 +3,7 @@
 #include <doctest/doctest.h>
 
 #include <caliper_builder/session/history.h>
-#include <caliper_builder/session/instrument_commands.h>
+#include <caliper_builder/session/interactive_commands.h>
 
 #include "helpers.h"
 
@@ -28,7 +28,7 @@ TensorData one(float v) {
 }
 
 const char* kSpec =
-    "caliper_spec = 1\n[applet]\nid = \"c\"\n"
+    "caliper_spec = 2\n[instrument]\nid = \"c\"\n"
     "[[source]]\nid = \"act\"\ncatalog = \"live:act\"\n";
 
 struct Fixture {
@@ -51,7 +51,7 @@ struct Fixture {
         CommandDescriptor d;
         d.name = name;
         CommandContext ctx{inv, d};
-        InstrumentContext ic{spec, true, values, history, &events, nullptr, nullptr, {}};
+        InteractiveContext ic{spec, true, values, history, &events, nullptr, nullptr, {}};
         CommandOutput out = cursor_command(ctx, ic);
         CommandResult r;
         r.ok = out.error.ok();

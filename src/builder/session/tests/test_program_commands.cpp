@@ -133,7 +133,7 @@ CommandResult call(Session& s, const std::string& name, json args) { return invo
 TEST_CASE("programs: program.create adds a checked program with a diff and an undo step") {
     auto s = scene_session("program_create");
     const spec::Spec before = s->open_spec()->spec;
-    CHECK(before.version == 1);   // the scene panel raised it
+    CHECK(before.version == 2);
     json dry = rows_args();
     dry["dry_run"] = true;
     const json d = ok(*s, "program.create", dry);
@@ -291,7 +291,7 @@ TEST_CASE("programs: program.status lists the spec's items with what the program
 TEST_CASE("programs: program.status lists the program of an operator that runs in the script, with kind operator") {
     // program.status reads the spec it is given, so the test parses it from TOML without a session.
     const spec::ParseResult parsed = spec::parse_toml(
-        "caliper_spec = 1\n[applet]\nid = \"ops\"\n[[source]]\nid = \"w\"\n"
+        "caliper_spec = 2\n[instrument]\nid = \"ops\"\n[[source]]\nid = \"w\"\n"
         "catalog = \"live:blocks.0.attn.proj.weight\"\ntransform = [{ op = \"surface\", max_cells = 4096 }]\n"
         "[[source]]\nid = \"recent\"\ncatalog = \"live:blocks.0.attn.proj.act\"\n"
         "transform = [{ op = \"window\", steps = 8 }, { op = \"surface\" }]\n");

@@ -125,9 +125,9 @@ TEST_CASE("every source, panel and layout of every valid fixture passes the tabl
     }
 }
 
-TEST_CASE("spec.new and spec.set_text take what a spec's applet and text may hold") {
+TEST_CASE("spec.new and spec.set_text take what a spec's instrument and text may hold") {
     const spec::Spec s = parse_fixture("dashboard.spec.toml");
-    json a{{"id", s.applet.id}, {"title", *s.applet.title}, {"description", *s.applet.description}};
+    json a{{"id", s.instrument.id}, {"title", *s.instrument.title}, {"description", *s.instrument.description}};
     check_passes("spec.new", a);
     check_passes("spec.set_text", json{{"text", spec::to_toml(s)}, {"dry_run", true}});
     check_refused("spec.new", json{{"id", "Bad"}}, "args.id");

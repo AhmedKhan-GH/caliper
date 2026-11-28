@@ -6,7 +6,7 @@
 // "function"), with a fake key: its conversation imports
 // the files, runs their loaders, builds the three-panel dashboard of the spec
 // fixture dashboard.spec.toml source by source and panel by panel, sets the
-// layout and saves the applet. The stand-in host reviews the agent's spec
+// layout and saves the instrument. The stand-in host reviews the agent's spec
 // edits and holds its destructive commands, as the app does, and approves
 // each one; the sidecar reads review.status and so sends no permission request
 // of its own. The test checks the host's approvals (each spec edit approved
@@ -97,10 +97,10 @@ TEST_CASE("the BYOK agent builds the dashboard through caliper-builder-host") {
                          "tool_use", 0));
     steps.push_back(step({call("loader.run", {{"id", "run42_metrics"}}), call("loader.run", {{"id", "attn"}})},
                          "tool_use", 9000));
-    json applet{{"id", dashboard.applet.id}};
-    if (dashboard.applet.title) applet["title"] = *dashboard.applet.title;
-    if (dashboard.applet.description) applet["description"] = *dashboard.applet.description;
-    steps.push_back(step({text_block("Now the spec."), call("spec.new", applet)}, "tool_use", 9000));
+    json instrument{{"id", dashboard.instrument.id}};
+    if (dashboard.instrument.title) instrument["title"] = *dashboard.instrument.title;
+    if (dashboard.instrument.description) instrument["description"] = *dashboard.instrument.description;
+    steps.push_back(step({text_block("Now the spec."), call("spec.new", instrument)}, "tool_use", 9000));
     json::array_t sources;
     for (const auto& s : dashboard.sources) sources.push_back(call("source.add", source_command_args(s)));
     steps.push_back(step(std::move(sources), "tool_use", 9000));
@@ -110,7 +110,7 @@ TEST_CASE("the BYOK agent builds the dashboard through caliper-builder-host") {
     REQUIRE(dashboard.layout);
     steps.push_back(step({call("layout.set", {{"layout", layout_to_flat(*dashboard.layout, dashboard)}})},
                          "tool_use", 9000));
-    steps.push_back(step({call("applet.save", json::object())}, "tool_use", 9000));
+    steps.push_back(step({call("instrument.save", json::object())}, "tool_use", 9000));
     steps.push_back(step({text_block("The dashboard is built and saved as run42-dashboard.")}, "end_turn", 9000));
     const std::string script = root + "/script.json";
     const std::string record = root + "/requests.jsonl";
@@ -213,7 +213,7 @@ TEST_CASE("the BYOK agent builds the dashboard through caliper-builder-host") {
     CHECK(asked_at.empty());
 
     // The host held and approved each spec edit once, with its diff, and the
-    // two loader runs, in the order the agent sent them; saving a new applet
+    // two loader runs, in the order the agent sent them; saving a new instrument
     // needs no approval.
     std::vector<json> approvals;
     std::size_t at = 0;
@@ -264,7 +264,7 @@ TEST_CASE("the BYOK agent builds the dashboard through caliper-builder-host") {
         REQUIRE(done_at.count(id));
         const json& change = change_of[id];
         REQUIRE_MESSAGE(change.is_object(), "no diff in the completed call");
-        CHECK(change["path"] == ws + "/applets/run42-dashboard/run42-dashboard.spec.toml");
+        CHECK(change["path"] == ws + "/instruments/run42-dashboard/run42-dashboard.spec.toml");
         CHECK(change["new_text"] != change["old_text"]);
         if (!previous.empty()) CHECK(change["old_text"] == previous);
         previous = change["new_text"];
@@ -272,13 +272,13 @@ TEST_CASE("the BYOK agent builds the dashboard through caliper-builder-host") {
     CHECK(edits == static_cast<int>(dashboard.sources.size() + dashboard.panels.size() + 1));
     CHECK(previous == canonical);
 
-    // The saved applet on disk is the fixture.
-    const std::string saved = read_text(ws + "/applets/run42-dashboard/run42-dashboard.spec.toml");
+    // The saved instrument on disk is the fixture.
+    const std::string saved = read_text(ws + "/instruments/run42-dashboard/run42-dashboard.spec.toml");
     CHECK(saved == canonical);
     auto parsed = spec::parse_toml(saved);
     REQUIRE(parsed.ok());
     CHECK(parsed.spec == dashboard);
-    CHECK(fs::exists(ws + "/applets/run42-dashboard/run42-dashboard.caliper.toml"));
+    CHECK(fs::exists(ws + "/instruments/run42-dashboard/run42-dashboard.caliper.toml"));
 
     // The journal: every command from the agent, and no line for a dry run.
     const JournalRead journal = read_journal(ws + "/journal/commands.jsonl");

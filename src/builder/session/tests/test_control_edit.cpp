@@ -7,7 +7,7 @@
 
 #include <caliper_builder/session/session.h>
 #include <caliper_builder/session/spec_edit.h>
-#include <caliper_builder/spec/instrument.h>
+#include <caliper_builder/spec/control.h>
 
 #include <doctest/doctest.h>
 
@@ -110,10 +110,10 @@ TEST_CASE("control layout: a new control joins the row of controls under the who
 
 TEST_CASE("control commands: their own refusals come before the validator") {
     spec::Spec s;
-    s.applet.id = "m1";
+    s.instrument.id = "m1";
     s.panels = {panel("world")};
     s.controls = {control("lr")};
-    s.version = spec::kInstrumentVersion;
+    s.version = spec::kFormatVersion;
 
     SpecEdit e = apply_spec_edit(s, "control.patch", {{"id", "momentum"}, {"patch", {{"title", "M"}}}});
     CHECK(e.error.code == "control.not_found");
@@ -140,7 +140,7 @@ TEST_CASE("control commands: their own refusals come before the validator") {
 TEST_CASE("control commands: create, patch and remove edit the open spec with a diff and undo") {
     auto s = open_session(fresh_dir("control_edit") + "/workspace");
     ok(*s, "spec.new", {{"id", "m1"}});
-    CHECK(s->open_spec()->spec.version == 0);
+    CHECK(s->open_spec()->spec.version == spec::kFormatVersion);
 
     // A dry run checks and shows the diff, and changes nothing.
     json r = ok(*s, "control.create", {{"id", "lr"}, {"kind", "slider"}, {"bind", "param:lr"}, {"dry_run", true}});
@@ -148,13 +148,13 @@ TEST_CASE("control commands: create, patch and remove edit the open spec with a 
     CHECK(r["diff"].get<std::string>().find("param:lr") != std::string::npos);
     CHECK(s->open_spec()->spec.controls.empty());
 
-    // The first control raises the version to 1 in the same step.
+    // The first control keeps the spec at format version 2.
     r = ok(*s, "control.create",
            {{"id", "lr"}, {"kind", "slider"}, {"bind", "param:lr"}, {"title", "Learning rate"}, {"options", {{"log", true}}}});
     CHECK(r["id"] == "lr");
     CHECK(r["applied"] == true);
     spec::Spec now = s->open_spec()->spec;
-    CHECK(now.version == spec::kInstrumentVersion);
+    CHECK(now.version == spec::kFormatVersion);
     REQUIRE(now.controls.size() == 1);
     CHECK(now.controls[0].title == std::optional<std::string>("Learning rate"));
     CHECK(now.controls[0].options.log == std::optional<bool>(true));
@@ -216,7 +216,7 @@ TEST_CASE("control closable and layout.lock enforce non-closable controls and un
 
     // Undo reverts layout.lock cleanly.
     ok(*s, "history.undo");
-    CHECK_FALSE(s->open_spec()->spec.applet.layout_locked.value_or(false));
+    CHECK_FALSE(s->open_spec()->spec.instrument.layout_locked.value_or(false));
     ok(*s, "control.remove", {{"id", "pause"}});
     CHECK(err(*s, "control.remove", {{"id", "lr"}}) == "control.not_closable");
 

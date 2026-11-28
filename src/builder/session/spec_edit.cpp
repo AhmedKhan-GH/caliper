@@ -1,5 +1,5 @@
 #include <caliper_builder/session/spec_edit.h>
-#include <caliper_builder/session/instrument_commands.h>
+#include <caliper_builder/session/interactive_commands.h>
 #include <caliper_builder/session/program_commands.h>
 
 #include <caliper_builder/spec/format.h>
@@ -33,13 +33,13 @@ Error fail(std::string code, std::string message, std::string where = {}) {
     return Error(std::move(code), std::move(message), std::move(where));
 }
 
-bool layout_is_locked(const spec::Spec& s) { return s.applet.layout_locked.value_or(false); }
+bool layout_is_locked(const spec::Spec& s) { return s.instrument.layout_locked.value_or(false); }
 
 Error layout_locked_error(const char* what) {
     return fail("layout.locked",
                 std::string("The instrument's layout is locked, so you cannot ") + what +
                     "; unlock the layout with layout.lock first.",
-                "applet.layout_locked");
+                "instrument.layout_locked");
 }
 
 std::string binding_source(const std::string& binding) {
@@ -380,10 +380,9 @@ SpecEdit layout_lock(const spec::Spec& s, const json& args, const spec::SourceRe
     const bool locked = it->get<bool>();
     spec::Spec next = s;
     if (locked) {
-        next.applet.layout_locked = true;
-        next.version = std::max(next.version, spec::required_version(next));
+        next.instrument.layout_locked = true;
     } else {
-        next.applet.layout_locked.reset();
+        next.instrument.layout_locked.reset();
     }
     return finish(std::move(next), resolver, json{{"locked", locked}});
 }
@@ -404,7 +403,7 @@ SpecEdit set_text(const spec::Spec& s, const json& args, const spec::SourceResol
     SpecEdit out;
     for (auto& d : checked.diagnostics)
         if (!d.is_error()) out.warnings.push_back(std::move(d));
-    out.result = json{{"id", checked.spec.applet.id}};
+    out.result = json{{"id", checked.spec.instrument.id}};
     out.spec = std::move(checked.spec);
     return out;
 }
@@ -693,7 +692,7 @@ SpecEdit apply_spec_edit(const spec::Spec& s, std::string_view name, const json&
             return apply_control_edit(s, name, args, resolver);
         if (name == "program.create" || name == "program.patch" || name == "program.remove")
             return apply_program_edit(s, name, args, resolver);
-        // design/instrument-interface.md (instrument_commands.h)
+        // design/instrument-interface.md (interactive_commands.h)
         if (name == "state.create" || name == "state.patch" || name == "state.remove")
             return apply_state_edit(s, name, args, resolver);
         if (name == "entity.set" || name == "entity.remove") return apply_entity_edit(s, name, args, resolver);
@@ -708,13 +707,12 @@ SpecEdit apply_spec_edit(const spec::Spec& s, std::string_view name, const json&
 
 spec::Spec new_spec_from_args(const json& args) {
     spec::Spec s;
-    s.applet.id = args.value("id", std::string());
-    if (args.contains("title") && args["title"].is_string()) s.applet.title = args["title"].get<std::string>();
+    s.instrument.id = args.value("id", std::string());
+    if (args.contains("title") && args["title"].is_string()) s.instrument.title = args["title"].get<std::string>();
     if (args.contains("description") && args["description"].is_string())
-        s.applet.description = args["description"].get<std::string>();
+        s.instrument.description = args["description"].get<std::string>();
     if (args.contains("layout_locked") && args["layout_locked"].is_boolean() && args["layout_locked"].get<bool>()) {
-        s.applet.layout_locked = true;
-        s.version = std::max(s.version, spec::required_version(s));
+        s.instrument.layout_locked = true;
     }
     return s;
 }

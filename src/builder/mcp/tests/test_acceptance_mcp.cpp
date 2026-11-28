@@ -5,7 +5,7 @@
 // agent would: list the tools, read the docs and the command table, import the
 // two files, run their loaders (approved through the stand-in), read the
 // catalog, query the table, build the three-panel dashboard of the spec
-// fixture dashboard.spec.toml, save the applet and read the spec back. The
+// fixture dashboard.spec.toml, save the instrument and read the spec back. The
 // saved spec on disk must equal the fixture. The arguments of the build come
 // from the fixture through the session's conversions, so the test knows no
 // command's schema. POSIX only.
@@ -86,10 +86,10 @@ struct Host {
 // session's conversions from the spec's forms to the command table's.
 std::vector<std::pair<std::string, json>> build_commands(const spec::Spec& s) {
     std::vector<std::pair<std::string, json>> out;
-    json applet{{"id", s.applet.id}};
-    if (s.applet.title) applet["title"] = *s.applet.title;
-    if (s.applet.description) applet["description"] = *s.applet.description;
-    out.emplace_back("spec.new", applet);
+    json instrument{{"id", s.instrument.id}};
+    if (s.instrument.title) instrument["title"] = *s.instrument.title;
+    if (s.instrument.description) instrument["description"] = *s.instrument.description;
+    out.emplace_back("spec.new", instrument);
     for (const auto& src : s.sources) out.emplace_back("source.add", source_command_args(src));
     for (const auto& p : s.panels) out.emplace_back("panel.create", panel_command_args(p));
     if (s.layout) out.emplace_back("layout.set", json{{"layout", layout_to_flat(*s.layout, s)}});
@@ -165,23 +165,18 @@ TEST_CASE("acceptance over MCP: an outside agent builds the dashboard through ca
     const json resources = child.request("resources", "resources/list", json::object())["result"];
     std::set<std::string> uris;
     for (const auto& r : resources["resources"]) uris.insert(r["uri"].get<std::string>());
-    CHECK(uris.count("caliper://docs/applets/manifest.md") == 1);
+    CHECK(uris.count("caliper://docs/instruments/manifest.md") == 1);
     CHECK(uris.count("caliper://docs/reference/cli.md") == 1);
     CHECK(uris.count("caliper://commands/command_table.json") == 1);
-    CHECK(uris.count("caliper://schema/caliper-spec-v0.schema.json") == 1);
+    CHECK(uris.count("caliper://schema/caliper-spec-v2.schema.json") == 1);
     const json page = child.request("doc", "resources/read", {{"uri", "caliper://docs/reference/cli.md"}});
     CHECK(page["result"]["contents"][0]["text"].get<std::string>().rfind("# CLI", 0) == 0);
     const json from_app = child.request("table", "resources/read", {{"uri", "caliper://commands/command_table.json"}});
     CHECK(json::parse(from_app["result"]["contents"][0]["text"].get<std::string>()) == table);
-    const json schema = child.request("schema", "resources/read", {{"uri", "caliper://schema/caliper-spec-v0.schema.json"}});
-    CHECK(json::parse(schema["result"]["contents"][0]["text"].get<std::string>(), nullptr, false).is_object());
-    // Spec version 1's schema is the second schema resource (design/instruments.md).
-    CHECK(uris.count("caliper://schema/caliper-spec-v1.schema.json") == 1);
-    const json schema_v1 =
-        child.request("schema-v1", "resources/read", {{"uri", "caliper://schema/caliper-spec-v1.schema.json"}});
-    const json v1 = json::parse(schema_v1["result"]["contents"][0]["text"].get<std::string>(), nullptr, false);
-    REQUIRE(v1.is_object());
-    CHECK(v1["$id"] == "urn:caliper:schema:spec:v1");
+    const json schema = child.request("schema", "resources/read", {{"uri", "caliper://schema/caliper-spec-v2.schema.json"}});
+    const json v2 = json::parse(schema["result"]["contents"][0]["text"].get<std::string>(), nullptr, false);
+    REQUIRE(v2.is_object());
+    CHECK(v2["$id"] == "urn:caliper:schema:spec:v2");
 
     // Import the two files of the workspace, then run their loaders, which
     // the stand-in holds until the person allows them.
@@ -218,22 +213,22 @@ TEST_CASE("acceptance over MCP: an outside agent builds the dashboard through ca
         structured(child.call("build-" + std::to_string(step++), command_tool_name(command.first), command.second),
                    command.first);
     }
-    const json saved = structured(child.call("save", "applet_save", json::object()), "applet.save");
-    CHECK(saved["id"] == dashboard.applet.id);
+    const json saved = structured(child.call("save", "instrument_save", json::object()), "instrument.save");
+    CHECK(saved["id"] == dashboard.instrument.id);
     const json got = structured(child.call("get", "spec_get", json::object()), "spec.get");
     CHECK(got["text"] == spec::to_toml(dashboard));
     CHECK(got["dirty"] == false);
 
-    // The saved applet's spec on disk is the fixture.
+    // The saved instrument's spec on disk is the fixture.
     const std::string saved_text = session_test::read_text(ws + "/" + saved["spec"].get<std::string>());
     const auto parsed = spec::parse_toml(saved_text);
     REQUIRE(parsed.ok());
     CHECK(parsed.spec == dashboard);
     CHECK(saved_text == spec::to_toml(dashboard));
 
-    // A scene panel bound to a live scene of the attached script raises the
-    // open spec to version 1 in the same edit. The stand-in attaches no
-    // script, so the scene is offline and the edit warns of it.
+    // A scene panel bound to a live scene of the attached script stays at
+    // format version 2. The stand-in attaches no script, so the scene is
+    // offline and the edit warns of it.
     const json scene = structured(child.call("scene", "panel_create",
                                              {{"id", "world"},
                                               {"primitive", "scene"},
@@ -245,7 +240,7 @@ TEST_CASE("acceptance over MCP: an outside agent builds the dashboard through ca
     const json with_scene = structured(child.call("get-scene", "spec_get", json::object()), "spec.get");
     const auto reread = spec::parse_toml(with_scene["text"].get<std::string>());
     REQUIRE(reread.ok());
-    CHECK(reread.spec.version == 1);
+    CHECK(reread.spec.version == 2);
     const spec::Panel* world = reread.spec.find_panel("world");
     REQUIRE(world != nullptr);
     CHECK(world->primitive == spec::Primitive::scene);

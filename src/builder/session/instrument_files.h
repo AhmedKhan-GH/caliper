@@ -1,7 +1,7 @@
 #pragma once
-// The files of a saved spec applet (design/spec-format.md, The manifest
-// of a spec applet): applets/<id>/<id>.caliper.toml and <id>.spec.toml. Not a
-// public header.
+// The files of a saved instrument written as a spec (design/spec-format.md,
+// The manifest of an instrument): instruments/<id>/<id>.caliper.toml and
+// <id>.spec.toml. Not a public header.
 #include <caliper_builder/error.h>
 
 #include <cstddef>
@@ -14,17 +14,17 @@ constexpr std::size_t kMaxManifestBytes = 64 * 1024;
 
 struct ManifestInfo {
     Error error;
-    std::string id;       // applet.id
-    std::string name;     // applet.name
-    std::string version;  // applet.version
-    std::string kind;     // applet.kind; "library" when absent
-    std::string spec;     // applet.spec
+    std::string id;       // instrument.id
+    std::string name;     // instrument.name
+    std::string version;  // instrument.version
+    std::string kind;     // instrument.kind; "library" when absent
+    std::string spec;     // instrument.spec
 };
 
-// Reads the [applet] table of a manifest. Other tables are not checked here.
+// Reads the [instrument] table of a manifest. Other tables are not checked here.
 ManifestInfo read_manifest(const std::string& path);
 
-// The manifest of a spec applet, in the key order of the spec format page.
+// The manifest of an instrument written as a spec, in the key order of the spec format page.
 std::string manifest_text(const std::string& manifest_id, const std::string& name, const std::string& version,
                           const std::optional<std::string>& summary, const std::string& spec_file);
 
