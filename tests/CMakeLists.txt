@@ -912,6 +912,22 @@ if(NOT WIN32 AND CALIPER_WITH_BUILDER AND _acceptance_python)
         SKIP_RETURN_CODE 77)
 endif()
 
+# The MNIST agent instrument and first-layer filter intervention acceptance test: drives the hidden
+# app through caliper-mcp on examples/mnist/train.py, builds a GPU confusion matrix heatmap and a
+# paginated misclassified digits scene (image_grid@1), switches off one first-layer conv1 filter
+# through caliper.watch's published intervention points, verifies per-digit accuracy shifts and
+# recovers on clear, and saves visible-size before/after captures. Exits 77 when Metal or a
+# required runtime module is unavailable.
+if(NOT WIN32 AND CALIPER_WITH_BUILDER AND _acceptance_python)
+    add_test(NAME caliper_mnist_agent_acceptance COMMAND "${_acceptance_python}"
+        "${CMAKE_SOURCE_DIR}/examples/mnist/agent_instrument.py"
+        "${CMAKE_CURRENT_BINARY_DIR}/mnist-agent-captures"
+        --app "$<TARGET_FILE:caliper>" --mcp "$<TARGET_FILE:caliper-mcp>" --python "${_acceptance_python}"
+        --work "${CMAKE_CURRENT_BINARY_DIR}/mnist-agent-work" --ctest)
+    set_tests_properties(caliper_mnist_agent_acceptance PROPERTIES LABELS "mnist;acceptance" TIMEOUT 300
+        SKIP_RETURN_CODE 77)
+endif()
+
 # The tests of programmable graphics (design/programmable-graphics.md), each
 # in its own folder with its own CMakeLists.txt once it exists: the acceptance
 # test, the match of points@1 with the built-in draw, and the pixel

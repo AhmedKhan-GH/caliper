@@ -363,6 +363,26 @@ jobs:
           assert math.isfinite(test_acc) and test_acc > 10.0, f"test_acc {test_acc}% did not beat 10% chance"
           print(f"MNIST CI check passed: steps={steps}, test_loss={test_loss:.4f}, test_acc={test_acc:.2f}%")
           PY
+      # MNIST agent instrument and filter intervention acceptance test through caliper-mcp.
+      # A skip because the runner has no Metal device is accepted. Any other skip, and any
+      # outcome that is neither a pass nor a Metal skip, is a setup error.
+      - name: MNIST agent instrument acceptance test
+        run: |
+          set -o pipefail
+          log="$RUNNER_TEMP/mnist-agent-acceptance.log"
+          CALIPER_MNIST_DATA_DIR="$HOME/.cache/caliper/mnist" \
+            ctest --test-dir cmake-build-release -R caliper_mnist_agent_acceptance --output-on-failure -V --timeout 300 | tee "$log"
+          if grep -q "caliper_mnist_agent_acceptance passed" "$log"; then
+            echo "MNIST agent instrument acceptance: RAN and passed"
+          elif grep -qE "caliper_mnist_agent_acceptance skipped: (this machine has no Metal device|the renderer is .*, not Metal)" "$log"; then
+            echo "MNIST agent instrument acceptance: SKIPPED because the runner has no Metal device"
+          elif grep -q "caliper_mnist_agent_acceptance skipped" "$log"; then
+            echo "::error::MNIST agent instrument acceptance: SKIPPED for a reason other than a missing Metal device (CI setup error)"
+            exit 1
+          else
+            echo "::error::MNIST agent instrument acceptance: neither passed nor skipped for lack of Metal"
+            exit 1
+          fi
       - name: Native Interpretation Capability
         env:
           CALIPER_AGENT_OFFLINE: '1'
