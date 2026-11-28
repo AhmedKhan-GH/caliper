@@ -63,7 +63,9 @@ export interface ProgramPick { program: string; item: number; step: number; fiel
 /** A reference in a program's params (spec version 1): state, selection or control. */
 type Ref = { state?: string; selection?: string; control?: string; field?: string; entity?: string; default?: unknown };
 
-// One resource holds at most 128 MiB before base64 encoding.
+// One resource holds at most 256 MiB before base64 encoding: a published texture of 8,192 by 8,192
+// RGBA8 or R32 texels (kPublishedTextureBytesMax, docs/reference/piece-format.md). A published buffer
+// has the lower limit of 128 MiB (kPublishedResourceBytesMax).
 const MAX_RESOURCE_B64 = Math.ceil((256 * 1024 * 1024) / 3) * 4;
 
 function bytesOf(b64: string): Uint8Array | null {

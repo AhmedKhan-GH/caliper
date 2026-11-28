@@ -46,7 +46,7 @@ Vec3 axis_vector(Axis a);
 const char* axis_name(Axis a);                         // "+x", "-x", "+y", "-y", "+z", "-z"
 bool parse_axis(std::string_view text, Axis* out);
 
-// ---- Limits (design/scenes.md, "Limits") ------------------------------------------------------
+// ---- Limits (docs/reference/wire-protocol-3-2.md, "Limits") ------------------------------------
 
 inline constexpr uint32_t kMaxEntities = 1024;          // the root included
 inline constexpr uint32_t kMaxBatches = 2048;
