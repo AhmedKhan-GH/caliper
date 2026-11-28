@@ -1,6 +1,6 @@
 #pragma once
-// Caliper C++ sugar (docs/applets/cpp-sugar.md). Header-only, optional by design: a C
-// applet can implement abi.h by hand. Requires C++20 (designated inits).
+// Caliper C++ sugar (docs/instruments/cpp-sugar.md). Header-only, optional by design: a C
+// instrument can implement abi.h by hand. Requires C++20 (designated inits).
 #include <caliper/abi.h>
 #include <caliper/services/log_v1.h>
 #include <caliper/services/ui_v1.h>
@@ -49,7 +49,7 @@ public:
         return (raw_ && raw_->get_service) ? raw_->get_service(raw_, id) : nullptr;
     }
     const char* data_dir() const {
-        return (raw_ && raw_->applet_data_dir) ? raw_->applet_data_dir : "";
+        return (raw_ && raw_->instrument_data_dir) ? raw_->instrument_data_dir : "";
     }
     void log(CaliperLogLevel lv, const char* msg) const {
         if (log_ && log_->log) log_->log(lv, msg);
@@ -304,7 +304,7 @@ public:
     // v1.2 imported-allocation ops — inert (0/false/no-op) on a host without
     // the v1_2 service or the CALIPER_BRIDGE_CAP_IMPORT_ALLOC bit. Hand
     // import_allocation an OS shareable handle from cuMemExportToShareableHandle;
-    // a 0 return means the applet stays on the v1 D2D-copy path.
+    // a 0 return means the instrument stays on the v1 D2D-copy path.
     CaliperAllocId import_allocation(void* h, uint64_t size, uint32_t type) const {
         return (t12_ && t12_->import_allocation)
                    ? t12_->import_allocation(h, size, type) : 0;
@@ -318,7 +318,7 @@ public:
                    ? t12_->update_texture_from_alloc(tex, a, off, d) : false;
     }
     // Opaque id -> ImTextureID for ImGui::Image (§5.4: the id's value IS the
-    // host's ImGui-compatible handle for this backend; applets never interpret
+    // host's ImGui-compatible handle for this backend; instruments never interpret
     // it, they only cast it here).
     static ImTextureID imtex(CaliperTextureId tex) { return (ImTextureID)tex; }
 private:
@@ -348,9 +348,9 @@ struct Device {
     }
 };
 
-class Applet {
+class Instrument {
 public:
-    virtual ~Applet() = default;
+    virtual ~Instrument() = default;
     virtual bool on_init(Host& host) = 0;
     virtual void on_frame(const Frame& frame) = 0;
     virtual void on_cleanup() {}
@@ -381,7 +381,7 @@ inline bool connect(const CaliperHost* h) {
 // it appears (caliper.ui.v1_1): CALIPER_DOCK_CENTRAL, CALIPER_DOCK_SIDE_TOP or
 // CALIPER_DOCK_SIDE_BOTTOM. Call it beside the window's Begin(), every frame
 // if that is simplest. On a host without caliper.ui.v1_1 it does nothing, so
-// an applet that uses it still requires only caliper.ui.v1.
+// an instrument that uses it still requires only caliper.ui.v1.
 inline void dock_hint(const CaliperHost* h, const char* window_title,
                       uint32_t role) {
     if (!h || !h->get_service || !window_title) return;
@@ -397,7 +397,7 @@ inline void dock_hint(const Host* host, const char* window_title, uint32_t role)
 }
 } // namespace ui
 
-struct AppletMeta {
+struct InstrumentMeta {
     const char* id;
     const char* version;
     const char* name;
@@ -410,9 +410,9 @@ struct AppletMeta {
 
 // Generates: descriptor + the five C bridge functions + the single export.
 // Field order is fixed: id, version, name, summary, tag, services.
-#define CALIPER_APPLET(CLASS, ...)                                             \
-    namespace caliper_applet_gen {                                             \
-    static const ::caliper::AppletMeta kMeta{__VA_ARGS__};                     \
+#define CALIPER_INSTRUMENT(CLASS, ...)                                         \
+    namespace caliper_instrument_gen {                                         \
+    static const ::caliper::InstrumentMeta kMeta{__VA_ARGS__};                 \
     struct Holder {                                                            \
         CLASS obj;                                                             \
         ::caliper::Host host;                                                  \
@@ -447,23 +447,23 @@ struct AppletMeta {
             hold->host.log_error("unhandled exception in on_cleanup");         \
         }                                                                      \
     }                                                                          \
-    } /* namespace caliper_applet_gen */                                       \
-    extern "C" CALIPER_EXPORT const CaliperAppletDescriptor*                   \
-    caliper_applet_descriptor(void) {                                          \
-        static const CaliperAppletDescriptor kDesc = {                         \
-            (uint32_t)sizeof(CaliperAppletDescriptor),                         \
+    } /* namespace caliper_instrument_gen */                                   \
+    extern "C" CALIPER_EXPORT const CaliperInstrumentDescriptor*               \
+    caliper_instrument_descriptor(void) {                                      \
+        static const CaliperInstrumentDescriptor kDesc = {                     \
+            (uint32_t)sizeof(CaliperInstrumentDescriptor),                     \
             CALIPER_ABI_EPOCH,                                                 \
-            ::caliper_applet_gen::kMeta.id,                                    \
-            ::caliper_applet_gen::kMeta.version,                               \
-            ::caliper_applet_gen::kMeta.name,                                  \
-            ::caliper_applet_gen::kMeta.summary,                               \
-            ::caliper_applet_gen::kMeta.tag,                                   \
-            ::caliper_applet_gen::kMeta.services,                              \
-            { (uint32_t)sizeof(CaliperAppletAPI),                              \
-              &::caliper_applet_gen::cal_create,                               \
-              &::caliper_applet_gen::cal_destroy,                              \
-              &::caliper_applet_gen::cal_initialize,                           \
-              &::caliper_applet_gen::cal_frame,                                \
-              &::caliper_applet_gen::cal_cleanup } };                          \
+            ::caliper_instrument_gen::kMeta.id,                                \
+            ::caliper_instrument_gen::kMeta.version,                           \
+            ::caliper_instrument_gen::kMeta.name,                              \
+            ::caliper_instrument_gen::kMeta.summary,                           \
+            ::caliper_instrument_gen::kMeta.tag,                               \
+            ::caliper_instrument_gen::kMeta.services,                          \
+            { (uint32_t)sizeof(CaliperInstrumentAPI),                          \
+              &::caliper_instrument_gen::cal_create,                           \
+              &::caliper_instrument_gen::cal_destroy,                          \
+              &::caliper_instrument_gen::cal_initialize,                       \
+              &::caliper_instrument_gen::cal_frame,                            \
+              &::caliper_instrument_gen::cal_cleanup } };                      \
         return &kDesc;                                                         \
     }

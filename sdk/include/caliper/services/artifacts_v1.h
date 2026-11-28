@@ -1,6 +1,6 @@
 #pragma once
-/* caliper.artifacts.v1 — content-addressed artifact store (docs/applets/services/caliper-artifacts-v1.md).
- * Immutable once published. Callable from applet job threads. */
+/* caliper.artifacts.v1 — content-addressed artifact store (docs/instruments/services/caliper-artifacts-v1.md).
+ * Immutable once published. Callable from instrument job threads. */
 #include <stdint.h>
 #include <stdbool.h>
 
@@ -15,7 +15,7 @@ extern "C" {
  * The content-addressed artifact store.
  *
  * The store keeps checkpoints and exports under the sha256 digest of their bytes, deduplicates them, and links each
- * one to the run that produced it. Artifacts are immutable once published. An applet can call every entry from a
+ * one to the run that produced it. Artifacts are immutable once published. An instrument can call every entry from a
  * job thread, and the host serializes the calls internally.
  */
 typedef struct CaliperArtifactsV1 {

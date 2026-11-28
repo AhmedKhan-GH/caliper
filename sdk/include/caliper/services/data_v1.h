@@ -1,6 +1,6 @@
 #pragma once
 /* caliper.data.v1 — SQL over the host's embedded analytical store, results out as Arrow C streams
- * (docs/applets/services/caliper-data-v1.md). Immutable once published. Callable from applet job threads. */
+ * (docs/instruments/services/caliper-data-v1.md). Immutable once published. Callable from instrument job threads. */
 #include <stdint.h>
 #include <stdbool.h>
 #include <caliper/arrow_c.h>
@@ -15,7 +15,7 @@ extern "C" {
 /**
  * SQL access to the host's analytical store.
  *
- * Datasets are named, shared resources, and results leave the host as Arrow C streams. An applet can call every
+ * Datasets are named, shared resources, and results leave the host as Arrow C streams. An instrument can call every
  * entry from a job thread, and the host serializes the calls internally.
  *
  * On success, `query` and `open_dataset` fill `*out` with a live `ArrowArrayStream`. The caller drains the stream

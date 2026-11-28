@@ -10,7 +10,7 @@
 
 /**
  * Bit 1 of `caps()`, which says that `import_allocation` and `update_texture_from_alloc` are live. The host can then
- * import an applet-exported device allocation and update textures from it with no copy of the tensor data.
+ * import an instrument-exported device allocation and update textures from it with no copy of the tensor data.
  */
 #define CALIPER_BRIDGE_CAP_IMPORT_ALLOC (1u << 1)
 
@@ -64,7 +64,7 @@ typedef struct CaliperTensorBridgeV1_2 {
      * `cuMemExportToShareableHandle`, or it is an `id<MTLBuffer>` for `CALIPER_ALLOC_HANDLE_MTLBUFFER`. The value
      * `size_bytes` is the byte size of the allocation, and `handle_type` is a `CALIPER_ALLOC_HANDLE_*` value. The
      * function returns 0 when the host cannot import, which means a missing cap, a bad handle, or no hardware pair,
-     * and the applet then stays on the v1 path. The host duplicates the handle, and the applet keeps ownership of
+     * and the instrument then stays on the v1 path. The host duplicates the handle, and the instrument keeps ownership of
      * its copy.
      */
     CaliperAllocId (*import_allocation)(void* os_handle, uint64_t size_bytes,
@@ -78,7 +78,7 @@ typedef struct CaliperTensorBridgeV1_2 {
      * applies the acceptance gates of `update_texture` and returns `false` when the texture is not updated, and
      * then the caller falls back. The pass reads the imported bytes in place, so the range from `offset_bytes` to
      * `offset_bytes` plus the extent must not change until the next update of the texture or the next frame of the
-     * applet. Device ordering covers producer writes that come before the call and not writes that come after it.
+     * instrument. Device ordering covers producer writes that come before the call and not writes that come after it.
      */
     bool (*update_texture_from_alloc)(CaliperTextureId tex, CaliperAllocId alloc,
                                       uint64_t offset_bytes,

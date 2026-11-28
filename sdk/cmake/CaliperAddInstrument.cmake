@@ -1,25 +1,25 @@
-# caliper_add_applet() builds one applet. The same file serves the core build
+# caliper_add_instrument() builds one instrument. The same file serves the core build
 # (root CMakeLists.txt includes it) and the installed caliper-sdk package
 # (caliper-sdk-config.cmake includes it).
 #
-#   caliper_add_applet(<target>
+#   caliper_add_instrument(<target>
 #       SOURCES <source>...
 #       MANIFEST <stem>.caliper.toml
 #       [OUTPUT_NAME <stem>]          # default: <target>
-#       [OUTPUT_DIRECTORY <dir>]      # default: ${CMAKE_BINARY_DIR}/applets
+#       [OUTPUT_DIRECTORY <dir>]      # default: ${CMAKE_BINARY_DIR}/instruments
 #       [TORCH])
 #
 # It builds the shared library lib<stem>.dylib, <stem>.dll or lib<stem>.so as
-# C++20 with CALIPER_APPLET_EXPORT, linked to caliper::sdk and caliper::ui_stack,
+# C++20 with CALIPER_INSTRUMENT_EXPORT, linked to caliper::sdk and caliper::ui_stack,
 # and writes a stamped copy of the manifest, <stem>.caliper.toml, beside it.
 # The loader pairs a manifest with the library of the same stem, so the source
 # manifest must be named <stem>.caliper.toml.
 #
-# The manifest is validated at configure time: [applet] id, name and version
-# and [compat] abi_epoch are required, the id must be a valid applet id, the
+# The manifest is validated at configure time: [instrument] id, name and version
+# and [compat] abi_epoch are required, the id must be a valid instrument id, the
 # versions must be strict semver (x.y.z), and abi_epoch must equal the SDK's
 # ABI epoch. The stamped copy appends a [build] table that records the SDK
-# version and the UI-stack hash the applet was compiled against, so the source
+# version and the UI-stack hash the instrument was compiled against, so the source
 # manifest must not contain a [build] table of its own.
 #
 # TORCH links the libtorch the SDK names (CALIPER_TORCH_DIR, version
@@ -37,7 +37,7 @@
 
 include_guard(GLOBAL)
 
-# Reads the scalar keys of the [applet] and [compat] tables of a manifest into
+# Reads the scalar keys of the [instrument] and [compat] tables of a manifest into
 # <prefix>_<table>_<key> (the value) and <prefix>_<table>_<key>_type (string or
 # integer) in the caller's scope. Also sets <prefix>_has_build (TRUE when the
 # manifest has a [build] table) and <prefix>_compat_offset (the byte offset of
@@ -77,7 +77,7 @@ function(_caliper_read_manifest manifest prefix)
             endif()
         elseif(table STREQUAL "" AND line MATCHES "^build[ \t]*[.=]")
             set(has_build TRUE)
-        elseif((table STREQUAL "applet" OR table STREQUAL "compat")
+        elseif((table STREQUAL "instrument" OR table STREQUAL "compat")
                AND line MATCHES "^([A-Za-z0-9_-]+)[ \t]*=[ \t]*(.*)$")
             set(key "${CMAKE_MATCH_1}")
             set(raw "${CMAKE_MATCH_2}")
@@ -107,7 +107,7 @@ endfunction()
 function(_caliper_find_torch target)
     if(NOT CALIPER_TORCH_VERSION)
         message(FATAL_ERROR
-            "caliper_add_applet(${target} ... TORCH): this SDK was built without "
+            "caliper_add_instrument(${target} ... TORCH): this SDK was built without "
             "libtorch (CALIPER_WITH_TORCH=OFF), so it names no libtorch to link.")
     endif()
     # The core build has already found libtorch; an SDK consumer finds it here.
@@ -115,7 +115,7 @@ function(_caliper_find_torch target)
     if(NOT TARGET torch OR NOT DEFINED TORCH_LIBRARIES)
         if(NOT EXISTS "${CALIPER_TORCH_DIR}/share/cmake/Torch/TorchConfig.cmake")
             message(FATAL_ERROR
-                "caliper_add_applet(${target} ... TORCH): no libtorch at "
+                "caliper_add_instrument(${target} ... TORCH): no libtorch at "
                 "CALIPER_TORCH_DIR=\"${CALIPER_TORCH_DIR}\". Pass "
                 "-DCALIPER_TORCH_DIR=<libtorch root> pointing at libtorch "
                 "${CALIPER_TORCH_VERSION}, the version the host was built with.")
@@ -130,9 +130,9 @@ function(_caliper_find_torch target)
     endif()
     if(NOT "${Torch_VERSION}" STREQUAL "${CALIPER_TORCH_VERSION}")
         message(FATAL_ERROR
-            "caliper_add_applet(${target} ... TORCH): found libtorch "
+            "caliper_add_instrument(${target} ... TORCH): found libtorch "
             "\"${Torch_VERSION}\" in ${Torch_DIR}, but the host was built with "
-            "libtorch ${CALIPER_TORCH_VERSION}. An applet must link the host's "
+            "libtorch ${CALIPER_TORCH_VERSION}. An instrument must link the host's "
             "libtorch; point CALIPER_TORCH_DIR at libtorch ${CALIPER_TORCH_VERSION}.")
     endif()
     get_filename_component(root "${Torch_DIR}/../../.." ABSOLUTE)
@@ -140,10 +140,10 @@ function(_caliper_find_torch target)
     set(_caliper_torch_root "${root}" PARENT_SCOPE)
 endfunction()
 
-function(caliper_add_applet target)
+function(caliper_add_instrument target)
     cmake_parse_arguments(PARSE_ARGV 1 arg
         "TORCH" "MANIFEST;OUTPUT_NAME;OUTPUT_DIRECTORY" "SOURCES")
-    set(where "caliper_add_applet(${target})")
+    set(where "caliper_add_instrument(${target})")
     if(arg_UNPARSED_ARGUMENTS)
         message(FATAL_ERROR "${where}: unknown arguments: ${arg_UNPARSED_ARGUMENTS}")
     endif()
@@ -163,7 +163,7 @@ function(caliper_add_applet target)
     if(arg_OUTPUT_NAME)
         set(stem "${arg_OUTPUT_NAME}")
     endif()
-    set(out_dir "${CMAKE_BINARY_DIR}/applets")
+    set(out_dir "${CMAKE_BINARY_DIR}/instruments")
     if(arg_OUTPUT_DIRECTORY)
         get_filename_component(out_dir "${arg_OUTPUT_DIRECTORY}" ABSOLUTE
             BASE_DIR "${CMAKE_CURRENT_BINARY_DIR}")
@@ -188,27 +188,27 @@ function(caliper_add_applet target)
     _caliper_read_manifest("${manifest}" m)
     set(bad "${manifest}:")
     foreach(key id name version)
-        if(NOT DEFINED m_applet_${key})
-            message(FATAL_ERROR "${bad} [applet] ${key} is required.")
+        if(NOT DEFINED m_instrument_${key})
+            message(FATAL_ERROR "${bad} [instrument] ${key} is required.")
         endif()
-        if(NOT m_applet_${key}_type STREQUAL "string")
-            message(FATAL_ERROR "${bad} [applet] ${key} must be a string.")
+        if(NOT m_instrument_${key}_type STREQUAL "string")
+            message(FATAL_ERROR "${bad} [instrument] ${key} must be a string.")
         endif()
     endforeach()
-    string(LENGTH "${m_applet_id}" id_length)
-    if(NOT m_applet_id MATCHES "^[a-z0-9-]+(\\.[a-z0-9-]+)*$" OR id_length GREATER 128)
+    string(LENGTH "${m_instrument_id}" id_length)
+    if(NOT m_instrument_id MATCHES "^[a-z0-9-]+(\\.[a-z0-9-]+)*$" OR id_length GREATER 128)
         message(FATAL_ERROR
-            "${bad} [applet] id \"${m_applet_id}\" is not a valid applet id: lowercase "
+            "${bad} [instrument] id \"${m_instrument_id}\" is not a valid instrument id: lowercase "
             "reverse-DNS, only [a-z0-9.-], dot-separated segments that are not empty, "
             "at most 128 characters.")
     endif()
-    string(STRIP "${m_applet_name}" name_stripped)
+    string(STRIP "${m_instrument_name}" name_stripped)
     if(name_stripped STREQUAL "")
-        message(FATAL_ERROR "${bad} [applet] name must not be empty.")
+        message(FATAL_ERROR "${bad} [instrument] name must not be empty.")
     endif()
-    if(NOT m_applet_version MATCHES "^[0-9]+\\.[0-9]+\\.[0-9]+$")
+    if(NOT m_instrument_version MATCHES "^[0-9]+\\.[0-9]+\\.[0-9]+$")
         message(FATAL_ERROR
-            "${bad} [applet] version \"${m_applet_version}\" is not strict semver (x.y.z).")
+            "${bad} [instrument] version \"${m_instrument_version}\" is not strict semver (x.y.z).")
     endif()
     if(NOT DEFINED m_compat_abi_epoch)
         message(FATAL_ERROR "${bad} [compat] abi_epoch is required.")
@@ -230,14 +230,14 @@ function(caliper_add_applet target)
     endif()
     if(m_has_build)
         message(FATAL_ERROR
-            "${bad} the source manifest has a [build] table. caliper_add_applet() "
+            "${bad} the source manifest has a [build] table. caliper_add_instrument() "
             "writes that table into the built copy; remove it from the source.")
     endif()
 
     # ---- The library ----
     add_library(${target} SHARED ${arg_SOURCES})
     target_link_libraries(${target} PRIVATE caliper::sdk caliper::ui_stack)
-    target_compile_definitions(${target} PRIVATE CALIPER_APPLET_EXPORT)
+    target_compile_definitions(${target} PRIVATE CALIPER_INSTRUMENT_EXPORT)
     # A generator expression in the output directory keeps multi-config
     # generators from appending a per-configuration folder, so the library and
     # its manifest always share one folder.
@@ -251,7 +251,7 @@ function(caliper_add_applet target)
     # ---- libtorch ----
     if(DEFINED m_compat_torch AND NOT arg_TORCH)
         message(FATAL_ERROR
-            "${bad} [compat] torch is set, but caliper_add_applet() was called "
+            "${bad} [compat] torch is set, but caliper_add_instrument() was called "
             "without TORCH. Add TORCH, or remove the key from the manifest.")
     endif()
     set(torch_line "")
@@ -260,7 +260,7 @@ function(caliper_add_applet target)
         target_link_libraries(${target} PRIVATE ${_caliper_torch_libraries})
         if(APPLE)
             # adapters/torch.hpp reaches the MPS command queue through the
-            # Objective-C runtime, so a macOS applet that includes it needs libobjc.
+            # Objective-C runtime, so a macOS instrument that includes it needs libobjc.
             target_link_libraries(${target} PRIVATE objc)
         endif()
         if(UNIX)
@@ -268,7 +268,7 @@ function(caliper_add_applet target)
                 BUILD_RPATH "${_caliper_torch_root}/lib")
         endif()
         # Windows has no rpath. The host executable carries the libtorch DLLs
-        # beside itself, so an applet DLL resolves them from the host process
+        # beside itself, so an instrument DLL resolves them from the host process
         # and never ships a second copy.
         if(DEFINED m_compat_torch)
             if(NOT m_compat_torch STREQUAL CALIPER_TORCH_VERSION)
@@ -302,11 +302,11 @@ function(caliper_add_applet target)
     endif()
     string(APPEND text
         "\n"
-        "# Written by caliper_add_applet() when the applet was built.\n"
+        "# Written by caliper_add_instrument() when the instrument was built.\n"
         "[build]\n"
         "sdk = \"${CALIPER_SDK_VERSION}\"\n"
         "ui_stack = \"${CALIPER_UI_STACK_HASH}\"\n")
-    set(stamped "${CMAKE_CURRENT_BINARY_DIR}/caliper_applet/${stem}.caliper.toml")
+    set(stamped "${CMAKE_CURRENT_BINARY_DIR}/caliper_instrument/${stem}.caliper.toml")
     file(WRITE "${stamped}.new" "${text}")
     configure_file("${stamped}.new" "${stamped}" COPYONLY)   # rewrites only on change
 

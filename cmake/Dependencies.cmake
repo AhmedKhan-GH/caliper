@@ -332,7 +332,7 @@ endif()
 add_subdirectory(${THIRD_PARTY_DIR}/duckdb EXCLUDE_FROM_ALL)
 # DuckDB's own CMakeLists hard-sets CMAKE_MSVC_RUNTIME_LIBRARY to the STATIC
 # CRT for its whole subtree, which conflicts with our /MD policy (host +
-# applet DLLs must share one heap) and fails the final link with
+# instrument DLLs must share one heap) and fails the final link with
 # LNK2005 (msvcprtd vs duckdb_static). Re-apply our runtime choice to every
 # target DuckDB created, recursively.
 if(WIN32)
@@ -433,9 +433,9 @@ list(APPEND CALIPER_DEPENDENCY_LIBS ImGuiFileDialog)
 message(STATUS "    ✓ ImGuiFileDialog configured")
 
 # --- CURL + ZLIB (Windows only) ---
-# On macOS these are system libraries; the applets find them with plain
+# On macOS these are system libraries; the instruments find them with plain
 # find_package. Windows ships neither, so build them in-tree and let the
-# applets' `if(NOT TARGET ...)` guards pick these targets up instead.
+# instruments' `if(NOT TARGET ...)` guards pick these targets up instead.
 # curl uses Schannel (Windows-native TLS) so no OpenSSL is involved.
 if(WIN32)
     message(STATUS "  Configuring ZLIB + CURL (Windows in-tree)...")
@@ -515,8 +515,8 @@ endif()
 # ============================================================================
 # Category 4: PyTorch (Large dependency)
 # ============================================================================
-# APPLET-ONLY. libcaliper / the caliper exe / embed_host never link libtorch:
-# TORCH_LIBRARIES is consumed by examples/mnist/applet and the
+# INSTRUMENT-ONLY. libcaliper / the caliper exe / embed_host never link libtorch:
+# TORCH_LIBRARIES is consumed by examples/mnist/instrument and the
 # torch-labelled tests, never appended to CALIPER_DEPENDENCY_LIBS. With
 # CALIPER_WITH_TORCH=OFF the whole category is skipped (no download, no
 # find_package(Torch)) and TORCH_LIBRARIES stays empty.
@@ -644,11 +644,11 @@ if(WIN32)
 
     # torch headers pull in windows.h; without NOMINMAX its min/max macros
     # break tensor.max() / std::max in every consumer. Attach to the imported
-    # target so all torch-linking applets inherit it.
+    # target so all torch-linking instruments inherit it.
     set_property(TARGET torch APPEND PROPERTY INTERFACE_COMPILE_DEFINITIONS NOMINMAX)
 
     # TORCH_LIBRARIES is deliberately NOT appended to CALIPER_DEPENDENCY_LIBS:
-    # only applets / torch tests link it (torch-free libcaliper).
+    # only instruments / torch tests link it (torch-free libcaliper).
 
     message(STATUS "  ✓ PyTorch configured via find_package(Torch)")
 
@@ -714,7 +714,7 @@ else()
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${TORCH_CXX_FLAGS}")
 
     # TORCH_LIBRARIES is deliberately NOT appended to CALIPER_DEPENDENCY_LIBS:
-    # only applets / torch tests link it (torch-free libcaliper).
+    # only instruments / torch tests link it (torch-free libcaliper).
 
     message(STATUS "  ✓ PyTorch configured via find_package(Torch)")
 

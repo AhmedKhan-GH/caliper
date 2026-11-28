@@ -1,6 +1,6 @@
 #pragma once
 /* caliper.metrics.v1 — TensorBoard vocabulary (experiment, run, tag, step) with ImPlot immediacy
- * (docs/applets/services/caliper-metrics-v1.md). Immutable once published. Callable from applet job threads. */
+ * (docs/instruments/services/caliper-metrics-v1.md). Immutable once published. Callable from instrument job threads. */
 #include <stdint.h>
 #include <caliper/tensor.h>
 
@@ -14,7 +14,7 @@ extern "C" {
 /**
  * The write-only metrics log.
  *
- * Every entry uses the vocabulary of experiment, run, tag and step. An applet can call every entry from a job
+ * Every entry uses the vocabulary of experiment, run, tag and step. An instrument can call every entry from a job
  * thread, and the host serializes the calls internally.
  */
 typedef struct CaliperMetricsV1 {
@@ -22,7 +22,7 @@ typedef struct CaliperMetricsV1 {
     uint32_t struct_size;
     /**
      * Open a run of `experiment` and return its id, or 0 on error. 0 is never a valid run. The run id scopes every
-     * scalar, histogram, image and hyperparameter that the applet logs afterward.
+     * scalar, histogram, image and hyperparameter that the instrument logs afterward.
      */
     uint64_t (*begin_run)(const char* experiment, const char* run_name);
     /**

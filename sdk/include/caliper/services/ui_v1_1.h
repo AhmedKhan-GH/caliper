@@ -1,7 +1,7 @@
 #pragma once
-/* caliper.ui.v1_1 - additive revision of caliper.ui.v1 (docs/applets/services/caliper-ui-v1-1.md). The table
+/* caliper.ui.v1_1 - additive revision of caliper.ui.v1 (docs/instruments/services/caliper-ui-v1-1.md). The table
  * opens with a byte-identical copy of CaliperUiV1 and appends one entry, dock_hint(). The host keeps serving
- * caliper.ui.v1 unchanged. An applet that wants hints probes this id at run time and goes on without them on a
+ * caliper.ui.v1 unchanged. An instrument that wants hints probes this id at run time and goes on without them on a
  * host that lacks it. The service is frozen once published. */
 #include <stdint.h>
 #include <stddef.h>
@@ -19,7 +19,7 @@ extern "C" {
  * value it does not know as `CALIPER_DOCK_CENTRAL`.
  */
 typedef enum CaliperDockRole {
-    /** The central area, for the main view of the applet. */
+    /** The central area, for the main view of the instrument. */
     CALIPER_DOCK_CENTRAL     = 0,
     /** The upper part of the side column, for controls. */
     CALIPER_DOCK_SIDE_TOP    = 1,
@@ -39,7 +39,7 @@ typedef struct CaliperUiV1_1 {
     /** Return the shared `ImPlot3DContext` of the host. The pointer stays valid from `initialize()` through `cleanup()`. */
     struct ImPlot3DContext* (*implot3d_context)(void);
     /**
-     * Write the allocator pair of the host to `out_alloc`, `out_free`, and `out_user_data`. The applet must install
+     * Write the allocator pair of the host to `out_alloc`, `out_free`, and `out_user_data`. The instrument must install
      * the pair into its copy of the ImGui globals before it makes any allocation, so that every allocation lands on
      * the host heap.
      */

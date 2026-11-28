@@ -33,7 +33,7 @@ typedef struct CaliperUiV1 {
     /** Return the shared `ImPlot3DContext` of the host. The pointer stays valid from `initialize()` through `cleanup()`. */
     struct ImPlot3DContext* (*implot3d_context)(void);
     /**
-     * Write the allocator pair of the host to `out_alloc`, `out_free`, and `out_user_data`. The applet must install
+     * Write the allocator pair of the host to `out_alloc`, `out_free`, and `out_user_data`. The instrument must install
      * the pair into its copy of the ImGui globals before it makes any allocation, so that every allocation lands on
      * the host heap.
      */

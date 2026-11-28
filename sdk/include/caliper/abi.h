@@ -1,13 +1,13 @@
 #pragma once
-/* Caliper ABI, epoch 3. Frozen: any change here is an epoch bump.
+/* Caliper ABI, epoch 4. Frozen: any change here is an epoch bump.
  * C types only, with no STL, exceptions or third-party types. */
 #include <stdint.h>
 #include <stdbool.h>
 
 /** The epoch of this contract. Any change to the frozen contract bumps the epoch. */
-#define CALIPER_ABI_EPOCH 3
-/** The name of the one symbol that every applet exports, as a string. */
-#define CALIPER_DESCRIPTOR_SYMBOL "caliper_applet_descriptor"
+#define CALIPER_ABI_EPOCH 4
+/** The name of the one symbol that every instrument exports, as a string. */
+#define CALIPER_DESCRIPTOR_SYMBOL "caliper_instrument_descriptor"
 
 #if defined(_WIN32)
   #define CALIPER_EXPORT __declspec(dllexport)
@@ -20,10 +20,10 @@ extern "C" {
 #endif
 
 /**
- * The host, as the applet sees it.
+ * The host, as the instrument sees it.
  *
- * The host is a service registry and not a struct of fields. An applet reads the identity of the host from this struct
- * and gets every capability through `get_service`.
+ * The host is a service registry and not a struct of fields. An instrument reads the identity of the host from this
+ * struct and gets every capability through `get_service`.
  */
 typedef struct CaliperHost {
     /** The value of `sizeof(CaliperHost)` as the host built it. */
@@ -32,11 +32,11 @@ typedef struct CaliperHost {
     uint32_t    abi_epoch;
     /** The version of the host, packed as `(major<<16)|(minor<<8)|patch`. */
     uint32_t    host_version;
-    /** The per-applet sandbox directory, as a UTF-8 string. The host owns the string. */
-    const char* applet_data_dir;
+    /** The per-instrument sandbox directory, as a UTF-8 string. The host owns the string. */
+    const char* instrument_data_dir;
     /**
      * Return the service table for `service_id`, or `NULL` if the host has no such service. The pointer stays valid for
-     * the lifetime of the applet. An unknown id returns `NULL` and never causes undefined behavior.
+     * the lifetime of the instrument. An unknown id returns `NULL` and never causes undefined behavior.
      */
     const void* (*get_service)(const struct CaliperHost* host,
                                const char* service_id);
@@ -64,15 +64,15 @@ typedef struct CaliperFrameInfo {
 } CaliperFrameInfo;
 
 /**
- * The entry points of an applet.
+ * The entry points of an instrument.
  *
  * The host calls these functions on the instance that `create` returns. Future entry points are appended to the end of
  * this struct and guarded by `struct_size`.
  */
-typedef struct CaliperAppletAPI {
-    /** The value of `sizeof(CaliperAppletAPI)` as the applet was built. */
+typedef struct CaliperInstrumentAPI {
+    /** The value of `sizeof(CaliperInstrumentAPI)` as the instrument was built. */
     uint32_t struct_size;
-    /** Return a new applet instance, or `NULL` on failure. */
+    /** Return a new instrument instance, or `NULL` on failure. */
     void* (*create)(void);
     /** Destroy the instance and free its memory. */
     void  (*destroy)(void* self);
@@ -82,37 +82,37 @@ typedef struct CaliperAppletAPI {
     void  (*frame)(void* self, const CaliperFrameInfo* info);
     /** Clean up the instance before the host destroys it. */
     void  (*cleanup)(void* self);
-} CaliperAppletAPI;
+} CaliperInstrumentAPI;
 
 /**
- * The description of an applet, which the applet gives to the host.
+ * The description of an instrument, which the instrument gives to the host.
  *
- * The `id` and `version` values match the manifest of the applet.
+ * The `id` and `version` values match the manifest of the instrument.
  */
-typedef struct CaliperAppletDescriptor {
-    /** The value of `sizeof(CaliperAppletDescriptor)` as the applet was built. */
+typedef struct CaliperInstrumentDescriptor {
+    /** The value of `sizeof(CaliperInstrumentDescriptor)` as the instrument was built. */
     uint32_t struct_size;
-    /** The ABI epoch of the applet. It must equal an epoch that the host supports. */
+    /** The ABI epoch of the instrument. It must equal an epoch that the host supports. */
     uint32_t abi_epoch;
-    /** The identifier of the applet in reverse-DNS form. It matches the manifest. */
+    /** The identifier of the instrument in reverse-DNS form. It matches the manifest. */
     const char* id;
-    /** The version of the applet as a semantic version. It matches the manifest. */
+    /** The version of the instrument as a semantic version. It matches the manifest. */
     const char* version;
-    /** The display name of the applet. */
+    /** The display name of the instrument. */
     const char* name;
-    /** A one-line summary of the applet. */
+    /** A one-line summary of the instrument. */
     const char* summary;
-    /** The tag that groups the applet in the host. */
+    /** The tag that groups the instrument in the host. */
     const char* tag;
-    /** The ids of the services that the applet needs, as a list that ends with `NULL`. The pointer may be `NULL`. */
+    /** The ids of the services that the instrument needs, as a list that ends with `NULL`. The pointer may be `NULL`. */
     const char* const* required_services;
-    /** The entry points of the applet. */
-    CaliperAppletAPI api;
-} CaliperAppletDescriptor;
+    /** The entry points of the instrument. */
+    CaliperInstrumentAPI api;
+} CaliperInstrumentDescriptor;
 
-/* Every epoch-2 applet exports exactly one symbol:
- *   const CaliperAppletDescriptor* caliper_applet_descriptor(void);
- * (generated by CALIPER_APPLET in caliper.hpp, or hand-written in C). */
+/* Every epoch-4 instrument exports exactly one symbol:
+ *   const CaliperInstrumentDescriptor* caliper_instrument_descriptor(void);
+ * (generated by CALIPER_INSTRUMENT in caliper.hpp, or hand-written in C). */
 
 #ifdef __cplusplus
 }

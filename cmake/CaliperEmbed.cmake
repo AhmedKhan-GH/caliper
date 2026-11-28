@@ -24,7 +24,7 @@
 # own copy of ImGui, GLFW or DuckDB apart from the core's.
 #
 # The include root is include/caliper-embed, not the SDK's include/, so an
-# applet that links caliper::sdk cannot reach caliper/embed.h even when both
+# instrument that links caliper::sdk cannot reach caliper/embed.h even when both
 # packages are installed into one prefix.
 #
 # The package version is the embed interface version of caliper/embed.h

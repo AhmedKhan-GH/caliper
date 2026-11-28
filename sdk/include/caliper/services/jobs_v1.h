@@ -1,5 +1,5 @@
 #pragma once
-/* caliper.jobs.v1 — background compute with progress and cancel (docs/applets/services/caliper-jobs-v1.md).
+/* caliper.jobs.v1 — background compute with progress and cancel (docs/instruments/services/caliper-jobs-v1.md).
  * Immutable once published: a new capability is jobs_v2, alongside.
  *
  * Job functions run on host worker threads as trusted code. The Caliper host runs them under its crash guard,

@@ -1,8 +1,8 @@
 #pragma once
-// Headless fake CaliperHost (docs/development/testing.md, "fixture host"): TDD applets and
+// Headless fake CaliperHost (docs/development/testing.md, "fixture host"): TDD instruments and
 // sugar without launching UI. Vends log.v1, and ui.v1_1 for its dock hints
 // only: that table has no UI contexts (its context getters return NULL), and
-// it records every dock_hint() call, so a test can assert the roles an applet
+// it records every dock_hint() call, so a test can assert the roles an instrument
 // declares (dock_hints(), dock_role()). get_service returns NULL for
 // everything else, caliper.ui.v1 included, so ui::connect() leaves ImGui
 // alone; a test that needs real contexts provides its own ui.v1 table. ONE
@@ -38,7 +38,7 @@ public:
         host_.struct_size = sizeof(CaliperHost);
         host_.abi_epoch = CALIPER_ABI_EPOCH;
         host_.host_version = (0u << 16) | (6u << 8) | 0u;
-        host_.applet_data_dir = data_dir_.c_str();
+        host_.instrument_data_dir = data_dir_.c_str();
         host_.get_service = &FixtureHost::get_service_thunk;
     }
     ~FixtureHost() { if (active_ == this) active_ = nullptr; }
