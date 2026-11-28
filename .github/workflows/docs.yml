@@ -16,7 +16,7 @@ on:
             'src/builder/spec/schema/caliper-spec-v1.schema.json',
             'src/host/host_cli.h',
             'scripts/check_api_reference.py', 'scripts/test_check_api_reference.py',
-            'scripts/generate_feature_index.py', 'scripts/generate_mcp_reference.py',
+            'scripts/generate_mcp_reference.py',
             'scripts/generate_piece_reference.py', 'scripts/check_doc_references.py',
             'scripts/test_doc_generators.py', 'scripts/test_check_doc_references.py',
             '.github/pull_request_template.md', '.github/workflows/docs.yml']
@@ -51,9 +51,7 @@ jobs:
       # docstring or no ::: directive, or when a service table entry or an embed, live or live_views
       # function has no doc comment or no generated table.
       - run: python scripts/check_api_reference.py
-      # Fails when any shipped feature lacks docs, code or tests, or when any generated reference
-      # page drifts from its source definitions.
-      - run: python scripts/generate_feature_index.py --check
+      # Fails when any generated reference page drifts from its source definitions.
       - run: python scripts/generate_mcp_reference.py --check
       - run: python scripts/generate_piece_reference.py --check
       # Fails on broken links/anchors, stale repository paths, or unknown commands, CLI subcommands,

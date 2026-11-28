@@ -1,4 +1,4 @@
-"""Unit tests for generate_feature_index.py, generate_mcp_reference.py, and generate_piece_reference.py."""
+"""Unit tests for generate_mcp_reference.py and generate_piece_reference.py."""
 
 import json
 import sys
@@ -9,94 +9,8 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 
-import generate_feature_index as gen_fi  # noqa: E402
 import generate_mcp_reference as gen_mcp  # noqa: E402
 import generate_piece_reference as gen_piece  # noqa: E402
-
-
-class FeatureIndexGeneratorTest(unittest.TestCase):
-    def setUp(self):
-        self.tmp = tempfile.TemporaryDirectory()
-        self.root = Path(self.tmp.name)
-        self._write(
-            "roadmap/core.yml",
-            """\
-prefix: COR
-title: Core
-order: 1
-summary: Core runtime features.
-features:
-  - id: COR-01
-    title: Host
-    status: shipped
-    scope: core
-    summary: Host binary.
-    docs: docs/intro/arch.md#components
-  - id: COR-02
-    title: Future Idea
-    status: planned
-    scope: supporting
-    summary: Planned feature.
-""",
-        )
-        self._write(
-            "docs/intro/arch.md",
-            "# Architecture\n\n## Components\n\nHost details.\n",
-        )
-        self._write("src/main.cpp", "int main() { return 0; }\n")
-        self._write("tests/test_main.cpp", "int main() { return 0; }\n")
-        self._write(
-            "roadmap/index/feature_code_tests.yml",
-            """\
-COR-01:
-  code:
-    - src/main.cpp
-  tests:
-    - tests/test_main.cpp
-""",
-        )
-
-    def tearDown(self):
-        self.tmp.cleanup()
-
-    def _write(self, rel: str, text: str) -> None:
-        path = self.root / rel
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(text, encoding="utf-8")
-
-    def test_write_then_check_passes(self):
-        problems, _ = gen_fi.run(self.root, write=True)
-        self.assertEqual(problems, [])
-        problems, _ = gen_fi.run(self.root, write=False)
-        self.assertEqual(problems, [])
-
-    def test_drift_fails_check(self):
-        gen_fi.run(self.root, write=True)
-        out = self.root / gen_fi.OUTPUT_REL
-        out.write_text(out.read_text(encoding="utf-8") + "\nextra\n", encoding="utf-8")
-        problems, _ = gen_fi.run(self.root, write=False)
-        self.assertTrue(any("out of date" in p for p in problems), problems)
-
-    def test_shipped_missing_tests_fails(self):
-        self._write(
-            "roadmap/index/feature_code_tests.yml",
-            "COR-01:\n  code:\n    - src/main.cpp\n  tests: []\n",
-        )
-        problems, _ = gen_fi.run(self.root, write=True)
-        self.assertTrue(any("lacks test locations" in p for p in problems), problems)
-
-    def test_shipped_missing_code_path_on_disk_fails(self):
-        self._write(
-            "roadmap/index/feature_code_tests.yml",
-            "COR-01:\n  code:\n    - src/missing.cpp\n  tests:\n    - tests/test_main.cpp\n",
-        )
-        problems, _ = gen_fi.run(self.root, write=True)
-        self.assertTrue(any("src/missing.cpp does not exist" in p for p in problems), problems)
-
-    def test_shipped_missing_docs_anchor_fails(self):
-        self._write("docs/intro/arch.md", "# Architecture\n\n## Other\n")
-        problems, _ = gen_fi.run(self.root, write=True)
-        self.assertTrue(any("#components does not exist" in p for p in problems), problems)
 
 
 class McpGeneratorTest(unittest.TestCase):

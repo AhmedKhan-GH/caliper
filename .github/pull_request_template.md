@@ -10,5 +10,5 @@
 
 <!-- Every pull request updates the documentation that its change affects, or states why no documentation page changes. -->
 
-- [ ] Updated affected pages in `docs/`, `CONTRIBUTING.md`, or `README.md`, and regenerated any affected reference pages (`scripts/generate_feature_index.py --write`, `scripts/generate_mcp_reference.py --write`, `scripts/generate_piece_reference.py --write`).
+- [ ] Updated affected pages in `docs/`, `CONTRIBUTING.md`, or `README.md`, and regenerated any affected reference pages (`scripts/generate_mcp_reference.py --write`, `scripts/generate_piece_reference.py --write`).
 - [ ] No documentation page changes (state why below).
