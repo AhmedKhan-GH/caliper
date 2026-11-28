@@ -70,7 +70,7 @@ function(caliper_draw_parity_targets)
         set_target_properties(caliper_dashboard_parity_app PROPERTIES CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON)
         caliper_spec_runtime_fonts(caliper_dashboard_parity_app)
         add_test(NAME caliper_draw_parity_dashboard_app
-            COMMAND caliper_dashboard_parity_app "${_dir}/dashboard" "${CMAKE_SOURCE_DIR}/demos/arc_tower"
+            COMMAND caliper_dashboard_parity_app "${_dir}/dashboard" "${CMAKE_SOURCE_DIR}/tests/acceptance/arc_tower"
                     "${CMAKE_BINARY_DIR}/tests/draw_parity/dashboard_out")
         set_tests_properties(caliper_draw_parity_dashboard_app PROPERTIES
             LABELS "gfx;draw_parity" SKIP_RETURN_CODE 77 TIMEOUT 180)

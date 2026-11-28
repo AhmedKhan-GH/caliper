@@ -1,6 +1,6 @@
 """Train a two-layer transformer until induction heads form, for the Attention Arc Tower.
 
-    python examples/python/arc_tower_train.py [--steps N] [--pace S] [--device mps|cpu]
+    python tests/acceptance/arc_tower_train.py [--steps N] [--pace S] [--device mps|cpu]
 
 The model is an attention-only transformer with two layers of four heads, a width of 64 and a
 vocabulary of 64 words, and with no layer norm after the last layer, as in the first studies of

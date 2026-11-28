@@ -253,7 +253,7 @@ jobs:
             exit 1
           fi
       # The programmable graphics acceptance test on its own. The agent builds the Attention Arc Tower from
-      # pieces through caliper-mcp on a managed run of examples/python/arc_tower_train.py, with the same two build
+      # pieces through caliper-mcp on a managed run of tests/acceptance/arc_tower_train.py, with the same two build
       # folders as the step above. It picks an arc, ablates a head, forks the run from a past step and stops a
       # draw that is over its time. A skip because the runner has no Metal device is accepted. Any other skip,
       # and any outcome that is neither a pass nor a Metal skip, is a setup error.
@@ -424,7 +424,7 @@ jobs:
           cd ..
           dash="$RUNNER_TEMP/dashboard-parity"
           set +e
-          cmake-build-release/caliper_dashboard_parity_app tests/draw_parity/dashboard demos/arc_tower "$dash" \
+          cmake-build-release/caliper_dashboard_parity_app tests/draw_parity/dashboard tests/acceptance/arc_tower "$dash" \
             | tee "$RUNNER_TEMP/dashboard-parity-app.log"
           dapp=$?
           set -e

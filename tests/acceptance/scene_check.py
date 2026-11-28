@@ -17,7 +17,7 @@ the fitted camera (its target and distance), clicks the centre of the picture an
 entity that the pick reports to the script. It exits with 1 when a value is not finite, a
 viewer reports nothing, or the two viewers disagree.
 
-    python examples/python/scene_check.py <output folder> [--app <caliper>] [--adapter metal|swiftshader]
+    python tests/acceptance/scene_check.py <output folder> [--app <caliper>] [--adapter metal|swiftshader]
 
 It needs PyTorch, the Caliper app (by default `cmake-build-release/caliper`, or
 `CALIPER_TEST_CALIPER_EXE`), the WebAssembly views in `python/caliper/_web/`

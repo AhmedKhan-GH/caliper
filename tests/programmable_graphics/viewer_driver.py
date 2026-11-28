@@ -1,6 +1,6 @@
 """The browser's dashboard viewer end to end: the real spec page of the hidden app draws the programs of a live run.
 
-The hidden app and caliper-mcp start as in driver.py, the model runner starts examples/python/arc_tower_train.py, and a
+The hidden app and caliper-mcp start as in driver.py, the model runner starts tests/acceptance/arc_tower_train.py, and a
 dashboard gets two scene panels that hold programs alone: the arcs of attention_arcs@1 pinned from the WORKSPACE, and
 the attention grid of attention_grid@1 written INLINE into the spec. The dashboard is saved, the run trains until the
 arcs are published, and tests/programmable_graphics/viewer_page.mjs opens the viewer link of the app's API file, which
@@ -59,8 +59,8 @@ def build(r, c):
     c.until("the first step of the run", lambda: r.run_step(c.run) >= 1, 60)
     r.call("run_pause", {"op": "pause", "run": c.run})
     r.step("a workspace piece and an inline piece in two scene panels, saved")
-    arcs = d.piece_args(ROOT / "demos" / "arc_tower" / "attention_arcs")
-    grid = d.piece_args(ROOT / "demos" / "arc_tower" / "attention_grid")
+    arcs = d.piece_args(ROOT / "tests" / "acceptance" / "arc_tower" / "attention_arcs")
+    grid = d.piece_args(ROOT / "tests" / "acceptance" / "arc_tower" / "attention_grid")
     r.call("piece_update", {"piece": arcs})
     for pid, title in (("tower", "Arcs"), ("pattern", "Grid")):
         r.call("panel_create", {"id": pid, "primitive": "scene", "title": title, "bind": {"scene": "live:model"},
@@ -113,7 +113,7 @@ def run(a):
     (work / "user").mkdir()
     ws = work / "workspace"
     ws.mkdir()
-    (ws / d.SCRIPT).write_text((ROOT / "examples" / "python" / d.SCRIPT).read_text())
+    (ws / d.SCRIPT).write_text((ROOT / "tests" / "acceptance" / d.SCRIPT).read_text())
     env.update({"CALIPER_AGENT_OFFLINE": "1", "CALIPER_HIDDEN": "1", "CALIPER_DATA_DIR": str(work / "data"),
                 "CALIPER_USER_APPLETS_DIR": str(work / "user"), "CALIPER_WINDOW_SIZE": "1280x800",
                 "CALIPER_WORKSPACE": str(ws), "CALIPER_RUN_PYTHON": a.python})

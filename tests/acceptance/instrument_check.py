@@ -5,7 +5,7 @@ It runs the transcript of the acceptance test (tests/instruments/transcript.json
 one Caliper line, the hidden app on its stream, and caliper-mcp as the agent's only way in. The agent
 adds a scene panel and a slider, changes the learning rate, and receives a pick. No window opens.
 
-usage: python3 examples/python/instrument_check.py [capture folder] [--app <caliper>] [--mcp <caliper-mcp>]
+usage: python3 tests/acceptance/instrument_check.py [capture folder] [--app <caliper>] [--mcp <caliper-mcp>]
                                                     [--python <python>]
 
 With no argument it finds the app and caliper-mcp in cmake-build-release, then cmake-build-notorch,
