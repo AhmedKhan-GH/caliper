@@ -16,7 +16,8 @@ export const REPO = path.resolve(WEB, '..');
 export const SHOTS = process.env.CALIPER_SHOTS ?? path.join(WEB, 'test-results', 'shots');
 
 const TYPES: Record<string, string> = {
-  '.html': 'text/html', '.js': 'text/javascript', '.woff': 'font/woff', '.json': 'application/json', '.map': 'application/json',
+  '.html': 'text/html', '.js': 'text/javascript', '.wasm': 'application/wasm', '.png': 'image/png',
+  '.woff': 'font/woff', '.json': 'application/json', '.map': 'application/json',
 };
 
 /** Serves the files under root on 127.0.0.1; returns the origin and a close function. */
