@@ -10,7 +10,7 @@ import fs from 'node:fs';
 import http from 'node:http';
 import path from 'node:path';
 import zlib from 'node:zlib';
-import { encode } from '../src/protocol/codec.js';
+import { decode, encode } from '../src/protocol/codec.js';
 import {
   KIND_IDS, PROTOCOL_MINOR_3_2, SNAP_AUTO_VMAX, SNAP_AUTO_VMIN,
   type Message, type ViewEntry,
@@ -99,14 +99,17 @@ function syntheticRecording(steps: number[]): Buffer {
     },
     { type: 'views', views, timelines: [{ name: 'step', kind: 'sequence' }, { name: 'time', kind: 'time' }] },
   ];
+  // One loss sample per step from the first to the last snapshot step, so the timeline holds those steps only.
+  const firstStep = steps[0];
   const maxStep = steps[steps.length - 1];
-  const nSeries = Math.max(1, maxStep + 1);
+  const nSeries = maxStep - firstStep + 1;
   const loss = new Float32Array(nSeries);
   const stamps = new BigInt64Array(nSeries * 2);
   for (let i = 0; i < nSeries; i++) {
-    loss[i] = 2.3 * Math.exp(-i / Math.max(10, maxStep * 0.35)) + 0.08;
-    stamps[i * 2] = BigInt(i);
-    stamps[i * 2 + 1] = BigInt(i * 1000);
+    const step = firstStep + i;
+    loss[i] = 2.3 * Math.exp(-step / Math.max(10, maxStep * 0.35)) + 0.08;
+    stamps[i * 2] = BigInt(step);
+    stamps[i * 2 + 1] = BigInt(step * 1000);
   }
   msgs.push({
     type: 'series', sub: 1, view: 'loss', start: 0, total: nSeries, stamp_ns: nSeries * 1000,
@@ -159,6 +162,21 @@ function syntheticRecording(steps: number[]): Buffer {
     });
   });
   return concatFrames(msgs);
+}
+
+/** Every step that any view of a recording holds data for: snapshot stamps and series sample stamps. */
+function recordedSteps(bytes: Buffer): number[] {
+  const steps = new Set<number>();
+  for (let pos = 0; pos < bytes.length;) {
+    const len = bytes.readUInt32LE(pos + 12);
+    const msg = decode(new Uint8Array(bytes.buffer, bytes.byteOffset + pos, len));
+    if (msg.type === 'snapshot' && msg.stamp) steps.add(Number(msg.stamp[0]));
+    if (msg.type === 'series' && msg.stamps && msg.stamps_t) {
+      for (let i = 0; i < msg.values.length; i++) steps.add(Number(msg.stamps[i * msg.stamps_t]));
+    }
+    pos += len;
+  }
+  return [...steps].sort((a, b) => a - b);
 }
 
 interface StaticServer {
@@ -313,10 +331,15 @@ test('docs embed replays the recorded MNIST run via static files and WASM on Web
         const el = document.querySelector('caliper-replay') as (HTMLElement & { debugState(): Record<string, unknown> }) | null;
         return el?.debugState().mode === 'fallback';
       }, null, { timeout: 15_000 });
+      await page.waitForFunction(() => {
+        const el = document.querySelector('caliper-replay')!;
+        return (el.shadowRoot!.querySelector('.fallback-img') as HTMLImageElement).complete;
+      }, null, { timeout: 15_000 });
       const state = await page.evaluate(() => {
         const el = document.querySelector('caliper-replay') as HTMLElement & { debugState(): Record<string, unknown> };
         const img = el.shadowRoot!.querySelector('.fallback-img') as HTMLImageElement;
         const note = el.shadowRoot!.querySelector('.fallback-note') as HTMLElement;
+        const cs = getComputedStyle(note);
         return {
           debug: el.debugState(),
           imgComplete: img.complete,
@@ -324,16 +347,34 @@ test('docs embed replays the recorded MNIST run via static files and WASM on Web
           naturalHeight: img.naturalHeight,
           imgBox: img.getBoundingClientRect().toJSON(),
           noteBox: note.getBoundingClientRect().toJSON(),
+          noteFontPx: parseFloat(cs.fontSize),
+          noteBorderLeftPx: parseFloat(cs.borderLeftWidth),
+          noteRole: note.getAttribute('role'),
+          barHidden: (el.shadowRoot!.querySelector('.bar') as HTMLElement).hidden,
         };
       });
       expect(state.debug.fallbackShown).toBe(true);
       expect(state.debug.fallbackImgVisible).toBe(true);
-      expect(state.debug.fallbackText).toMatch(/WebGPU/);
+      // The canvas2d project turns WebGPU off: Chromium keeps navigator.gpu and gives no adapter.
+      expect(state.debug.reason).toBe('no-adapter');
+      expect(state.debug.fallbackText).toBe(
+        'WebGPU did not start in this browser. The image below is a static screenshot of the replay.');
       expect(state.imgComplete).toBe(true);
       expect(state.naturalWidth).toBeGreaterThan(0);
       expect(state.naturalHeight).toBeGreaterThan(0);
       expect((state.imgBox as { height: number }).height).toBeGreaterThan(100);
-      expect((state.noteBox as { height: number }).height).toBeGreaterThan(10);
+      // The notice sits above the image, as wide as it, in body-size text with an accent border.
+      const noteBox = state.noteBox as { top: number; bottom: number; left: number; width: number };
+      const imgBox = state.imgBox as { top: number; left: number; width: number };
+      expect(noteBox.bottom).toBeLessThanOrEqual(imgBox.top);
+      expect(noteBox.left).toBe(imgBox.left);
+      expect(noteBox.width).toBe(imgBox.width);
+      expect(state.noteFontPx).toBeGreaterThanOrEqual(16);
+      expect(state.noteBorderLeftPx).toBeGreaterThan(1);
+      expect(state.noteRole).toBe('note');
+      // No Play, Reset or range bar over a screenshot.
+      expect(state.barHidden).toBe(true);
+      expect(state.debug.scrubberVisible).toBe(false);
       expect(site.requests.some((r) => r.includes('caliper-views.wasm'))).toBe(false);
       expect(wsUrls).toEqual([]);
       expect(errors).toEqual([]);
@@ -345,19 +386,25 @@ test('docs embed replays the recorded MNIST run via static files and WASM on Web
     }
 
     // WebGPU (metal) and SwiftShader: real WASM views draw every recorded view with no server and no WebSocket.
-    const finalState = await waitReplayLive(page);
-    const steps = finalState.steps as number[];
+    const firstState = await waitReplayLive(page);
+    const steps = firstState.steps as number[];
     expect(steps.length).toBeGreaterThan(1);
-    expect(finalState.scrubberVisible).toBe(true);
-    expect(finalState.fallbackShown).toBe(false);
-    expect(finalState.currentStep).toBe(steps[steps.length - 1]);
+    // The timeline holds every recorded step of any view, not only the snapshot steps.
+    expect(steps).toEqual(recordedSteps(recBytes));
+    expect(firstState.scrubberVisible).toBe(true);
+    expect(firstState.fallbackShown).toBe(false);
+    // On load the replay sits on the first step.
+    expect(firstState.stepIndex).toBe(0);
+    expect(firstState.currentStep).toBe(steps[0]);
+    expect(firstState.playing).toBe(false);
     expect(wsUrls).toEqual([]);
     expect(site.requests.some((r) => r === 'GET /assets/caliper-replay/wasm/caliper-views.wasm')).toBe(true);
     expect(site.requests.some((r) => r === 'GET /assets/caliper-replay/mnist/recording.calrec')).toBe(true);
 
-    const views = finalState.views as { view: string; drawer: string; renderer: string; wasmStats: { updates: number; frames: number; gfxErrors?: string } }[];
+    type ViewState = { view: string; kind: string; info: string; window?: unknown; drawer: string; renderer: string; wasmStats: { updates: number; frames: number; gfxErrors?: string } };
+    const views = firstState.views as ViewState[];
     if (hasMnist) {
-      expect(views.map((v) => v.view)).toEqual(['loss', 'accuracy', 'conv1.filters', 'conv1.act', 'embedding', 'fc1.weight.hist']);
+      expect(views.map((v) => v.view)).toEqual(['loss', 'lr', 'accuracy', 'conv1.filters', 'conv1.act', 'embedding', 'fc1.weight.hist']);
     }
     for (const v of views) {
       expect(v.drawer, v.view).toBe('wasm');
@@ -365,44 +412,107 @@ test('docs embed replays the recorded MNIST run via static files and WASM on Web
       expect(v.wasmStats.gfxErrors ?? '', v.view).toBe('');
     }
 
-    const shotFinal = await page.locator('caliper-replay').screenshot();
-    saveShot(info, 'replay-mnist-final', shotFinal);
-    expect(distinctColors(shotFinal)).toBeGreaterThan(20);
+    // The transport bar has Play, Reset, the range and the step, and Reset looks like Play.
+    const transport = await page.evaluate(() => {
+      const root = document.querySelector('caliper-replay')!.shadowRoot!;
+      const look = (sel: string) => {
+        const cs = getComputedStyle(root.querySelector(sel)!);
+        return ['font-family', 'font-size', 'color', 'background-color', 'border-top', 'border-radius', 'height', 'padding', 'min-width']
+          .map((p) => cs.getPropertyValue(p));
+      };
+      return {
+        order: [...root.querySelector('.transport')!.children].map((c) => c.className),
+        resetText: root.querySelector('.reset')!.textContent,
+        stepText: root.querySelector('.step')!.textContent,
+        playLook: look('.play'),
+        resetLook: look('.reset'),
+      };
+    });
+    expect(transport.order).toEqual(['play', 'reset', 'range', 'step']);
+    expect(transport.resetText).toBe('Reset');
+    expect(transport.stepText).toBe(`Step ${steps[0]} / ${steps[steps.length - 1]}`);
+    expect(transport.resetLook).toEqual(transport.playLook);
 
-    // Scrub back to step 0 via the range slider and confirm every WASM view updates and pixels change.
-    const updatesBefore = views.map((v) => Number(v.wasmStats.updates));
-    const framesBefore = views.map((v) => Number(v.wasmStats.frames));
+    const shotFirst = await page.locator('caliper-replay').screenshot();
+    saveShot(info, 'replay-mnist-step0', shotFirst);
+    expect(distinctColors(shotFirst)).toBeGreaterThan(20);
+
+    // Scrub to the last step via the range slider and confirm every WASM view updates and pixels change.
+    const updatesAtFirst = views.map((v) => Number(v.wasmStats.updates));
+    const framesAtFirst = views.map((v) => Number(v.wasmStats.frames));
     await page.evaluate(() => {
       const el = document.querySelector('caliper-replay')!;
       const range = el.shadowRoot!.querySelector('.range') as HTMLInputElement;
-      range.value = '0';
+      range.value = range.max;
       range.dispatchEvent(new Event('input'));
     });
-    const step0State = await waitReplayStepDrawn(page, updatesBefore, framesBefore);
-    expect(step0State.currentStep).toBe(steps[0]);
-    const lossAt0 = (step0State.views as { view: string; info: string }[]).find((v) => v.view === 'loss')?.info ?? '';
-    const lossAtEnd = (finalState.views as { view: string; info: string }[]).find((v) => v.view === 'loss')?.info ?? '';
-    expect(lossAt0).not.toBe(lossAtEnd);
+    const lastState = await waitReplayStepDrawn(page, updatesAtFirst, framesAtFirst);
+    expect(lastState.currentStep).toBe(steps[steps.length - 1]);
+    const lossInfo = (s: Record<string, unknown>) => (s.views as ViewState[]).find((v) => v.view === 'loss')?.info ?? '';
+    expect(lossInfo(lastState)).not.toBe(lossInfo(firstState));
 
-    const shotStep0 = await page.locator('caliper-replay').screenshot();
-    saveShot(info, 'replay-mnist-step0', shotStep0);
-    expect(differingPixels(shotFinal, shotStep0)).toBeGreaterThan(500);
+    const shotLast = await page.locator('caliper-replay').screenshot();
+    saveShot(info, 'replay-mnist-final', shotLast);
+    expect(differingPixels(shotFirst, shotLast)).toBeGreaterThan(500);
 
-    // Play advances at least one step, and Pause stops playback.
-    await page.evaluate(() => {
-      const btn = document.querySelector('caliper-replay')!.shadowRoot!.querySelector('.play') as HTMLButtonElement;
-      btn.click();
-    });
-    await page.waitForFunction(() => {
+    // Play advances one recorded step on every display frame. A frame counter that starts in the
+    // same task as Play runs before the playback callback on each frame, so the counts match.
+    const startIndex = await page.evaluate(() => {
+      const w = window as unknown as { frameCount: number; frameId: number };
+      w.frameCount = 0;
+      const count = () => {
+        w.frameCount++;
+        w.frameId = requestAnimationFrame(count);
+      };
+      w.frameId = requestAnimationFrame(count);
       const el = document.querySelector('caliper-replay') as HTMLElement & { debugState(): Record<string, unknown> };
-      return Number(el.debugState().stepIndex) >= 1;
-    }, null, { timeout: 15_000 });
-    await page.evaluate(() => {
-      const btn = document.querySelector('caliper-replay')!.shadowRoot!.querySelector('.play') as HTMLButtonElement;
-      btn.click();
+      (el.shadowRoot!.querySelector('.play') as HTMLButtonElement).click();
+      return el.debugState().stepIndex;
     });
-    const paused = await page.evaluate(() => (document.querySelector('caliper-replay') as HTMLElement & { debugState(): Record<string, unknown> }).debugState());
-    expect(paused.playing).toBe(false);
+    // Play from the last step starts again at the first step.
+    expect(startIndex).toBe(0);
+    await page.waitForFunction(() => (window as unknown as { frameCount: number }).frameCount >= 10, null, { timeout: 30_000 });
+    const played = await page.evaluate(() => {
+      const w = window as unknown as { frameCount: number; frameId: number };
+      const el = document.querySelector('caliper-replay') as HTMLElement & { debugState(): Record<string, unknown> };
+      const s = el.debugState();
+      cancelAnimationFrame(w.frameId);
+      (el.shadowRoot!.querySelector('.play') as HTMLButtonElement).click();
+      return { frames: w.frameCount, stepIndex: Number(s.stepIndex), playing: s.playing, paused: !el.debugState().playing };
+    });
+    expect(played.playing).toBe(true);
+    expect(played.stepIndex).toBe(played.frames);
+    expect(played.paused).toBe(true);
+
+    // Reset during playback pauses, returns to the first step, and clears the views back to their
+    // first-step state: the series hold one value again, and every view reports what it did on load.
+    await page.evaluate(() => (document.querySelector('caliper-replay')!.shadowRoot!.querySelector('.play') as HTMLButtonElement).click());
+    await page.waitForFunction((target) => {
+      const el = document.querySelector('caliper-replay') as HTMLElement & { debugState(): Record<string, unknown> };
+      return Number(el.debugState().stepIndex) >= target;
+    }, played.stepIndex + 5, { timeout: 30_000 });
+    const beforeReset = await page.evaluate(() => (document.querySelector('caliper-replay') as HTMLElement & { debugState(): Record<string, unknown> }).debugState());
+    expect(beforeReset.playing).toBe(true);
+    expect(Number(beforeReset.stepIndex)).toBeGreaterThan(played.stepIndex);
+    await page.evaluate(() => (document.querySelector('caliper-replay')!.shadowRoot!.querySelector('.reset') as HTMLButtonElement).click());
+    const updatesBeforeReset = (beforeReset.views as ViewState[]).map((v) => Number(v.wasmStats.updates));
+    const framesBeforeReset = (beforeReset.views as ViewState[]).map((v) => Number(v.wasmStats.frames));
+    const resetState = await waitReplayStepDrawn(page, updatesBeforeReset, framesBeforeReset);
+    expect(resetState.playing).toBe(false);
+    expect(resetState.stepIndex).toBe(0);
+    expect(resetState.currentStep).toBe(steps[0]);
+    const viewFacts = (s: Record<string, unknown>) => (s.views as ViewState[]).map((v) => ({
+      view: v.view, info: v.info, window: v.kind === 'series' ? v.window : undefined,
+    }));
+    await expect.poll(async () => viewFacts(await page.evaluate(() =>
+      (document.querySelector('caliper-replay') as HTMLElement & { debugState(): Record<string, unknown> }).debugState())),
+    { timeout: 15_000 }).toEqual(viewFacts(firstState));
+    // The load state, which Reset returned to above, holds one loss value. resetState itself can
+    // carry a header line from before the reset, as the views report their lines after drawing.
+    if (hasMnist) expect(lossInfo(firstState)).toMatch(/^1 steps /);
+
+    const shotReset = await page.locator('caliper-replay').screenshot();
+    saveShot(info, 'replay-mnist-reset', shotReset);
     expect(errors).toEqual([]);
   } finally {
     site.close();
@@ -414,8 +524,9 @@ test('docs embed falls back to the static screenshot and text when WebAssembly v
   const fallbackBytes = makeFallbackPng();
   const html = `<!doctype html><html><body style="margin:0;background:#12110f">
 <script type="module" src="./caliper-replay.js"></script>
-<caliper-replay src="./rec.calrec" wasm-base="./missing-wasm/" fallback="./fallback.png"
+<caliper-replay id="custom" src="./rec.calrec" wasm-base="./missing-wasm/" fallback="./fallback.png"
   fallback-text="Static fallback capture for browsers without WebAssembly views."></caliper-replay>
+<caliper-replay id="plain" src="./rec.calrec" wasm-base="./missing-wasm/" fallback="./fallback.png"></caliper-replay>
 </body></html>`;
   const site = await startStaticSite({
     '/index.html': { type: 'text/html; charset=utf-8', body: html },
@@ -427,18 +538,62 @@ test('docs embed falls back to the static screenshot and text when WebAssembly v
     const errors: string[] = [];
     page.on('pageerror', (e) => errors.push(e.message));
     await page.goto(`${site.origin}/index.html`);
-    await page.waitForFunction(() => {
-      const el = document.querySelector('caliper-replay') as (HTMLElement & { debugState(): Record<string, unknown> }) | null;
-      return el?.debugState().mode === 'fallback';
-    }, null, { timeout: 15_000 });
-    const dbg = await page.evaluate(() => (document.querySelector('caliper-replay') as HTMLElement & { debugState(): Record<string, unknown> }).debugState());
-    expect(dbg.fallbackShown).toBe(true);
-    expect(dbg.fallbackImgVisible).toBe(true);
-    expect(dbg.fallbackText).toBe('Static fallback capture for browsers without WebAssembly views.');
+    await page.waitForFunction(() => [...document.querySelectorAll('caliper-replay')].every((el) =>
+      (el as HTMLElement & { debugState(): Record<string, unknown> }).debugState().mode === 'fallback'),
+    null, { timeout: 15_000 });
+    const debugOf = (id: string) => page.evaluate((i) =>
+      (document.getElementById(i) as HTMLElement & { debugState(): Record<string, unknown> }).debugState(), id);
+    const custom = await debugOf('custom');
+    expect(custom.fallbackShown).toBe(true);
+    expect(custom.fallbackImgVisible).toBe(true);
+    // A page's fallback-text replaces the notice.
+    expect(custom.fallbackText).toBe('Static fallback capture for browsers without WebAssembly views.');
+    // Without it, the notice gives the cause: no adapter on canvas2d, and a WebAssembly load
+    // failure elsewhere. Both count as WebGPU not starting.
+    const plain = await debugOf('plain');
+    expect(plain.scrubberVisible).toBe(false);
+    expect(plain.fallbackText).toBe('WebGPU did not start in this browser. The image below is a static screenshot of the replay.');
     expect(errors).toEqual([]);
-    const shot = await page.locator('caliper-replay').screenshot();
+    const shot = await page.locator('#custom').screenshot();
     saveShot(info, 'replay-missing-wasm-fallback', shot);
     expect(distinctColors(shot)).toBeGreaterThan(3);
+  } finally {
+    site.close();
+  }
+});
+
+test('docs embed notice says when the browser has no WebGPU or the page is not a secure context', async ({ page }, info) => {
+  test.skip(info.project.name !== 'canvas2d', 'the notice cases need no GPU, so canvas2d covers them');
+  // The page script removes navigator.gpu, or marks the page as not a secure context, as the query asks.
+  await page.addInitScript(() => {
+    if (location.search.includes('no-gpu')) Object.defineProperty(Navigator.prototype, 'gpu', { get: () => undefined });
+    if (location.search.includes('insecure')) Object.defineProperty(window, 'isSecureContext', { get: () => false });
+  });
+  const html = `<!doctype html><html><body style="margin:0;background:#12110f">
+<script type="module" src="./caliper-replay.js"></script>
+<caliper-replay src="./rec.calrec" wasm-base="./wasm/" fallback="./fallback.png"></caliper-replay>
+</body></html>`;
+  const site = await startStaticSite({
+    '/index.html': { type: 'text/html; charset=utf-8', body: html },
+    '/caliper-replay.js': { type: 'text/javascript; charset=utf-8', body: fs.readFileSync(EMBED_BUNDLE) },
+    '/rec.calrec': { type: 'application/octet-stream', body: syntheticRecording([0, 10]) },
+    '/fallback.png': { type: 'image/png', body: makeFallbackPng() },
+  });
+  try {
+    const errors: string[] = [];
+    page.on('pageerror', (e) => errors.push(e.message));
+    for (const [query, reason, text] of [
+      ['no-gpu', 'no-webgpu', 'This browser does not support WebGPU.'],
+      ['insecure', 'insecure-context', 'WebGPU is not available because this page is not served over HTTPS or from localhost.'],
+    ]) {
+      await page.goto(`${site.origin}/index.html?${query}`);
+      await page.waitForFunction(() => (document.querySelector('caliper-replay') as (HTMLElement & { debugState(): Record<string, unknown> }) | null)
+        ?.debugState().mode === 'fallback', null, { timeout: 15_000 });
+      const dbg = await page.evaluate(() => (document.querySelector('caliper-replay') as HTMLElement & { debugState(): Record<string, unknown> }).debugState());
+      expect(dbg.reason).toBe(reason);
+      expect(dbg.fallbackText).toBe(`${text} The image below is a static screenshot of the replay.`);
+    }
+    expect(errors).toEqual([]);
   } finally {
     site.close();
   }

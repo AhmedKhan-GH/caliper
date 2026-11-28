@@ -84,9 +84,128 @@ test('parseRecording extracts session, views, steps, snapshots and series', () =
   assert.equal(rec.session.id, 'mnist-test');
   assert.equal(rec.session.script, 'examples/mnist/train.py');
   assert.deepEqual(rec.views.map((v) => v.name), ['loss', 'weights', 'embedding']);
-  assert.deepEqual(rec.steps, [0, 10, 25]);
+  // The series has a sample at every step 0..25, so the timeline holds every step.
+  assert.deepEqual(rec.steps, Array.from({ length: 26 }, (_, i) => i));
   assert.equal(rec.snapshots.get('weights')?.length, 3);
   assert.equal(rec.series.get('loss')?.values.length, 26);
+});
+
+test('the timeline is the union of snapshot and series steps, and views hold their latest value', async () => {
+  const views: ViewEntry[] = [
+    { id: 1, name: 'loss', kind: KIND_IDS.series, sources: [] },
+    { id: 2, name: 'weights', kind: KIND_IDS.heatmap, sources: [] },
+  ];
+  const snap = (step: number): Message => ({
+    type: 'snapshot', sub: 2, view: 'weights', seq: step + 1, stamp_ns: step, kind: KIND_IDS.heatmap,
+    data_view: {}, data: new Float32Array([step]), shape: [1, 1], colormap: 0, flags: 0, vmin: 0, vmax: 1,
+    stats: [step, step], axes: [], stamp: new BigInt64Array([BigInt(step), BigInt(step)]),
+  });
+  // Series samples at steps 0, 5, 10 and snapshots at steps 0 and 7.
+  const bytes = concatFrames([
+    { type: 'views', views },
+    {
+      type: 'series', sub: 1, view: 'loss', start: 0, total: 3, stamp_ns: 10,
+      values: new Float32Array([3, 2, 1]), stamps: new BigInt64Array([0n, 0n, 5n, 5n, 10n, 10n]), stamps_t: 2,
+    },
+    snap(0),
+    snap(7),
+  ]);
+  assert.deepEqual(parseRecording(bytes).steps, [0, 5, 7, 10]);
+
+  const src = new ReplaySource('http://localhost/r.calrec', { bytes, initialStep: 'first' });
+  const snaps: SnapshotMsg[] = [];
+  const series: SeriesMsg[] = [];
+  src.listen({ onSnapshot: (s) => snaps.push(s), onSeries: (s) => series.push(s) });
+  src.connect();
+  await src.ready;
+  src.subscribe('loss');
+  src.subscribe('weights');
+  await new Promise((r) => queueMicrotask(() => r(null)));
+  src.seekStep(5);
+  assert.equal(series.at(-1)?.total, 2);
+  assert.equal(snaps.at(-1)?.data[0], 0);   // no snapshot at step 5: the step 0 snapshot holds
+  src.seekStep(7);
+  assert.equal(series.at(-1)?.total, 2);    // no series sample at step 7: the step 5 value holds
+  assert.equal(snaps.at(-1)?.data[0], 7);
+  src.close();
+});
+
+test('every points snapshot carries the bounding box of the whole run', () => {
+  const pts = (step: number, half: number): Message => ({
+    type: 'snapshot', sub: 3, view: 'embedding', seq: step + 1, stamp_ns: step, kind: KIND_IDS.points,
+    data_view: {}, data: new Float32Array([-half, -half, -half, half, half, half]), shape: [2, 3],
+    aux: new Float32Array([0, 1]), colormap: 0, flags: 0, vmin: 0, vmax: 9,
+    stats: [0, 9, -half, half, -2 * half, 2 * half, -half, half], axes: [], points_dims: 3, label_count: 10,
+    stamp: new BigInt64Array([BigInt(step), BigInt(step)]),
+  });
+  const rec = parseRecording(concatFrames([
+    { type: 'views', views: [{ id: 3, name: 'embedding', kind: KIND_IDS.points, sources: [] }] },
+    pts(0, 0.1),
+    pts(10, 3),
+  ]));
+  for (const s of rec.snapshots.get('embedding')!) {
+    assert.deepEqual(s.msg.stats, [0, 9, -3, 3, -6, 6, -3, 3]);
+  }
+});
+
+test('play advances one step per animation frame and stops at the last step', async () => {
+  const frames: (() => void)[] = [];
+  const g = globalThis as unknown as Record<string, unknown>;
+  const saved = [g.requestAnimationFrame, g.cancelAnimationFrame];
+  g.requestAnimationFrame = (cb: () => void) => frames.push(cb);
+  g.cancelAnimationFrame = (id: number) => { frames[id - 1] = () => {}; };
+  try {
+    const src = new ReplaySource('http://localhost/r.calrec', { bytes: makeSampleRecording([0, 3]), initialStep: 'first' });
+    src.connect();
+    await src.ready;
+    assert.deepEqual(src.steps, [0, 1, 2, 3]);
+    src.play();
+    assert.equal(src.playing, true);
+    assert.equal(src.currentStep, 0);
+    for (const want of [1, 2, 3]) {
+      frames.at(-1)!();
+      assert.equal(src.currentStep, want);
+    }
+    assert.equal(src.playing, false);
+    assert.equal(frames.length, 3);   // no frame is requested after the last step
+    src.close();
+  } finally {
+    [g.requestAnimationFrame, g.cancelAnimationFrame] = saved;
+  }
+});
+
+test('reset pauses, returns to the first step and re-sends every view with a new cursor', async () => {
+  const src = new ReplaySource('http://localhost/r.calrec', { bytes: makeSampleRecording([0, 10, 25]), initialStep: 'last' });
+  src.connect();
+  await src.ready;
+  const peerFrames: Message[] = [];
+  const peer = src.attachFramePeer((frame) => {
+    const decoded = decode(frame);
+    if (decoded.type !== 'unknown') peerFrames.push(decoded);
+  });
+  peer.receive(encode({ type: 'hello', role: 'viewer', capabilities: [] }, PROTOCOL_MINOR_3_2));
+  peer.receive(encode({ type: 'subscribe', sub: 7, view: 'loss', request_id: 1 }, PROTOCOL_MINOR_3_2));
+  peer.receive(encode({ type: 'subscribe', sub: 8, view: 'weights', request_id: 2 }, PROTOCOL_MINOR_3_2));
+  const lastSeries = () => peerFrames.filter((m): m is SeriesMsg => m.type === 'series').at(-1)!;
+  const lastSnap = () => peerFrames.filter((m): m is SnapshotMsg => m.type === 'snapshot').at(-1)!;
+  assert.equal(lastSeries().total, 26);
+
+  src.reset();
+  assert.equal(src.playing, false);
+  assert.equal(src.stepIndex, 0);
+  assert.equal(lastSeries().total, 1);
+  assert.equal(lastSeries().values[0], 2);
+  assert.ok(Math.abs(lastSnap().data[0] - 0) < 1e-6);
+  const cursor = lastSeries().cursor!;
+
+  // At the first step already, a reset still re-sends the views with a newer cursor.
+  const before = peerFrames.length;
+  src.reset();
+  assert.ok(peerFrames.length > before);
+  assert.ok(lastSeries().cursor! > cursor);
+  assert.equal(lastSeries().total, 1);
+  peer.detach();
+  src.close();
 });
 
 test('ReplaySource seeks snapshots and series cleanly for both StreamClient and WASM frame peers', async () => {
@@ -103,7 +222,7 @@ test('ReplaySource seeks snapshots and series cleanly for both StreamClient and 
 
   assert.equal(src.state, 'open');
   assert.equal(src.currentStep, 25);
-  assert.equal(src.stepIndex, 2);
+  assert.equal(src.stepIndex, 25);
 
   // StreamClient subscriptions deliver initial step (25)
   const subLoss = src.subscribe('loss');

@@ -4,7 +4,7 @@
 // (caliper-views-loader.js, caliper-views.js, caliper-views.wasm) from paths
 // relative to the page, with no install and no server. When WebGPU or the
 // WebAssembly module is unavailable, renders the static fallback screenshot
-// and one line of text, never a blank box.
+// under a notice that says why, never a blank box.
 
 import { ReplaySource, resolvePageUrl } from './client/replay.js';
 import { CaliperView, define as defineView } from './element.js';
@@ -14,8 +14,17 @@ import { hasAdapter, preloadWasm, wasmKinds } from './wasm.js';
 
 defineView();
 
-const DEFAULT_FALLBACK_TEXT =
-  'This page shows a static capture of the recorded run because this browser has no WebGPU support.';
+const SCREENSHOT_TEXT = 'The image below is a static screenshot of the replay.';
+
+/** The first sentence of the fallback notice: why the live replay does not show. */
+function fallbackCause(reason: string): string {
+  if (reason === 'insecure-context') {
+    return 'WebGPU is not available because this page is not served over HTTPS or from localhost.';
+  }
+  if (reason === 'no-webgpu') return 'This browser does not support WebGPU.';
+  if (reason === 'no-adapter' || reason.startsWith('wasm-')) return 'WebGPU did not start in this browser.';
+  return 'The recorded run did not load.';
+}
 
 const STYLE = `
 :host { display: block; color: ${C.parchment}; font: 13px/1.45 ${FONT_TEXT}; -webkit-font-smoothing: antialiased; }
@@ -27,30 +36,31 @@ const STYLE = `
 .brand { font: 12px/1 ${FONT_TEXT}; letter-spacing: .14em; text-transform: uppercase; color: ${C.parchment}; }
 .script { font: 12px ${FONT_MONO}; color: ${C.secondary}; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 24em; }
 .tag { font: 11px ${FONT_MONO}; color: ${C.bronze}; border: 1px solid ${C.rule}; border-radius: 3px; padding: 1px 6px; white-space: nowrap; }
-.transport { display: flex; align-items: center; gap: 8px; margin-left: auto; flex: 1 1 220px; max-width: 420px; }
+.transport { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-left: auto; flex: 1 1 280px; max-width: 480px; }
 .transport[hidden] { display: none; }
-.play { font: 12px ${FONT_TEXT}; color: ${C.parchment}; background: ${C.deep}; border: 1px solid ${C.rule};
+.play, .reset { font: 12px ${FONT_TEXT}; color: ${C.parchment}; background: ${C.deep}; border: 1px solid ${C.rule};
   border-radius: 4px; padding: 2px 10px; height: 24px; cursor: pointer; flex: none; min-width: 56px; }
-.play:hover { border-color: ${C.bronze}; color: ${C.bronze}; }
-.play:focus-visible, .range:focus-visible { outline: 1px solid ${C.bronze}; outline-offset: 2px; }
+.play:hover, .reset:hover { border-color: ${C.bronze}; color: ${C.bronze}; }
+.play:focus-visible, .reset:focus-visible, .range:focus-visible { outline: 1px solid ${C.bronze}; outline-offset: 2px; }
 .range { flex: 1; min-width: 90px; accent-color: ${C.bronze}; cursor: pointer; margin: 0; }
-.step { font: 11.5px ${FONT_MONO}; color: ${C.secondary}; white-space: nowrap; flex: none; min-width: 9.5em; text-align: right; }
+.step { font: 11.5px ${FONT_MONO}; color: ${C.secondary}; white-space: nowrap; flex: none; min-width: 9.5em; text-align: right; margin-left: auto; }
 .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 400px), 1fr)); gap: 12px; padding: 12px; }
 .loading { padding: 36px 20px; text-align: center; color: ${C.faint}; font: 13px ${FONT_TEXT}; }
 .fallback { padding: 12px; background: ${C.ground}; }
 .fallback-img { display: block; width: 100%; height: auto; border: 1px solid ${C.ruleFaint}; border-radius: 6px; background: ${C.plate}; }
-.fallback-note { margin: 10px 2px 2px; color: ${C.secondary}; font: 13px/1.45 ${FONT_TEXT}; }
+.fallback-note { margin: 0 0 12px; padding: 12px 16px; color: ${C.parchment}; font: 16px/1.5 ${FONT_TEXT};
+  background: ${C.plate}; border: 1px solid ${C.rule}; border-left: 3px solid ${C.bronze}; border-radius: 6px; }
 [hidden] { display: none !important; }
 `;
 
 export type ReplayMode = 'loading' | 'live' | 'fallback';
 
 function parseInitialStep(raw: string | null): 'first' | 'last' | number {
-  if (!raw) return 'last';
+  if (!raw) return 'first';
   const s = raw.trim().toLowerCase();
   if (s === 'first' || s === 'last') return s;
   const n = Number(s);
-  return Number.isFinite(n) ? n : 'last';
+  return Number.isFinite(n) ? n : 'first';
 }
 
 export class CaliperReplay extends HTMLElement {
@@ -73,6 +83,7 @@ export class CaliperReplay extends HTMLElement {
     script: HTMLElement;
     transport: HTMLElement;
     play: HTMLButtonElement;
+    reset: HTMLButtonElement;
     range: HTMLInputElement;
     step: HTMLElement;
     grid: HTMLElement;
@@ -96,6 +107,7 @@ export class CaliperReplay extends HTMLElement {
       script: el('span', 'script'),
       transport: el('div', 'transport'),
       play: el('button', 'play'),
+      reset: el('button', 'reset'),
       range: el('input', 'range'),
       step: el('span', 'step'),
       grid: el('div', 'grid'),
@@ -135,14 +147,19 @@ export class CaliperReplay extends HTMLElement {
     this.replay?.seekStep(step);
   }
 
-  /** Starts playback through recorded steps. */
-  play(intervalMs = 450): void {
-    this.replay?.play(intervalMs);
+  /** Starts playback through recorded steps, one step per display frame. */
+  play(): void {
+    this.replay?.play();
   }
 
   /** Pauses playback. */
   pause(): void {
     this.replay?.pause();
+  }
+
+  /** Pauses playback and returns every view to its first-step state. */
+  reset(): void {
+    this.replay?.reset();
   }
 
   /** Read-only state for automated tests and diagnostics. */
@@ -180,6 +197,9 @@ export class CaliperReplay extends HTMLElement {
     p.play.type = 'button';
     p.play.textContent = 'Play';
     p.play.addEventListener('click', () => this.replay?.togglePlay());
+    p.reset.type = 'button';
+    p.reset.textContent = 'Reset';
+    p.reset.addEventListener('click', () => this.replay?.reset());
     p.range.type = 'range';
     p.range.min = '0';
     p.range.max = '0';
@@ -191,7 +211,7 @@ export class CaliperReplay extends HTMLElement {
       this.replay.seekIndex(Number(p.range.value));
     });
     p.transport.hidden = true;
-    p.transport.append(p.play, p.range, p.step);
+    p.transport.append(p.play, p.reset, p.range, p.step);
 
     p.bar.hidden = true;
     p.bar.append(brand, p.script, tag, p.transport);
@@ -200,9 +220,13 @@ export class CaliperReplay extends HTMLElement {
     p.loading.textContent = 'WebGPU replay load in progress.';
 
     p.fallbackImg.decoding = 'async';
-    p.fallbackImg.addEventListener('error', () => { p.fallbackImg.hidden = true; });
+    p.fallbackImg.addEventListener('error', () => {
+      p.fallbackImg.hidden = true;
+      if (this.mode === 'fallback') this.writeNotice();
+    });
+    p.fallbackNote.setAttribute('role', 'note');
     p.fallback.hidden = true;
-    p.fallback.append(p.fallbackImg, p.fallbackNote);
+    p.fallback.append(p.fallbackNote, p.fallbackImg);
 
     p.shell.append(p.bar, p.loading, p.grid, p.fallback);
     this.root.append(style, p.shell);
@@ -264,8 +288,16 @@ export class CaliperReplay extends HTMLElement {
       p.fallbackImg.removeAttribute('src');
       p.fallbackImg.hidden = true;
     }
-    p.fallbackNote.textContent = this.getAttribute('fallback-text')?.trim() || DEFAULT_FALLBACK_TEXT;
+    this.writeNotice();
     p.fallback.hidden = false;
+  }
+
+  /** The notice above the screenshot: the page's fallback-text, or the cause and what the image is. */
+  private writeNotice(): void {
+    const p = this.parts;
+    const custom = this.getAttribute('fallback-text')?.trim();
+    p.fallbackNote.textContent = custom
+      || (p.fallbackImg.hidden ? fallbackCause(this.reason) : `${fallbackCause(this.reason)} ${SCREENSHOT_TEXT}`);
   }
 
   private syncTimeline(): void {
@@ -281,7 +313,10 @@ export class CaliperReplay extends HTMLElement {
     p.range.max = String(steps.length - 1);
     p.range.value = String(r.stepIndex);
     p.play.textContent = r.playing ? 'Pause' : 'Play';
-    p.step.textContent = `Step ${r.currentStep} / ${steps[steps.length - 1]}`;
+    const last = steps[steps.length - 1];
+    p.step.textContent = `Step ${r.currentStep} / ${last}`;
+    // The widest label sets the width, so the range bar stays still while playback adds digits.
+    p.step.style.minWidth = `${`Step ${last} / ${last}`.length}ch`;
   }
 
   private async start(): Promise<void> {
@@ -298,7 +333,9 @@ export class CaliperReplay extends HTMLElement {
     const adapterOk = await hasAdapter();
     if (gen !== this.generation) return;
     if (!adapterOk) {
-      this.showFallback('no-webgpu');
+      // WebGPU exists only in secure contexts, so check the context before navigator.gpu.
+      const gpu = (navigator as Navigator & { gpu?: unknown }).gpu;
+      this.showFallback(!window.isSecureContext ? 'insecure-context' : gpu ? 'no-adapter' : 'no-webgpu');
       return;
     }
 
