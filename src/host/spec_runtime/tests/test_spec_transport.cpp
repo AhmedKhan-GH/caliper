@@ -27,7 +27,7 @@
 
 namespace cb = caliper_builder;
 namespace spec = caliper_builder::spec;
-using caliper_host::SpecInstrumentHost;
+using caliper_host::SpecLiveHost;
 using caliper_host::SpecLook;
 
 namespace {
@@ -54,7 +54,7 @@ struct PausedRun final : cb::RunControl {
 };
 
 const char* kSpec =
-    "caliper_spec = 1\n[applet]\nid = \"t\"\n"
+    "caliper_spec = 2\n[instrument]\nid = \"t\"\n"
     "[[source]]\nid = \"act\"\ncatalog = \"live:act\"\n"
     "[[control]]\nid = \"time\"\nkind = \"transport\"\nbind = \"cursor\"\n";
 
@@ -80,7 +80,7 @@ struct State {
         values.reset(spec);
         for (int step = 10; step <= 50; step += 10) history.append("live:act", step, one(float(step)));
     }
-    SpecInstrumentHost host() { return SpecInstrumentHost{&events, nullptr, &values, &history, &spec}; }
+    SpecLiveHost host() { return SpecLiveHost{&events, nullptr, &values, &history, &spec}; }
 };
 
 // A headless ImGui context, one window over the display, and the mouse.
@@ -144,7 +144,7 @@ bool warm(uint32_t p) {
 TEST_CASE("spec transport: the buttons hold, step, play and go live, and each move adds one cursor event") {
     State s;
     Ui ui;
-    SpecInstrumentHost host = s.host();
+    SpecLiveHost host = s.host();
     const spec::Control& t = s.spec.controls.front();
     auto draw = [&] { return caliper_host::draw_transport_control(t, kRow, SpecLook{}, host); };
     CHECK(s.history.cursor().live);
@@ -167,7 +167,7 @@ TEST_CASE("spec transport: the buttons hold, step, play and go live, and each mo
 TEST_CASE("spec transport: the keys step, go to the first step and go live, unless a text field holds them") {
     State s;
     Ui ui;
-    SpecInstrumentHost host = s.host();
+    SpecLiveHost host = s.host();
     auto keys = [&] { return caliper_host::handle_transport_keys(s.spec, host); };
     CHECK(ui.key(ImGuiKey_LeftArrow, keys) == 1);
     CHECK(s.history.cursor().step == 40);
@@ -186,7 +186,7 @@ TEST_CASE("spec transport: the keys step, go to the first step and go live, unle
 
 TEST_CASE("spec transport: play moves the cursor once a frame at its speed and goes live at the newest step") {
     State s;
-    SpecInstrumentHost host = s.host();
+    SpecLiveHost host = s.host();
     cb::CursorState want = s.history.cursor();
     want.live = false;
     want.step = 10;
@@ -209,7 +209,7 @@ TEST_CASE("spec transport: a held transport beside a paused run, and a held seri
     run.run.attached = true;
     run.run.state = "paused";
     run.run.step = 50;
-    SpecInstrumentHost host = s.host();
+    SpecLiveHost host = s.host();
     host.run = &run;
     cb::CursorState want = s.history.cursor();
     want.live = false;

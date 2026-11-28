@@ -80,7 +80,7 @@ if(BUILD_TESTS AND TARGET doctest::doctest AND NOT WIN32)
             # caliper_attention_producer is defined later, under the same condition.
             add_dependencies(caliper_agent_settings_tests caliper_attention_producer)
             list(APPEND _settings_app_env "CALIPER_TEST_PRODUCER_EXE=$<TARGET_FILE:caliper_attention_producer>"
-                "CALIPER_TEST_APPLETS=${CMAKE_BINARY_DIR}/applets")
+                "CALIPER_TEST_INSTRUMENTS=${CMAKE_BINARY_DIR}/instruments")
         endif()
         add_test(NAME caliper_agent_settings_app COMMAND caliper_agent_settings_tests --test-suite=app)
         set_tests_properties(caliper_agent_settings_app PROPERTIES LABELS "builder;widget;cli" TIMEOUT 400

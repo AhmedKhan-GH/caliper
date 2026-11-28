@@ -10,7 +10,7 @@
 // files of --inputs (run42_metrics.parquet with step, loss, accuracy and lr,
 // and attn.safetensors), or else a CSV of 200 steps and a small safetensors
 // file that the tool writes, imported and run, and the dashboard of
-// dashboard.spec.toml saved as a spec applet. The tool opens it (applet.open from the ui origin), so give it a
+// dashboard.spec.toml saved as an instrument. The tool opens it (instrument.open from the ui origin), so give it a
 // folder of its own. Then it runs what the app runs for the chat: the
 // session's command queue drained on this thread, Caliper API's server on
 // 127.0.0.1 with the session's command gateway and an API file, and the side
@@ -82,9 +82,9 @@ using caliper_builder::CommandResult;
 
 namespace {
 
-const char* const kDashboard = R"(caliper_spec = 0
+const char* const kDashboard = R"(caliper_spec = 2
 
-[applet]
+[instrument]
 id = "run42-dashboard"
 title = "Run 42"
 description = "Loss and accuracy of run 42, the attention of its first layer, and the metrics as a table."
@@ -192,8 +192,8 @@ std::string make_dashboard(caliper_builder::Session& s, const std::string& ws, c
     if (!r.ok) return "spec.new: " + r.error.code + ": " + r.error.message;
     r = invoke(s, "spec.set_text", {{"text", kDashboard}});
     if (!r.ok) return "spec.set_text: " + r.error.code + ": " + r.error.message;
-    r = invoke(s, "applet.save", {{"overwrite", true}});
-    if (!r.ok) return "applet.save: " + r.error.code + ": " + r.error.message;
+    r = invoke(s, "instrument.save", {{"overwrite", true}});
+    if (!r.ok) return "instrument.save: " + r.error.code + ": " + r.error.message;
     return {};
 }
 
@@ -260,11 +260,11 @@ int main(int argc, char** argv) {
     if (opened.error) return fail("cannot open the workspace " + workspace + ": " + opened.error.message);
     std::unique_ptr<caliper_builder::Session> session = std::move(opened.session);
     session->registry().set_frame_thread(std::this_thread::get_id());
-    if (!fs::exists(fs::path(workspace) / "applets" / "run42-dashboard", ec)) {
+    if (!fs::exists(fs::path(workspace) / "instruments" / "run42-dashboard", ec)) {
         if (std::string why = make_dashboard(*session, workspace, inputs); !why.empty()) return fail(why);
     }
-    if (CommandResult r = invoke(*session, "applet.open", {{"id", "run42-dashboard"}}); !r.ok)
-        return fail("applet.open: " + r.error.code + ": " + r.error.message);
+    if (CommandResult r = invoke(*session, "instrument.open", {{"id", "run42-dashboard"}}); !r.ok)
+        return fail("instrument.open: " + r.error.code + ": " + r.error.message);
 
     // Caliper API with the session's command layer, and its API file, as the
     // app writes it (owner only), beside the workspace.

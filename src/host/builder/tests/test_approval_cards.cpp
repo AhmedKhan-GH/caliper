@@ -291,8 +291,8 @@ TEST_CASE("approval cards: an edit that conflicts after the spec changed underne
 
 TEST_CASE("approval cards: a destructive command's card says what is lost, and an api call has no time limit") {
     Rig r("destructive");
-    ok(*r.s, "applet.save");
-    auto f = r.submit("applet.save", {{"overwrite", true}});
+    ok(*r.s, "instrument.save");
+    auto f = r.submit("instrument.save", {{"overwrite", true}});
     // loader.delete from the api origin answers at once and stays pending.
     CommandInvocation del;
     del.name = "loader.delete";
@@ -307,7 +307,7 @@ TEST_CASE("approval cards: a destructive command's card says what is lost, and a
     REQUIRE(r.cards->cards().size() == 2);
     const ApprovalCard& save = r.cards->cards()[0];
     const ApprovalCard& gone = r.cards->cards()[1];
-    CHECK(save.what == "applet.save \xC2\xB7 board");
+    CHECK(save.what == "instrument.save \xC2\xB7 board");
     // An overwrite is approved by its content: the card shows the diff of the
     // file it would write (empty here, the same content), not a loss line.
     CHECK(save.review);
@@ -331,9 +331,9 @@ TEST_CASE("approval cards: a destructive command's card says what is lost, and a
 
 TEST_CASE("approval cards: an approval made void by a change of what the card showed is reissued, not failed") {
     Rig r("reissued");
-    ok(*r.s, "applet.save");
-    // An outside agent overwrites the saved applet: held, with the content.
-    auto f = r.submit("applet.save", {{"overwrite", true}});
+    ok(*r.s, "instrument.save");
+    // An outside agent overwrites the saved instrument: held, with the content.
+    auto f = r.submit("instrument.save", {{"overwrite", true}});
     r.frame();
     const std::string first = r.only().id;
     // The open spec changes while the card waits; the person approves the card.
@@ -346,10 +346,10 @@ TEST_CASE("approval cards: an approval made void by a change of what the card sh
     const ApprovalCard& second = r.only();
     CHECK(second.id != first);
     CHECK(second.state == ApprovalState::waiting);
-    CHECK(second.name == "applet.save");
+    CHECK(second.name == "instrument.save");
     CHECK(r.cards->waiting() == 1);
     CHECK_FALSE(ready(f));
-    CHECK(r.err.str().find("[approval] " + first + " applet.save (mcp) reissued as " + second.id) != std::string::npos);
+    CHECK(r.err.str().find("[approval] " + first + " instrument.save (mcp) reissued as " + second.id) != std::string::npos);
     CHECK(r.err.str().find("failed") == std::string::npos);
     CHECK(r.err.str().find("history.conflict") == std::string::npos);
     // Approving the new card completes the call.

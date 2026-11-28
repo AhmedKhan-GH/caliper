@@ -109,10 +109,10 @@ inline std::unique_ptr<caliper_builder::Session> dashboard_workspace(const std::
     REQUIRE(imported["refused"].empty());
 
     const caliper_builder::spec::Spec d = dashboard_fixture();
-    nlohmann::json applet{{"id", d.applet.id}};
-    if (d.applet.title) applet["title"] = *d.applet.title;
-    if (d.applet.description) applet["description"] = *d.applet.description;
-    ok(*s, "spec.new", applet);
+    nlohmann::json instrument{{"id", d.instrument.id}};
+    if (d.instrument.title) instrument["title"] = *d.instrument.title;
+    if (d.instrument.description) instrument["description"] = *d.instrument.description;
+    ok(*s, "spec.new", instrument);
     for (const auto& src : d.sources) ok(*s, "source.add", caliper_builder::source_command_args(src));
     for (const auto& p : d.panels) ok(*s, "panel.create", caliper_builder::panel_command_args(p));
     ok(*s, "layout.set", {{"layout", caliper_builder::layout_to_flat(*d.layout, d)}});

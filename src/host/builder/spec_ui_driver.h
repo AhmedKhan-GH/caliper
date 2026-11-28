@@ -100,7 +100,7 @@
 //                        import runs
 //   pane focus <panel>   wait until the builder's focused panel is <panel>
 //   page <name>          wait until the app shows that page (landing, spec,
-//                        live, applet)
+//                        live, instrument)
 //   browser note <text>|none
 //                        wait until the spec page's note about ⌘O Open in
 //                        browser (SpecPage::browser_note()) is that text, or
@@ -108,10 +108,10 @@
 //   command-line <text>|none
 //                        wait until the landing's command line holds that
 //                        text, or nothing
-//   landing selected <applet id>
-//                        wait until the landing's selected row is the applet
+//   landing selected <instrument id>
+//                        wait until the landing's selected row is the instrument
 //                        with that manifest id
-//   landing projects <applet id>,...|none
+//   landing projects <instrument id>,...|none
 //                        wait until Projects lists exactly those dashboards
 //                        (manifest ids, in their order), or none
 //   widget <label>       presses the inline surface's action of that label
@@ -571,7 +571,7 @@ public:
                 if (shown(listed) != want) return patience("Projects lists " + shown(listed));
                 next("Projects lists " + want);
             } else {
-                error_ = "landing takes selected <applet id> or projects <applet id>,...|none";
+                error_ = "landing takes selected <instrument id> or projects <instrument id>,...|none";
             }
             return;
         }

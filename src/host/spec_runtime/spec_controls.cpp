@@ -1,4 +1,4 @@
-// The controls of a spec (spec_instruments.h, design/instruments.md, Control
+// The controls of a spec (spec_live_host.h, design/instruments.md, Control
 // Table, and design/instrument-interface.md, Controls).
 //
 // A control is one row: its title on the left, its widget on the right. This file
@@ -42,7 +42,7 @@
 // frame; the `control` event, and the `state` event of a state, go to the ring
 // once, when the edit ends. Without a session the control holds its value
 // itself.
-#include "spec_runtime/spec_instruments.h"
+#include "spec_runtime/spec_live_host.h"
 #include "spec_runtime/spec_transport.h"
 
 #include <caliper_builder/spec/state.h>
@@ -115,7 +115,7 @@ std::string key_of(const spec::Control& c) {
 
 bool same(double a, double b) { return std::fabs(a - b) <= 1e-12 * std::max(1.0, std::max(std::fabs(a), std::fabs(b))); }
 
-void push_control_event(SpecInstrumentHost& host, const spec::Control& c, json value) {
+void push_control_event(SpecLiveHost& host, const spec::Control& c, json value) {
     if (!host.events) return;
     cb::Event e;
     e.kind = cb::EventKind::control;
@@ -147,7 +147,7 @@ const cb::RunAction* find_action(const cb::RunState& st, const std::string& name
 }
 
 // Why a widget bound to the script cannot act now, or "".
-std::string why_disabled(const SpecInstrumentHost& host, const cb::RunState& st) {
+std::string why_disabled(const SpecLiveHost& host, const cb::RunState& st) {
     if (!host.run || !st.attached) return "No script is attached.";
     if (!st.control) return st.why_not.empty() ? "The stream takes no control." : st.why_not;
     return "";
@@ -171,7 +171,7 @@ bool holds_value(const spec::ControlTarget& t) {
 }
 
 // The state variable a control binds, from the spec shown.
-const spec::StateVar* bound_state(const SpecInstrumentHost& host, const spec::Control& c) {
+const spec::StateVar* bound_state(const SpecLiveHost& host, const spec::Control& c) {
     const auto t = spec::parse_control_target(c.bind);
     if (!host.spec || !t || t->kind != spec::ControlTarget::Kind::state) return nullptr;
     for (const auto& s : host.spec->states)
@@ -180,7 +180,7 @@ const spec::StateVar* bound_state(const SpecInstrumentHost& host, const spec::Co
 }
 
 // The value a reference reads now, or its default.
-json read_reference(const SpecInstrumentHost& host, const spec::Reference& r) {
+json read_reference(const SpecLiveHost& host, const spec::Reference& r) {
     if (r.kind == spec::Reference::Kind::state && r.target == spec::kCursorState && host.history) {
         const cb::CursorState cur = host.history->cursor();
         const std::string f = r.field.value_or("step");
@@ -193,7 +193,7 @@ json read_reference(const SpecInstrumentHost& host, const spec::Reference& r) {
 
 // The low or high bound of a slider or a range: a number, a reference's
 // value, or the bound of its state.
-std::optional<double> bound_of(const SpecInstrumentHost& host, const spec::Control& c, const char* key) {
+std::optional<double> bound_of(const SpecLiveHost& host, const spec::Control& c, const char* key) {
     const auto ref = c.options.references.find(key);
     if (ref != c.options.references.end()) {
         const json v = read_reference(host, ref->second);
@@ -207,7 +207,7 @@ std::optional<double> bound_of(const SpecInstrumentHost& host, const spec::Contr
 }
 
 // The value a control starts with when nothing holds one.
-json start_of(const SpecInstrumentHost& host, const spec::Control& c) {
+json start_of(const SpecLiveHost& host, const spec::Control& c) {
     if (const spec::StateVar* s = bound_state(host, c)) return spec::state_initial_value(*s);
     const spec::ControlOptions& o = c.options;
     if (o.value) return *o.value;
@@ -229,7 +229,7 @@ json start_of(const SpecInstrumentHost& host, const spec::Control& c) {
 }
 
 // The value a control bound to `value` or to a state shows now.
-json current(const SpecInstrumentHost& host, const spec::Control& c) {
+json current(const SpecLiveHost& host, const spec::Control& c) {
     if (host.values) {
         json v = host.values->control_value(c.id);
         if (!v.is_null()) return v;
@@ -243,7 +243,7 @@ json current(const SpecInstrumentHost& host, const spec::Control& c) {
 // the end of the edit the value goes again with its events, from the value
 // the drag began with, so that the `state` event gives the right previous
 // value. Returns whether the session took it.
-bool write(SpecInstrumentHost& host, const spec::Control& c, const json& v, bool end) {
+bool write(SpecLiveHost& host, const spec::Control& c, const json& v, bool end) {
     const std::string key = key_of(c);
     if (!end && !drag_starts().count(key)) drag_starts()[key] = current(host, c);
     if (end) {
@@ -360,7 +360,7 @@ double snap(double v, double lo, const std::optional<double>& step) {
     return lo + std::round((v - lo) / *step) * *step;
 }
 
-bool draw_slider(const spec::Control& c, const spec::ControlTarget& t, const Row& row, SpecInstrumentHost& host) {
+bool draw_slider(const spec::Control& c, const spec::ControlTarget& t, const Row& row, SpecLiveHost& host) {
     const std::string key = key_of(c);
     double lo = c.options.min.value_or(0.0), hi = c.options.max.value_or(1.0);
     bool log = c.options.log.value_or(false);
@@ -450,7 +450,7 @@ bool draw_slider(const spec::Control& c, const spec::ControlTarget& t, const Row
     return changed;
 }
 
-bool draw_button(const spec::Control& c, const spec::ControlTarget& t, const Row& row, SpecInstrumentHost& host) {
+bool draw_button(const spec::Control& c, const spec::ControlTarget& t, const Row& row, SpecLiveHost& host) {
     const cb::RunState st = host.run ? host.run->state() : cb::RunState{};
     std::string why = why_disabled(host, st);
     const std::string label = spec_button_label(c, st);
@@ -491,7 +491,7 @@ const cb::Intervention* find_intervention(const std::vector<cb::Intervention>& i
 }
 
 bool draw_toggle(const spec::Control& c, const spec::ControlTarget& t, const Row& row, const SpecLook& look,
-                 SpecInstrumentHost& host) {
+                 SpecLiveHost& host) {
     const cb::RunState st = host.run ? host.run->state() : cb::RunState{};
     std::string why = why_disabled(host, st);
     bool script_on = false;
@@ -588,7 +588,7 @@ bool draw_toggle(const spec::Control& c, const spec::ControlTarget& t, const Row
 
 // A toggle bound to `value` or to a state: the switch of draw_toggle() over a
 // boolean that the session holds.
-bool draw_value_toggle(const spec::Control& c, const Row& row, const SpecLook& look, SpecInstrumentHost& host) {
+bool draw_value_toggle(const spec::Control& c, const Row& row, const SpecLook& look, SpecLiveHost& host) {
     const json now = current(host, c);
     const bool on = now.is_boolean() && now.get<bool>();
     ImGui::SetCursorScreenPos(row.widget.Min);
@@ -633,7 +633,7 @@ std::map<std::string, int>& range_grips() {
 // colour with a grab at each end, and the two numbers over it. A drag moves
 // the nearer grab, or the whole span when it starts between the grabs; the
 // value snaps to `step` and keeps at least `min_span`.
-bool draw_range(const spec::Control& c, const Row& row, const SpecLook& look, SpecInstrumentHost& host) {
+bool draw_range(const spec::Control& c, const Row& row, const SpecLook& look, SpecLiveHost& host) {
     const std::optional<double> mn = bound_of(host, c, "min"), mx = bound_of(host, c, "max");
     const std::string key = key_of(c);
     ImGui::SetCursorScreenPos(row.widget.Min);
@@ -720,7 +720,7 @@ bool draw_range(const spec::Control& c, const Row& row, const SpecLook& look, Sp
 }
 
 // A picker: a menu of its choices, the chosen one shown.
-bool draw_picker(const spec::Control& c, const Row& row, SpecInstrumentHost& host) {
+bool draw_picker(const spec::Control& c, const Row& row, SpecLiveHost& host) {
     const json now = current(host, c);
     std::string shown = now.is_null() ? std::string("\xE2\x80\x94") : now.is_string() ? now.get<std::string>() : now.dump();
     for (const auto& ch : c.options.choices)
@@ -777,7 +777,7 @@ TextEdits& text_edits() {
 
 // A text field: the person's edit applies on Return or when the field loses
 // focus. Parameter edits over max_length are refused without truncation.
-bool draw_text_field(const spec::Control& c, const Row& row, SpecInstrumentHost& host) {
+bool draw_text_field(const spec::Control& c, const Row& row, SpecLiveHost& host) {
     const std::string key = key_of(c);
     const auto target = spec::parse_control_target(c.bind);
     const bool script = target && target->kind == spec::ControlTarget::Kind::param;
@@ -879,7 +879,7 @@ bool draw_text_field(const spec::Control& c, const Row& row, SpecInstrumentHost&
 // A segmented group: one square button for each choice, the ones that are on
 // in the accent colour. Without `multiple` a click chooses one; with it a
 // click turns its choice on or off.
-bool draw_segmented(const spec::Control& c, const Row& row, const SpecLook& look, SpecInstrumentHost& host) {
+bool draw_segmented(const spec::Control& c, const Row& row, const SpecLook& look, SpecLiveHost& host) {
     const json now = current(host, c);
     const bool multiple = c.options.multiple && *c.options.multiple;
     const std::size_t n = c.options.choices.size();
@@ -947,7 +947,7 @@ bool draw_segmented(const spec::Control& c, const Row& row, const SpecLook& look
 // a field that names a source, from the source's kept value at the cursor
 // (spec_annotations.h). A format that does not parse shows as written, in the
 // faint colour, with the reason as its tooltip.
-void draw_readout(const spec::Control& c, const Row& row, const SpecLook& look, const SpecInstrumentHost& host) {
+void draw_readout(const spec::Control& c, const Row& row, const SpecLook& look, const SpecLiveHost& host) {
     ImDrawList* dl = ImGui::GetWindowDrawList();
     const float ty = row.widget.GetCenter().y - ImGui::GetTextLineHeight() * 0.5f;
     if (host.run && (c.bind == "param:output.status" || c.id == "trace_status")) {
@@ -1016,7 +1016,7 @@ float spec_control_height(const caliper_builder::spec::Control& control, const S
 }
 
 bool draw_spec_control(const caliper_builder::spec::Control& control, const ImRect& rect, const SpecLook& look,
-                       SpecInstrumentHost& host) {
+                       SpecLiveHost& host) {
     if (rect.GetWidth() <= 1.0f || rect.GetHeight() <= 1.0f) return false;
     const ImVec2 cursor = ImGui::GetCursorScreenPos();
     ImGui::PushID(control.id.c_str());
@@ -1058,7 +1058,7 @@ bool draw_spec_control(const caliper_builder::spec::Control& control, const ImRe
     return changed;
 }
 
-void record_spec_pick(const std::string& panel, const caliper_builder::Event& pick, SpecInstrumentHost& host) {
+void record_spec_pick(const std::string& panel, const caliper_builder::Event& pick, SpecLiveHost& host) {
     if (!host.values) return;
     // The pick's fields: the event's `fields` when the panel gave them, else
     // the keys of a live view's pick (entity, index, row_id, position).

@@ -18,7 +18,7 @@
 //                  sources, then spec.new, a source for each live source it
 //                  needs and one whose transforms take the entropy of each
 //                  layer's head-mean attention, three panels, the layout,
-//                  applet.save and applet.open, each through caliper-mcp, so
+//                  instrument.save and instrument.open, each through caliper-mcp, so
 //                  that each spec edit waits for the person's approval when
 //                  Caliper reviews them
 //   Compare ...    one chunk, a line on stderr, then exits with code 1
@@ -445,14 +445,14 @@ void live_entropy(const json& id) {
                                                                         {"children", json::array({"top", "steps"})}},
                                                                        {{"id", "top"}, {"split", "horizontal"}, {"ratio", 0.5},
                                                                         {"children", json::array({"heads", "layers"})}}})}}}}));
-    good = good && ok(caliper_call(mcp, row(), "applet_save", "edit", json::object()));
+    good = good && ok(caliper_call(mcp, row(), "instrument_save", "edit", json::object()));
     if (!good) {
         chunk("Caliper refused a step, so the spec is not complete.");
         end_turn(id);
         return;
     }
     steps("completed", "completed", "in_progress");
-    caliper_call(mcp, row(), "applet_open", "other", {{"id", "attention-entropy"}});
+    caliper_call(mcp, row(), "instrument_open", "other", {{"id", "attention-entropy"}});
     steps("completed", "completed", "completed");
     chunk("Opened Attention entropy: the entropy by layer and head as the training script computes it, the entropy of "
           "each layer's head-mean attention computed by the spec, and each layer's mean entropy by step. They follow "

@@ -61,7 +61,7 @@ TEST_CASE("a bound text reads its references' defaults without a session, and a 
     t.fields["step"] = ref(caliper_builder::spec::Reference::Kind::state, "cursor", 12000, "step");
     t.fields["token"] = ref(caliper_builder::spec::Reference::Kind::state, "token", 7);
     t.fields["loss"] = std::string("loss");
-    const SpecInstrumentHost host;   // no session: references give their defaults
+    const SpecLiveHost host;   // no session: references give their defaults
     const auto values = spec_bound_text_values(t, host);
     CHECK(values.at("step") == json(12000));
     CHECK(values.at("token") == json(7));
@@ -84,7 +84,7 @@ TEST_CASE("annotations: a series panel draws a band, a threshold, a marker and l
     // Three labels at almost one point of the curve, the case that drew
     // labels on top of each other, beside a band, a threshold and a marker.
     const caliper_builder::spec::Spec s = parse(
-        "caliper_spec = 1\n[applet]\nid = \"t\"\n[[source]]\nid = \"w\"\ncatalog = \"tensor:w\"\n"
+        "caliper_spec = 2\n[instrument]\nid = \"t\"\n[[source]]\nid = \"w\"\ncatalog = \"tensor:w\"\n"
         "[[panel]]\nid = \"p\"\nprimitive = \"series\"\ntitle = \"Loss\"\nbind = { y = \"w\" }\n"
         "[[panel.annotation]]\nid = \"window\"\nkind = \"band\"\naxis = \"x\"\nrange = [20.0, 45.0]\ntext = \"Window\"\n"
         "[[panel.annotation]]\nid = \"floor\"\nkind = \"threshold\"\naxis = \"y\"\nvalue = 30.0\ntext = \"Floor {f:.1f}\"\n"
@@ -102,7 +102,7 @@ TEST_CASE("annotations: a series panel draws a band, a threshold, a marker and l
     SpecPanelView view;
     view.data = prepare_panel(s, s.panels[0], data({f32("y", "w", {100}, y)}, caliper_builder::spec::Primitive::series));
     view.key = &key;
-    SpecInstrumentHost host;
+    SpecLiveHost host;
     view.spec_panel = &s.panels[0];
     view.instruments = &host;
     SpecPanelFrame frame;
@@ -217,8 +217,8 @@ TEST_CASE("annotations: the item labels of a scene keep off the view's own texts
 
 TEST_CASE("annotations: the layout shares at 2560 by 1440 and at 1440 by 900") {
     if (!canvas()) return;
-    const caliper_builder::spec::Spec s = parse(R"toml(caliper_spec = 1
-[applet]
+    const caliper_builder::spec::Spec s = parse(R"toml(caliper_spec = 2
+[instrument]
 id = "shares"
 [[source]]
 id = "w"

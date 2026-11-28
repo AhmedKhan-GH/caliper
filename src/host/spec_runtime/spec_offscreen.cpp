@@ -214,7 +214,7 @@ PanelPng OffscreenPanelRenderer::render_panel(const spec::Spec& s, const caliper
     view.data = prepare_panel(s, *panel, data, limits_);
     view.key = &key;
     // The annotations, the cursor line and the bound texts, as the page draws them.
-    SpecInstrumentHost host;
+    SpecLiveHost host;
     host.values = values_;
     host.history = history_;
     host.spec = &s;

@@ -6,7 +6,7 @@
 // Windows, as `caliper shot` uses) and its own ImGui, ImPlot and ImPlot3D
 // contexts in the house style. It opens no window. It needs none of the app's
 // page machinery: the seam is HostRenderer's canvas, which `caliper shot`
-// also draws through, and nothing of the applet page.
+// also draws through, and nothing of the instrument page.
 //
 // When another ImGui context is current as it is made (the app's, between
 // two frames), its contexts share that context's font atlas, so the house

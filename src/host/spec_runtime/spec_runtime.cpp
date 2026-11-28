@@ -3,7 +3,7 @@
 // out and keeps its panels' data.
 #include "spec_runtime/spec_runtime.h"
 #include "spec_runtime/spec_annotations.h"
-#include "spec_runtime/spec_instruments.h"
+#include "spec_runtime/spec_live_host.h"
 #include "spec_runtime/spec_shortcuts.h"
 #include "spec_runtime/spec_transport.h"
 #include "live/camera_drag.h"         // a right click on a 3-D points box, as on a scene
@@ -826,8 +826,8 @@ void draw_text(SpecPanelView& v, const ImRect& c, const SpecLook& L) {
     // A bound text: formatted at each frame from the values at the cursor
     // (spec_annotations.h), with the bound value as its field `value`.
     if (X.bound && v.spec_panel && v.spec_panel->options.bound_text) {
-        static const SpecInstrumentHost no_session;
-        const SpecInstrumentHost& host = v.instruments ? *v.instruments : no_session;
+        static const SpecLiveHost no_session;
+        const SpecLiveHost& host = v.instruments ? *v.instruments : no_session;
         std::map<std::string, nlohmann::json> extra;
         if (v.spec_panel->bind.count("value")) extra["value"] = X.value_json;
         const std::string t = spec_bound_text_string(*v.spec_panel->options.bound_text, host, extra);
@@ -1708,8 +1708,8 @@ caliper_builder::ChainContext SpecRuntime::chain_context() const {
     return c;
 }
 
-SpecInstrumentHost SpecRuntime::instrument_host(const spec::Spec* shown) const {
-    SpecInstrumentHost h;
+SpecLiveHost SpecRuntime::instrument_host(const spec::Spec* shown) const {
+    SpecLiveHost h;
     h.events = events_;
     h.run = run_;
     h.values = values_;
@@ -1770,8 +1770,8 @@ void SpecRuntime::bind_scene(Entry& e) {
             caliper_builder::Event kept = pick ? ev : caliper_builder::Event{};
             note_program_pick(panel, ev);
             events_->push(std::move(ev));
-            if (pick) {   // the panel's last pick and its `select` write (spec_instruments.h)
-                SpecInstrumentHost host = instrument_host(spec_ ? &*spec_ : nullptr);
+            if (pick) {   // the panel's last pick and its `select` write (spec_live_host.h)
+                SpecLiveHost host = instrument_host(spec_ ? &*spec_ : nullptr);
                 record_spec_pick(panel, kept, host);
             }
         };
@@ -1808,7 +1808,7 @@ void SpecRuntime::bind_entity_scene(Entry& e) {
             note_program_pick(panel, ev);
             events_->push(std::move(ev));
             if (pick) {
-                SpecInstrumentHost host = instrument_host(spec_ ? &*spec_ : nullptr);
+                SpecLiveHost host = instrument_host(spec_ ? &*spec_ : nullptr);
                 record_spec_pick(panel, kept, host);
             }
         };
@@ -1838,7 +1838,7 @@ void SpecRuntime::draw_control(const spec::Control& control, const ImRect& r, co
                               ImGuiWindowFlags_NoBackground)) {
         ImGui::PopStyleVar(2);
         ImGui::GetWindowDrawList()->AddRectFilled(r.Min, r.Max, L.ground);
-            SpecInstrumentHost host = instrument_host(spec_ ? &*spec_ : nullptr);
+            SpecLiveHost host = instrument_host(spec_ ? &*spec_ : nullptr);
         draw_spec_control(control, r, L, host);
         // An item at the corner, so the child's bounds come from an item.
         ImGui::SetCursorScreenPos(r.Min);
@@ -2152,14 +2152,14 @@ void SpecRuntime::draw(const ImRect& area, const SpecLook& L) {
     const spec::Spec& shown = spec_preview_ ? *spec_preview_ : *spec_;
     // The instruments' keys and the transport's play, once a frame
     // (spec_shortcuts.h, spec_transport.h).
-    SpecInstrumentHost instruments = instrument_host(&shown);
+    SpecLiveHost instruments = instrument_host(&shown);
     handle_instrument_keys(shown, instruments);
     handle_transport_keys(shown, instruments);
     tick_transport(instruments, ImGui::GetIO().DeltaTime);
     const std::optional<spec::LayoutNode> root = caliper_builder::effective_layout(shown);
     if (!root) {
         dl->AddRectFilled(area.Min, area.Max, L.ground);
-        if (empty_hint_.empty()) draw_state({PanelStateKind::empty, "No panels", shown.applet.id}, area, L);
+        if (empty_hint_.empty()) draw_state({PanelStateKind::empty, "No panels", shown.instrument.id}, area, L);
         else draw_hint("No panels", empty_hint_, area, L);
         return;
     }

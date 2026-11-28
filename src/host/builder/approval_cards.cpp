@@ -108,10 +108,10 @@ std::string approval_what(const cb::CommandInvocation& inv, const spec::Spec* op
     } else if (n == "layout.set") {
         target = "layout";
     } else if (n == "spec.set_text") {
-        if (open) target = open->applet.title && !open->applet.title->empty() ? *open->applet.title : open->applet.id;
-    } else if (n == "applet.save") {
+        if (open) target = open->instrument.title && !open->instrument.title->empty() ? *open->instrument.title : open->instrument.id;
+    } else if (n == "instrument.save") {
         target = str_arg(a, "id");
-        if (target.empty() && open) target = open->applet.id;
+        if (target.empty() && open) target = open->instrument.id;
     } else if (n == "data.import") {
         const auto it = a.find("paths");
         if (it != a.end() && it->is_array() && !it->empty() && (*it)[0].is_string()) {
@@ -177,14 +177,14 @@ std::string approval_loss(const cb::CommandInvocation& inv, const spec::Spec* op
     const std::string& n = inv.name;
     const json& a = inv.args;
     std::string id = str_arg(a, "id");
-    if (n == "applet.save" && id.empty() && open) id = open->applet.id;
+    if (n == "instrument.save" && id.empty() && open) id = open->instrument.id;
     if (n == "loader.update")
         return "Loader " + id + (bool_arg(a, "run", false) ? " overwritten and run" : " overwritten");
     if (n == "loader.run") return "Tables of loader " + id + " replaced";
     if (n == "loader.delete")
         return "Loader " + id + (bool_arg(a, "keep_outputs", false) ? " deleted" : " and its tables deleted");
     if (n == "loader.create") return "Python script run";   // it asks only for a Python loader with run set
-    if (n == "applet.save") return "Applet " + (id.empty() ? std::string("of the open spec") : id) + " overwritten";
+    if (n == "instrument.save") return "Instrument " + (id.empty() ? std::string("of the open spec") : id) + " overwritten";
     if (n == "history.undo") return steps_text(steps_arg(a)) + " undone";
     if (n == "history.redo") return steps_text(steps_arg(a)) + " redone";
     return {};

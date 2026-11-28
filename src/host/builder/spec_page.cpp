@@ -12,7 +12,7 @@
 #include "builder/spec_page_layout.h"
 #include "builder/widget_app.h"
 #include "builder/widget_surface.h"
-#include "applet_spec.h"
+#include "instrument_spec.h"
 #include "spec_runtime/spec_annotations.h"
 #include "spec_runtime/spec_offscreen.h"
 #include "spec_runtime/spec_runtime.h"
@@ -23,7 +23,7 @@
 #include "gfx/metal_backend.h"
 #include "gfx/shaders/generated/programs_metal.h"
 #endif
-#include "pages/applet_page.h"      // begin_page_bar, JobsTray
+#include "pages/instrument_page.h"      // begin_page_bar, JobsTray
 #include "pages/landing_screen.h"   // draw_host_status_items
 #include "ui/sternbild_fonts.h"
 #include "ui/sternbild_theme.h"
@@ -160,7 +160,7 @@ private:
         apply_entity_scene(view, scene, &drawn);
         // The panel's markers and planes at the session's values; their texts need the page's
         // overlay, which an offscreen scene does not draw.
-        SpecInstrumentHost host;
+        SpecLiveHost host;
         cb::Session* s = session_ ? session_() : nullptr;
         host.values = s ? &s->values() : nullptr;
         host.history = s ? &s->history() : nullptr;
@@ -205,14 +205,14 @@ struct SpecPage::Impl {
     std::optional<uint64_t> journal_read;   // AppSession::journaled() when the open spec was last read
 
     std::string title;
-    std::string applet_id;
+    std::string instrument_id;
     std::string workspace;
     size_t panels = 0, sources = 0;
     bool has_spec = false;
     bool dirty = false;
     bool layout_locked = false;
-    bool from_file = false;   // enter_file(): a spec applet's file, not the open spec
-    // The open spec's saved applet in the workspace (applets/<id>/), "" while
+    bool from_file = false;   // enter_file(): an instrument's file, not the open spec
+    // The open spec's saved instrument in the workspace (instruments/<id>/), "" while
     // it was never saved: what ⌘O Open in browser shows.
     std::string saved_id;
     float browser_rect[4] = {0, 0, 0, 0};   // the button, as the last frame drew it
@@ -224,7 +224,7 @@ struct SpecPage::Impl {
     std::string menu_request;     // a panel right-clicked this frame
     std::string menu_panel;       // the panel whose menu is open
 
-    std::optional<std::future<cb::CommandResult>> request;       // the last applet.open
+    std::optional<std::future<cb::CommandResult>> request;       // the last instrument.open
     std::optional<std::future<cb::CommandResult>> request_new_f; // the last spec.new, apart, so an open never drops it
     std::string request_error;
     bool new_done = false;         // a spec.new succeeded since the last take_new()
@@ -401,7 +401,7 @@ struct SpecPage::Impl {
         if (!builder || !has_spec || from_file || widget_open() || !runtime) return false;
         if (runtime->has_spec_preview() || runtime->has_preview(id)) return false;
         const auto& shown = runtime->spec();   // the open spec as the page shows it
-        if (!shown || shown->applet.layout_locked.value_or(false)) return false;
+        if (!shown || shown->instrument.layout_locked.value_or(false)) return false;
         const cb::spec::Panel* panel = shown->find_panel(id);
         return panel != nullptr && panel->closable.value_or(true);
     }
@@ -595,7 +595,7 @@ struct SpecPage::Impl {
         this->app = &app;
         if (workspace.empty()) workspace = folder_name(app.workspace());
         cb::Session* s = app.session();
-        // The instruments of spec version 1 (spec_instruments.h): the
+        // The instruments of spec version 1 (spec_live_host.h): the
         // session's event ring and the app's run control, which acts on the
         // attached script.
         runtime->set_instruments(s ? &s->events() : nullptr, app.run_control());
@@ -655,23 +655,23 @@ struct SpecPage::Impl {
             runtime->clear_spec();
             has_spec = false;
             layout_locked = false;
-            applet_id.clear();
+            instrument_id.clear();
             saved_id.clear();
             panels = sources = 0;
             return;
         }
         show(open->spec);
         dirty = open->dirty;
-        saved_id = saved_applet(open->path);
+        saved_id = saved_instrument(open->path);
     }
 
     // The workspace id of a spec saved at `path` (relative to the workspace,
-    // applets/<id>/<file>), "" for one never saved or saved elsewhere.
-    static std::string saved_applet(const std::optional<std::string>& path) {
+    // instruments/<id>/<file>), "" for one never saved or saved elsewhere.
+    static std::string saved_instrument(const std::optional<std::string>& path) {
         if (!path) return {};
         const std::filesystem::path p(*path);
         auto it = p.begin();
-        if (it == p.end() || it->string() != "applets") return {};
+        if (it == p.end() || it->string() != "instruments") return {};
         if (++it == p.end()) return {};
         return it->string();
     }
@@ -697,9 +697,9 @@ struct SpecPage::Impl {
     void show(const cb::spec::Spec& spec) {
         runtime->set_spec(spec);
         has_spec = true;
-        const auto& a = spec.applet;
+        const auto& a = spec.instrument;
         title = a.title && !a.title->empty() ? *a.title : a.id;
-        applet_id = a.id;
+        instrument_id = a.id;
         layout_locked = a.layout_locked.value_or(false);
         panels = spec.panels.size();
         sources = spec.sources.size();
@@ -708,8 +708,8 @@ struct SpecPage::Impl {
     // `command_key`: the page bar's ⌘K Command was clicked this frame.
     bool draw_bars(const char* renderer_name, JobsTray* tray, bool* command_key) {
         bool home = false;
-        // The page bar, as the applet page's: Home as a key button holding
-        // its key, then the spec's title where an applet's name goes, the
+        // The page bar, as the instrument page's: Home as a key button holding
+        // its key, then the spec's title where an instrument's name goes, the
         // page's command input while it is open, and at the right end ⌘K
         // Command, the same control as the landing screen's command bar.
         if (begin_page_bar()) {
@@ -738,8 +738,8 @@ struct SpecPage::Impl {
                                      : 0.0f;
             const float right = ImGui::GetWindowContentRegionMax().x - w - cw - bw - sternbild::metric::pad;
             // The builder's items after the title, in the room the right end
-            // leaves (only ⌘B Build when it is short); none for a spec
-            // applet's file, which the builder does not edit.
+            // leaves (only ⌘B Build when it is short); none for a foreign
+            // instrument's file, which the builder does not edit.
             if (builder && has_spec && !from_file) {
                 ImGui::Separator();
                 builder->page_bar(right - ImGui::GetCursorPosX() - 2.0f * sternbild::metric::pad);
@@ -953,7 +953,7 @@ bool SpecPage::request_open(AppSession& session, const std::string& id, const st
     cb::Session* s = session.session();
     if (!s) return false;
     cb::CommandInvocation inv;
-    inv.name = "applet.open";
+    inv.name = "instrument.open";
     inv.args = {{"id", id}};
     // From who asked; a name that is not an origin is a program's (api), never
     // the person's.
@@ -966,10 +966,10 @@ bool SpecPage::request_open(AppSession& session, const std::string& id, const st
 bool SpecPage::request_new(AppSession& session, const std::string& title) {
     cb::Session* s = session.session();
     if (!s) return false;
-    const std::filesystem::path applets = std::filesystem::path(s->workspace()) / "applets";
+    const std::filesystem::path instruments = std::filesystem::path(s->workspace()) / "instruments";
     const std::string id = pane_new_spec_id(title, [&](const std::string& x) {
         std::error_code ec;
-        return std::filesystem::exists(applets / x, ec);
+        return std::filesystem::exists(instruments / x, ec);
     });
     cb::CommandInvocation inv;
     inv.name = "spec.new";
@@ -996,7 +996,7 @@ std::string SpecPage::open_title(AppSession& session) {
     if (!s || session.worker_busy()) return {};
     const std::optional<cb::OpenSpec> open = s->open_spec();
     if (!open) return {};
-    const auto& a = open->spec.applet;
+    const auto& a = open->spec.instrument;
     return a.title && !a.title->empty() ? *a.title : a.id;
 }
 
@@ -1291,18 +1291,18 @@ void SpecPage::leave() {
     impl_->journal_read.reset();
     impl_->has_spec = false;
     impl_->from_file = false;
-    impl_->applet_id.clear();
+    impl_->instrument_id.clear();
 }
 
 const std::string& SpecPage::title() const { return impl_->title; }
 
-const std::string& SpecPage::applet_id() const { return impl_->applet_id; }
+const std::string& SpecPage::instrument_id() const { return impl_->instrument_id; }
 
-bool SpecPage::facts(const std::string& spec_path, SpecAppletFacts* out) {
+bool SpecPage::facts(const std::string& spec_path, SpecInstrumentFacts* out) {
     // One reading per file and change, on the frame thread.
     struct Kept {
         std::filesystem::file_time_type mtime;
-        SpecAppletFacts facts;
+        SpecInstrumentFacts facts;
     };
     static std::map<std::string, Kept> kept;
     std::error_code ec;
@@ -1404,12 +1404,12 @@ const std::string& SpecPage::focused_panel() const { return impl_->focused; }
 void SpecPage::focus_panel(const std::string&) {}
 void SpecPage::leave() {}
 const std::string& SpecPage::title() const { return impl_->title; }
-const std::string& SpecPage::applet_id() const { return impl_->title; }
+const std::string& SpecPage::instrument_id() const { return impl_->title; }
 bool SpecPage::enter_file(AppSession&, const std::string&, std::string* error) {
     if (error) *error = "the builder is not in this build";
     return false;
 }
-bool SpecPage::facts(const std::string&, SpecAppletFacts*) { return false; }
+bool SpecPage::facts(const std::string&, SpecInstrumentFacts*) { return false; }
 void SpecPage::shutdown() {}
 std::shared_ptr<PanelRenderSeam> SpecPage::make_panel_renderer(std::function<caliper_builder::Session*()>) {
     return nullptr;

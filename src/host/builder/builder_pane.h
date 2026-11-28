@@ -405,7 +405,7 @@ public:
     // What an empty canvas says in build mode under "No panels": how to
     // start. "" outside build mode and once the open spec has a panel.
     std::string canvas_hint() const;
-    // The spec's own applet id, title and description (no focus), sent as
+    // The spec's own instrument id, title and description (no focus), sent as
     // spec.set_text.
     bool set_spec_id(const std::string& id);
     bool set_spec_title(const std::string& title);

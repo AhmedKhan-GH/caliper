@@ -522,7 +522,7 @@ struct AppSession::Impl {
         Impl* im;
         explicit HostBinding(Impl* i) : im(i) {}
         cb::CommandOutput app_info() override { return im->app_info(); }
-        cb::CommandOutput app_applets() override { return im->app_applets(); }
+        cb::CommandOutput app_instruments() override { return im->app_instruments(); }
         // The session always says who asked (app_launch(id, origin) below);
         // a launch with no origin is refused rather than taken as the person's.
         cb::CommandOutput app_launch(const std::string&) override {
@@ -567,9 +567,9 @@ struct AppSession::Impl {
     std::vector<Line> lines;   // from the journal, any thread
     std::vector<AppSession::Applied> applied;   // under lines_m: what a mode or a rule let run, the newest 64
     std::atomic<uint64_t> journaled{0};        // every journaled command
-    std::atomic<uint64_t> specs_opened{0};     // every applet.open, and an agent's spec.new or spec.open, that succeeded
+    std::atomic<uint64_t> specs_opened{0};       // every instrument.open, and an agent's spec.new or spec.open, that succeeded
     std::atomic<uint64_t> agent_specs_opened{0};   // of those, the ones an agent sent
-    std::atomic<uint64_t> applets_saved{0};    // every applet.save that succeeded
+    std::atomic<uint64_t> instruments_saved{0};  // every instrument.save that succeeded
 
     // Caliper API's gateway (command_gateway()), and the pending approvals as
     // the last frame without a worker read them, for its approval lookups.
@@ -695,11 +695,11 @@ struct AppSession::Impl {
 
     void note(const cb::JournalEvent& e) {
         const bool agent = e.origin == cb::CommandOrigin::agent || e.origin == cb::CommandOrigin::mcp;
-        if (e.ok && (e.name == "applet.open" || (agent && (e.name == "spec.new" || e.name == "spec.open")))) {
+        if (e.ok && (e.name == "instrument.open" || (agent && (e.name == "spec.new" || e.name == "spec.open")))) {
             if (agent) agent_specs_opened.fetch_add(1, std::memory_order_acq_rel);
             specs_opened.fetch_add(1, std::memory_order_acq_rel);
         }
-        if (e.ok && e.name == "applet.save") applets_saved.fetch_add(1, std::memory_order_acq_rel);
+        if (e.ok && e.name == "instrument.save") instruments_saved.fetch_add(1, std::memory_order_acq_rel);
         journaled.fetch_add(1, std::memory_order_acq_rel);
         Line l;
         l.name = e.name;
@@ -837,10 +837,10 @@ struct AppSession::Impl {
         return cb::CommandOutput::ok(std::move(j));
     }
 
-    cb::CommandOutput app_applets() {
-        if (!hooks.applets_json) return failed("command.not_available", "app.applets is not available here.");
-        json j = parse_object(hooks.applets_json());
-        if (j.is_null()) return failed("command.failed", "The app's applets could not be listed.");
+    cb::CommandOutput app_instruments() {
+        if (!hooks.instruments_json) return failed("command.not_available", "app.instruments is not available here.");
+        json j = parse_object(hooks.instruments_json());
+        if (j.is_null()) return failed("command.failed", "The app's instruments could not be listed.");
         return cb::CommandOutput::ok(std::move(j));
     }
 
@@ -1220,7 +1220,7 @@ uint64_t AppSession::agent_specs_opened() const {
     return impl_->agent_specs_opened.load(std::memory_order_acquire);
 }
 
-uint64_t AppSession::applets_saved() const { return impl_->applets_saved.load(std::memory_order_acquire); }
+uint64_t AppSession::instruments_saved() const { return impl_->instruments_saved.load(std::memory_order_acquire); }
 
 std::vector<AppSession::Applied> AppSession::take_applied() {
     std::lock_guard<std::mutex> lock(impl_->lines_m);
@@ -1312,7 +1312,7 @@ void AppSession::set_draw_host(caliper_builder::DrawStatusHost*) {}
 uint64_t AppSession::journaled() const { return 0; }
 uint64_t AppSession::specs_opened() const { return 0; }
 uint64_t AppSession::agent_specs_opened() const { return 0; }
-uint64_t AppSession::applets_saved() const { return 0; }
+uint64_t AppSession::instruments_saved() const { return 0; }
 std::vector<AppSession::Applied> AppSession::take_applied() { return {}; }
 std::shared_ptr<caliper_api::CommandGateway> AppSession::command_gateway() { return nullptr; }
 

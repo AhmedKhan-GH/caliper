@@ -127,7 +127,7 @@ if(BUILD_TESTS AND TARGET doctest::doctest AND NOT WIN32 AND TARGET caliper)
         # caliper_attention_producer is defined later, under the same condition.
         add_dependencies(caliper_chat_pane_tests caliper_attention_producer)
         list(APPEND _chat_app_env "CALIPER_TEST_PRODUCER_EXE=$<TARGET_FILE:caliper_attention_producer>"
-            "CALIPER_TEST_APPLETS=${CMAKE_BINARY_DIR}/applets")
+            "CALIPER_TEST_INSTRUMENTS=${CMAKE_BINARY_DIR}/instruments")
     endif()
     add_test(NAME caliper_side_chat_app COMMAND caliper_chat_pane_tests --test-suite=app)
     set_tests_properties(caliper_chat_pane PROPERTIES LABELS "builder;chat" TIMEOUT 240

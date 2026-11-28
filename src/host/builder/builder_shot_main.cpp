@@ -6,12 +6,12 @@
 // it into its gestures. It writes a PNG at each named step, opens no window
 // and is not installed.
 //
-//   caliper-builder-shot --workspace <dir> --applet-from <spec.toml>
+//   caliper-builder-shot --workspace <dir> --instrument-from <spec.toml>
 //                        --files <file>... --out-dir <dir> [options]
 //
 // The workspace is changed: give it a new folder. The spec is begun with
-// spec.new from the builder origin under the applet id, title and
-// description of --applet-from's [applet], the files are dropped on the
+// spec.new from the builder origin under the instrument id, title and
+// description of --instrument-from's [instrument], the files are dropped on the
 // pane (data.import from the builder origin, their loaders run), and then
 // the scenario builds the dashboard:
 //   1 empty      build mode on the empty spec, the palettes, the two sources
@@ -24,7 +24,7 @@
 //                the root divider being dragged to 0.65
 //   5 text       the spec text strip open beside the finished dashboard
 //   6 undo       after two undos (⌘Z twice)
-// then redoes both and saves the applet (⌘S).
+// then redoes both and saves the instrument (⌘S).
 // Options:
 //   --size WxH        the canvas (1440x900)
 //   --prefix NAME     the files' prefix (builder): <prefix>-<step><suffix>.png
@@ -70,7 +70,7 @@ namespace {
 int usage(const char* why) {
     std::fprintf(stderr, "caliper-builder-shot: %s\n", why);
     std::fprintf(stderr,
-                 "usage: caliper-builder-shot --workspace <dir> --applet-from <spec.toml> --files <file>...\n"
+                 "usage: caliper-builder-shot --workspace <dir> --instrument-from <spec.toml> --files <file>...\n"
                  "                            --out-dir <dir> [--size WxH] [--prefix NAME] [--suffix TEXT]\n"
                  "                            [--text-scale S]\n");
     return 2;
@@ -220,7 +220,7 @@ private:
 }  // namespace
 
 int main(int argc, char** argv) {
-    std::string workspace, applet_from, out_dir, prefix = "builder", suffix;
+    std::string workspace, instrument_from, out_dir, prefix = "builder", suffix;
     std::vector<std::string> files;
     int width = 1440, height = 900;
     float text_scale = 1.0f;
@@ -234,7 +234,7 @@ int main(int argc, char** argv) {
         if (!v) return usage(("incomplete option " + a).c_str());
         ++i;
         if (a == "--workspace") workspace = v;
-        else if (a == "--applet-from") applet_from = v;
+        else if (a == "--instrument-from") instrument_from = v;
         else if (a == "--out-dir") out_dir = v;
         else if (a == "--prefix") prefix = v;
         else if (a == "--suffix") suffix = v;
@@ -245,14 +245,14 @@ int main(int argc, char** argv) {
             return usage(("unknown option " + a).c_str());
         }
     }
-    if (workspace.empty() || applet_from.empty() || out_dir.empty() || files.empty()) return usage("missing an option");
+    if (workspace.empty() || instrument_from.empty() || out_dir.empty() || files.empty()) return usage("missing an option");
     if (width < 640 || height < 400 || width > 8192 || height > 8192) return usage("--size must be from 640x400 to 8192x8192");
     if (!(text_scale >= 0.5f && text_scale <= 3.0f)) return usage("--text-scale must be from 0.5 to 3");
     std::error_code ec;
     if (!fs::is_directory(out_dir, ec)) return fail("the folder " + out_dir + " does not exist");
-    const auto parsed = cb::spec::parse_toml(read_file(applet_from));
-    if (!parsed.ok()) return fail("cannot read the spec " + applet_from);
-    const cb::spec::Applet applet = parsed.spec.applet;
+    const auto parsed = cb::spec::parse_toml(read_file(instrument_from));
+    if (!parsed.ok()) return fail("cannot read the spec " + instrument_from);
+    const cb::spec::Instrument instrument = parsed.spec.instrument;
 
     auto opened = cb::Session::open(workspace);
     if (opened.error) return fail("cannot open the workspace " + workspace + ": " + opened.error.message);
@@ -261,9 +261,9 @@ int main(int argc, char** argv) {
         // The empty spec the scenario builds in.
         cb::CommandInvocation inv;
         inv.name = "spec.new";
-        inv.args = {{"id", applet.id}};
-        if (applet.title) inv.args["title"] = *applet.title;
-        if (applet.description) inv.args["description"] = *applet.description;
+        inv.args = {{"id", instrument.id}};
+        if (instrument.title) inv.args["title"] = *instrument.title;
+        if (instrument.description) inv.args["description"] = *instrument.description;
         inv.origin = cb::CommandOrigin::builder;
         const cb::CommandResult r = session->invoke(std::move(inv));
         if (!r.ok) return fail("spec.new: " + r.error.code + ": " + r.error.message);
@@ -314,7 +314,7 @@ int main(int argc, char** argv) {
                 ImGui::Separator();
                 ImGui::PushStyleColor(ImGuiCol_Text, sternbild::col::secondary);
                 const auto open = pane.open_spec();
-                const std::string title = open ? open->spec.applet.title.value_or(open->spec.applet.id) : "";
+                const std::string title = open ? open->spec.instrument.title.value_or(open->spec.instrument.id) : "";
                 ImGui::TextUnformatted(title.c_str());
                 ImGui::PopStyleColor();
                 ImGui::Separator();

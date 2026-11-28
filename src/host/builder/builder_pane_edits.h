@@ -176,7 +176,7 @@ bool pane_valid_id(const std::string& id);
 // A spec id from a catalog name ("run42_metrics", "attn.weights" ->
 // "attn_weights"), unique among the spec's sources.
 std::string pane_source_id(const std::string& catalog_name, const caliper_builder::spec::Spec& spec);
-// The applet id of a new spec titled `title`: its letters and digits in
+// The instrument id of a new spec titled `title`: its letters and digits in
 // lower case, every other run of characters one '-', "dashboard" when
 // nothing is left, "d-" before an id that does not begin with a letter, and
 // then "-2", "-3", ... while `taken` says the id is used.

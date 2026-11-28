@@ -1206,7 +1206,7 @@ void BuilderPane::draw_properties(const SpecRect& rect, SpecRuntime& runtime) {
             dl->AddRectFilled(t.Min, v2(t.Max.x, t.Min.y + 1.0f), L.accent);
             dl->AddRectFilled(v2(t.Max.x, t.Min.y), v2(t.Max.x + 1.0f, t.Max.y), L.rule);
             put(dl, L.ui, L.ui_size, v2(t.Min.x + pad, t.Min.y + (bar.GetHeight() - ts.y) * 0.5f), L.text, tab);
-            std::string what = !focus_panel_.empty() ? focus_panel_ : !focus_source_.empty() ? source_id() : open_ ? open_->spec.applet.id : "";
+            std::string what = !focus_panel_.empty() ? focus_panel_ : !focus_source_.empty() ? source_id() : open_ ? open_->spec.instrument.id : "";
             const float right = bar.Max.x - std::round(8.0f * s);
             const std::string w = fit(L.mono, L.mono_size, what, right - t.Max.x - pad);
             put(dl, L.mono, L.mono_size, v2(right - extent(L.mono, L.mono_size, w).x, bar.Min.y + (bar.GetHeight() - d.mono_h()) * 0.5f),
@@ -1882,17 +1882,17 @@ void BuilderPane::draw_spec_properties(Rows& rows) {
     const spec::Spec s = open_->spec;   // a copy: the fields below change the open spec
     const std::optional<std::string> path = open_->path;
     rows.section("Spec");
-    {   // The applet's id: a rename of the whole spec on Enter or when left.
+    {   // The instrument's id: a rename of the whole spec on Enter or when left.
         const ImRect r = rows.next();
         const ImRect v = rows.label(r, "Id");
-        const Field f = text_field(d.bufs, L, "##spec.id", v, s.applet.id, "", true, false, ImGuiInputTextFlags_AutoSelectAll);
-        if ((f.entered || f.deactivated) && f.value != s.applet.id && !f.value.empty()) set_spec_id(f.value);
+        const Field f = text_field(d.bufs, L, "##spec.id", v, s.instrument.id, "", true, false, ImGuiInputTextFlags_AutoSelectAll);
+        if ((f.entered || f.deactivated) && f.value != s.instrument.id && !f.value.empty()) set_spec_id(f.value);
         d.item("prop:spec.id", v);
     }
     {
         const ImRect r = rows.next();
         const ImRect v = rows.label(r, "Title");
-        const Field f = text_field(d.bufs, L, "##spec.title", v, s.applet.title.value_or(""), s.applet.id, false);
+        const Field f = text_field(d.bufs, L, "##spec.title", v, s.instrument.title.value_or(""), s.instrument.id, false);
         if (f.activated) begin_gesture("spec.title");
         if (f.changed) set_spec_title(f.value);
         if (f.deactivated) end_gesture();
@@ -1905,7 +1905,7 @@ void BuilderPane::draw_spec_properties(Rows& rows) {
         rows.dl->AddRect(v.Min, v.Max, L.rule, 0.0f, 0, 1.0f);
         const float in = std::round(4.0f * L.text_scale);
         const Field f = text_field(d.bufs, L, "##spec.description", ImRect(v2(v.Min.x + in, v.Min.y + 2.0f), v2(v.Max.x - in, v.Max.y - 2.0f)),
-                                   s.applet.description.value_or(""), "", false, true);
+                                   s.instrument.description.value_or(""), "", false, true);
         if (f.activated) begin_gesture("spec.description");
         if (f.changed) set_spec_description(f.value);
         if (f.deactivated) end_gesture();
@@ -1914,7 +1914,7 @@ void BuilderPane::draw_spec_properties(Rows& rows) {
     {
         const ImRect r = rows.next();
         const ImRect v = rows.label(r, "Lock layout");
-        const bool on = s.applet.layout_locked.value_or(false);
+        const bool on = s.instrument.layout_locked.value_or(false);
         if (flag_box(L, "##spec.layout_locked", v, on)) set_layout_locked(!on);
         d.item("prop:spec.layout_locked", ImRect(v.Min, v2(v.Min.x + std::round(17.0f * L.text_scale), v.Max.y)));
     }
@@ -1953,7 +1953,7 @@ void BuilderPane::draw_text_strip(const SpecRect& rect) {
         ImDrawList* dl = ImGui::GetWindowDrawList();
         const ImRect head(v2(rect.x, rect.y), v2(rect.right(), rect.y + d.m.header));
         std::string sub;
-        if (open_) sub = open_->path.value_or(open_->spec.applet.id + ".spec.toml");
+        if (open_) sub = open_->path.value_or(open_->spec.instrument.id + ".spec.toml");
         if (editing_ && draft_pending_)
             sub = std::to_string(diagnostics_.size()) + (diagnostics_.size() == 1 ? " error" : " errors");
         header_strip(L, dl, head, "Spec text", sub);

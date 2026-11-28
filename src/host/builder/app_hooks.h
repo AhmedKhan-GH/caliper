@@ -4,7 +4,7 @@
 // (app_session.h) that needs nothing of their own state: the options from the
 // command line and the environment, the host's job system for the session's
 // worker, the body of GET /v0/info for app.info, and the PNG encoder for
-// capture.frame. The app adds the applets, the launch, the capture and the
+// capture.frame. The app adds the instruments, the launch, the capture and the
 // Activity pane itself. Header-only; built with the builder on or off.
 // ============================================================================
 #include "app_paths.h"

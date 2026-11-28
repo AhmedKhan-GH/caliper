@@ -14,7 +14,7 @@
 // compact diff of diff_card.h, as the inline surface draws it: the changed
 // keys with their old and new values, the validator's warnings, and the full
 // unified diff on demand), or what a destructive command loses as a noun
-// phrase ("Applet run42-dashboard overwritten"), the time left before the
+// phrase ("Instrument run42-dashboard overwritten"), the time left before the
 // call times out, and two actions, Approve and Deny. Both go through the
 // session's queue (CommandQueue::approve() and deny()), whose decision runs
 // at the next drain on the frame thread. There is no Approve all for one
@@ -148,10 +148,10 @@ namespace caliper_host {
 std::string approval_who(const caliper_builder::CommandInvocation& invocation);
 // The command and its target: "panel.patch · Loss and accuracy", with a
 // panel's title from `open` when it has one, a source's, loader's or
-// applet's id, "layout", a file's name, or the number of steps.
+// instrument's id, "layout", a file's name, or the number of steps.
 std::string approval_what(const caliper_builder::CommandInvocation& invocation, const caliper_builder::spec::Spec* open);
-// What a destructive command loses, as a noun phrase: "Applet
-// run42-dashboard overwritten" (the open spec's applet when the call names
+// What a destructive command loses, as a noun phrase: "Instrument
+// run42-dashboard overwritten" (the open spec's instrument when the call names
 // none), "Loader rows deleted", "Tables of loader rows replaced", "2 steps
 // undone"; "" for a command that loses nothing.
 std::string approval_loss(const caliper_builder::CommandInvocation& invocation,

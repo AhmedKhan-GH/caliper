@@ -14,7 +14,7 @@
 // steps, which the bounds of a range may read.
 #include "spec_runtime/spec_shortcuts.h"
 
-#include <caliper_builder/spec/instrument.h>
+#include <caliper_builder/spec/control.h>
 
 #include <string>
 
@@ -72,7 +72,7 @@ json pressed_value(const spec::Control& c, const spec::Choice& ch, const json& n
 
 }  // namespace
 
-bool handle_instrument_keys(const caliper_builder::spec::Spec& spec, SpecInstrumentHost& host) {
+bool handle_instrument_keys(const caliper_builder::spec::Spec& spec, SpecLiveHost& host) {
     if (host.values && host.history) host.values->set_cursor(host.history->cursor());
     if (!host.values) return false;
     const ImGuiIO& io = ImGui::GetIO();

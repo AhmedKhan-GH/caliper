@@ -51,7 +51,7 @@ public:
     std::vector<std::string> panels;
     std::vector<size_t> slots;
     caliper_builder::CommandOutput app_info() override { return fail(); }
-    caliper_builder::CommandOutput app_applets() override { return fail(); }
+    caliper_builder::CommandOutput app_instruments() override { return fail(); }
     caliper_builder::CommandOutput app_launch(const std::string&) override { return fail(); }
     caliper_builder::CommandOutput capture_frame() override { return fail(); }
     explicit FakeHost(SpecOffscreen* canvas) : renderer(canvas) {}
