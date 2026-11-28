@@ -287,95 +287,98 @@ The editor checks each binding against the catalog. It checks the dtype and rank
 
 A buffer input makes the programs of a spec a graph. Only the draw half reads a buffer input. The viewer gives it the version of the other resource at the cursor.
 
-This example is the piece `attention_grid` of `tests/acceptance/arc_tower/`. It draws the attention weights of one head as a grid with one cell for each pair of tokens. Its derive half copies the first batch row of two attention tensors into one resource. It also places one label anchor for each token at the left of its row. Its draw half has one full-screen pass, and its text table holds the words of the sentence.
+This example is the piece `confusion_grid` of `tests/programmable_graphics/pieces/`. It draws a 10x10 row-normalized MNIST confusion matrix with one cell for each true and predicted digit pair. Its derive half computes the matrix from live probe logits and labels. It also places one label anchor for each true-digit row along the left margin. Its draw half has one full-screen pass, and its text table holds the ten row labels.
 
 ```toml
-name = "attention_grid"
+name = "confusion_grid"
 version = 1
-description = "The attention grid of one head of a two-layer model, one cell for each pair of tokens, with the words of the rows"
+description = "Row-normalized 10x10 MNIST confusion matrix with selected-digit highlight and row labels"
 imports = ["colormap@1"]
 
 [[inputs]]
-name = "attn0"
+name = "logits"
 kind = "tensor"
+dtype = "f32"
 rank_min = 2
 rank_max = 2
-title = "Attention Weights of Layer 0"
+title = "Probe Logits (N, 10)"
 
 [[inputs]]
-name = "attn1"
+name = "targets"
 kind = "tensor"
-rank_min = 2
-rank_max = 2
-title = "Attention Weights of Layer 1"
+dtype = "i32"
+rank_min = 1
+rank_max = 1
+title = "Probe Labels (N)"
 
 [[params]]
-name = "layer"
+name = "digit"
 type = "i32"
+default = 0
 min = 0
-max = 1
-title = "Layer"
+max = 9
+title = "Selected Digit"
 
 [[params]]
-name = "head"
+name = "picked"
 type = "i32"
+default = 0
 min = 0
-max = 3
-title = "Head"
+max = 9
+title = "Picked Digit"
 
 [[params]]
 name = "gain"
+type = "f32"
 default = 1.0
 min = 0.1
-max = 10.0
+max = 4.0
 title = "Gain"
 
 [[resources]]
-id = "pattern"
+id = "matrix"
 kind = "buffer"
 element = "f32"
-count = 8192      # 2 layers, 4 heads, 32 by 32 tokens
+count = 100
 
 [[resources]]
 id = "labels"
 kind = "buffer"
 struct = "Label"
 fields = ["position: vec4<f32>", "string: u32"]
-count = 32
+count = 10
 
 [[derive.passes]]
-entry = "copy_rows"
-workgroups = [16, 1, 1]
-writes = ["pattern"]
+entry = "compute_confusion"
+workgroups = [10, 1, 1]
+writes = ["matrix"]
 
 [[derive.passes]]
 entry = "place_labels"
+workgroups = [1, 1, 1]
+writes = ["labels"]
 
 [draw]
 camera = "none"
 
 [draw.text]
 anchors = "labels"
-strings = [
-  "the", "old", "map", "shows", "red", "fox", "jumps", "over", "lazy", "dogs", "near", "green",
-  "hills", "under", "blue", "skies", "red", "fox", "jumps", "over", "lazy", "dogs", "near", "green",
-  "hills", "under", "blue", "skies", "and", "then", "it", "ends",
-]
+strings = ["True 0", "True 1", "True 2", "True 3", "True 4", "True 5", "True 6", "True 7", "True 8", "True 9"]
 
 [[draw.passes]]
 kind = "render"
 fragment = "grid"
 ```
 
-A program then places the piece in the panel `pattern`, and it follows the head that a pick selects through two state variables.
+A program then places the piece in the panel `matrix`, and it follows the digit that a pick selects through a state variable and selection reference.
 
 ```toml
 [[program]]
-id = "head_pattern"
-piece = { name = "attention_grid", version = 1, from = "workspace", hash = "sha256:..." }
-panel = "pattern"
-bind = { attn0 = "live:blocks.0.attn.weights.act", attn1 = "live:blocks.1.attn.weights.act" }
-params = { layer = { state = "layer" }, head = { state = "head" }, gain = 2.0 }
+id = "confusion_view"
+piece = { name = "confusion_grid", version = 1, from = "workspace", hash = "sha256:..." }
+panel = "matrix"
+bind = { logits = "live:probe.logits", targets = "live:probe.labels" }
+params = { digit = { state = "digit" }, picked = { selection = "digits", field = "digit", default = 0 }, gain = 1.0 }
 ```
 
 ## Piece Commands
@@ -578,17 +581,13 @@ The palette of the builder pane has a group Pieces. It lists one row for each en
 
 A person drags a piece row onto the middle of a scene panel, or focuses a scene panel and uses Add. The pane then sends `program.create` with the pin of the piece and that panel. The pane binds no input. A piece with inputs is refused with `piece.bad_binding`, and the message says that the program must be written in the spec text or by the agent. A drop that would make a new panel is refused with `program.bad_target`, because a piece makes no panel. A piece that only publishes needs no panel.
 
-## Attention Arc Tower
+## MNIST Probe Dashboard
 
-The Attention Arc Tower answers one question. When and where does the model learn to copy, and is that what drops the loss? An agent builds it through `caliper-mcp` alone, on a managed run of a script that calls `caliper.watch(model, optimizer)` and `caliper.series`. The chart of the induction score of each head is the headline view. The tower of arcs is the overview, and the attention grid is the inspector of one head. No built-in primitive is in the frames of the tower and the grid. The scene panels `tower` and `pattern` hold programs only, and the chart and the loss curves are series panels.
+The MNIST probe dashboard verifies the full piece pipeline through `caliper-mcp` alone. An agent starts `examples/mnist/train.py` as a managed run. The script trains the canonical PyTorch MNIST CNN and publishes `live:loss`, `live:accuracy`, `live:probe.images`, `live:probe.labels`, and `live:probe.logits`. The dashboard puts two custom graphics in two scene panels with no built-in primitives, a multi-line chart with a legend, a two-tab curve strip, and an intervention toggle.
 
-The script `tests/acceptance/arc_tower_train.py` trains an attention-only transformer with two layers of four heads, a width of 64 and a vocabulary of 64 words. Each sequence holds 32 random tokens, and a segment of 12 of them repeats. The loss stays near ln 64 until heads of layer 1 learn to copy, and then it drops at a bump, which comes between step 600 and step 1,000 on an Apple GPU. Row 0 of every batch is a fixed sentence that the loss leaves out. Thus the attention that a viewer shows is always that of the same sentence.
+The workspace pieces live in `tests/programmable_graphics/pieces/`. The piece `digit_ring` computes per-digit probe accuracy, error counts, and confidence in its derive half. Its draw half renders ten 3-D columns on a ring with picks and digit labels. The piece `confusion_grid` computes the 10x10 row-normalized confusion matrix and draws it with a fragment-only pass and row labels. Its parameters follow the `digit` state and the last pick in `digits`.
 
-The watch publishes the attention weights of each layer as `live:blocks.<i>.attn.weights.act`, as rows of batch, head and query token against the key tokens. It publishes `live:token_loss.act`, the loss of each token, and one intervention point `blocks.<i>.attn#<h>` for each head. The in-context loss is the mean of the loss of row 0 over the second copy, which only a copy from the first occurrence predicts. After each optimizer step, the script publishes the induction score of each head as the series `induction_l<i>_h<h>`. The score is the mean weight of row 0 from a token of the second copy to the token after the first occurrence of the same token. The calls pass 0-d tensors on the device, thus a step does not wait for the GPU.
-
-The pieces are in `tests/acceptance/arc_tower/`. The piece `attention_arcs` scores each head for induction in its derive half and publishes `heads`, one score for each head. It also publishes the arcs, one for each attention weight above the threshold, with `from_token`, `to_token`, `layer`, `head`, `weight` and `score`. Its draw half draws the arcs instanced and additive with an ID for each arc, a glow target and a bloom pass, and it labels the tokens. Its item map holds the six fields of an arc. The piece `attention_grid` is the second graphic. It is fragment-only and has the camera `none`. It draws the weights of one head as flat cells in magma, with the words of the rows in a left margin. It leaves the half above the diagonal empty, because a token never attends to a later token. It outlines the cells that an induction head fills, and it lights the row and the column under the pointer. Its parameters follow the state `head` and the layer of the last pick in `tower`.
-
-The agent starts the run, writes both pieces with `piece_check` and `piece_update`, and places them with `program_create`. It adds the loss series, the in-context loss, and a window source for each score series. The series panel `head_scores` shows one line for each head, with a legend. A toggle is bound to `intervene:blocks.1.attn#0`. In the layout, the left column holds the tower, the chart below it, and the in-context loss and the loss as tabs below the chart. The attention grid fills the right column. After the bump, `program_read` shows the head scores rise from below 0.2 at the first kept version to above 0.4. In the chart, the strongest line of layer 1 starts below 0.2 and passes 0.5, at the steps where the in-context loss falls. A pick of an arc with `selection_set` gives its layer, head and token pair, and the attention grid follows the head. The toggle raises the in-context loss at once. A fork from the first kept step with the same head ablated through `run_fork` never forms that head.
+The agent writes both pieces with `piece_check` and `piece_update`, and places them with `program_create`. After training improves probe accuracy, `cursor_set` scrubs between the first kept step and the live step. A pick with `selection_set` returns the digit fields, updates the `digit` state, and highlights the selected row in `confusion_grid`. An ablation on `fc1` drops probe accuracy, a clear restores it, and a fork from an early step with `fc1` ablated stays unlearned.
 
 ## Limits
 
@@ -601,8 +600,8 @@ These parts are not built, and the pieces do not depend on them.
 - The derive half on a platform other than Metal.
 - A preview of a piece from its sample.
 
-Three points need care when a piece is written. In a fork, another head may form induction arcs in place of the ablated one. Without multisampling, an arc of one pixel aliases, thus a width of at least one pixel times the pixel ratio keeps it visible. The timestamp query is optional in WebGPU, thus a browser without it does not know the frame time, and it warns on a draw only when frames exceed 250 ms.
+Two points need care when a piece is written. Without multisampling, geometry thinner than one pixel aliases, thus a width of at least one pixel times the pixel ratio keeps it visible. The timestamp query is optional in WebGPU, thus a browser without it does not know the frame time, and it warns on a draw only when frames exceed 250 ms.
 
 ## Tests
 
-[Testing](../development/testing.md) lists the tests of pieces. The test `tests/piece_path/driver.py` follows one piece from its command to a pick. The test `tests/draw_parity/` compares the draw of the app and of the browser module on one recorded frame. The test `caliper_programmable_graphics_acceptance` builds the Attention Arc Tower through `caliper-mcp`, and `python3 tests/acceptance/arc_tower_check.py` runs the same steps and prints each check. Each refusal of this page has a test in `src/builder/programs/tests/test_pieces.cpp` or in the suite of the host that gives it.
+[Testing](../development/testing.md) lists the tests of pieces. The test `tests/piece_path/driver.py` follows one piece from its command to a pick on MNIST `live:fc1.weight`. The test `tests/draw_parity/` compares the app and the browser module on a recorded MNIST dashboard (`tests/draw_parity/dashboard/`). The tests `caliper_programmable_graphics_acceptance` and `caliper_dashboard_viewer_acceptance` build and inspect the MNIST probe dashboard through `caliper-mcp`. Each refusal of this page has a test in `src/builder/programs/tests/test_pieces.cpp` or in the suite of the host that gives it.

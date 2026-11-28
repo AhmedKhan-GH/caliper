@@ -43,10 +43,10 @@ cs::PieceInput tensor(const std::string& name) {
     return in;
 }
 
-// The manifest of attention_arcs in the plan, without its draw half.
+// The manifest of ring_arcs in the plan, without its draw half.
 cs::Piece arcs() {
     cs::Piece p;
-    p.name = "attention_arcs";
+    p.name = "ring_arcs";
     p.inputs = {tensor("attn0"), tensor("attn1")};
     cs::PieceParam threshold;
     threshold.name = "threshold";

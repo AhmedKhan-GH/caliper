@@ -1882,7 +1882,7 @@ const Row kRows[] = {
      "piece.exists. It checks the piece first.",
      R"json({"type": "object", "additionalProperties": false, "required": ["name"], "properties": {"name": {"type": "string", "pattern": "^[a-z][a-z0-9_]{0,31}$", "description": "The inline piece's name."}, "version": {"type": "integer", "minimum": 1, "maximum": 1000000, "description": "The version to write; the inline piece's own when absent."}, "dry_run": {"$use": "dry_run"}}})json",
      R"json({"type": "object", "additionalProperties": false, "required": ["name", "version", "hash", "path", "programs", "messages", "applied"], "properties": {"name": {"type": "string", "description": "The piece's name."}, "version": {"type": "integer", "description": "The version written."}, "hash": {"type": "string", "description": "Its hash."}, "path": {"type": ["string", "null"], "description": "The piece's folder relative to the workspace, pieces/<name>/<version>; null for a library or inline piece."}, "programs": {"type": "array", "items": {"type": "string"}, "description": "The programs that now pin the workspace piece."}, "messages": {"type": "array", "items": {"$use": "compiler_message"}, "description": "The messages, errors first; each names the file in its message, and line and column are in that file."}, "applied": {"$use": "applied"}}})json",
-     R"json({"name": "attention_arcs"})json"},
+     R"json({"name": "digit_ring"})json"},
     {"piece.copy", true, false, false,
      "Forks a library piece into the workspace as version 1 of a new name, or of its own name, so that the person "
      "or the agent can change it. A library piece never changes, and an instrument uses the workspace copy only "

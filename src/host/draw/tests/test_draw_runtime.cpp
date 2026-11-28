@@ -159,7 +159,7 @@ TEST_CASE("the arcs record the instanced pass with its ID, the glow target and t
         cd::DrawRuntime rt(h.gfx, webgpu, checks());
         cd::Instance in;
         in.program = "tower_arcs";
-        REQUIRE(rt.install(ex::attention_arcs(), in, 9).ok());
+        REQUIRE(rt.install(ex::ring_arcs(), in, 9).ok());
         const ex::ArcResources res = ex::arc_resources();
         REQUIRE(res.arcs.size() > 10);
         give_arcs(rt, res, 100);
@@ -207,7 +207,7 @@ TEST_CASE("the arcs record the instanced pass with its ID, the glow target and t
 TEST_CASE("a pass whose instance count is zero is skipped, and its target is still cleared") {
     Host h;
     cd::DrawRuntime rt(h.gfx, true, checks());
-    REQUIRE(rt.install(ex::attention_arcs(), {}, 1).ok());
+    REQUIRE(rt.install(ex::ring_arcs(), {}, 1).ok());
     ex::ArcResources res = ex::arc_resources();
     res.arcs.clear();
     give_arcs(rt, res, 5);
@@ -509,19 +509,19 @@ TEST_CASE("the checks run before anything is made") {
         return v;
     };
     cd::DrawRuntime rt(h.gfx, true, refusing);
-    const cp::Verdict v = rt.install(ex::attention_arcs(), {}, 1);
+    const cp::Verdict v = rt.install(ex::ring_arcs(), {}, 1);
     CHECK(v.code == cp::kPieceBadManifest);
     CHECK(rt.status().state == cd::DrawState::refused);
     CHECK(h.gfx.ops().size() == before);   // no buffer, texture, program or pipeline
 
     cd::DrawRuntime pinned(h.gfx, true, checks());
-    cs::Piece p = ex::attention_arcs();
+    cs::Piece p = ex::ring_arcs();
     p.hash = "sha256:" + std::string(64, '0');
     CHECK(pinned.install(p, {}, 1).code == cp::kPieceHashMismatch);
     CHECK(h.gfx.ops().size() == before);
 
     cd::DrawRuntime pick_offscreen(h.gfx, true, checks());
-    p = ex::attention_arcs();
+    p = ex::ring_arcs();
     p.draw->passes[1].pick = true;
     const cp::Verdict off = pick_offscreen.install(p, {}, 1);
     CHECK(off.code == cp::kProgramBadPass);
@@ -545,7 +545,7 @@ TEST_CASE("a pass that does not compile is refused with its file and line") {
 TEST_CASE("a version is held to its resource's layout and count") {
     Host h;
     cd::DrawRuntime rt(h.gfx, true, checks());
-    REQUIRE(rt.install(ex::attention_arcs(), {}, 1).ok());
+    REQUIRE(rt.install(ex::ring_arcs(), {}, 1).ok());
     std::vector<float> too_many(9, 0.0f);
     CHECK(rt.set_resource(version("heads", too_many, 1)).code == cp::kProgramResourceTooLarge);
     cd::ResourceVersion odd = version("heads", std::vector<float>(4, 0.0f), 1);
@@ -561,7 +561,7 @@ TEST_CASE("a version is held to its resource's layout and count") {
 
 TEST_CASE("the reset rules zero the draw buffers at a new epoch, a cursor move or a new version") {
     Host h;
-    cs::Piece p = ex::attention_arcs();
+    cs::Piece p = ex::ring_arcs();
     cs::DrawBuffer trail, age, fixed;
     trail.id = "trail";
     trail.layout = ex::element("f32");
@@ -627,7 +627,7 @@ TEST_CASE("a program over its frame time for 30 frames warns, naming its costlie
     cd::DrawRuntime rt(h.gfx, true, checks());
     cd::Instance in;
     in.program = "tower_arcs";
-    REQUIRE(rt.install(ex::attention_arcs(), in, 1).ok());
+    REQUIRE(rt.install(ex::ring_arcs(), in, 1).ok());
     give_arcs(rt, ex::arc_resources(), 1);
     CHECK(rt.status().frame_limit_ms == doctest::Approx(4.0));
 
@@ -678,7 +678,7 @@ TEST_CASE("a program over its frame time for 30 frames warns, naming its costlie
 TEST_CASE("a measured frame back under the limit records no warning") {
     Host h;
     cd::DrawRuntime rt(h.gfx, true, checks());
-    REQUIRE(rt.install(ex::attention_arcs(), {}, 1).ok());
+    REQUIRE(rt.install(ex::ring_arcs(), {}, 1).ok());
     give_arcs(rt, ex::arc_resources(), 1);
     for (int i = 0; i < 30; ++i) {
         frame(h, rt);
@@ -700,7 +700,7 @@ TEST_CASE("a frame still pending after 5 s stops its program at once, and the ot
     cd::Instance a, b;
     a.program = "slow";
     b.program = "other";
-    REQUIRE(slow.install(ex::attention_arcs(), a, 1).ok());
+    REQUIRE(slow.install(ex::ring_arcs(), a, 1).ok());
     REQUIRE(other.install(ex::attention_field(), b, 2).ok());
     give_arcs(slow, ex::arc_resources(), 1);
     const std::vector<float> pattern = ex::field_pattern();
@@ -726,7 +726,7 @@ TEST_CASE("a late frame waits for its GPU time: a busy GPU keeps the program, ov
     cd::DrawRuntime rt(h.gfx, true, checks());
     cd::Instance a;
     a.program = "arcs";
-    REQUIRE(rt.install(ex::attention_arcs(), a, 1).ok());
+    REQUIRE(rt.install(ex::ring_arcs(), a, 1).ok());
     give_arcs(rt, ex::arc_resources(), 1);
     REQUIRE(frame(h, rt).size() == 1);
     // A training run holds the GPU: the frame waits 1.5 s by the wall clock but took 2 ms on it.
@@ -754,7 +754,7 @@ TEST_CASE("a late frame waits for its GPU time: a busy GPU keeps the program, ov
     CHECK(rt.status().error.code == cp::kProgramDrawTimeout);
     CHECK(rt.status().error.message.find("of GPU time") != std::string::npos);
     // A late frame that the driver ended gives no GPU time on a device that has timestamps.
-    REQUIRE(rt.install(ex::attention_arcs(), a, 1).ok());
+    REQUIRE(rt.install(ex::ring_arcs(), a, 1).ok());
     give_arcs(rt, ex::arc_resources(), 1);
     REQUIRE(frame(h, rt).size() == 1);
     rt.frame_pending(1500.0);
@@ -769,7 +769,7 @@ TEST_CASE("a frame over 1 s of GPU time stops the program also when no poll saw 
     cd::DrawRuntime rt(h.gfx, true, checks());
     cd::Instance a;
     a.program = "arcs";
-    REQUIRE(rt.install(ex::attention_arcs(), a, 1).ok());
+    REQUIRE(rt.install(ex::ring_arcs(), a, 1).ok());
     give_arcs(rt, ex::arc_resources(), 1);
     REQUIRE(frame(h, rt).size() == 1);
     rt.frame_pending(900.0);         // the last poll before it completed: not late yet
@@ -785,7 +785,7 @@ TEST_CASE("heavy frames in a row stop the program once their GPU time passes 1 s
     cd::DrawRuntime rt(h.gfx, true, checks());
     cd::Instance a;
     a.program = "arcs";
-    REQUIRE(rt.install(ex::attention_arcs(), a, 1).ok());
+    REQUIRE(rt.install(ex::ring_arcs(), a, 1).ok());
     give_arcs(rt, ex::arc_resources(), 1);
     // A busy GPU delays light frames by the wall clock: they never count.
     for (int k = 0; k < 10; ++k) {
@@ -806,7 +806,7 @@ TEST_CASE("heavy frames in a row stop the program once their GPU time passes 1 s
     CHECK(rt.status().error.message ==
           "Stopped arcs: 3 frames of its draw passes in a row took 1200.0 ms of GPU time together, above 1 s");
     // A program just under 1 s of GPU time a frame stops at its second frame.
-    REQUIRE(rt.install(ex::attention_arcs(), a, 1).ok());
+    REQUIRE(rt.install(ex::ring_arcs(), a, 1).ok());
     give_arcs(rt, ex::arc_resources(), 1);
     REQUIRE(frame(h, rt).size() == 1);
     rt.frame_pending(1100.0);
@@ -824,7 +824,7 @@ TEST_CASE("a frame whose time the backend no longer keeps is done, and neither s
     cd::DrawRuntime rt(h.gfx, true, checks());
     cd::Instance a;
     a.program = "arcs";
-    REQUIRE(rt.install(ex::attention_arcs(), a, 1).ok());
+    REQUIRE(rt.install(ex::ring_arcs(), a, 1).ok());
     give_arcs(rt, ex::arc_resources(), 1);
     REQUIRE(frame(h, rt).size() == 1);
     rt.frame_pending(1100.0);   // late at the last poll, then the panel was not drawn for a while
@@ -843,7 +843,7 @@ TEST_CASE("without GPU time, three late frames in a row stop the program, and a 
     cd::DrawRuntime rt(h.gfx, true, checks());
     cd::Instance a;
     a.program = "arcs";
-    REQUIRE(rt.install(ex::attention_arcs(), a, 1).ok());
+    REQUIRE(rt.install(ex::ring_arcs(), a, 1).ok());
     give_arcs(rt, ex::arc_resources(), 1);
     const auto late = [&] {
         REQUIRE(frame(h, rt).size() == 1);
@@ -875,7 +875,7 @@ TEST_CASE("without GPU time, a light frame that the host sees done a frame later
     cd::DrawRuntime rt(h.gfx, true, checks());
     cd::Instance a;
     a.program = "arcs";
-    REQUIRE(rt.install(ex::attention_arcs(), a, 1).ok());
+    REQUIRE(rt.install(ex::ring_arcs(), a, 1).ok());
     give_arcs(rt, ex::arc_resources(), 1);
     // A browser polls once a frame: 17 ms from the submit until seen done, far above the 4 ms limit.
     for (int i = 0; i < 90; ++i) {
@@ -904,7 +904,7 @@ TEST_CASE("a pick keeps the version of the frame it read, and a version at the s
     cd::DrawRuntime rt(h.gfx, true, checks());
     cd::Instance a;
     a.program = "tower_arcs";
-    REQUIRE(rt.install(ex::attention_arcs(), a, 1).ok());
+    REQUIRE(rt.install(ex::ring_arcs(), a, 1).ok());
     ex::ArcResources res = ex::arc_resources();
     REQUIRE(res.arcs.size() > 2);
     REQUIRE(res.labels.size() > 1);
@@ -1030,7 +1030,7 @@ TEST_CASE("a refused frame is an error of its program only") {
     cd::DrawRuntime rt(h.gfx, true, checks());
     cd::Instance in;
     in.program = "tower_arcs";
-    REQUIRE(rt.install(ex::attention_arcs(), in, 1).ok());
+    REQUIRE(rt.install(ex::ring_arcs(), in, 1).ok());
     rt.frame_refused("a bind group was released");
     CHECK(rt.status().state == cd::DrawState::stopped);
     CHECK(rt.status().error.code == cp::kProgramLayerRefused);
@@ -1041,7 +1041,7 @@ TEST_CASE("the panel's rule warns on a program after one measured frame and clea
     cd::DrawRuntime rt(h.gfx, true, checks());
     cd::Instance in;
     in.program = "tower_arcs";
-    REQUIRE(rt.install(ex::attention_arcs(), in, 1).ok());
+    REQUIRE(rt.install(ex::ring_arcs(), in, 1).ok());
     give_arcs(rt, ex::arc_resources(), 1);
     rt.request_warning(cp::kProgramDrawOverTime, "the programs of its panel took 18.0 ms a frame, above 16.7 ms");
     REQUIRE(frame(h, rt).size() == 3);
@@ -1092,7 +1092,7 @@ TEST_CASE("draw memory over draw.memory_mb stops the program and names the objec
     }
     SUBCASE("a target at the panel's size") {
         Host h(1024, 1024);
-        cs::Piece p = ex::attention_arcs();
+        cs::Piece p = ex::ring_arcs();
         p.draw->memory_mb = 1;
         p.draw->targets[0].scale = 1.0f;   // 4 MiB at 1,024 by 1,024
         cd::DrawRuntime rt(h.gfx, true, checks());
@@ -1200,7 +1200,7 @@ TEST_CASE("decode reads the sample of the canonical manifest that the app sends"
 TEST_CASE("remove releases the program and returns to waiting") {
     Host h;
     cd::DrawRuntime rt(h.gfx, true, checks());
-    REQUIRE(rt.install(ex::attention_arcs(), {}, 1).ok());
+    REQUIRE(rt.install(ex::ring_arcs(), {}, 1).ok());
     rt.remove();
     CHECK(rt.status().state == cd::DrawState::waiting);
     CHECK(rt.internals().passes.empty());
@@ -1243,13 +1243,13 @@ TEST_CASE("the draw host gives each panel its programs, packs params and refuses
     layer.target = "layer";
     field.params["layer"] = layer;
     field.params["head"] = 9.0;   // above its max of 3: clamped
-    spec.programs = {field, instance_of("tower_arcs", "attention_arcs", "tower"),
+    spec.programs = {field, instance_of("tower_arcs", "ring_arcs", "tower"),
                      instance_of("tower_field", "attention_field", "tower")};
     cd::DrawHost host;
     Sink sink;
     host.set_events(&sink);
     host.set_resolver([](const cs::Spec&, const cs::Program& p, cs::Piece* out) {
-        *out = p.piece->name == "attention_arcs" ? ex::attention_arcs() : ex::attention_field();
+        *out = p.piece->name == "ring_arcs" ? ex::ring_arcs() : ex::attention_field();
         return cp::Verdict{};
     });
     host.set_evaluate([](const cs::Reference& r) { return r.target == "layer" ? nlohmann::json(1) : nlohmann::json(); });
@@ -1353,7 +1353,7 @@ TEST_CASE("the draw host gives each panel its programs, packs params and refuses
 
 TEST_CASE("the draw host holds a foreign spec's piece for a review of its hash, then draws it") {
     cs::Spec spec;
-    spec.programs = {instance_of("tower_arcs", "attention_arcs", "tower"),
+    spec.programs = {instance_of("tower_arcs", "ring_arcs", "tower"),
                      instance_of("tower_field", "attention_field", "tower")};
     spec.provenance.foreign = true;
     spec.provenance.from = std::string("a shared instrument");
@@ -1361,7 +1361,7 @@ TEST_CASE("the draw host holds a foreign spec's piece for a review of its hash, 
     Sink sink;
     host.set_events(&sink);
     host.set_resolver([](const cs::Spec&, const cs::Program& p, cs::Piece* out) {
-        *out = p.piece->name == "attention_arcs" ? ex::attention_arcs() : ex::attention_field();
+        *out = p.piece->name == "ring_arcs" ? ex::ring_arcs() : ex::attention_field();
         return cp::Verdict{};
     });
     host.reconcile(spec);
@@ -1378,7 +1378,7 @@ TEST_CASE("the draw host holds a foreign spec's piece for a review of its hash, 
     CHECK(cd::draw_status_json(host.status().at("tower_arcs"))["state"] == "review");
 
     // A review of another hash, or of another program's target, does not count.
-    const std::string arcs = cp::piece_hash(ex::attention_arcs());
+    const std::string arcs = cp::piece_hash(ex::ring_arcs());
     const std::string arcs_hex = arcs.substr(arcs.find(':') + 1);
     spec.provenance.reviewed = {{"program:tower_field", arcs_hex},
                                 {"program:tower_arcs", std::string(64, '0')}};

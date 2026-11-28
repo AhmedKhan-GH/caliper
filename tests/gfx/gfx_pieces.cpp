@@ -265,7 +265,7 @@ TEST_CASE("gfx/Metal pieces: the arcs draw instanced and additive, with an ID fo
     std::unique_ptr<gfx::Backend> g = layer();
     if (!g) CALIPER_SKIP_NO_GPU("no Metal device");
     Panel panel(*g);
-    const cs::Piece piece = ex::attention_arcs();
+    const cs::Piece piece = ex::ring_arcs();
     cd::DrawRuntime rt(*g, false, ex::draw_checks());
     cd::Instance in;
     in.program = "tower_arcs";
@@ -283,7 +283,7 @@ TEST_CASE("gfx/Metal pieces: the arcs draw instanced and additive, with an ID fo
     const std::vector<std::uint8_t> rgba = panel.read(panel.target.color);
     const std::vector<std::uint8_t> ids = panel.read(panel.target.id);
     capture_png("arcs.png", rgba, int(kSize), int(kSize));
-    MESSAGE("attention_arcs: ", res.arcs.size(), " arcs, median GPU time of a frame ", rt.status().frame_ms,
+    MESSAGE("ring_arcs: ", res.arcs.size(), " arcs, median GPU time of a frame ", rt.status().frame_ms,
             " ms at 512 by 512");
     CHECK(rt.status().state == cd::DrawState::running);
 
@@ -495,7 +495,7 @@ struct FixedFeed final : cd::DrawFeed {
             rt.set_resource(version("heads", arcs.heads, 1));
             rt.set_resource(version("arcs", arcs.arcs, 1));
             rt.set_resource(version("labels", arcs.labels, 1));
-            in->params = ex::pack({0.05, 1.0}, ex::attention_arcs());
+            in->params = ex::pack({0.05, 1.0}, ex::ring_arcs());
         } else {
             rt.set_resource(version("pattern", pattern, 1));
             in->params = ex::pack({1, 2, 2.0}, ex::attention_field());
@@ -547,7 +547,7 @@ TEST_CASE("gfx/Metal pieces: the scene view draws its programs after its scene, 
     ViewRig rig;
     if (!rig.init()) CALIPER_SKIP_NO_GPU("no Metal device");
     FixedFeed feed;
-    feed.add(ex::attention_arcs(), "tower_arcs", 1u << 24);
+    feed.add(ex::ring_arcs(), "tower_arcs", 1u << 24);
     rig.view->set_draw_feed(&feed);
     for (int i = 0; i < 3; ++i) rig.frame();
     REQUIRE(rig.view->draw_runtimes().size() == 1);
@@ -599,7 +599,7 @@ TEST_CASE("gfx/Metal pieces: a scene view of programs alone opens at its startin
     ViewRig rig;
     if (!rig.init()) CALIPER_SKIP_NO_GPU("no Metal device");
     FixedFeed feed;
-    feed.add(ex::attention_arcs(), "tower_arcs", 1u << 24);
+    feed.add(ex::ring_arcs(), "tower_arcs", 1u << 24);
     rig.view->set_draw_feed(&feed);
     rig.frame();
     // No starting camera: the fit of the box at the default angles.
@@ -661,7 +661,7 @@ fn slow(in: CaliperFullscreen) -> @location(0) vec4<f32> {
 )";
     // The view measures real GPU times: tower_arcs keeps the largest frame budget, 16 ms, and
     // slow_field exceeds its 0.5 ms budget by thousands of times on any GPU.
-    cs::Piece arcs = ex::attention_arcs();
+    cs::Piece arcs = ex::ring_arcs();
     arcs.draw->frame_ms = cs::piece_limits::kFrameMsMax;
     FixedFeed feed;
     feed.add(arcs, "tower_arcs", 1u << 24);
@@ -705,7 +705,7 @@ TEST_CASE("gfx/Recording pieces: queued submits without timestamps measure each 
     REQUIRE_MESSAGE(view.init(&why), why);
     view.describe(caliper_net::wire::SceneView{CALIPER_NET_SPACE_3D, "+y", ""});
     FixedFeed feed;
-    feed.add(ex::attention_arcs(), "tower_arcs", 1u << 24);
+    feed.add(ex::ring_arcs(), "tower_arcs", 1u << 24);
     view.set_draw_feed(&feed);
     for (int i = 0; i < 6; ++i) REQUIRE_MESSAGE(view.render(64, 64, 1.0f, kBackground, &why), why);
     REQUIRE(view.draw_runtimes().size() == 1);

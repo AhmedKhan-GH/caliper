@@ -16915,7 +16915,7 @@
       "effect": "change",
       "examples": [
         {
-          "name": "attention_arcs"
+          "name": "digit_ring"
         }
       ],
       "frame_thread": true,

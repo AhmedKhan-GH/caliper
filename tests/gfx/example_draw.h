@@ -11,7 +11,7 @@ namespace caliper_test_pieces {
 
 inline caliper_draw::DrawChecks draw_checks() {
     caliper_draw::DrawChecks c = caliper_draw::DrawChecks::pieces();
-    const cs::Piece p = attention_arcs();
+    const cs::Piece p = ring_arcs();
     if (cp::check_piece_manifest(p).code == cp::kProgramNotBuilt) c.manifest = [](const cs::Piece&) { return cp::Verdict{}; };
     if (cp::check_piece_source("", 1).code == cp::kProgramNotBuilt)
         c.source = [](std::string_view, std::size_t) { return cp::Verdict{}; };

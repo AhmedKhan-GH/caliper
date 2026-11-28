@@ -482,7 +482,7 @@ id = "side"
 primitive = "scene"
 bind = { scene = "live:model" }
 )");
-    spec::Piece piece = ex::attention_arcs();
+    spec::Piece piece = ex::ring_arcs();
     piece.hash = programs::piece_hash(piece);
     sp.pieces.push_back(piece);
     const auto program = [&](const char* id, const char* panel, const std::string& hash) {

@@ -263,7 +263,7 @@ TEST_CASE("live/programs: only a resource that the pinned piece publishes, in it
         }
     };
     cb::spec::Spec spec;
-    cb::spec::Piece arcs = caliper_test_pieces::attention_arcs();   // heads: f32 x 8; arcs: 24 bytes x 4096
+    cb::spec::Piece arcs = caliper_test_pieces::ring_arcs();   // heads: f32 x 8; arcs: 24 bytes x 4096
     arcs.hash = cb::programs::piece_hash(arcs);
     spec.pieces = {arcs};
     cb::spec::Program instance;
@@ -330,7 +330,7 @@ TEST_CASE("live/programs: a texture's version reaches the history with its forma
         }
     };
     cb::spec::Spec spec;
-    cb::spec::Piece arcs = caliper_test_pieces::attention_arcs();
+    cb::spec::Piece arcs = caliper_test_pieces::ring_arcs();
     cb::spec::Resource grey;   // r8unorm, at most 8 by 4 and 20 texels
     grey.id = "grey";
     grey.kind = cb::spec::ResourceKind::texture;

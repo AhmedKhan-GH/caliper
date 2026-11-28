@@ -50,7 +50,7 @@ M3 lets an agent turn any tensor of the running model into a visual with no scen
 
 M5 gives the agent the graphics layer itself, inside the sandbox. The agent declares buffers, textures and state that persists between frames, and it imports live model tensors read-only with no copy. It writes its own vertex, fragment and compute shaders in WGSL, with its own blending and depth, and it composes compute, render and post passes. The output draws into a panel with the camera given, and an ID buffer keeps picking. Caliper validates each program before it runs and holds it inside its budgets.
 
-The demo is an attention arc tower that the agent writes completely. A small transformer trains, and a compute pass turns each attention weight into an arc between tokens on a ring for each layer. A render pass draws the arcs with additive blending, and a bloom pass adds the glow. The arcs show when induction heads form, and an ablation and a fork test whether they cause the drop in loss.
+The original M5 induction-head demo left the product repository during product formalization. All programmable-graphics acceptance tests and dashboard parity checks now run on the canonical MNIST example (`examples/mnist/train.py`).
 
 ## Graphics Consolidation
 
@@ -62,7 +62,7 @@ Piece resources accept `u8` and `u16` elements and typed textures. Large resourc
 
 Library pieces now own every scene draw, and each sender uses the piece form for every scene batch. The change removes the built-in draw route and stage hooks. A read-only converter preserves old per-shape recordings. The Vulkan renderer stays for the Windows interface, and the graphics layer's Vulkan backend remains planned. The browser dashboard draws programs, series labels and colors, controls, and layout from the same spec as the app. Viewer controls keep the origin restrictions.
 
-The library tests check pixels and picks, and the app and browser comparison tests cover each piece. The earlier acceptance tests pass, and the Arc Tower dashboard comparison checks the app and browser against the same recorded data. [Testing](../development/testing.md) describes the test suites.
+The library tests check pixels and picks, and the app and browser comparison tests cover each piece. All acceptance tests and the MNIST dashboard comparison check the app and browser against the same recorded data. [Testing](../development/testing.md) describes the test suites.
 
 ## Circuit Tracing and Steering
 
