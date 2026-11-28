@@ -17,5 +17,5 @@ nav:
       - managed-runs.md
       - gpu-programs.md
       - pieces.md
-      - instrument-tools.md
+      - scene-and-state-tools.md
       - http-api.md

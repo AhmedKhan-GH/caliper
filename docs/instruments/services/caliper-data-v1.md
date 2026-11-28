@@ -30,7 +30,7 @@ On success the host hands back a **live** `ArrowArrayStream`. The **caller drain
 
 ### Persistence and Rebuilds
 
-The store is the file `data.duckdb` in the app-data folder. DuckDB writes every ordinary table in it to disk through its write-ahead log. This suits a dataset that you register once. It does not suit a table that an applet rebuilds several times a second to show live state, because each `CREATE OR REPLACE TABLE` appends to the log and grows the catalog. As a result, the cost of a rebuild grows over a session.
+The store is the file `data.duckdb` in the app-data folder. DuckDB writes every ordinary table in it to disk through its write-ahead log. This suits a dataset that you register once. It does not suit a table that an instrument rebuilds several times a second to show live state, because each `CREATE OR REPLACE TABLE` appends to the log and grows the catalog. As a result, the cost of a rebuild grows over a session.
 
 Build live-visualization tables as `TEMP` tables instead:
 
@@ -40,7 +40,7 @@ CREATE OR REPLACE TEMP TABLE embed_points(label INT, pred INT, x REAL, y REAL, z
 
 A `TEMP` table lives in memory and disappears when the host exits, so nothing reaches the log. The service keeps one connection, so every later call from any thread sees a `TEMP` table that one call made. Use an ordinary table only for data that must outlive the session.
 
-Run the rebuild on a thread that the applet owns, never on the frame thread. A query is file and catalog work with a cost that differs by platform, and a slow query on the frame thread stalls every window. See [The frame loop](../../introduction/architecture.md#frame-loop).
+Run the rebuild on a thread that the instrument owns, never on the frame thread. A query is file and catalog work with a cost that differs by platform, and a slow query on the frame thread stalls every window. See [The frame loop](../../introduction/architecture.md#frame-loop).
 
 ### Resource Limits
 

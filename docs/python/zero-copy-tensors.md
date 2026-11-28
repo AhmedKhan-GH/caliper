@@ -1,6 +1,6 @@
 # Zero-Copy Tensors
 
-A tensor goes from a training step to pixels without a CPU round trip. The renderer seam is in [Rendering](../applets/rendering.md), and the Windows interop machinery is in [Vulkan and CUDA on Windows](../development/vulkan-and-cuda.md).
+A tensor goes from a training step to pixels without a CPU round trip. The renderer seam is in [Rendering](../instruments/rendering.md), and the Windows interop machinery is in [Vulkan and CUDA on Windows](../development/vulkan-and-cuda.md).
 
 ```mermaid
 flowchart LR
@@ -9,20 +9,20 @@ flowchart LR
     texture -->|ImGui::Image| screen[Screen]
 ```
 
-The applet hands a tensor to the bridge, and a GPU pass turns it into a texture that the frame thread draws.
+The instrument hands a tensor to the bridge, and a GPU pass turns it into a texture that the frame thread draws.
 
 ## Terms
 
-The host claims zero-copy only when the zero-copy path drew ([Platform rules](../introduction/architecture.md#design-decisions)). Thus two phrases have separate meanings:
+The host claims zero-copy only when the zero-copy path drew ([Platform Rules](../introduction/architecture.md#design-decisions)). Thus two phrases have separate meanings:
 
 - **Zero-copy** means the tensor's data is copied nowhere, not into host memory and not to a second place in GPU memory. A GPU pass can still convert the data (a colormap, a buffer-to-texture write), because converting is work on the data and not a copy of it.
 - **GPU-resident, no CPU staging** means the data never reaches host memory, but it is copied at least once inside the GPU.
 
-Status lines in applets and in the host's log use the same words. An applet claims "zero-copy" only when the zero-copy path ran that frame.
+Status lines in instruments and in the host's log use the same words. An instrument claims "zero-copy" only when the zero-copy path ran that frame.
 
 ## Tensor Texture Paths
 
-An applet never talks to a graphics API. It fills a `CaliperTensor`, a plain C struct whose `device` field says where the bytes live, and hands it to the [`tensor_bridge.v1`](../applets/services/caliper-tensor-bridge-v1.md) service. The backend behind the host turns the tensor into a texture in the way that is best for the platform. It returns an `ImTextureID` for `ImGui::Image`. The contract does not name Metal or Vulkan.
+An instrument never talks to a graphics API. It fills a `CaliperTensor`, a plain C struct whose `device` field says where the bytes live, and hands it to the [`tensor_bridge.v1`](../instruments/services/caliper-tensor-bridge-v1.md) service. The backend behind the host turns the tensor into a texture in the way that is best for the platform. It returns an `ImTextureID` for `ImGui::Image`. The contract does not name Metal or Vulkan.
 
 ### Apple Silicon
 
@@ -44,7 +44,7 @@ The host does not need the CUDA toolkit. It loads the CUDA driver API from `nvcu
 
 ### CPU Tensors
 
-For any CPU tensor, the bridge stages through host memory. It applies the colormap on the CPU into an RGBA scratch buffer and uploads it once. The ABI, the textures and the on-screen result are the same as on the other paths. Only the copy that the other paths avoid is added. Windows also uses this path when Vulkan starts but CUDA interop does not pair. Thus the worst case is a slow path that works. Where Metal or Vulkan cannot start at all, there is no fallback renderer, and Caliper refuses with a message that says why ([No Fallback Renderer](../applets/rendering.md#no-fallback-renderer)).
+For any CPU tensor, the bridge stages through host memory. It applies the colormap on the CPU into an RGBA scratch buffer and uploads it once. The ABI, the textures and the on-screen result are the same as on the other paths. Only the copy that the other paths avoid is added. Windows also uses this path when Vulkan starts but CUDA interop does not pair. Thus the worst case is a slow path that works. Where Metal or Vulkan cannot start at all, there is no fallback renderer, and Caliper refuses with a message that says why ([No Fallback Renderer](../instruments/rendering.md#no-fallback-renderer)).
 
 ## Data Crossings per Path
 
@@ -54,7 +54,7 @@ For any CPU tensor, the bridge stages through host memory. It applies the colorm
 | Metal, imported allocation | 0 | 0 | The pass reads the imported `MTLBuffer` at a byte offset |
 | Vulkan with CUDA, any CUDA tensor, direct path | 0 | 0 | A CUDA kernel reads the tensor in place and writes the image |
 | Vulkan with CUDA, any CUDA tensor, buffer path | 0 | 1 | A copy into the shared buffer, then a Vulkan pass. Used when the direct path refuses the tensor and for the offscreen canvas |
-| Vulkan with CUDA, `alloc_shared` | 0 | 0 | The applet's kernels write the texture's own buffer, and a Vulkan pass converts it |
+| Vulkan with CUDA, `alloc_shared` | 0 | 0 | The instrument's kernels write the texture's own buffer, and a Vulkan pass converts it |
 | Vulkan with CUDA, tensor in an exportable pool | 0 | 0 | The bridge imports the pool block once, and the pass reads it at a byte offset |
 | Any CPU tensor | 1 (staging) | 0 | The bridge converts on the CPU and uploads |
 
@@ -62,7 +62,7 @@ For any CPU tensor, the bridge stages through host memory. It applies the colorm
 
 ## Sync Ladder
 
-The sync ladder says when it is safe to read the bytes. It has two rungs, negotiated at run time. The applet asks the bridge what the host honors, and the adapter does the right thing:
+The sync ladder says when it is safe to read the bytes. It has two rungs, negotiated at run time. The instrument asks the bridge what the host honors, and the adapter does the right thing:
 
 ```cpp
 uint32_t caps = bridge.caps();                          // caliper.tensor_bridge.v1_1
@@ -86,9 +86,9 @@ Two habits keep the frame thread fast. Keep I/O off it, because the host [forbid
 
 ## Imported Allocations
 
-With an imported allocation, the applet exports a block of device memory once, and the host imports it once. Then the texture path addresses the memory as an allocation id plus a byte offset. This is [`caliper.tensor_bridge.v1_2`](../applets/services/caliper-tensor-bridge-v1.md), and it is opt-in per allocation.
+With an imported allocation, the instrument exports a block of device memory once, and the host imports it once. Then the texture path addresses the memory as an allocation id plus a byte offset. This is [`caliper.tensor_bridge.v1_2`](../instruments/services/caliper-tensor-bridge-v1.md), and it is opt-in per allocation.
 
-**Windows.** An applet allocates its torch CUDA tensors from `caliper::adapters::ExportablePool`, a torch `MemPool` whose blocks are created with `cuMemCreate` and a shareable handle. The host imports each block into Vulkan on first use. Then `update_texture_from_alloc` runs the colormap or blit pass directly on the imported buffer at the tensor's offset. Memory that was born in the pool needs no copy. Memory that was born unshareable, such as torch's default caching allocator, takes the ordinary update path.
+**Windows.** An instrument allocates its torch CUDA tensors from `caliper::adapters::ExportablePool`, a torch `MemPool` whose blocks are created with `cuMemCreate` and a shareable handle. The host imports each block into Vulkan on first use. Then `update_texture_from_alloc` runs the colormap or blit pass directly on the imported buffer at the tensor's offset. Memory that was born in the pool needs no copy. Memory that was born unshareable, such as torch's default caching allocator, takes the ordinary update path.
 
 **Metal.** Handle kind `CALIPER_ALLOC_HANDLE_MTLBUFFER` carries an in-process `id<MTLBuffer>`. There is no OS handle and no driver export, because with unified memory the pointer already is the resource. The renderer keeps a strong reference as the host's copy of the handle. It checks that the buffer lives on the renderer's own device, and it declines a buffer that is too short. `ExportablePool` on MPS makes any tensor eligible without an allocator change, because its `to_bridge` imports the tensor's own storage buffer. The tensor must stay alive until the pool is destroyed or the import is released. Otherwise torch's MPS allocator can hand the same buffer to an unrelated tensor while the host still draws from it.
 
@@ -96,4 +96,4 @@ Every miss returns `false`, and the caller falls back to the copying path. A mis
 
 ## Derived Graphics
 
-An applet can compute any graphic from the live training state on the GPU. Image-like results (heatmaps, feature maps, attention grids) go through the bridge as textures. Coordinates go through ImPlot and ImPlot3D as small arrays, which need no zero-copy path. Tokens and labels go through styled text. The routes compose in one panel, and the zero-copy path matters for the dense outputs.
+An instrument can compute any graphic from the live training state on the GPU. Image-like results (heatmaps, feature maps, attention grids) go through the bridge as textures. Coordinates go through ImPlot and ImPlot3D as small arrays, which need no zero-copy path. Tokens and labels go through styled text. The routes compose in one panel, and the zero-copy path matters for the dense outputs.

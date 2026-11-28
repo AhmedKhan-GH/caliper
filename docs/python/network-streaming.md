@@ -39,7 +39,7 @@ The kinds of live view are the same on each transport: heatmap, image, points, s
 
 What differs is where a snapshot ends. The two local transports give the viewer the memory that the snapshot was written to, with no copy ([Zero-Copy Tensors](zero-copy-tensors.md)). A socket can send only bytes, so the network transport copies each snapshot off the device and encodes it as one binary message. As a result, the zero-copy claim applies only to viewing on the same machine, through a live session or the own window. A viewer on the network receives copies.
 
-The element decides per view what draws it ([Renderer Selection](../web/browser-elements.md#renderer-selection)). Where WebGPU gives an adapter, Caliper's own views compiled to WebAssembly draw the kinds that their loader lists: heatmaps, images, points, series, histograms and scenes. They are the only WebGPU drawing in a browser. Elsewhere, views written in TypeScript draw with Canvas 2D. Both kinds select, pick and hover with the same gestures and send the producer the same events, in source indices. Thus the `selection` of a widget and the `events()` of the server do not depend on which views draw. [Browser Elements](../web/browser-elements.md) gives the details, and the [WebGPU Backend](../applets/rendering.md#webgpu-backend) draws the WebAssembly views.
+The element decides per view what draws it ([Renderer Selection](../web/browser-elements.md#renderer-selection)). Where WebGPU gives an adapter, Caliper's own views compiled to WebAssembly draw the kinds that their loader lists: heatmaps, images, points, series, histograms and scenes. They are the only WebGPU drawing in a browser. Elsewhere, views written in TypeScript draw with Canvas 2D. Both kinds select, pick and hover with the same gestures and send the producer the same events, in source indices. Thus the `selection` of a widget and the `events()` of the server do not depend on which views draw. [Browser Elements](../web/browser-elements.md) gives the details, and the [WebGPU Backend](../instruments/rendering.md#webgpu-backend) draws the WebAssembly views.
 
 ## Device-Side Reduction
 
@@ -74,7 +74,7 @@ Network streaming sends copies of reduced snapshots to a browser on the same mac
 | Platform | macOS only. Caliper LIB, and with it the server, is built and tested only on macOS. |
 | Machine | The browser must run on the machine of the producer. A notebook on a remote Jupyter server cannot show the widgets, because the browser connects to its own 127.0.0.1. |
 | Copies | Each snapshot on the network is a copy off the device. Data views and the budget keep it small, but do not remove it. |
-| Browser Work | The browser draws what a producer sends and computes nothing. It runs no applet. The producer computes the data views on its own device. |
+| Browser Work | The browser draws what a producer sends and computes nothing. It runs no library instrument. The producer computes the data views on its own device. |
 | WebAssembly Heap | WebAssembly in a browser is 32-bit, so the views cannot hold more than 4 GB. The module caps its heap at 512 MB, which bounds the size of the snapshots that the views accept. |
 | Browser Copy | The browser copies each snapshot a second time, from WebAssembly memory into its GPU process. Sampling and data views keep snapshots small for this reason too. |
 | Canvas | Caliper's views draw into one canvas. The pointer, the wheel, keys and text reach them while the canvas has focus. The clipboard and multi-touch gestures do not. A screen reader cannot read the canvas. |

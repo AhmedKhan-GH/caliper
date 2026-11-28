@@ -1,9 +1,9 @@
 nav:
   - index.md
   - Tutorials:
-      - first-applet.md
+      - first-instrument.md
   - Guides:
-      - applet-debugging.md
+      - instrument-debugging.md
       - shader-authoring.md
   - Concepts:
       - rendering.md
@@ -11,7 +11,7 @@ nav:
       - scene-rendering.md
       - trust-model.md
   - Reference:
-      - applet-contract.md
+      - instrument-contract.md
       - manifest.md
       - sdk-package.md
       - cpp-sugar.md

@@ -82,7 +82,7 @@ The scale applies to the entities of the spec only. A live scene from the script
 
 A scene panel applies `view_camera` when it opens. The value is an orbit table, the path of a camera entity or the name of a saved view. The view keeps fitting the scene while its parts arrive, until the person moves the camera. A move stays for the session, and the reset of the view returns to `view_camera`. This holds for every scene view, also for the scene of a script.
 
-The option `views` holds at most 16 saved views. Each view is `{ name, target, distance, azimuth, elevation }`, with the angles in degrees. A name is unique in the panel. The header of the panel has a menu of its views. The command `camera.save` writes the current camera into `views` as an edit, and `camera.set` moves the camera to a view or an orbit. [Instrument Tools](../agents/instrument-tools.md) lists the camera commands.
+The option `views` holds at most 16 saved views. Each view is `{ name, target, distance, azimuth, elevation }`, with the angles in degrees. A name is unique in the panel. The header of the panel has a menu of its views. The command `camera.save` writes the current camera into `views` as an edit, and `camera.set` moves the camera to a view or an orbit. [Scene and State Tools](../agents/scene-and-state-tools.md) lists the camera commands.
 
 ## Colormaps
 

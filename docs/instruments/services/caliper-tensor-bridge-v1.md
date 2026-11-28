@@ -32,26 +32,26 @@ The host validates every tensor before it becomes a texture. A violation returns
 - **3-D `(H,W,C≤4)` `u8`** goes to `texture_from_tensor` as direct RGBA.
 
 The tensor must also be **contiguous** (row-major, no gaps). Its device must be CPU or the active backend's device, which
-is Metal on macOS and CUDA on Windows. The applet-side [torch adapter](../adapters.md) enforces the mirror of these rules
+is Metal on macOS and CUDA on Windows. The instrument-side [torch adapter](../adapters.md) enforces the mirror of these rules
 before the tensor reaches the host. It rejects a bad tensor and never copies it silently.
 
 ### Frame Thread Only
 
 Every bridge entry point is frame-thread-only. Unlike [`caliper.metrics.v1`](caliper-metrics-v1.md), which a job thread
-may call, the bridge touches renderer state and must be called from the applet's `frame()`. In the usual pattern the
+may call, the bridge touches renderer state and must be called from the instrument's `frame()`. In the usual pattern the
 training worker snapshots weights under a mutex and never calls the bridge. The frame thread reads that snapshot and
 does every upload. The frame thread owns the textures and releases them after the job wait and before renderer teardown.
 
 ### Per-Backend Behavior
 
-The applet code is identical on every backend. The place where staging happens differs, and the device-path string that
+The instrument code is identical on every backend. The place where staging happens differs, and the device-path string that
 the renderer reports says which path ran.
 
 | Backend | Path | Staging |
 |---|---|---|
 | Metal (macOS default) | A device compute pass (f32 with a colormap) or a blit (u8) reads the MPS `MTLBuffer` in place | None |
 | Vulkan with CUDA (Windows default) | Tried in order: a CUDA kernel reads the tensor and writes the Vulkan image (`direct-cmap`, `direct-blit`), then a copy into a shared buffer and a Vulkan pass (`compute`, `blit`), then CPU staging | None on the first two rungs, and no in-VRAM copy on the direct rung |
-| Any CPU tensor | The bridge converts on the CPU and uploads | The bridge stages, and the applet never touches a pixel |
+| Any CPU tensor | The bridge converts on the CPU and uploads | The bridge stages, and the instrument never touches a pixel |
 
 The Windows ladder is described in [Vulkan and CUDA on Windows](../../development/vulkan-and-cuda.md).
 
@@ -59,7 +59,7 @@ The Windows ladder is described in [Vulkan and CUDA on Windows](../../developmen
     A single tensor is either zero-copy on the device path or staged from the CPU, not both. A bridge whose renderer
     has no device path for the tensor, such as Vulkan without paired CUDA interop, has CPU as its active device, so it
     rejects a device tensor as a foreign device. The exemplar hands over the training-device tensor first. If the
-    create returns `0`, it relocates the tensor to CPU and the bridge stages it. The applet does no pixel work on
+    create returns `0`, it relocates the tensor to CPU and the bridge stages it. The instrument does no pixel work on
     either path, because the bridge's accept or reject drives the choice.
 
 ### Texture Lifecycle
@@ -75,11 +75,11 @@ frame, because creating a texture costs far more than updating one.
 
 ### `alloc_shared`
 
-`alloc_shared` allocates tensor memory that is the texture's backing store. The applet wraps `out_tensor->data` (for
+`alloc_shared` allocates tensor memory that is the texture's backing store. The instrument wraps `out_tensor->data` (for
 example with `torch::from_blob`) and writes into it. The texture sees the result after at most a layout transition.
 Free the memory with `free_shared`. The result depends on the backend:
 
-- **Vulkan with CUDA** returns a device-backed tensor on `CALIPER_DEV_CUDA`. The applet's kernels write the texture's
+- **Vulkan with CUDA** returns a device-backed tensor on `CALIPER_DEV_CUDA`. The instrument's kernels write the texture's
   memory in place, and the update runs the buffer-to-image pass with no copy.
 - **Metal** returns a CPU vector in unified memory. That is zero-copy for CPU writers, but a device writer still goes
   through `update_texture`.
@@ -91,8 +91,8 @@ The host hands out the ImGui-compatible handle of each backend. That handle is t
 
 ### Sync Model
 
-v1 is stream-free, so `CaliperTensor.stream` is `NULL`. Correctness on device textures comes from the applet draining
-the device once at the handoff. The applet calls `torch::mps::synchronize()` or `torch::cuda::synchronize()` through the
+v1 is stream-free, so `CaliperTensor.stream` is `NULL`. Correctness on device textures comes from the instrument draining
+the device once at the handoff. The instrument calls `torch::mps::synchronize()` or `torch::cuda::synchronize()` through the
 adapter's `synced_to_tensor`, and then calls `update_texture`. That drain is a full-device barrier, and v1_1 replaces it
 with stream ordering where the host honors it.
 
@@ -107,7 +107,7 @@ adapter side and the reasons are in [Adapters](../adapters.md) and
 Both revisions extend the bridge under the [growth rules](../../development/compatibility-and-epochs.md#growth-rules).
 Each struct keeps the same members in the same order with the same semantics, and new members go at the end. Each
 revision adds one capability bit. There is no ABI epoch bump, and the earlier headers, tables and ids stay frozen. An
-applet asks the host for each id and calls `caps()`. A missing id or an unset bit means the applet falls back to the
+instrument asks the host for each id and calls `caps()`. A missing id or an unset bit means the instrument falls back to the
 previous contract, never a crash.
 
 ### `caliper.tensor_bridge.v1_1` Handoff
@@ -128,4 +128,4 @@ v1_2 adds three entry points to the seven v1_1 members. A host without bit 1 kee
 
 <!-- c-api ids sdk/include/caliper/services/tensor_bridge_v1_2.h -->
 
-`CaliperAllocId` is the id that `import_allocation` returns. It reuses the caches, gates and lifecycle of v1_2. The applet side of an import is [`ExportablePool`](../torch-per-platform.md#exportablepool-opt-in).
+`CaliperAllocId` is the id that `import_allocation` returns. It reuses the caches, gates and lifecycle of v1_2. The instrument side of an import is [`ExportablePool`](../torch-per-platform.md#exportablepool-opt-in).

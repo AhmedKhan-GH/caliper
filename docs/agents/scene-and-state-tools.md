@@ -1,6 +1,6 @@
-# Instrument Tools
+# Scene and State Tools
 
-An agent builds an instrument with the tools of this page and the tools of [MCP Server](mcp-server.md). The instrument reacts to a run: its panels read live tensors, kept steps and the values of controls. The builder pages describe what each key does. This page lists the tools, their arguments and their answers. The exact schemas are in the command table, and `tools/list` serves them.
+An agent edits scenes, cameras, state variables, selections, controls, the time cursor, annotations and layout locks in the open spec with the tools on this page and the tools of [MCP Server](mcp-server.md). The builder pages describe what each key does. This page lists the tools, their arguments and their answers. The exact schemas are in the command table, and `tools/list` serves them.
 
 ## Tool Kinds
 

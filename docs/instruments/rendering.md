@@ -6,24 +6,24 @@ MPS backend of PyTorch allocates. Every Mac tensor would take a round trip throu
 
 ```mermaid
 flowchart LR
-    applet -->|CaliperTensor| bridge
+    instrument -->|CaliperTensor| bridge
     bridge -->|update| renderer
-    renderer -->|CaliperTextureId| applet
-    applet -->|ImGui::Image| ImGui
+    renderer -->|CaliperTextureId| instrument
+    instrument -->|ImGui::Image| ImGui
 ```
 
-The applet gives a tensor to the bridge, and the renderer fills a texture that the applet shows through ImGui.
+The instrument gives a tensor to the bridge, and the renderer fills a texture that the instrument shows through ImGui.
 
-To avoid this problem, Caliper keeps graphics out of the applet contract. A `HostRenderer` seam hides the backends, and
+To avoid this problem, Caliper keeps graphics out of the instrument contract. A `HostRenderer` seam hides the backends, and
 each backend updates textures in its own way. [Zero-copy tensor visualization](../python/zero-copy-tensors.md)
 describes how a tensor reaches pixels without a CPU round trip and what each path costs. The [graphics layer](graphics-layer.md) and [scene rendering](scene-rendering.md) pages describe the renderer core that the live views draw through.
 
 ## Graphics API Independence
 
-Applets render only through ImGui and ImPlot. A tensor crosses to the renderer as a [`CaliperTensor`](tensor-and-arrow-headers.md#tensor-header),
+Instruments render only through ImGui and ImPlot. A tensor crosses to the renderer as a [`CaliperTensor`](tensor-and-arrow-headers.md#tensor-header),
 and the renderer returns an opaque `CaliperTextureId`. The host keeps a table from that id to the handle of the backend,
 so the id is never a raw Metal or Vulkan object. Because the contract hides the backend, a change or addition
-needs no epoch bump and no applet rebuild.
+needs no epoch bump and no instrument rebuild.
 
 `HostRenderer` is a host-internal interface that the ABI never sees. The host picks one backend at startup.
 
@@ -111,10 +111,10 @@ drawn with ImGui, so they look the same on every backend.
 
 ## Pixel-Space Contract
 
-Applets never issue graphics calls. They describe what to draw in ImGui terms and hand tensors to the bridge. The host
+Instruments never issue graphics calls. They describe what to draw in ImGui terms and hand tensors to the bridge. The host
 owns the window, the contexts and every GPU call. A tensor becomes a texture through [`caliper.tensor_bridge.v1`](services/caliper-tensor-bridge-v1.md).
 That service is the one place where the backend difference lives: device compute or blit on Metal and Vulkan, and CPU
-staging for a CPU tensor or a renderer without the device path. The applet runs the same code on every backend.
+staging for a CPU tensor or a renderer without the device path. The instrument runs the same code on every backend.
 
 ## Windows Update Ladder
 
@@ -135,15 +135,15 @@ startup log says so, as the [fallback rule](../introduction/architecture.md#desi
 ## One-Way Data Flow
 
 Data moves from tensors to pixels to ImGui, and no further, as the [platform rules](../introduction/architecture.md#design-decisions)
-require. There is no render-to-tensor entry point, no readback on any hot path, and no way for an applet to supply its
+require. There is no render-to-tensor entry point, no readback on any hot path, and no way for an instrument to supply its
 own shader. The `debug_readback_rgba8` function of the backends exists for the test harness only. Training consumes the
 same tensors that the renderer reads, and never the output of the renderer.
 
 Several things look as though they need a new host capability, but they do not:
 
-- **Static assets** such as CAD, OBJ or glTF shells. The applet loads the file and fills vertex and index tensors. The
+- **Static assets** such as CAD, OBJ or glTF shells. The instrument loads the file and fills vertex and index tensors. The
   host never learns about file formats.
-- **Picking, hover and selection.** The applet casts rays against its own tensors. Interaction is math that the applet
+- **Picking, hover and selection.** The instrument casts rays against its own tensors. Interaction is math that the instrument
   owns.
 - **Annotation and heads-up displays.** ImGui composites over the view image.
 
@@ -174,7 +174,7 @@ heatmap reached through the shared-memory session or the in-process window count
 |---|---|---|
 | MPS tensor, imported allocation, shared-memory slot, in-process window slot | 0 | 0 |
 | Points from an `MTLBuffer` (also while the view redraws every frame) | 0 | 0 |
-| CPU tensor to a heatmap or image view (an embedder's `caliper_core_view_tensor`, an applet's bridge texture) | 1 | width x height x 4 |
+| CPU tensor to a heatmap or image view (an embedder's `caliper_core_view_tensor`, an instrument's bridge texture) | 1 | width x height x 4 |
 | CPU points payload (the graphics layer's copy at import, natively and in the browser) | 1 per buffer | N x 12, and N x 4 for the values |
 | Browser heatmap (`tex_update_mapped_from_host`) | 1 | width x height x 4 |
 | Network snapshot (`caliper_core_live_attach_url`) | 1, into its slot | the payload and its values |
@@ -214,7 +214,7 @@ The Metal renderer submits tensor operations and the drawing of the frame to one
 command buffers on one queue in the order of their commits. This gives most of what the Vulkan backend needs explicit
 machinery for:
 
-- **Draw after update.** The tensor operation is committed during the `frame()` of the applet, before the command buffer
+- **Draw after update.** The tensor operation is committed during the `frame()` of the instrument, before the command buffer
   of the frame. Thus the frame samples finished texels with no added synchronization.
 - **Resource lifetime.** A command buffer retains the resources it references until it completes. A buffer or texture
   that the host releases in flight stays alive until the GPU is done with it.

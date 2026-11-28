@@ -4,57 +4,57 @@ kind: reference
 
 # Shot and Serve Commands
 
-This page describes `caliper shot`, which writes a PNG of an applet page, and `caliper serve`, which runs the hub of wire protocol v3.
+This page describes `caliper shot`, which writes a PNG of an instrument page, and `caliper serve`, which runs the hub of wire protocol v3.
 
 ## `caliper shot`
 
-Draws the app's applet page for one applet without a window, and writes the last frame as a PNG. It draws the same page that the app draws for the applet. The page has the page bar and the status bar. While a job runs or a failure is kept, it also has the jobs tray's strip above the status bar. All three are absent when `CALIPER_CHROMELESS=1`. The dock space fills the area they leave, with docking by role and the applet's own frame. The tray's strip appears once a job has run for half a second. Thus a shot of an applet that starts a job when it launches needs more than 30 frames to show it.
+Draws the app's instrument page for one instrument without a window, and writes the last frame as a PNG. It draws the same page that the app draws for the instrument. The page has the page bar and the status bar. While a job runs or a failure is kept, it also has the jobs tray's strip above the status bar. All three are absent when `CALIPER_CHROMELESS=1`. The dock space fills the area they leave, with docking by role and the instrument's own frame. The tray's strip appears once a job has run for half a second. Thus a shot of an instrument that starts a job when it launches needs more than 30 frames to show it.
 
-`shot` finds the applet in [the search order](cli.md#search-order), with the `--applets` folders first. It launches the applet as the app does, draws the frames at about 60 a second, and writes the last one:
+`shot` finds the instrument in [the search order](cli.md#search-order), with the `--instruments` folders first. It launches the instrument as the app does, draws the frames at about 60 a second, and writes the last one:
 
 ```text
-caliper shot --applets build --launch com.example.my-viewer --out page.png
+caliper shot --instruments build --launch com.example.my-viewer --out page.png
 wrote /home/me/my-viewer/page.png: com.example.my-viewer at 1600x1000 after 60 frames
 ```
 
 | Option | Meaning |
 |---|---|
-| `--launch <id>` | The manifest id of the applet to launch, a spec applet's included, or the workspace id of a spec applet that a command script saves in the same run ([Spec Page](../builder/workspace.md#spec-page)). Required. |
+| `--launch <id>` | The manifest id of the instrument to launch, spec-based instruments included, or the workspace id of an instrument that a command script saves in the same run ([Spec Page](../builder/workspace.md#spec-page)). Required (omitting the value prints `--launch needs an instrument id`). |
 | `--out <file.png>` | The image to write. Its folder must exist, and a file already there is replaced. Required. |
 | `--size <W>x<H>` | The size of the image in pixels, each side from 1 to 16384. The default is `1600x1000`. |
 | `--frames <N>` | The number of frames drawn, from 1 to 100000. The image is the last one. The default is 60, one second. |
 
 Each option takes its value as the next argument or after `=`, as in `--size=800x500`, and you may give it once. Any of them with another subcommand is a usage error.
 
-The page is drawn at a scale of 1, so a 1600x1000 image shows what a window of 1600 by 1000 points shows on a display without scaling. The image is opaque. As in the app, an applet's windows do not appear in the first frame and are docked in place from the second. Give enough frames for the applet to load what it shows.
+The page is drawn at a scale of 1, so a 1600x1000 image shows what a window of 1600 by 1000 points shows on a display without scaling. The image is opaque. As in the app, an instrument's windows do not appear in the first frame and are docked in place from the second. Give enough frames for the instrument to load what it shows.
 
 Nothing appears on screen. `shot` draws into the renderer's offscreen canvas, the canvas that Caliper Embed uses in `CALIPER_CANVAS_OFFSCREEN` mode, and reads the frame back from it. It creates no window. On macOS the process has no Dock icon and no menu bar. The offscreen canvas needs Metal on macOS or Vulkan on Windows, and there is no fallback renderer. When that renderer cannot start, with `CALIPER_RENDERER=gl`, which asks for the removed OpenGL renderer, and on Linux, `shot` prints `caliper: shot cannot draw offscreen: ` followed by the reason, as in `caliper: shot cannot draw offscreen: the Metal renderer could not start (no Metal device), and there is no fallback renderer until the WebGPU fallback through Dawn lands`, and exits with 1.
 
-`shot` never reads or writes the saved window layout, `imgui.ini`. Every image thus shows the layout of a first run, with each window where its dock role puts it. `CALIPER_DATA_DIR` decides where the stores and the applet's data folder go:
+`shot` never reads or writes the saved window layout, `imgui.ini`. Every image thus shows the layout of a first run, with each window where its dock role puts it. `CALIPER_DATA_DIR` decides where the stores and the instrument's data folder go:
 
-- When `CALIPER_DATA_DIR` is set and not empty, the stores and the applet's data folder `data/<id>/` are in that folder, as they are for the app. An image can thus show data that the applet saved there.
-- When it is not set, `shot` creates a temporary folder under the system's temporary folder (`TMPDIR` on macOS and Linux, `TMP` or `TEMP` on Windows) and uses it as the app-data folder. It removes the folder before it exits. The applet starts with an empty data folder, and `shot` writes nothing in the real app-data folder.
+- When `CALIPER_DATA_DIR` is set and not empty, the stores and the instrument's data folder `data/<id>/` are in that folder, as they are for the app. An image can thus show data that the instrument saved there.
+- When it is not set, `shot` creates a temporary folder under the system's temporary folder (`TMPDIR` on macOS and Linux, `TMP` or `TEMP` on Windows) and uses it as the app-data folder. It removes the folder before it exits. The instrument starts with an empty data folder, and `shot` writes nothing in the real app-data folder.
 
-In both cases `shot` searches the user applets folder, as the app does, and only reads it. `--workspace` and `CALIPER_WORKSPACE` name the builder's workspace as they do for the app ([Workspace](cli.md#workspace)). Without them the workspace is `workspace/` in the app-data folder, which is the temporary one when `CALIPER_DATA_DIR` is not set. It opens only when a command script, a spec applet or a command of Caliper API needs it. The session's `capture.frame` reads the canvas back at the end of the next frame. `shot` loads the display face only when `CALIPER_DISPLAY_FONT` names it, because only the landing screen's wordmark uses it.
+In both cases `shot` searches the user instruments folder, as the app does, and only reads it. `--workspace` and `CALIPER_WORKSPACE` name the builder's workspace as they do for the app ([Workspace](cli.md#workspace)). Without them the workspace is `workspace/` in the app-data folder, which is the temporary one when `CALIPER_DATA_DIR` is not set. It opens only when a command script, a spec-based instrument or a command of Caliper API needs it. The session's `capture.frame` reads the canvas back at the end of the next frame. `shot` loads the display face only when `CALIPER_DISPLAY_FONT` names it, because only the landing screen's wordmark uses it.
 
-For a spec applet, `shot` draws the spec page. The applet is one of these:
+For an instrument written as a spec, `shot` draws the spec page. The instrument is one of these:
 
-- A spec applet that the search finds by its manifest id, such as `local.run42-dashboard`.
-- The workspace's applet of that id, when no search folder has an applet with the id and the id is a workspace's applet id (a lowercase letter, then up to 63 lowercase letters, digits, `_` and `-`, with no dots).
+- A spec-based instrument that the search finds by its manifest id, such as `local.run42-dashboard`.
+- The workspace's instrument of that id, when no search folder has an instrument with the id and the id is a workspace instrument id (a lowercase letter, then up to 63 lowercase letters, digits, `_` and `-`, with no dots).
 
-Once the workspace is open and the command script, if any, is done, `shot` opens the applet. It uses `applet.open` when the applet is in the workspace and its file otherwise. Then it draws at least 10 more frames so that the plots fit their data, and writes the last one. A command script can therefore build and save the applet in the same run. When the workspace has no such applet, `shot` exits with 1. Whatever `--launch` named, an `applet.open` that succeeds while `shot` runs shows the spec page from then on, as in the app. It can come from the command script or through Caliper API.
+Once the workspace is open and the command script, if any, is done, `shot` opens the instrument. It uses `instrument.open` when the instrument is in the workspace and its file otherwise. Then it draws at least 10 more frames so that the plots fit their data, and writes the last one. A command script can therefore build and save the instrument in the same run. When the workspace has no such instrument, `shot` exits with 1. Whatever `--launch` named, an `instrument.open` that succeeds while `shot` runs shows the spec page from then on, as in the app. It can come from the command script or through Caliper API.
 
 ```text
 CALIPER_COMMAND_SCRIPT=build.jsonl caliper shot --workspace ws --launch run42-dashboard --size 2560x1440 --out board.png
 wrote /home/me/board.png: Run 42 at 2560x1440 after 60 frames
 ```
 
-The applet runs as it runs in the app: its `on_init`, its frames and any jobs it starts. Its own environment variables apply as usual. Leave them unset for an image of the applet's first state.
+A library instrument runs as it runs in the app: its `on_init`, its frames and any jobs it starts. Its own environment variables apply as usual. Leave them unset for an image of the instrument's first state.
 
 `shot` exits with 0 when it has written the image, and with 2 for a wrong command line. It exits with 1 in these cases:
 
-- No folder holds an applet with the id: `caliper: no applet with the id <id> in the search folders (caliper list shows them)`. For an id written as a workspace's applet id, the message is `caliper: no applet with the id <id> in the search folders or the workspace (<code>: <reason>)`.
-- The applet cannot be launched, with its status from `caliper list`: `caliper: <id> cannot be launched (REFUSED): <reason>`.
+- No folder holds an instrument with the id: `caliper: no instrument with the id <id> in the search folders (caliper list shows them)`. For an id written as a workspace instrument id, the message is `caliper: no instrument with the id <id> in the search folders or the workspace (<code>: <reason>)`.
+- The instrument cannot be launched, with its status from `caliper list`: `caliper: <id> cannot be launched (REFUSED): <reason>`.
 - Its `on_init` fails or it faults while launching: `caliper: <id> failed to launch: <reason>`.
 - It faults in a frame and is quarantined: `caliper: <id> was quarantined: <reason>`.
 - The renderer cannot draw offscreen, as described above.
@@ -64,7 +64,7 @@ The applet runs as it runs in the app: its `on_init`, its frames and any jobs it
 
 ## `caliper serve`
 
-Runs the hub of [wire protocol v3](wire-protocol.md). Producers, such as training scripts, connect out to the hub and each becomes a session. Viewers (the browser viewer page, the notebook widget, the Caliper app) connect to it, list the sessions and attach to one. The hub needs no window, renderer or GPU, and listens on 127.0.0.1 only. [Run a hub](../python/hub-setup.md) explains how to use it, what it keeps and its limits.
+Runs the hub of [wire protocol v3](wire-protocol.md). Producers, such as training scripts, connect out to the hub and each becomes a session. Viewers (the browser viewer page, the notebook widget, the Caliper app) connect to it, list the sessions and attach to one. The hub needs no window, renderer or GPU, and listens on 127.0.0.1 only. [Hub Setup](../python/hub-setup.md) explains how to use it, what it keeps and its limits.
 
 | Option | Meaning |
 |---|---|

@@ -7,15 +7,15 @@ This page lists the milestones of Caliper's current trajectory, Agent-Built Play
 | Milestone | Scope | Status | Pull Request |
 |---|---|---|---|
 | M0, Reconciled Base | Graphics layer, scenes, protocol 3.2, picking | Done | [#24](https://github.com/AhmedKhan-GH/caliper/pull/24) |
-| M1, Agent-Built Instruments | Scene panels, controls, run control and events over MCP | Done | [#25](https://github.com/AhmedKhan-GH/caliper/pull/25) |
+| M1, Agent-Built Instruments | Live scene panels, controls, run control and events over MCP in spec-based instruments | Done | [#25](https://github.com/AhmedKhan-GH/caliper/pull/25) |
 | M2, GPU Programs | Agent-written WGSL over live tensors, stages, sandbox, first ablation | Done | [#27](https://github.com/AhmedKhan-GH/caliper/pull/27) |
-| M3, Instrument Building | Entities from tensors, operators, shared state, time transport, annotations, all control kinds | Done | [#28](https://github.com/AhmedKhan-GH/caliper/pull/28) |
+| M3, Instrument Building | Tensor-derived entities, operators, shared state, time cursor, annotations and all control kinds in spec-based instruments | Done | [#28](https://github.com/AhmedKhan-GH/caliper/pull/28) |
 | M4, Hosted Runs | Start, fork and stop a model's run from Caliper and over MCP | Done | [#26](https://github.com/AhmedKhan-GH/caliper/pull/26) |
 | M5, Programmable Graphics | Pieces with a derive half in the run and a draw half in the viewer, written by the agent, in the app and the browser | Done | [#34](https://github.com/AhmedKhan-GH/caliper/pull/34) |
 | M6, Graphics Consolidation | Library scene pieces, typed resources, dashboard parity, and removal of the built-in draw route | Done | [#42](https://github.com/AhmedKhan-GH/caliper/pull/42) |
 | M7, Derivation Catalog | Model probes, SAELens and circuit-tracer dictionaries, example indexes, and attribution graphs as library pieces and commands | Done | [#45](https://github.com/AhmedKhan-GH/caliper/pull/45), [#51](https://github.com/AhmedKhan-GH/caliper/pull/51) |
 | M8, Steering and Intervention | Feature steering, scaling, clamping, and activation patching on TransformerLens models, with an interactive circuit trace instrument | Done | [#51](https://github.com/AhmedKhan-GH/caliper/pull/51) |
-| M9, Saved and Editable Instruments | Saved instruments with their pieces, and the node editor | Planned | |
+| M9, Saved and Editable Instruments | Bundling workspace pieces into saved spec-based instruments, and the node editor | Planned | |
 | M10, Browser Parity | The rest of an instrument in the browser | Planned | |
 | M11, Training Debugger | First acceptance demo | Planned | |
 | M12, Image Sequences and Training Data | Image grids, sequences, augmentation preview | Planned | |
@@ -58,7 +58,7 @@ M6 supplies library pieces for points, lines, arrows, boxes, meshes, images, dep
 
 Piece resources accept `u8` and `u16` elements and typed textures. Large resource versions travel in parts, then each viewer assembles a complete version before it draws. The [piece reference](../agents/pieces.md#piece-sources) lists the capacities, and the [wire reference](../reference/wire-protocol-3-2.md#resource-parts) defines the parts.
 
-[ABI epoch 3](../development/compatibility-and-epochs.md#host-abi-epoch-and-service-revisions) removes the geometry and export services. The six demos that depend on those services and the five archived applets leave the repository. GPTScope keeps its ImPlot3D view.
+[ABI epoch 3](../development/compatibility-and-epochs.md#host-abi-epoch-and-service-revisions) removed the geometry and export services, and the legacy demos and archived C++ instruments that depended on them left the repository. ABI epoch 4 later unified the C ABI under the instrument contract.
 
 Library pieces now own every scene draw, and each sender uses the piece form for every scene batch. The change removes the built-in draw route and stage hooks. A read-only converter preserves old per-shape recordings. The Vulkan renderer stays for the Windows interface, and the graphics layer's Vulkan backend remains planned. The browser dashboard draws programs, series labels and colors, controls, and layout from the same spec as the app. Viewer controls keep the origin restrictions.
 

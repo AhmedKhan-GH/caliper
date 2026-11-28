@@ -1,7 +1,7 @@
 # Torch per Platform
 
 A training tensor reaches the screen without a copy through the CPU. Six steps make up that path, and the table shows
-what each step is on macOS and on Windows. Applet code is the same on both platforms. Only the layers underneath differ.
+what each step is on macOS and on Windows. Instrument code is the same on both platforms. Only the layers underneath differ.
 
 | Step | macOS · Metal | Windows · Vulkan + CUDA |
 |---|---|---|
@@ -29,15 +29,15 @@ what each step is on macOS and on Windows. Applet code is the same on both platf
 6. **`Bridge::texture_from_tensor_mapped`: what is drawn.** The GPU colormaps the tensor into a Metal texture or a
    Vulkan image. See [caliper.tensor_bridge.v1](services/caliper-tensor-bridge-v1.md).
 
-Most applets call steps 1, 3 and 6 directly, and the SDK does steps 4 and 5. The MNIST applet (`examples/mnist/applet/`) uses these calls.
+Most instruments call steps 1, 3 and 6 directly, and the SDK does steps 4 and 5. The MNIST instrument (`examples/mnist/instrument/`) uses these calls.
 
 ## Windows Memory Sharing
 
-An applet chooses one of two routes from a CUDA tensor to a Vulkan image for each tensor. Both routes use step 5.
+An instrument chooses one of two routes from a CUDA tensor to a Vulkan image for each tensor. Both routes use step 5.
 
 - **An arbitrary tensor.** Any contiguous CUDA tensor from the default allocator of torch goes through
   `Bridge::texture_from_tensor_mapped` and `update_texture`. The host loads a CUDA kernel into the context of torch.
-  The kernel reads the tensor in place and writes the Vulkan image, so nothing is copied and the applet does not change.
+  The kernel reads the tensor in place and writes the Vulkan image, so nothing is copied and the instrument does not change.
   If the kernel path refuses the tensor, the host copies it inside VRAM. If that also fails, the host stages it on the
   CPU. See [Vulkan and CUDA on Windows](../development/vulkan-and-cuda.md).
 - **The exportable pool.** Tensors from an `ExportablePool` live in `cuMemCreate` blocks with shareable handles. The
@@ -53,7 +53,7 @@ copy, but a device writer goes through the normal update path. See
 
 ## `ExportablePool` Opt-In
 
-An applet opts in after the host grants `CALIPER_BRIDGE_CAP_IMPORT_ALLOC`. Follow these rules to keep the opt-in safe:
+An instrument opts in after the host grants `CALIPER_BRIDGE_CAP_IMPORT_ALLOC`. Follow these rules to keep the opt-in safe:
 
 1. **Check `ok()`.** Construction fails quietly when CUDA, the driver or a driver symbol is missing, and `ok()` is then
    `false`. The class compiles on every platform. Where the pool cannot be backed, `use()` does nothing and `to_bridge`

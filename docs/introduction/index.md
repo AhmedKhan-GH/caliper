@@ -8,7 +8,7 @@ This area is for a reader who meets Caliper for the first time. It explains what
 
 ## Platform Overview
 
-Caliper is a desktop application that draws live graphics from tensors that stay on the GPU. A host program owns the window, the renderer and the frame loop. Applets are shared libraries that the host loads at run time. The [Overview](../index.md) describes the whole product and its parts.
+Caliper is a desktop application that draws live graphics from tensors that stay on the GPU. A host program owns the window, the renderer and the frame loop. An instrument is anything that the Caliper app opens, written in C++ or written as a spec. The [Overview](../index.md) describes the whole product and its parts.
 
 ## First Steps
 
@@ -18,17 +18,17 @@ The quickstart needs Apple Silicon, macOS 14 or later, Python 3.12 and PyTorch w
 
 ## Layer Structure
 
-The [Architecture](architecture.md) page explains the layering. Applets sit on top. They depend on the SDK and on a pinned UI stack of ImGui and ImPlot. The host implements the SDK, so the SDK depends on nothing else in Caliper. Dependencies point down only.
+The [Architecture](architecture.md) page explains the layering. Instruments sit on top. Library instruments depend on the SDK and on a pinned UI stack of ImGui and ImPlot. The host implements the SDK, so the SDK depends on nothing else in Caliper. Dependencies point down only.
 
 ```mermaid
 flowchart TB
-    applets[Applets] -->|C ABI calls| sdk[SDK]
-    applets -->|ImGui calls| ui[UI Stack]
+    instruments[Instruments] -->|C ABI calls| sdk[SDK]
+    instruments -->|ImGui calls| ui[UI Stack]
     sdk -->|implemented by| host[Host]
     ui -->|contexts owned by| host
     host -->|libcaliper| embed[Embedders]
 ```
 
-Four rules hold across all layers. Applets run in the process of the host and call it through a C ABI. The host links no ML framework. Data flows one way, from tensors to pixels. A missing capability falls back to a slower path that works, and the host says so.
+Four rules hold across all layers. Instruments with a library run in the process of the host and call it through a C ABI. The host links no ML framework. Data flows one way, from tensors to pixels. A missing capability falls back to a slower path that works, and the host says so.
 
-A reader who wants to write an applet moves on to the Applets area. A reader who wants more from Caliper LIB moves on to the Python area.
+A reader who wants to write an instrument moves on to the Instruments area. A reader who wants more from Caliper LIB moves on to the Python area.

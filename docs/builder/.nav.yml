@@ -3,7 +3,7 @@ nav:
   - Reference:
       - builder-pane.md
       - workspace.md
-      - spec-version-1.md
+      - spec-format.md
       - scene-entities.md
       - operators.md
       - state-and-references.md

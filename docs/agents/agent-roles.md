@@ -23,7 +23,7 @@ tool call in the same way, and a Stop control cancels either one.
 
 Both roles act on Caliper through its command layer. A change to a spec is a command. Caliper checks it against the spec
 format, records it in the workspace's journal and lets you undo it from the app. Commands that delete or overwrite saved
-data, such as saving an applet or running a loader, need your approval in the app. A change to the open spec waits for
+data, such as saving an instrument or running a loader, need your approval in the app. A change to the open spec waits for
 your review, with its diff, unless you turn review off. The command layer asks, so this holds for every agent, including
 an agent outside the app that uses MCP.
 
@@ -37,7 +37,7 @@ You review a waiting change on its card. The card opens in a strip at the bottom
 any page. It shows who asks (MCP agent, Side chat, Widget agent or API), the command and its target, such as
 "panel.patch · Loss and accuracy". For a spec, it shows each changed key with its old value struck through and its new
 value, the validator's warnings, and the whole diff behind Diff. For saved data, it shows what would be lost, such as
-"Applet run42-dashboard overwritten".
+"Instrument run42-dashboard overwritten".
 
 The card also shows how long the agent still waits, two minutes at most. On the spec page, the panel that the change
 touches carries a REVIEW mark. Approve applies the change as the card showed it. It refuses the change if the spec
@@ -45,7 +45,7 @@ changed so that the change would mean something else. Deny tells the agent no, a
 nobody decides in time. Activity lists each request when it starts to wait and when it ends.
 
 The two roles share one journal and one undo history, and their commands run one at a time in one order. An agent builds
-data (specs and loaders), never code that runs in Caliper's process. The [trust model](../applets/trust-model.md)
+data (specs and loaders), never code that runs in Caliper's process. The [Trust Model](../instruments/trust-model.md)
 explains why that matters.
 
 ## Side Chat

@@ -1,6 +1,6 @@
 # UI Principles
 
-These rules apply to the host and to every applet. They describe structure, not visual style. The visual direction is a dense technical workstation in the Sternbild palette, with bronze as the single accent, square corners and 1 px rules. Researchers can have denser panes than first-time users, but the rules hold at any density.
+These rules apply to the host and to every instrument. They describe structure, not visual style. The visual direction is a dense technical workstation in the Sternbild palette, with bronze as the single accent, square corners and 1 px rules. Researchers can have denser panes than first-time users, but the rules hold at any density.
 
 ## Text
 
@@ -14,7 +14,7 @@ These rules apply to the host and to every applet. They describe structure, not 
 ## Explanation
 
 - **One on-demand place.** Explanation lives in a tour or behind an info icon beside a title, never on the surface.
-- **A tour is data.** Each step names the region it describes, and the overlay outlines that region. Step text is a title and at most two plain sentences. The content lives in a file beside the applet, so a developer can revise it without a code change and reuse it elsewhere.
+- **A tour is data.** Each step names the region it describes, and the overlay outlines that region. Step text is a title and at most two plain sentences. The content lives in a file beside the instrument, so a developer can revise it without a code change and reuse it elsewhere.
 
 ## Layout
 

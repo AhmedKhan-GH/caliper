@@ -1,7 +1,7 @@
 # caliper.feed.v1
 
 Service id `caliper.feed.v1`: live telemetry from the machine the host runs on.
-The host owns the telemetry providers and buffers their samples in a ring buffer for each channel. Each sample has a timestamp and a sequence number. The host offers a pull-based read surface that any thread can call without blocking. Applets copy samples into their own tensors on their job threads, so data still flows from tensors to pixels. Embedders reach the same surface through `caliper_core_get_service`.
+The host owns the telemetry providers and buffers their samples in a ring buffer for each channel. Each sample has a timestamp and a sequence number. The host offers a pull-based read surface that any thread can call without blocking. Instruments copy samples into their own tensors on their job threads, so data still flows from tensors to pixels. Embedders reach the same surface through `caliper_core_get_service`.
 
 The caller holds its own cursor. Thus the service needs no callbacks across the ABI and keeps no state in the host for each reader.
 
@@ -27,7 +27,7 @@ Each channel keeps a fixed-capacity ring of 4096 samples, and an overflow drops 
 
 ### Thread Callability
 
-Every entry point is callable from any thread and never blocks. Applet job threads and embedder UI threads can read the same surface at the same time. No callbacks cross the ABI, so the service has no reentrancy or threading contract and no state for each subscriber. The service has no applet-registered or external sources, because every channel comes from a host provider.
+Every entry point is callable from any thread and never blocks. Instrument job threads and embedder UI threads can read the same surface at the same time. No callbacks cross the ABI, so the service has no reentrancy or threading contract and no state for each subscriber. The service has no instrument-registered or external sources, because every channel comes from a host provider.
 
 ## Providers
 

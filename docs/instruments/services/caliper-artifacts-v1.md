@@ -12,17 +12,17 @@ Service id `caliper.artifacts.v1` is a content-addressed artifact store. It keep
 
 ## Semantics
 
-The store keeps checkpoints and exports under a key that comes from their content. It deduplicates them on disk and links each one to the run that produced it. An applet calls all three entry points from a **job thread**. Hashing uses **sha256**, and a `put` writes the digest into `out_digest[65]` as **64 hex chars + NUL**.
+The store keeps checkpoints and exports under a key that comes from their content. It deduplicates them on disk and links each one to the run that produced it. An instrument calls all three entry points from a **job thread**. Hashing uses **sha256**, and a `put` writes the digest into `out_digest[65]` as **64 hex chars + NUL**.
 
 The digest is a pure function of the bytes, so identical bytes always land at the same path.
 
-**Deduplication.** If an applet stores the same bytes twice, the second `put` finds the file on disk and **skips the write**. The store keeps one file, not two. The index still records the newer `(name, run, ts)` against the same digest.
+**Deduplication.** If an instrument stores the same bytes twice, the second `put` finds the file on disk and **skips the write**. The store keeps one file, not two. The index still records the newer `(name, run, ts)` against the same digest.
 
-**Name Resolution.** A `name` is a mutable label, not a key. If an applet reuses a name for new bytes, the store adds a new row with a fresh `ts`. `path_of` and `exists` accept **either** a digest **or** a name. A name resolves to the **newest** row with that name, and a digest resolves to exactly that blob.
+**Name Resolution.** A `name` is a mutable label, not a key. If an instrument reuses a name for new bytes, the store adds a new row with a fresh `ts`. `path_of` and `exists` accept **either** a digest **or** a name. A name resolves to the **newest** row with that name, and a digest resolves to exactly that blob.
 
 **Run Lineage.** The `run` argument links a blob to the `caliper.metrics.v1` run that produced it. The value `run = 0` means the blob is unlinked, for example a standalone export. The host can list the artifacts of a run with its `by_run` query, so a checkpoint always knows which run made it.
 
-**Unknown Values.** An unknown digest or name returns `false` or `nullptr`. No exception crosses the C boundary. If the store fails to open at host start-up, the host still vends the service, but every call does nothing: `put` returns `false`, `path_of` returns `nullptr` and `exists` returns `false`. The applet degrades and does not crash.
+**Unknown Values.** An unknown digest or name returns `false` or `nullptr`. No exception crosses the C boundary. If the store fails to open at host start-up, the host still vends the service, but every call does nothing: `put` returns `false`, `path_of` returns `nullptr` and `exists` returns `false`. The instrument degrades and does not crash.
 
 ### Threading and String Lifetime
 

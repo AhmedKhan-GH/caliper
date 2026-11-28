@@ -1,10 +1,12 @@
-# Spec Version 1
+# Spec Format
 
-Spec version 1 is spec version 0 with additions: the panel primitive `scene`, the top-level arrays `control` and `state`, and the keys that instruments need. The [Instrument Keys](#instrument-keys) section lists them. A version 0 document stays valid and is read as before. A document of version 1 starts with `caliper_spec = 1`. The reader knows the versions 0 and 1 and refuses any other with `spec.unsupported_version`. The JSON Schema of version 1 is `caliper-spec-v1.schema.json`, and `caliper-mcp` serves it beside the schema of version 0.
+Spec format version 2 (`caliper_spec = 2`) is the unified format for instruments written as specs. Every spec begins with `caliper_spec = 2` and an `[instrument]` table (`"instrument"` in JSON). Earlier format versions (`0` and `1`) are retired, and the reader refuses any version other than `2` with `spec.unsupported_version`. The JSON Schema is `src/builder/spec/schema/caliper-spec-v2.schema.json` (`$id = "urn:caliper:schema:spec:v2"`), and `caliper-mcp` serves it at `caliper://schema/caliper-spec-v2.schema.json`.
 
-## Instrument Keys
+Whether a spec reads static workspace tables or connects to live tensors, step history, scenes, controls, state and GPU programs is a property of what the spec declares, not a separate spec subtype.
 
-An instrument is a spec that reacts to a run: its panels read live tensors, kept steps and the values of controls. All keys of an instrument belong to version 1, and each one raises the required version to 1. This table lists the keys and the page that describes each one.
+## Spec Keys
+
+A spec declares `[instrument]` metadata (`id`, `title`, `description`, `layout_locked`, `x`), `source` entries, `panel` entries and a `layout`. A spec can also declare live and interactive keys that connect panels to runs, kept steps, state variables, controls and GPU programs. This table lists the interactive and live keys and the page that describes each one.
 
 | Key | Place | Content | Page |
 |---|---|---|---|
@@ -21,7 +23,7 @@ An instrument is a spec that reacts to a run: its panels read live tensors, kept
 | `state:<id>`, `cursor` | Control `bind` | The state and the cursor as targets | [Controls](controls.md) |
 | `shares`, `min` | Layout | The shares of a split and the minimum of a leaf | [Layout Shares](#layout-shares) |
 | `closable` | Panel and control | Whether a user or a command can close the component | [Non-Closable Components](#non-closable-components) |
-| `layout_locked` | Applet | Whether the instrument fixes its layout and blocks close actions | [Layout Lock](#layout-lock) |
+| `layout_locked` | `[instrument]` | Whether the instrument fixes its layout and blocks close actions | [Layout Lock](#layout-lock) |
 | `params` | Program | Named numbers that the program reads | [Operators](operators.md#program-parameters) |
 | `tensor` | Program output `kind` | An output that the script publishes as a live tensor | [Operators](operators.md#tensor-output) |
 | `piece` | Top level | An array of inline pieces | [Pieces](#pieces) |
@@ -31,11 +33,9 @@ A binding reference can stand at some of these keys. [State and References](stat
 
 ## Version Rules
 
-A version 0 document that uses a key of version 1 gets the errors of version 0, `spec.unknown_primitive` or `spec.unknown_key`. A version 0 document with the number changed to 1 is a valid version 1 document, because version 1 is a strict superset. The canonical writers write the version that the spec holds and do not raise it.
+Every spec starts with `caliper_spec = 2` before its first table, and the canonical writers always emit `caliper_spec = 2` with the `[instrument]` table. The reader accepts version `2` only and refuses any other version (including retired versions `0` and `1`) with `spec.unsupported_version`.
 
-An edit that adds a scene panel, a control, a state variable or another key of version 1 to a version 0 spec raises the version to 1 in the same command. The edit and the new number are one undo step. This holds for `panel.create` of a scene panel, for the first `control.create` and for the first `state.create`.
-
-A saved spec applet of format 1 loads from the workspace. The host refuses only a format above the newest one or below 0.
+A saved spec-based instrument in a workspace loads when its spec states `caliper_spec = 2`. The host refuses any other format version before opening the instrument ([Refusal Messages](../reference/refusal-messages.md#spec-based-instruments)).
 
 ## Scene Panel
 
@@ -89,7 +89,7 @@ The `bind` string has one of these forms:
 - `value` is a value that the spec holds.
 - `state:<id>` is a [state variable](state-and-references.md). A `readout` has no target and a `transport` binds `cursor`.
 
-Version 1 builds all nine kinds: `slider`, `button`, `range`, `toggle`, `picker`, `text`, `segmented`, `readout` and `transport`. [Controls](controls.md) describes each kind. A toggle binds `intervene:<point>`, which it ablates while it is on, or `param:<name>` of a boolean parameter.
+Spec format 2 builds all nine kinds: `slider`, `button`, `range`, `toggle`, `picker`, `text`, `segmented`, `readout` and `transport`. [Controls](controls.md) describes each kind. A toggle binds `intervene:<point>`, which it ablates while it is on, or `param:<name>` of a boolean parameter.
 
 | Kind | Targets | Options |
 |---|---|---|
@@ -120,7 +120,7 @@ The table `provenance` marks a spec from someone else. It has `foreign` (true), 
 
 A control is a leaf of the layout, as a panel is. A leaf is an id, and the id names a panel or a control. The commands `layout.place` and `layout.set` accept control ids. In a vertical split, a control leaf takes the height of one control row.
 
-A spec with no `layout` places its panels as version 0 does. When the spec has controls, the default root is a vertical split of two children: the panels, then one horizontal split of the controls in declaration order. A single control is a leaf and not a split. The validator warns with `spec.unplaced_panel` for a control that the layout does not place.
+A spec with no `layout` places its panels in a default grid. When the spec has controls, the default root is a vertical split of two children: the panels, then one horizontal split of the controls in declaration order. A single control is a leaf and not a split. The validator warns with `spec.unplaced_panel` for a control that the layout does not place.
 
 ## Layout Shares
 
@@ -156,16 +156,16 @@ When `closable` is `false`, the app and the browser viewer hide the close button
 
 ## Layout Lock
 
-The `[applet]` table accepts the optional boolean key `layout_locked`. The default value is `false` when the key is absent. Set `layout_locked = true` to lock the whole instrument.
+The `[instrument]` table accepts the optional boolean key `layout_locked`. The default value is `false` when the key is absent. Set `layout_locked = true` to lock the whole instrument.
 
 ```toml
-[applet]
+[instrument]
 id = "circuit-trace"
 title = "Circuit Trace"
 layout_locked = true
 ```
 
-When `layout_locked` is `true`, every panel and control becomes non-closable and the layout stays fixed. The app hides panel close buttons, disables title strip drags and disables divider drags. The browser viewer hides panel close buttons and shows `layout locked` in the status bar. The commands `panel.create`, `panel.remove`, `control.create`, `control.remove`, `layout.place` and `layout.set` fail with `layout.locked`. Use `layout.lock` with `locked = false`, or click Lock Layout in the page bar, to unlock the instrument.
+When `layout_locked` is `true`, every panel and control becomes non-closable and the layout stays fixed. The app hides panel close buttons, disables title strip drags and disables divider drags. The browser viewer hides panel close buttons and shows `layout locked` in the status bar. The commands `panel.create`, `panel.remove`, `control.create`, `control.remove`, `layout.place` and `layout.set` fail with `layout.locked` (with `where` set to `"instrument.layout_locked"`). Use `layout.lock` with `locked = false`, or click Lock Layout in the page bar, to unlock the instrument.
 
 ## Control Commands
 
@@ -177,25 +177,22 @@ The result of `control.create` and `control.remove` holds `id`, `warnings`, `dif
 
 ## Validator Codes
 
-Version 1 adds three error codes for controls. The first one is given for an unknown kind. A spec with more than 16 programs fails with `spec.too_many`. The other errors of controls and scene panels use the codes of version 0.
+Controls, scenes and programs use these validator codes:
 
 | Code | Stage | Cause |
 |---|---|---|
 | `spec.unknown_control_kind` | Parse | A `kind` that is not one of the nine kinds |
 | `spec.unsupported_control` | Validate | A kind of the format that this Caliper does not draw yet |
 | `spec.control_mismatch` | Validate | A target that the kind cannot take, or an option of another kind |
+| `spec.bad_binding` | Validate | A `bind` that does not match the target forms, or a scene slot that is not `live:<name>` |
+| `spec.duplicate_id` | Validate | A control id that is also a panel id |
+| `spec.unknown_panel` | Validate | A layout leaf that names no panel and no control |
+| `spec.out_of_range` | Validate | A slider with `min` not below `max`, a `step` not above 0, or `log` with `min` not above 0 |
+| `spec.too_many` | Validate | More than 64 controls, more than 64 patterns or more than 16 programs |
 
-| Existing Code | Use in Version 1 |
-|---|---|
-| `spec.bad_binding` | A `bind` that does not match the target forms, or a scene slot that is not `live:<name>` |
-| `spec.duplicate_id` | A control id that is also a panel id |
-| `spec.unknown_panel` | A layout leaf that names no panel and no control |
-| `spec.out_of_range` | A slider with `min` not below `max`, a `step` not above 0, or `log` with `min` not above 0 |
-| `spec.too_many` | More than 64 controls or more than 64 patterns |
+## Interactive Codes
 
-## Instrument Codes
-
-The keys of an instrument add these codes. The pages named above state when each one applies.
+Interactive keys add these codes. The pages named above state when each one applies.
 
 | Code | Severity | Cause |
 |---|---|---|

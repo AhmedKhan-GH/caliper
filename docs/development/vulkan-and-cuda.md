@@ -1,6 +1,6 @@
 # Vulkan and CUDA
 
-On Windows with an NVIDIA GPU, Caliper renders with Vulkan and shares GPU memory with CUDA. As a result, a torch tensor reaches the screen without passing through host memory. The renderer seam is in [Rendering](../applets/rendering.md), and the general idea is in [Zero-copy tensor visualization](../python/zero-copy-tensors.md).
+On Windows with an NVIDIA GPU, Caliper renders with Vulkan and shares GPU memory with CUDA. As a result, a torch tensor reaches the screen without passing through host memory. The renderer seam is in [Rendering](../instruments/rendering.md), and the general idea is in [Zero-Copy Tensors](../python/zero-copy-tensors.md).
 
 ```mermaid
 flowchart LR
@@ -23,7 +23,7 @@ With no match, interop is off and the backend does not fall back to device 0, be
 
 ## Update Paths
 
-Interop has two independent parts: the memory that the APIs share, and the order of work between them. [Rendering](../applets/rendering.md#windows-update-ladder) introduces the update ladder. This section gives the detail.
+Interop has two independent parts: the memory that the APIs share, and the order of work between them. [Rendering](../instruments/rendering.md#windows-update-ladder) introduces the update ladder. This section gives the detail.
 
 ### Direct Image Path
 
@@ -31,7 +31,7 @@ The first rung gives CUDA the Vulkan image to write. Each texture's `VkImage` is
 
 - **The kernels ship as PTX.** `src/host/renderer/kernels/cmap_direct.ptx` is checked in, embedded in the binary at build time and loaded with `cuModuleLoadData`. Only the driver API is in use, so no build needs the toolkit. The colormap is a third implementation, beside the GLSL and Metal ones. The gfx tests hold it byte-exact to `map_f32_to_rgba8`. The kernels compile without fused multiply-add and without fast math, because either would change rounding.
 - **What it accepts.** The tensor is either an f32 tensor of shape `(H, W)` with a colormap, 4-byte aligned, or a u8 tensor of shape `(H, W, 4)`. The shape must equal the texture's. The image must use a format that CUDA arrays support, and RGBA8 is one. Anything else takes the buffer path. The caller checks the tensor's extent against its allocation first, so a bad read cannot poison torch's context.
-- **A second image per texture.** After a frame samples a texture, the next update writes a second image and the two swap. The `ImTextureID` that the applet holds stays stable. With one image, the producer's stream would wait for the frame that samples it, and that frame waits for its swapchain image. A texture that no frame has drawn yet is written in place and never allocates the second image.
+- **A second image per texture.** After a frame samples a texture, the next update writes a second image and the two swap. The `ImTextureID` that the instrument holds stays stable. With one image, the producer's stream would wait for the frame that samples it, and that frame waits for its swapchain image. A texture that no frame has drawn yet is written in place and never allocates the second image.
 - **The offscreen canvas stays on the buffer path**, because it composites without the frame's timeline waits.
 
 `last_device_path()` reports `direct-cmap` or `direct-blit` for this rung. If the exportable image cannot be created or the CUDA import fails, the backend logs the reason once and the texture uses the buffer path.
@@ -52,13 +52,13 @@ When no device path applies, the bridge converts on the CPU and uploads. CPU ten
 
 ### `alloc_shared` and Imported Allocations
 
-`alloc_shared` on Vulkan returns a device-backed tensor. `HostRenderer::alloc_device_shared` makes the texture's shared buffer the tensor's memory and returns its CUDA pointer. The applet's kernels write the texture's memory directly, and the update runs the buffer-to-image pass with no copy. An optimally tiled image cannot alias linear buffer memory the way a unified-memory buffer can back a Metal texture. Thus zero-copy here means zero copies of the data, not zero GPU work. Without interop (CUDA unpaired), `alloc_shared` falls back to a CPU vector.
+`alloc_shared` on Vulkan returns a device-backed tensor. `HostRenderer::alloc_device_shared` makes the texture's shared buffer the tensor's memory and returns its CUDA pointer. The instrument's kernels write the texture's memory directly, and the update runs the buffer-to-image pass with no copy. An optimally tiled image cannot alias linear buffer memory the way a unified-memory buffer can back a Metal texture. Thus zero-copy here means zero copies of the data, not zero GPU work. Without interop (CUDA unpaired), `alloc_shared` falls back to a CPU vector.
 
-An [imported allocation](../python/zero-copy-tensors.md#imported-allocations) is a block that the applet exports with `cuMemCreate` and a shareable handle. `import_allocation` duplicates the handle and imports the block into Vulkan with `VkImportMemoryWin32HandleInfoKHR`. On failure it unwinds fully. `update_texture_from_alloc` then reads the block at a byte offset with no copy. It uses a descriptor offset for the f32 compute pass and a `bufferOffset` for the u8 blit, and reports `compute-imported` and `blit-imported`. The f32 offset must be a multiple of the device's `minStorageBufferOffsetAlignment`, and the u8 offset must be a multiple of four. Torch sub-allocations are 512-byte aligned, so real offsets pass.
+An [imported allocation](../python/zero-copy-tensors.md#imported-allocations) is a block that the instrument exports with `cuMemCreate` and a shareable handle. `import_allocation` duplicates the handle and imports the block into Vulkan with `VkImportMemoryWin32HandleInfoKHR`. On failure it unwinds fully. `update_texture_from_alloc` then reads the block at a byte offset with no copy. It uses a descriptor offset for the f32 compute pass and a `bufferOffset` for the u8 blit, and reports `compute-imported` and `blit-imported`. The f32 offset must be a multiple of the device's `minStorageBufferOffsetAlignment`, and the u8 offset must be a multiple of four. Torch sub-allocations are 512-byte aligned, so real offsets pass.
 
 ### Caching Allocator Limits
 
-Vulkan can import only memory that was allocated as exportable with a Win32 handle. `cudaMalloc` memory, which torch's caching allocator hands out, has no handle. For this reason Vulkan exports and CUDA imports in this backend. The direct path avoids the problem because it never makes the source tensor visible to Vulkan, and only the output image crosses. Torch tensors in general are therefore not exportable. `ExportablePool` is the opt-in route for tensors that an applet allocates on purpose.
+Vulkan can import only memory that was allocated as exportable with a Win32 handle. `cudaMalloc` memory, which torch's caching allocator hands out, has no handle. For this reason Vulkan exports and CUDA imports in this backend. The direct path avoids the problem because it never makes the source tensor visible to Vulkan, and only the output image crosses. Torch tensors in general are therefore not exportable. `ExportablePool` is the opt-in route for tensors that an instrument allocates on purpose.
 
 ### DLPack
 
@@ -116,6 +116,6 @@ Two environment variables change the backend's behavior:
 - `CALIPER_VULKAN_NO_DIRECT` (any value) disables the direct path, so every update takes the buffer path in the same binary.
 - `CALIPER_VULKAN_STATS` (any value) records frame times and update stalls and prints a summary at exit, in the form `[vulkan] stats: N frames, ms p50 .. p99 .. max ..; updates direct .. buffer ..; kernel waits on a frame ..; retire blocks .. (.. ms total)`.
 
-There is no fallback renderer: when Vulkan cannot start, the app refuses with a message that names the reason ([No Fallback Renderer](../applets/rendering.md#no-fallback-renderer)). [Verify on Windows hardware](windows-verification.md) gives the full procedure.
+There is no fallback renderer: when Vulkan cannot start, the app refuses with a message that names the reason ([No Fallback Renderer](../instruments/rendering.md#no-fallback-renderer)). [Windows Verification](windows-verification.md) gives the full procedure.
 
 On WebGPU, Caliper destroys a released texture at once. It releases the view of that texture at the end of the frame, after ImGui drops its bind groups. Caliper reuses released point buffers for the next snapshot of the same size.

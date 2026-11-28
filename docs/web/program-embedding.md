@@ -1,6 +1,6 @@
 # Program Embedding
 
-A program that owns its own window can run Caliper applets inside a view of
+A program that owns its own window can run Caliper instruments inside a view of
 that window. It links the `caliper-embed` package, a shared library with a C
 interface, and drives the core with five calls from its own event loop. This
 guide builds such a program outside this repository, from the package to a
@@ -10,13 +10,13 @@ first run that opens no window.
 flowchart LR
     pkg[caliper-embed package] -->|link| host[Host program]
     host -->|create core and attach canvas| core[Core]
-    core -->|load applet| applet[Applet]
+    core -->|load instrument| instrument[Instrument]
     host -->|one frame per tick| core
 ```
 
-The host links the package, then creates the core, attaches a canvas, loads an applet and pumps frames.
+The host links the package, then creates the core, attaches a canvas, loads an instrument and pumps frames.
 
-The contract behind each step is in [Embedding Caliper](embedding-api.md).
+The contract behind each step is in [Embedding API](embedding-api.md).
 `examples/embed_host` is a complete program that follows this guide.
 
 The steps use macOS with Metal. Windows uses the same package with Vulkan
@@ -48,7 +48,7 @@ Link whatever your own window code needs beside it.
 ```cmake
 cmake_minimum_required(VERSION 3.18)
 project(my_host LANGUAGES CXX OBJCXX)
-find_package(caliper-embed 1.4 CONFIG REQUIRED)
+find_package(caliper-embed 2.0 CONFIG REQUIRED)
 
 add_executable(my_host main.mm)
 target_link_libraries(my_host PRIVATE caliper::embed "-framework Cocoa")
@@ -84,7 +84,7 @@ The encoding and the rule are in [Versions](embedding-api.md#versions).
 
 ## Core Frame Loop
 
-Create one core, attach one canvas, load an applet, and then pump one frame per
+Create one core, attach one canvas, load an instrument, and then pump one frame per
 tick of your own loop. The canvas is either your native view (`NSView*` on
 macOS, `HWND` on Windows) with `CALIPER_CANVAS_WINDOW`, or an offscreen target
 with `CALIPER_CANVAS_OFFSCREEN`. The offscreen target takes no view and opens
@@ -92,9 +92,9 @@ nothing on screen. This example uses the offscreen form.
 
 ```c
 CaliperCoreDesc desc = { .struct_size = sizeof desc };
-desc.renderer    = CALIPER_RENDERER_DEFAULT;   /* Metal on macOS */
-desc.applets_dir = "<applets>";                /* searched first */
-desc.data_dir    = "<data>";                   /* metrics, artifacts, imgui.ini */
+desc.renderer        = CALIPER_RENDERER_DEFAULT;   /* Metal on macOS */
+desc.instruments_dir = "<instruments>";            /* searched first */
+desc.data_dir        = "<data>";                   /* metrics, artifacts, imgui.ini */
 CaliperCore* core = caliper_core_create(&desc);
 
 CaliperCanvasDesc canvas = { .struct_size = sizeof canvas };
@@ -103,7 +103,7 @@ canvas.width = 1280; canvas.height = 800; canvas.content_scale = 1.0f;
 if (!caliper_core_attach_canvas(core, NULL, &canvas))
     fprintf(stderr, "%s\n", caliper_core_last_error(core));
 
-caliper_core_load_applet(core, "dev.caliper.hello-world");
+caliper_core_load_instrument(core, "dev.caliper.hello-world");
 for (int i = 0; i < 60; ++i)
     caliper_core_frame(core);                  /* one frame per call */
 caliper_core_shutdown(core);
@@ -114,14 +114,14 @@ For a window, pass your view and its size in physical pixels to
 link. Translate the input of your toolkit into `CaliperInputEvent` values for
 `caliper_core_event`. `examples/embed_host` does this for AppKit and Win32.
 
-The core looks for applets in `applets_dir`, then in the folders of
-`CALIPER_APPLET_PATH`, then in the user applets folder, and last in an
-`applets` folder beside the executable.
+The core looks for instruments in `instruments_dir`, then in the folders of
+`CALIPER_INSTRUMENT_PATH`, then in the user instruments folder, and last in an
+`instruments` folder beside the executable.
 
-An applet loads when its ABI epoch and UI-stack hash match those of the core,
-and the core serves the services that the applet requires
-([Compatibility](../development/compatibility-and-epochs.md)). This holds for
-applets built against the `caliper-sdk` package of the same core build.
+An instrument loads when its ABI epoch and UI-stack hash match those of the core,
+and the core serves the services that the instrument requires
+([Compatibility and Epochs](../development/compatibility-and-epochs.md)). This holds for
+instruments built against the `caliper-sdk` package of the same core build.
 
 Without `data_dir`, the core keeps its stores in the app-data folder. This is
 the folder that `CALIPER_DATA_DIR` names when it is set. Otherwise it is the
@@ -130,18 +130,18 @@ Caliper data folder of the operating system.
 ## Windowless Mode
 
 `embed_host` runs the whole path on a machine where no window may open. Build
-it against the package as above. Put the `hello_world` fixture (or any applet built
+it against the package as above. Put the `hello_world` fixture (or any instrument built
 from the same core build) in a folder, and run its offscreen mode:
 
 ```sh
 cp -R examples/embed_host <work>/embed_host
 cmake -S <work>/embed_host -B <work>/embed_host-build -DCMAKE_PREFIX_PATH=<prefix>
 cmake --build <work>/embed_host-build
-CALIPER_EMBED_OFFSCREEN=1 CALIPER_EMBED_APPLETS=<applets> \
+CALIPER_EMBED_OFFSCREEN=1 CALIPER_EMBED_INSTRUMENTS=<instruments> \
     <work>/embed_host-build/embed_host dev.caliper.hello-world
 ```
 
 It prints the version of the library, the log lines of the core and the log
-lines of the applet. Then it prints one line with the frames it pumped and the
-pixels the applet drew. It exits with code 0 when the applet drew.
+lines of the instrument. Then it prints one line with the frames it pumped and the
+pixels the instrument drew. It exits with code 0 when the instrument drew.
 `CALIPER_EMBED_EXIT_AFTER` sets how many seconds it runs (1 by default).
