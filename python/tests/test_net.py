@@ -1106,7 +1106,7 @@ def test_memory_flat_long_run(server):
         caliper.series(float(i[0]), name="loss")
 
     async def go():
-        async with Client(server) as c:
+        async with Client(server, max_queue=1) as c:
             for v in ("w", "z", "loss"):
                 await c.subscribe(len(c.views) + hash(v) % 1000, v, pump=step)
             loop = asyncio.get_running_loop()
