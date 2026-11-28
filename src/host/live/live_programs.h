@@ -505,7 +505,7 @@ inline std::vector<ProgramChange> ProgramSync::take_changes() {
 #include <caliper_builder/session/program_host.h>
 #include <caliper_builder/session/session.h>
 #include <caliper_builder/session/values.h>
-#include <caliper_builder/spec/instrument.h>
+#include <caliper_builder/spec/control.h>
 #include <caliper_builder/spec/program.h>
 
 #include <nlohmann/json.hpp>

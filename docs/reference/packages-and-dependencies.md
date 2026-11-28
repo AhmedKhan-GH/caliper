@@ -9,9 +9,9 @@ Run `python3 scripts/generate_packages_reference.py --write` after any edit to t
 
 ## Shipped Packages
 
-Caliper builds five deliverables from this repository for desktop users, Python developers, browser pages, native hosts, and applet authors.
+Caliper builds five deliverables from this repository for desktop users, Python developers, browser pages, native hosts, and instrument authors.
 The **Caliper Application** builds the native `caliper` desktop host and the `caliper-mcp` server from the C++ core.
-The `caliper` executable opens the desktop workspace, runs [Caliper CLI](cli.md) subcommands, and loads compiled and spec applets.
+The `caliper` executable opens the desktop workspace, runs [Caliper CLI](cli.md) subcommands, and opens instruments.
 The `caliper-mcp` executable ships beside `caliper` and exposes the tools in [MCP Command Reference](mcp-commands.md) over stdio.
 
 The **Python Package** (`caliper` `0.1.0`, Python `>=3.12`) ships Caliper LIB and the `caliper_agent` package from `pyproject.toml`.
@@ -22,8 +22,8 @@ See [Caliper LIB API](../python/caliper-lib-api.md) for Python view calls and [V
 The **Browser Module** (`@caliper/view` `0.1.0` from `web/package.json`) supplies `<caliper-view>`, `<caliper-controls>`, and `<caliper-replay>` custom elements.
 When a browser provides WebGPU, those elements render with `caliper-views.wasm`, compiled with Emscripten `6.0.13` from `web/wasm/emscripten-version.txt`.
 **Caliper Embed** (`caliper-embed`) installs the shared library (`libcaliper_embed.dylib` on macOS and `caliper_embed.dll` on Windows) behind the C interface in `include/caliper/embed.h`.
-**Applet SDK** (`caliper-sdk`) installs `sdk/include/caliper/abi.h`, `sdk/include/caliper/caliper.hpp`, `caliper_add_applet()`, the fixture host, and the pinned UI stack for out-of-tree native applets.
-See [Browser Elements](../web/browser-elements.md), [Program Embedding](../web/program-embedding.md), and [SDK Package](../applets/sdk-package.md) for integration details.
+**Instrument SDK** (`caliper-sdk`) installs `sdk/include/caliper/abi.h`, `sdk/include/caliper/caliper.hpp`, `caliper_add_instrument()`, the fixture host, and the pinned UI stack for out-of-tree C++ instruments.
+See [Browser Elements](../web/browser-elements.md), [Program Embedding](../web/program-embedding.md), and [SDK Package](../instruments/sdk-package.md) for integration details.
 
 ### Shipped Package Summary
 
@@ -35,17 +35,18 @@ Each deliverable below maps to its package name, version or pin, and primary ent
 | Python Package | `caliper` | `0.1.0` (Python `>=3.12`) | `caliper._native`, `caliper._live`, `caliper._netio`, `caliper._producer`, `caliper-viewer`, `caliper-agent` |
 | Browser Module | `@caliper/view`, `caliper-views.wasm` | `0.1.0` (Emscripten `6.0.13`) | `<caliper-view>`, `<caliper-controls>`, `<caliper-replay>` |
 | Caliper Embed | `caliper-embed` (`libcaliper_embed.dylib`, `caliper_embed.dll`) | CMake package `caliper::embed` | `include/caliper/embed.h` |
-| Applet SDK | `caliper-sdk` | CMake package `caliper::sdk` | `sdk/include/caliper/abi.h`, `sdk/include/caliper/caliper.hpp`, `caliper_add_applet()`, pinned UI stack |
+| Instrument SDK | `caliper-sdk` | CMake package `caliper::sdk` | `sdk/include/caliper/abi.h`, `sdk/include/caliper/caliper.hpp`, `caliper_add_instrument()`, pinned UI stack |
 
 ### Python Package Extras
 
 The `[project.optional-dependencies]` table in `pyproject.toml` splits optional Python packages by workflow.
-User extras add PyTorch, notebooks, interpretability tooling, or the side chat agent.
+User extras add PyTorch, the shipped examples, notebooks, interpretability tooling, or the side chat agent.
 The `[test]` and `[docs]` extras are for contributors only and never ship as user runtime requirements.
 
 | Extra | Audience | What It Adds | When to Install |
 |---|---|---|---|
 | `caliper[torch]` | Users | PyTorch (`torch`) for tensor views and model hooks. | Install when a script streams PyTorch tensors and does not already install PyTorch. |
+| `caliper[examples]` | Users | PyTorch (`torch`) and `torchvision` for the shipped training examples. | Install when you run `examples/mnist/train.py` or any other shipped example. |
 | `caliper[notebook]` | Users | `anywidget` interactive notebook widgets. | Install when you display Caliper views inside JupyterLab or notebook cells. |
 | `caliper[interp]` | Users | PyTorch, Hugging Face libraries, `transformer-lens`, `sae-lens`, `nnsight`, and `circuit-tracer`. | Install when you run mechanistic interpretability captures, dictionary queries, or circuit traces. |
 | `caliper[agent]` | Users | `pydantic-ai-slim[anthropic]`, `anthropic`, and `openai` for the `caliper-agent` CLI. | Install when you run the Caliper side chat agent outside a source checkout. |
@@ -71,6 +72,8 @@ The `[test]` and `[docs]` groups are for contributors only.
 | Base runtime | `websockets` | Unpinned |
 | Base runtime | `Pillow` | Unpinned |
 | `[torch]` | `torch` | Unpinned |
+| `[examples]` | `torch` | Unpinned |
+| `[examples]` | `torchvision` | Unpinned |
 | `[notebook]` | `anywidget` | Unpinned |
 | `[interp]` | `torch` | `>=2.15.0` |
 | `[interp]` | `safetensors` | Unpinned |
@@ -117,7 +120,7 @@ The `[test]` and `[docs]` groups are for contributors only.
 
 Caliper tracks third-party C++ source trees as Git submodules in `.gitmodules` under `third_party/`.
 Each submodule pins an exact 40-character Git commit in the repository index.
-The UI stack submodules (`imgui`, `implot`, `implot3d`, and `ImGuiFileDialog`) form part of the frozen applet ABI epoch.
+The UI stack submodules (`imgui`, `implot`, `implot3d`, and `ImGuiFileDialog`) form part of the frozen instrument ABI epoch.
 
 | Submodule | Pinned Commit | Repository | Role |
 |---|---|---|---|
@@ -141,17 +144,17 @@ Python wheel builds set `CALIPER_WITH_BUILDER=OFF` and `CALIPER_WITH_TORCH=OFF`,
 
 | Dependency | Pin | Scope | Source | Role |
 |---|---|---|---|---|
-| `tomlplusplus` | `v3.4.0` | All builds (host, `src/builder`, `web/wasm`) | `https://github.com/marzer/tomlplusplus.git` | TOML parser for applet manifests, piece manifests, and spec documents. |
+| `tomlplusplus` | `v3.4.0` | All builds (host, `src/builder`, `web/wasm`) | `https://github.com/marzer/tomlplusplus.git` | TOML parser for instrument manifests, piece manifests, and spec documents. |
 | `nlohmann_json` | `v3.11.3` (`SHA256=d6c65aca6b1ed68e7a182f4757257b107ae403032760ed6ef121c9d55e81757d`) | `CALIPER_WITH_BUILDER=ON` and `web/wasm` | `https://github.com/nlohmann/json/releases/download/v3.11.3/json.tar.xz` | JSON parser and serializer for specs, commands, MCP messages, and WebAssembly program metadata. |
 | `doctest` | `v2.4.11` | C++ tests (`BUILD_TESTS=ON`) and `caliper-sdk` | `https://github.com/doctest/doctest.git` | Header-only C++ unit test framework. |
 | `sternbild_tokens` | `design-v2.0.0` (commit `f88dc88a2223cdeb029625639d23be1ab5755f95`) | All builds (native host and `web/wasm`) | `https://github.com/AhmedKhan-GH/organization.git` (`packages/sternbild-tokens-c`) | Sternbild design tokens, theme color palette, and house font files. |
-| `zlib` | `v1.3.1` | Windows only (`WIN32`) | `https://github.com/madler/zlib/releases/download/v1.3.1/zlib-1.3.1.tar.gz` | Static compression library for Windows applets (macOS uses the system library). |
-| `curl` | `8.11.1` (tag `curl-8_11_1`) | Windows only (`WIN32`) | `https://github.com/curl/curl/releases/download/curl-8_11_1/curl-8.11.1.tar.gz` | Static HTTP client with Windows Schannel TLS for applets (macOS uses the system library). |
+| `zlib` | `v1.3.1` | Windows only (`WIN32`) | `https://github.com/madler/zlib/releases/download/v1.3.1/zlib-1.3.1.tar.gz` | Static compression library for Windows instruments (macOS uses the system library). |
+| `curl` | `8.11.1` (tag `curl-8_11_1`) | Windows only (`WIN32`) | `https://github.com/curl/curl/releases/download/curl-8_11_1/curl-8.11.1.tar.gz` | Static HTTP client with Windows Schannel TLS for instruments (macOS uses the system library). |
 | `vulkan-headers` | `vulkan-sdk-1.3.290.0` | Windows only (`WIN32`) | `https://github.com/KhronosGroup/Vulkan-Headers/archive/refs/tags/vulkan-sdk-1.3.290.0.tar.gz` | Khronos Vulkan C API headers for the Windows Vulkan renderer. |
 | `volk` | `vulkan-sdk-1.3.290.0` | Windows only (`WIN32`) | `https://github.com/zeux/volk/archive/refs/tags/vulkan-sdk-1.3.290.0.tar.gz` | Vulkan entry-point meta-loader on Windows. |
 | `glslang` | `vulkan-sdk-1.3.290.0` | Windows only (`WIN32`) | `https://github.com/KhronosGroup/glslang/archive/refs/tags/vulkan-sdk-1.3.290.0.tar.gz` | GLSL-to-SPIR-V shader compiler for the Windows Vulkan backend. |
 
-When `CALIPER_WITH_TORCH=ON`, `cmake/Dependencies.cmake` downloads pre-built LibTorch `2.5.1` archives for applet and torch test targets.
+When `CALIPER_WITH_TORCH=ON`, `cmake/Dependencies.cmake` downloads pre-built LibTorch `2.5.1` archives for instrument and torch test targets.
 `libcaliper`, `caliper`, `caliper-embed`, and the Python wheel never link LibTorch.
 Supported LibTorch variants are `cu124`, `cu121`, `cu118`, `cpu`.
 
