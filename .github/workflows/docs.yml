@@ -8,7 +8,9 @@ on:
     # and the command table, piece definitions, and root docs checked here.
     paths: ['docs/**', 'design/**', 'docs-theme/**', 'mkdocs.yml',
             'sdk/include/**', 'include/caliper/**', 'python/caliper/**', 'examples/**', 'roadmap/**',
-            'candidates/**', 'pyproject.toml', 'CONTRIBUTING.md', 'README.md',
+            'candidates/**', 'pyproject.toml', '.gitmodules',
+            'cmake/Dependencies.cmake', 'web/package.json',
+            'web/wasm/emscripten-version.txt', 'CONTRIBUTING.md', 'README.md',
             'src/builder/commands/command_table.json',
             'src/builder/include/caliper_builder/spec/piece.h',
             'src/builder/include/caliper_builder/programs/pieces.h',
@@ -17,7 +19,8 @@ on:
             'src/host/host_cli.h',
             'scripts/check_api_reference.py', 'scripts/test_check_api_reference.py',
             'scripts/generate_mcp_reference.py',
-            'scripts/generate_piece_reference.py', 'scripts/check_doc_references.py',
+            'scripts/generate_piece_reference.py',
+            'scripts/generate_packages_reference.py', 'scripts/check_doc_references.py',
             'scripts/test_doc_generators.py', 'scripts/test_check_doc_references.py',
             '.github/pull_request_template.md', '.github/workflows/docs.yml']
   workflow_dispatch:
@@ -61,6 +64,7 @@ jobs:
       # Fails when any generated reference page drifts from its source definitions.
       - run: python scripts/generate_mcp_reference.py --check
       - run: python scripts/generate_piece_reference.py --check
+      - run: python scripts/generate_packages_reference.py --check
       # Fails on broken links/anchors, stale repository paths, or unknown commands, CLI subcommands,
       # or Python symbols across docs, CONTRIBUTING.md and README.md.
       - run: python scripts/check_doc_references.py

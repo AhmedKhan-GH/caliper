@@ -68,7 +68,7 @@ Caliper keeps third-party code as git submodules in `third_party/`. Run `./init-
 
 - One logical change per commit. Code, its tests and its documentation go in the same commit.
 - Every pull request updates the documentation that its change affects, or states in the pull request description why no documentation page changes.
-- When a change updates `src/builder/commands/command_table.json`, `src/builder/include/caliper_builder/spec/piece.h`, `src/builder/include/caliper_builder/programs/pieces.h`, `src/builder/programs/piece_checks.cpp`, or `src/builder/spec/schema/caliper-spec-v1.schema.json`, regenerate the matching reference page (`scripts/generate_mcp_reference.py --write` or `scripts/generate_piece_reference.py --write`) in the same pull request.
+- When a change updates `src/builder/commands/command_table.json`, `src/builder/include/caliper_builder/spec/piece.h`, `src/builder/include/caliper_builder/programs/pieces.h`, `src/builder/programs/piece_checks.cpp`, `src/builder/spec/schema/caliper-spec-v1.schema.json`, `pyproject.toml`, `.gitmodules`, `cmake/Dependencies.cmake`, `web/package.json`, or `web/wasm/emscripten-version.txt`, regenerate the matching reference page (`scripts/generate_mcp_reference.py --write`, `scripts/generate_piece_reference.py --write`, or `scripts/generate_packages_reference.py --write`) in the same pull request.
 - The subject line says what changed, in plain words. Start it with the area when that helps, as in `Site: ...`, `CI: ...` or `Docs: ...`.
 - The body says why, and anything a reviewer cannot see in the diff.
 
