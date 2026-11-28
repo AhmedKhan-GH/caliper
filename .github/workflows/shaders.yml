@@ -25,7 +25,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       # The driver and the crates it was built from, keyed on the lock file and its source.
-      - uses: actions/cache@v5
+      - uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/registry/index
