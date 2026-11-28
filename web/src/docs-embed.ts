@@ -27,14 +27,14 @@ const STYLE = `
 .brand { font: 12px/1 ${FONT_TEXT}; letter-spacing: .14em; text-transform: uppercase; color: ${C.parchment}; }
 .script { font: 12px ${FONT_MONO}; color: ${C.secondary}; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 24em; }
 .tag { font: 11px ${FONT_MONO}; color: ${C.bronze}; border: 1px solid ${C.rule}; border-radius: 3px; padding: 1px 6px; white-space: nowrap; }
-.transport { display: flex; align-items: center; gap: 8px; margin-left: auto; flex: 1 1 220px; max-width: 420px; }
+.transport { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-left: auto; flex: 1 1 280px; max-width: 480px; }
 .transport[hidden] { display: none; }
-.play { font: 12px ${FONT_TEXT}; color: ${C.parchment}; background: ${C.deep}; border: 1px solid ${C.rule};
+.play, .reset { font: 12px ${FONT_TEXT}; color: ${C.parchment}; background: ${C.deep}; border: 1px solid ${C.rule};
   border-radius: 4px; padding: 2px 10px; height: 24px; cursor: pointer; flex: none; min-width: 56px; }
-.play:hover { border-color: ${C.bronze}; color: ${C.bronze}; }
-.play:focus-visible, .range:focus-visible { outline: 1px solid ${C.bronze}; outline-offset: 2px; }
+.play:hover, .reset:hover { border-color: ${C.bronze}; color: ${C.bronze}; }
+.play:focus-visible, .reset:focus-visible, .range:focus-visible { outline: 1px solid ${C.bronze}; outline-offset: 2px; }
 .range { flex: 1; min-width: 90px; accent-color: ${C.bronze}; cursor: pointer; margin: 0; }
-.step { font: 11.5px ${FONT_MONO}; color: ${C.secondary}; white-space: nowrap; flex: none; min-width: 9.5em; text-align: right; }
+.step { font: 11.5px ${FONT_MONO}; color: ${C.secondary}; white-space: nowrap; flex: none; min-width: 9.5em; text-align: right; margin-left: auto; }
 .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 400px), 1fr)); gap: 12px; padding: 12px; }
 .loading { padding: 36px 20px; text-align: center; color: ${C.faint}; font: 13px ${FONT_TEXT}; }
 .fallback { padding: 12px; background: ${C.ground}; }
@@ -46,11 +46,11 @@ const STYLE = `
 export type ReplayMode = 'loading' | 'live' | 'fallback';
 
 function parseInitialStep(raw: string | null): 'first' | 'last' | number {
-  if (!raw) return 'last';
+  if (!raw) return 'first';
   const s = raw.trim().toLowerCase();
   if (s === 'first' || s === 'last') return s;
   const n = Number(s);
-  return Number.isFinite(n) ? n : 'last';
+  return Number.isFinite(n) ? n : 'first';
 }
 
 export class CaliperReplay extends HTMLElement {
@@ -73,6 +73,7 @@ export class CaliperReplay extends HTMLElement {
     script: HTMLElement;
     transport: HTMLElement;
     play: HTMLButtonElement;
+    reset: HTMLButtonElement;
     range: HTMLInputElement;
     step: HTMLElement;
     grid: HTMLElement;
@@ -96,6 +97,7 @@ export class CaliperReplay extends HTMLElement {
       script: el('span', 'script'),
       transport: el('div', 'transport'),
       play: el('button', 'play'),
+      reset: el('button', 'reset'),
       range: el('input', 'range'),
       step: el('span', 'step'),
       grid: el('div', 'grid'),
@@ -135,14 +137,19 @@ export class CaliperReplay extends HTMLElement {
     this.replay?.seekStep(step);
   }
 
-  /** Starts playback through recorded steps. */
-  play(intervalMs = 450): void {
-    this.replay?.play(intervalMs);
+  /** Starts playback through recorded steps, one step per display frame. */
+  play(): void {
+    this.replay?.play();
   }
 
   /** Pauses playback. */
   pause(): void {
     this.replay?.pause();
+  }
+
+  /** Pauses playback and returns every view to its first-step state. */
+  reset(): void {
+    this.replay?.reset();
   }
 
   /** Read-only state for automated tests and diagnostics. */
@@ -180,6 +187,9 @@ export class CaliperReplay extends HTMLElement {
     p.play.type = 'button';
     p.play.textContent = 'Play';
     p.play.addEventListener('click', () => this.replay?.togglePlay());
+    p.reset.type = 'button';
+    p.reset.textContent = 'Reset';
+    p.reset.addEventListener('click', () => this.replay?.reset());
     p.range.type = 'range';
     p.range.min = '0';
     p.range.max = '0';
@@ -191,7 +201,7 @@ export class CaliperReplay extends HTMLElement {
       this.replay.seekIndex(Number(p.range.value));
     });
     p.transport.hidden = true;
-    p.transport.append(p.play, p.range, p.step);
+    p.transport.append(p.play, p.reset, p.range, p.step);
 
     p.bar.hidden = true;
     p.bar.append(brand, p.script, tag, p.transport);
@@ -281,7 +291,10 @@ export class CaliperReplay extends HTMLElement {
     p.range.max = String(steps.length - 1);
     p.range.value = String(r.stepIndex);
     p.play.textContent = r.playing ? 'Pause' : 'Play';
-    p.step.textContent = `Step ${r.currentStep} / ${steps[steps.length - 1]}`;
+    const last = steps[steps.length - 1];
+    p.step.textContent = `Step ${r.currentStep} / ${last}`;
+    // The widest label sets the width, so the range bar stays still while playback adds digits.
+    p.step.style.minWidth = `${`Step ${last} / ${last}`.length}ch`;
   }
 
   private async start(): Promise<void> {

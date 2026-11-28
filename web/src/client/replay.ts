@@ -177,14 +177,15 @@ export function parseRecording(input: Uint8Array | ArrayBuffer, fallbackScript =
     list.sort((a, b) => a.step - b.step);
   }
 
-  // Collect checkpoint steps: prefer snapshot steps so every tick advances every visual view.
+  // The timeline is every recorded step of any view. At a step where a view has no data,
+  // the view holds its latest value at or before that step.
   const stepSet = new Set<number>();
   for (const list of snapshots.values()) {
     for (const s of list) stepSet.add(s.step);
   }
-  if (stepSet.size === 0) {
-    for (const s of series.values()) {
-      for (let i = 0; i < s.steps.length; i++) stepSet.add(s.steps[i]);
+  for (const chunks of seriesChunks.values()) {
+    for (const c of chunks) {
+      for (const step of c.steps) stepSet.add(step);
     }
   }
   const steps = [...stepSet].sort((a, b) => a - b);
@@ -241,7 +242,7 @@ export class ReplaySource implements StreamClient {
   private stepIndex_ = 0;
   private seekGen = 1;
   private playing_ = false;
-  private playTimer: ReturnType<typeof setInterval> | null = null;
+  private playFrame: number | null = null;
   private started = false;
   private closed = false;
   private readonly listeners = new Set<StreamListener>();
@@ -368,36 +369,47 @@ export class ReplaySource implements StreamClient {
     this.seekIndex(best);
   }
 
-  play(intervalMs = 450): void {
+  /** Plays forward one recorded step per display frame and stops at the last step. */
+  play(): void {
     const s = this.steps;
     if (s.length <= 1 || this.playing_ || this.closed) return;
     if (this.stepIndex_ >= s.length - 1) this.seekIndex(0);
     this.playing_ = true;
     this.notifyTimeline();
-    this.playTimer = setInterval(() => {
-      if (this.closed || !this.playing_) {
-        this.pause();
-        return;
-      }
-      if (this.stepIndex_ + 1 >= this.steps.length) {
-        this.pause();
-        return;
-      }
+    const tick = () => {
+      this.playFrame = null;
+      if (this.closed || !this.playing_) return;
       this.seekIndex(this.stepIndex_ + 1);
-    }, Math.max(50, intervalMs));
+      if (this.stepIndex_ + 1 >= this.steps.length) this.pause();
+      else this.playFrame = requestAnimationFrame(tick);
+    };
+    this.playFrame = requestAnimationFrame(tick);
   }
 
   pause(): void {
-    if (this.playTimer) clearInterval(this.playTimer);
-    this.playTimer = null;
+    if (this.playFrame !== null) cancelAnimationFrame(this.playFrame);
+    this.playFrame = null;
     if (!this.playing_) return;
     this.playing_ = false;
     this.notifyTimeline();
   }
 
-  togglePlay(intervalMs = 450): void {
+  togglePlay(): void {
     if (this.playing_) this.pause();
-    else this.play(intervalMs);
+    else this.play();
+  }
+
+  /**
+   * Pauses and returns to the first step. Every view gets its first-step data
+   * again with a new cursor, so series views drop the values they accumulated.
+   */
+  reset(): void {
+    this.pause();
+    if (!this.steps.length || this.closed) return;
+    this.stepIndex_ = 0;
+    this.seekGen++;
+    this.deliverAll();
+    this.notifyTimeline();
   }
 
   // --- WASM feed:"frames" bridge --------------------------------------------
