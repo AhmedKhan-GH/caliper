@@ -16,11 +16,14 @@ defineView();
 
 const SCREENSHOT_TEXT = 'The image below is a static screenshot of the replay.';
 
-// Hang guard: the time from live mode until every plate's WebAssembly view is ready, after which a
-// plate that is still not ready falls back. The module is fetched before live mode, so this covers
-// only the mount on the device. Measured in headless Chromium on Apple silicon, five runs each
-// (web/test/replay.spec.ts prints it): ready at the first 200 ms poll on Metal WebGPU and at the second,
-// 0.4 s, on SwiftShader. 30 s is 75 times the slowest run, generous for slower machines.
+// Hang guard: the visible time from live mode until every plate's WebAssembly view is ready, after
+// which a plate that is still not ready falls back. The module is fetched before live mode, so this
+// covers the mount on the device and the first frame. A plate gets ready in a requestAnimationFrame
+// frame, which a hidden tab does not run, so only the polls of a visible page count. Measured in
+// headless Chromium on Apple silicon, five runs each (web/test/replay.spec.ts prints it): ready at the
+// first 200 ms poll on Metal WebGPU and at the second, 0.4 s, on SwiftShader. 30 s is 75 times the
+// slowest run, generous for slower machines.
+const HEALTH_POLL_MS = 200;
 const READY_DEADLINE_MS = 30_000;
 
 /** The first sentence of the fallback notice: why the live replay does not show. */
@@ -29,6 +32,7 @@ function fallbackCause(reason: string): string {
     return 'WebGPU is not available because this page is not served over HTTPS or from localhost.';
   }
   if (reason === 'no-webgpu') return 'This browser does not support WebGPU.';
+  if (reason === 'wasm-ready-timeout') return 'The live replay did not start in time.';
   if (reason === 'no-adapter' || reason.startsWith('wasm-')) return 'WebGPU did not start in this browser.';
   return 'The recorded run did not load.';
 }
@@ -84,6 +88,7 @@ export class CaliperReplay extends HTMLElement {
   private unlistenTimeline: (() => void) | null = null;
   private healthTimer: ReturnType<typeof setInterval> | null = null;
   private liveSince = 0;
+  private visibleWaitMs = 0;
   private readyMs: number | null = null;
   private plates: CaliperView[] = [];
   private readonly parts: {
@@ -248,6 +253,7 @@ export class CaliperReplay extends HTMLElement {
       clearInterval(this.healthTimer);
       this.healthTimer = null;
     }
+    this.readyMs = null;
     this.unlistenTimeline?.();
     this.unlistenTimeline = null;
     for (const plate of this.plates) plate.remove();
@@ -418,6 +424,7 @@ export class CaliperReplay extends HTMLElement {
     // switch cleanly to the static fallback instead of showing a blank box. A plate that never gets
     // ready and never reports an error also falls back, after READY_DEADLINE_MS.
     this.liveSince = performance.now();
+    this.visibleWaitMs = 0;
     this.readyMs = null;
     this.healthTimer = setInterval(() => {
       if (gen !== this.generation || this.mode !== 'live') return;
@@ -436,13 +443,15 @@ export class CaliperReplay extends HTMLElement {
         if (!st.wasmReady) allReady = false;
       }
       if (allReady && this.healthTimer) {
+        // The first poll that saw every plate ready: an upper bound at the poll's resolution.
         this.readyMs = performance.now() - this.liveSince;
         clearInterval(this.healthTimer);
         this.healthTimer = null;
-      } else if (!allReady && performance.now() - this.liveSince > READY_DEADLINE_MS) {
-        this.showFallback('wasm-ready-timeout');
+      } else if (!allReady && !document.hidden) {
+        this.visibleWaitMs += HEALTH_POLL_MS;
+        if (this.visibleWaitMs > READY_DEADLINE_MS) this.showFallback('wasm-ready-timeout');
       }
-    }, 200);
+    }, HEALTH_POLL_MS);
   }
 }
 
