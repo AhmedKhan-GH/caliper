@@ -970,7 +970,8 @@ TEST_CASE("live/net: a scene view refused for good unsubscribes instead of queue
         f.append({1.0f});   // after them on the connection: once it arrives, so have they
         return 0;
     });
-    REQUIRE(poll_until(core, [&] { return view_status(core, "loss").series_total >= 1; }));
+    // The one value is the only one that the producer appended.
+    REQUIRE(poll_until(core, [&] { return view_status(core, "loss").series_total == 1; }));
     CHECK(p.call([](FakeProducer& f) { return f.subscribes["world"]; }) == 1);
     REQUIRE(poll_until(core, [&] {
         const auto un = p.call([](FakeProducer& f) { return f.unsubscribed; });
@@ -1357,7 +1358,8 @@ TEST_CASE("live/net: a producer streams a heatmap, an image, points, a series an
                   CALIPER_NET_SNAP_RAW | CALIPER_NET_SNAP_AUTO_VMIN | CALIPER_NET_SNAP_AUTO_VMAX, {-3.0, 0.0});
         return 0;
     });
-    REQUIRE(poll_until(core, [&] { return view_status(core, "heat").updates >= 2; }));
+    // The second snapshot of the heatmap: each one is waited for before the next.
+    REQUIRE(poll_until(core, [&] { return view_status(core, "heat").updates == 2; }));
     CHECK(readback(core, "heat", 8, HH) == map_ref(heat2, 8, HH, CALIPER_NET_COLORMAP_RDBU, -3.0f, 0.0f));
     CHECK(view_info(core, "heat").creates == 1);   // in place
 
@@ -1449,20 +1451,21 @@ TEST_CASE("live/net: a snapshot's step stamp reaches the view info when VIEWS li
             return 0;
         });
     };
+    // Each wait counts the snapshots sent so far, and each one is waited for before the next.
     send_heat(false, 0);
-    REQUIRE(poll_until(core, [&] { return view_status(core, "heat").updates >= 1; }));
+    REQUIRE(poll_until(core, [&] { return view_status(core, "heat").updates == 1; }));
     CHECK(view_info(core, "heat").step == INT64_MIN);
     send_heat(true, 42);
-    REQUIRE(poll_until(core, [&] { return view_status(core, "heat").updates >= 2; }));
+    REQUIRE(poll_until(core, [&] { return view_status(core, "heat").updates == 2; }));
     CHECK(view_info(core, "heat").step == 42);
     send_heat(true, CALIPER_NET_STAMP_ABSENT);   // absent on the step timeline
-    REQUIRE(poll_until(core, [&] { return view_status(core, "heat").updates >= 3; }));
+    REQUIRE(poll_until(core, [&] { return view_status(core, "heat").updates == 3; }));
     CHECK(view_info(core, "heat").step == INT64_MIN);
     send_heat(true, 43);
-    REQUIRE(poll_until(core, [&] { return view_status(core, "heat").updates >= 4; }));
+    REQUIRE(poll_until(core, [&] { return view_status(core, "heat").updates == 4; }));
     CHECK(view_info(core, "heat").step == 43);
     send_heat(false, 0);
-    REQUIRE(poll_until(core, [&] { return view_status(core, "heat").updates >= 5; }));
+    REQUIRE(poll_until(core, [&] { return view_status(core, "heat").updates == 5; }));
     CHECK(view_info(core, "heat").step == INT64_MIN);
     caliper_core_live_detach(core);
     caliper_core_shutdown(core);
@@ -1496,11 +1499,12 @@ TEST_CASE("live/net: a snapshot's cadence (protocol 3.2 draft) reaches the sourc
             return 0;
         });
     };
+    // Each wait counts the snapshots sent so far, and each one is waited for before the next.
     send_heat(false);
-    REQUIRE(poll_until(core, [&] { return view_status(core, "heat").updates >= 1; }));
+    REQUIRE(poll_until(core, [&] { return view_status(core, "heat").updates == 1; }));
     CHECK(src->view_cadences().count("heat") == 0);
     send_heat(true);
-    REQUIRE(poll_until(core, [&] { return view_status(core, "heat").updates >= 2; }));
+    REQUIRE(poll_until(core, [&] { return view_status(core, "heat").updates == 2; }));
     const auto cadences = src->view_cadences();
     REQUIRE(cadences.count("heat") == 1);
     Json c;
@@ -1687,7 +1691,8 @@ TEST_CASE("live/net: the native source announces controls and selection, and a s
         f.heatmap(ramp(8, 4, 1.0f), 4, 8, 0, 0.0, 1.0, CALIPER_NET_SNAP_RAW);
         return 0;
     });
-    REQUIRE(poll_until(core, [&] { return view_status(core, "heat").updates >= 1; }));
+    // The one heatmap above is the only snapshot of this test.
+    REQUIRE(poll_until(core, [&] { return view_status(core, "heat").updates == 1; }));
     REQUIRE(viewer_caught_up(p));   // an ERROR or a close for any frame above would be in by now
     caliper_core_live_poll(core);
     CHECK(status(core).client_alive == 1);
@@ -1796,7 +1801,8 @@ TEST_CASE("live/net: a select event names its item space and items, and the SELE
         f.heatmap(ramp(8, 4, 1.0f), 4, 8, 0, 0.0, 1.0, CALIPER_NET_SNAP_RAW);
         return 0;
     });
-    REQUIRE(poll_until(core, [&] { return view_status(core, "heat").updates >= 1; }));
+    // The one heatmap above is the only snapshot of this test.
+    REQUIRE(poll_until(core, [&] { return view_status(core, "heat").updates == 1; }));
     // The item axes the views declared.
     REQUIRE(poll_until(core, [&] { return rc->item_axes().size() == 3; }));
 
@@ -2096,6 +2102,8 @@ namespace {
 // Three points on the x axis of the scene view "world", a tenth of a unit wide, the middle one at the
 // bounds' centre, which the fitted orbit puts at the picture's centre; the producer sampled them, every
 // tenth of 30 units.
+constexpr double kDiscRadius = 0.12;   // the radius of each point's disc
+
 void send_three_points(FakeProducer& p) {
     const std::vector<float> pos = {-1, 0, 0, 0, 0, 0, 1, 0, 0};
     p.call([&](FakeProducer& f) {
@@ -2107,7 +2115,7 @@ void send_three_points(FakeProducer& p) {
         reset.state = true;
         f.send(reset);
         wire::SceneUpdate u = f.scene_update("cloud", CALIPER_NET_PART_POINTS, pos, false);
-        u.params.set("radius", Json(0.12));
+        u.params.set("radius", Json(kDiscRadius));
         u.items = std::string("units");
         Json ax = Json::object();
         ax.set("dim", "unit");
@@ -2181,7 +2189,7 @@ TEST_CASE("live/app: a scene view's picks, hovers and selections reach the scrip
         REQUIRE(e.detail.find("position"));
         const Json& at = *e.detail.find("position");
         // The disc's centre is at the origin; the hit lies on the disc, facing the camera.
-        CHECK(std::hypot(at.at(0).as_double(), at.at(1).as_double(), at.at(2).as_double()) < 0.12);
+        CHECK(std::hypot(at.at(0).as_double(), at.at(1).as_double(), at.at(2).as_double()) <= kDiscRadius);
     }
     // The rectangle selected the middle point alone, with the batch's item space.
     const wire::Event sel = *event("select");

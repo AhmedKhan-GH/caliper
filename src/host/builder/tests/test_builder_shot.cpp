@@ -100,7 +100,8 @@ TEST_CASE("caliper-builder-shot: the dashboard built by hand equals the fixture"
     CHECK(summary["undone_text"] != summary["finished_text"]);
     // Every command from the builder origin, and so every line of the journal,
     // but the import of the dropped files, which is the person's ui.
-    REQUIRE(summary["commands"].size() > 20);
+    // The script of caliper-builder-shot sends 40 commands.
+    REQUIRE(summary["commands"].size() == 40);
     for (const auto& c : summary["commands"]) CHECK(c["origin"] == (c["name"] == "data.import" ? "ui" : "builder"));
     std::ifstream journal(ws + "/journal/commands.jsonl");
     std::string line;
@@ -111,7 +112,7 @@ TEST_CASE("caliper-builder-shot: the dashboard built by hand equals the fixture"
         const json e = json::parse(line);
         CHECK(e["origin"] == (e["name"] == "data.import" ? "ui" : "builder"));
     }
-    CHECK(lines > 20);
+    CHECK(lines == summary["commands"].size() + 1);   // and the import, which the pane did not send
 
     // The six captures, at the size asked for; the undone dashboard differs
     // from the finished one.

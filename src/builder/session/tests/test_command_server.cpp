@@ -190,7 +190,9 @@ TEST_CASE("each check of a request answers with its status") {
               .status == 408);
     // A client that goes away before its head is complete gets nothing.
     CHECK(http_raw(sv.port, "GET /v0/commands HTTP/1.1\r\n" + host).status == 0);
-    CHECK(sv.server->served() > 40);
+    // Every request of this test got an answer but the last, whose client went
+    // away before its head was complete: 42 of the 43.
+    CHECK(sv.server->served() == 42);
 }
 
 TEST_CASE("a call that needs approval waits for mcp and agent and answers at once for api") {

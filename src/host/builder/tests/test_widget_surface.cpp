@@ -161,7 +161,8 @@ TEST_CASE("widget surface: Accept commits the preview as one undo step journaled
     CHECK_FALSE(r.surface->bundle_error());
     REQUIRE(r.agent->contexts().size() == 1);
     REQUIRE(r.agent->contexts()[0].is_array());
-    CHECK(r.agent->contexts()[0].size() >= 2);
+    // The header, the panel's spec text and its one source (context_bundle.cpp).
+    CHECK(r.agent->contexts()[0].size() == 3);
     CHECK(r.agent->contexts()[0].dump().find("curves") != std::string::npos);
     CHECK(r.agent->contexts()[0].dump().find("run42_metrics") != std::string::npos);
     REQUIRE(r.agent->scopes().size() == 1);

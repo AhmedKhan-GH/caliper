@@ -177,7 +177,7 @@ TEST_CASE("runs panel: the card's lines keep every character of its text") {
                                       {"args", {"a\" b", "C:\\data", "x\ny", "two words"}},
                                       {"params", json::array({{{"name", "note"}, {"value", "ok\" c=2"}}})}});
     caliper_host::RunsPanelLayout L = caliper_host::layout_runs_panel(in, m, measure);
-    REQUIRE(L.card_lines.size() > 1);
+    REQUIRE(L.card_lines.size() == 2);   // the argument wider than a line takes a second line
     std::string joined;
     for (const auto& line : L.card_lines) {
         CHECK(measure(line) <= L.card.w - 2 * m.gap);

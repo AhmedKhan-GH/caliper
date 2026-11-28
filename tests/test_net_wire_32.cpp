@@ -1226,8 +1226,11 @@ TEST_CASE("net/wire 3.2: every invalid golden frame is refused as expect.json sa
             CHECK(r.reason == kv.second.find("reason")->as_string());
         }
     }
+    // Every frame file in invalid/ has its entry in expect.json.
+    size_t files = 0;
+    for (const auto& e : fs::directory_iterator(v32_dir() / "invalid")) files += e.path().extension() == ".bin";
     CHECK(frames == 3);
-    CHECK(messages >= 90);
+    CHECK(messages == files - frames);
 }
 
 TEST_CASE("net/wire 3.2: every truncation of a scene_update frame is refused") {
@@ -1789,7 +1792,15 @@ TEST_CASE("net/hub 3.2: a resource in parts reaches a viewer whole and in order,
     CHECK(late.all<Resource>().size() == 4);
     const caliper_net::HubStats st = h.hub->stats();
     CHECK(st.resources_in == 3);
-    CHECK(st.retained_resource_bytes > 80);
+    // The hub keeps the newest whole version of each resource as the frames it received: the
+    // heads in one frame and the three parts of segments version 9.
+    auto encoded = [](const Message& m) {
+        std::vector<uint8_t> b;
+        REQUIRE(encode(m, &b, nullptr, CALIPER_NET_MINOR_3_2));
+        return (uint64_t)b.size();
+    };
+    CHECK(st.retained_resource_bytes ==
+          encoded(heads_at(1200, {1, 2, 3, 4})) + encoded(part(0, 9)) + encoded(part(1, 9)) + encoded(part(2, 9)));
 }
 
 TEST_CASE("net/hub 3.2: a producer without resources has its RESOURCE and relays ignored") {

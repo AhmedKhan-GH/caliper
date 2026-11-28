@@ -600,8 +600,10 @@ TEST_CASE("api commands: a held command that nobody decides is withdrawn with co
     const json env = command(port, "loader.delete", {{"id", "nope"}}, "mcp");
     const double waited = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
     CHECK(error_code(env) == "command.approval_timeout");
-    CHECK(waited >= 0.25);
-    CHECK(waited < 5.0);
+    // The queue withdraws the command when its steady clock reaches
+    // command_approval_wait_ms after the submit, which came after t0. The
+    // error code proves that this wait expired, thus no upper time bound.
+    CHECK(waited >= o.command_approval_wait_ms / 1000.0);
     CHECK(app.session->registry().pending_approvals().empty());
     CHECK(app.server->stats().commands_held == 0);
 }

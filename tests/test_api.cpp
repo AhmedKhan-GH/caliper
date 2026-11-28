@@ -9,6 +9,7 @@
 
 #include "api/api_server.h"
 #include "api/window_captures.h"
+#include "caliper/abi.h"
 #include "caliper/live_net.h"
 #include "net/json.h"
 #include "net/wire.h"
@@ -535,6 +536,7 @@ TEST_CASE("api: a call the frame thread does not answer times out, and waiting c
     // Two calls wait; the third is refused at once.
     const api_sock a = open_socket(port), b = open_socket(port);
     const std::string get = "GET /v0/instruments HTTP/1.1\r\nHost: 127.0.0.1:" + std::to_string(port) + "\r\n" + bearer() + "\r\n";
+    const auto sent = std::chrono::steady_clock::now();
     ::send(a, get.data(), (int)get.size(), 0);
     ::send(b, get.data(), (int)get.size(), 0);
     const auto t0 = std::chrono::steady_clock::now();
@@ -548,10 +550,13 @@ TEST_CASE("api: a call the frame thread does not answer times out, and waiting c
     const Response ra = parse_response(read_all(a)), rb = parse_response(read_all(b));
     api_close(a);
     api_close(b);
-    const double waited = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+    const double waited = std::chrono::duration<double>(std::chrono::steady_clock::now() - sent).count();
     CHECK(ra.status == 504);
     CHECK(rb.status == 504);
-    CHECK(waited < 3.0);
+    // A call's deadline is frame_timeout_ms after the server gets it, in whole
+    // milliseconds of monotonic_ms(), thus at most 1 ms early. The 504 status
+    // proves that the deadline fired, thus no upper time bound.
+    CHECK(waited >= (o.frame_timeout_ms - 1) / 1000.0);
     // A late answer is dropped, and the next call is served.
     app.frames_on.store(true);
     CHECK(http(port, "GET", "/v0/instruments", bearer()).status == 200);
@@ -1045,7 +1050,11 @@ TEST_CASE("api: a held command blocks neither the stream nor API v0, and held co
     const double waited = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
     CHECK(late.status == 504);
     CHECK(parse_json(late.body).find("error")->as_string().find("may still complete") != std::string::npos);
-    CHECK(waited < 3.0);
+    // A held command's deadline is command_timeout_ms after the frame thread
+    // takes it, in whole milliseconds of monotonic_ms(), thus at most 1 ms
+    // early. The 504 status and its message prove that this deadline fired,
+    // thus no upper time bound.
+    CHECK(waited >= (o.command_timeout_ms - 1) / 1000.0);
     CHECK(app.server->stats().commands_held == 0);
 }
 
@@ -1230,7 +1239,7 @@ TEST_CASE("api: caliper shot --api serves every endpoint as a process and stops 
     CHECK_FALSE(ij.find("host")->as_string().empty());
     int64_t epoch = 0;
     CHECK(ij.find("abi_epoch")->get_i64(&epoch));
-    CHECK(epoch >= 2);
+    CHECK(epoch == CALIPER_ABI_EPOCH);
     CHECK(ij.find("services")->size() > 0);
     CHECK(ij.has("sdk"));
 

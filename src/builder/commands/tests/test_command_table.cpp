@@ -110,7 +110,9 @@ TEST_CASE("every schema is closed, lists its required properties and describes e
         CHECK_MESSAGE(args.ok(), (args.where + ": " + args.message));
         const auto result = cb::check_closed_command_schema(d.result, "result", open_paths_of(d.name));
         CHECK_MESSAGE(result.ok(), (result.where + ": " + result.message));
-        CHECK(d.summary.size() > 40);
+        // A summary is a sentence: check_command_descriptor (command.cpp) refuses
+        // an empty one, and it ends with a period.
+        REQUIRE_FALSE(d.summary.empty());
         CHECK(d.summary.size() < 1200);
         CHECK(d.summary.back() == '.');
     }

@@ -330,7 +330,14 @@ TEST_CASE("acceptance over HTTP: the same dashboard through caliper-builder-host
     }
     // The journal names the origin of every command the host ran.
     const JournalRead read = read_journal(ws + "/journal/commands.jsonl");
-    REQUIRE(read.events.size() > 10);
+    // Every command that the host ran, in order, with the refused save. The
+    // lookups and the dry runs write no journal line.
+    std::vector<std::string> names;
+    for (const auto& e : read.events) names.push_back(e.name);
+    CHECK(names == std::vector<std::string>{"data.import", "loader.run", "loader.run", "loader.delete", "spec.new",
+                                            "source.add", "source.add", "panel.create", "panel.create", "panel.create",
+                                            "layout.set", "instrument.save", "instrument.save", "panel.patch",
+                                            "panel.patch", "instrument.save"});
     bool all_mcp = true;
     for (const auto& e : read.events) all_mcp = all_mcp && e.origin == CommandOrigin::mcp;
     CHECK(all_mcp);

@@ -300,7 +300,9 @@ TEST_CASE("side chat: protocol faults go to the diagnostics, not the conversatio
     SideChat chat(f.options());
     say(chat, "malformed");
     REQUIRE(pump_until(chat, [&] { return turn_over(chat); }));
-    CHECK(chat.faults().size() >= 5);
+    // One fault for each of the ten malformed messages of the stub's script
+    // (stub_agent.cpp). The empty line is no fault.
+    CHECK(chat.faults().size() == 10);
     CHECK(kinds(chat, 1) == std::vector<K>{K::person, K::agent, K::stop});
     CHECK(find(chat, K::agent)->text == "Still here.");
     CHECK(chat.items().back().text == "DONE");

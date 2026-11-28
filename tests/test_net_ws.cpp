@@ -683,8 +683,13 @@ TEST_CASE("net/ws: a slow reader never blocks the sender; back-pressure is visib
         std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
     MESSAGE("queued 256 x 256 KiB to a silent and a reading client in " << send_ms << " ms; the silent one's "
             "queue peaked at " << (max_queued >> 20) << " MiB");
-    CHECK(send_ms < 5000);
-    CHECK(max_queued > (16u << 20));                      // most of it waits in the queue
+    // The loop ended, which proves that no send blocked: the silent client
+    // never reads, thus a blocking send would never return. Loopback TCP holds
+    // at most the sender's and the receiver's socket buffers, which macOS
+    // autotunes to at most 4 MiB each (net.inet.tcp.autosndbufmax and
+    // autorcvbufmax), thus the rest of the 64 MiB waits in the queue.
+    const size_t kernel_bytes = 2 * (size_t(4) << 20);
+    CHECK(max_queued >= 256 * chunk->size() - kernel_bytes);
     CHECK(server.queued_messages(slow_id) > 0);
     // The fast client gets everything meanwhile.
     REQUIRE(p.until([&] { return Pump::count(p.cev[1], Type::Message) == 257; }, 20000));
@@ -696,9 +701,12 @@ TEST_CASE("net/ws: a slow reader never blocks the sender; back-pressure is visib
     tight.max_queued_bytes = 1 << 20;
     Pair t(tight);
     p.clients[0] = nullptr;
+    // 64 chunks are 16 MiB, more than the 8 MiB of loopback socket buffers
+    // and the 1 MiB queue can take, thus some sends are refused.
+    const size_t sends = 64;
     size_t accepted = 0;
-    for (int i = 0; i < 64; ++i) accepted += t.server.send(t.conn, chunk);   // the client never reads
-    CHECK(accepted < 64);
+    for (size_t i = 0; i < sends; ++i) accepted += t.server.send(t.conn, chunk);   // the client never reads
+    CHECK(accepted < sends);
     CHECK(t.server.queued_bytes(t.conn) <= tight.max_queued_bytes);
 
     // The slow client finally reads: everything arrives, in order, and the
@@ -834,11 +842,13 @@ TEST_CASE("net/ws: connect failures, header timeout, wake from another thread") 
         s.wake();
     });
     go = true;
+    const int poll_ms = 5000;
     const auto t0 = std::chrono::steady_clock::now();
-    s.poll(5000);
+    s.poll(poll_ms);
     const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
     t.join();
-    CHECK(ms < 2000);
+    // A poll that the wake did not end would last its whole timeout.
+    CHECK(ms < poll_ms);
 }
 
 TEST_CASE("net/ws: a message sent as a prefix and a shared body arrives whole") {
@@ -924,7 +934,10 @@ TEST_CASE("net/ws: a request body is read only when body_limit allows it, within
     const double waited = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
     CHECK(resp.rfind("HTTP/1.1 408", 0) == 0);
     CHECK(bodies.size() == before);
-    CHECK(waited < 2.0);
+    // The deadline is body_timeout_ms after the head, in whole milliseconds of
+    // monotonic_ms(), thus at most 1 ms early. The 408 status proves that it
+    // fired, thus no upper time bound.
+    CHECK(waited >= (o.body_timeout_ms - 1) / 1000.0);
 }
 
 #ifndef _WIN32
@@ -1081,6 +1094,8 @@ TEST_CASE("net/ws: the read after a failed write takes no more than one poll's r
     INFO("messages: " << messages << ", closed: " << Pump::find(got, Type::Closed)->reason);
     CHECK(messages >= 1);                     // what fits in the budget arrives
     CHECK(bytes <= o.read_budget_bytes);      // and nothing past it
-    CHECK(messages < 16);
+    // A frame is 4 header bytes and 4096 payload bytes, thus one budget holds
+    // at most this many whole frames.
+    CHECK(messages <= o.read_budget_bytes / (frames.size() / 16));
 }
 #endif

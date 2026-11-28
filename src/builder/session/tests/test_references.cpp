@@ -147,12 +147,11 @@ TEST_CASE("references: evaluation count over 100 control values in 10 frames") {
         REQUIRE_MESSAGE(b.error.ok(), b.error.message);
         const auto after_b = sources.cache_stats().computed;
         CAPTURE(frame);
-        CHECK(after_a - before_a <= 1);
+        CHECK(after_a - before_a == 1u);   // the last value of the frame differs from the one before
         CHECK(after_b - after_a == (frame == 0 ? 1u : 0u));
         computed_a += after_a - before_a;
         computed_b += after_b - after_a;
     }
-    CHECK(computed_a <= 10);
     CHECK(computed_a == 10);   // the last value of each frame differs from the one before, so each frame evaluates once
     CHECK(computed_b == 1);
 }

@@ -371,11 +371,13 @@ TEST_CASE("a call held for approval waits while other requests go on, and can be
     std::this_thread::sleep_for(std::chrono::milliseconds(200));
     const json pong = child.request("ping", "ping", json::object());
     CHECK(pong["result"]["resultType"] == "complete");
-    CHECK(Clock::now() - t0 < std::chrono::milliseconds(1400));
+    // The API holds the call hold_ms after it arrives, which came after t0: a
+    // ping that waited for it would come after the hold.
+    CHECK(Clock::now() - t0 < std::chrono::milliseconds(api.hold_ms.load()));
     const json dup = child.request("held", "ping", json::object());
     CHECK(dup["error"]["code"] == -32600);
     const json approved = child.await("held");
-    CHECK(Clock::now() - t0 >= std::chrono::milliseconds(1400));
+    CHECK(Clock::now() - t0 >= std::chrono::milliseconds(api.hold_ms.load()));
     CHECK(approved["result"]["isError"] == false);
     CHECK(approved["result"]["structuredContent"] == test::sample_for_schema(held->result));
 
@@ -409,7 +411,8 @@ TEST_CASE("a call held for approval waits while other requests go on, and can be
     const auto t2 = Clock::now();
     const json late = error_of(quick.call("late", tool, held->examples[0]));
     CHECK(late["code"] == "mcp.timeout");
-    CHECK(Clock::now() - t2 < std::chrono::milliseconds(3000));
+    // A call that waited for the held answer would last the whole hold.
+    CHECK(Clock::now() - t2 < std::chrono::milliseconds(api.hold_ms.load()));
     CHECK(quick.finish().success());
     check_no_token(quick, api);
 }
@@ -564,7 +567,8 @@ TEST_CASE("hostile input over the pipe and a closed stdin") {
     const auto t0 = Clock::now();
     const ExitStatus st = child.finish(10000);
     CHECK(st.success());
-    CHECK(Clock::now() - t0 < std::chrono::milliseconds(5000));
+    // A server that waited for the held call would last the whole hold.
+    CHECK(Clock::now() - t0 < std::chrono::milliseconds(api.hold_ms.load()));
     bool answered = false;
     for (const auto& n : child.notes)
         if (n.value("id", json()) == "held") {

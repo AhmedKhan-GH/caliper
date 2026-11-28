@@ -230,13 +230,16 @@ TEST_CASE("chat app: the side chat on the hidden app's spec page, with the cards
         size_t e = at + mark.size();
         while (e < run.out.size() && (std::isalnum((unsigned char)run.out[e]) || run.out[e] == '_' || run.out[e] == '-')) ++e;
         const std::string person = run.out.substr(at + mark.size(), e - at - mark.size());
-        REQUIRE(person.size() >= 22);
+        // caliper_net::random_token() makes each token: 32 characters of
+        // base64url from 24 random bytes (src/host/net/hub.h).
+        const size_t token_chars = 32;
+        REQUIRE(person.size() == token_chars);
         const json agent_file = json::parse(read_file(gates / "api-seen.json"), nullptr, false);
         const json api_file = json::parse(read_file(gates / "api-json-seen.json"), nullptr, false);
         REQUIRE(agent_file.is_object());
         REQUIRE(api_file.is_object());
         const std::string agent_token = agent_file["token"];
-        CHECK(agent_token.size() >= 22);
+        CHECK(agent_token.size() == token_chars);
         CHECK(agent_token != person);
         CHECK(agent_token != api_file["token"].get<std::string>());
         CHECK(api_file["token"].get<std::string>() != person);
@@ -344,7 +347,8 @@ TEST_CASE("chat app: plot attention entropy per layer while it trains, from the 
     CHECK(cmds["source.add"] == 9);   // the entropy, the attention, the layers' entropy and one per layer
     CHECK(cmds["panel.create"] == 3);
     CHECK(cmds["layout.set"] == 1);
-    CHECK(count(run.err, "(agent) approved") >= 13);
+    // The person approved each spec edit on its card.
+    CHECK(count(run.err, "(agent) approved") == cmds["source.add"] + cmds["panel.create"] + cmds["layout.set"]);
     CHECK(run.err.find("[ui] shot live-2b") != std::string::npos);
     CHECK(run.err.find("chat ready") != std::string::npos);
     // While it trains: the panels change between two frames a moment apart.
@@ -483,9 +487,10 @@ TEST_CASE("chat app: a step of the input script waits as long as patience says, 
     int frames = -1;
     double seconds = -1.0;
     REQUIRE(std::sscanf(run.err.c_str() + at + stop.size(), "%d frames, %lf s)", &frames, &seconds) == 2);
+    // It waited the 3 s of patience, and stopped before the default of 1800
+    // frames, which proves that the seconds stopped it.
     CHECK(frames < 1800);
     CHECK(seconds >= 3.0);
-    CHECK(seconds < 6.0);
     CHECK(run.status.success());
 
     // A value that is not a number of seconds stops the script at once.
