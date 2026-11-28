@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import ast
 import asyncio
+import ctypes
 import gc
 import json
 import os
@@ -775,6 +776,32 @@ def _rss_now_mb() -> float:
     return int(out.strip()) / 1024
 
 
+class _RusageInfoV0(ctypes.Structure):
+    """rusage_info_v0 of <sys/resource.h>, which proc_pid_rusage fills for RUSAGE_INFO_V0."""
+    _fields_ = [("uuid", ctypes.c_uint8 * 16)] + [(name, ctypes.c_uint64) for name in (
+        "user_time", "system_time", "pkg_idle_wkups", "interrupt_wkups", "pageins", "wired_size",
+        "resident_size", "phys_footprint", "proc_start_abstime", "proc_exit_abstime")]
+
+
+_LIBSYSTEM = ctypes.CDLL("/usr/lib/libSystem.B.dylib") if sys.platform == "darwin" else None
+
+
+def _footprint_now_mb() -> float | None:
+    """The physical footprint in MB, the measure of macOS memory accounting. Unlike ps rss, it
+    leaves out the freed pages that libmalloc marked reusable and the kernel has not taken back."""
+    if _LIBSYSTEM is None:
+        return None
+    info = _RusageInfoV0()
+    if _LIBSYSTEM.proc_pid_rusage(os.getpid(), 0, ctypes.byref(info)) != 0:
+        return None
+    return info.phys_footprint / 2**20
+
+
+def _memory_now_mb():
+    """The RSS and the physical footprint in MB, sampled together."""
+    return _rss_now_mb(), _footprint_now_mb()
+
+
 def _held_mb(frame_bytes, views=1):
     """The MB that ``views`` subscriptions with frames of at most ``frame_bytes`` can hold in this
     process at once. On the producer's side each holds its pending snapshot (latest wins) and the
@@ -793,11 +820,22 @@ def _growth_check(rss, held_mb):
     window by r times the short window's length more, and fails. Memory that the short window
     released and the long window used again gives a long growth of at most zero, and passes.
     Returns the growth of both windows."""
-    short, long = max(rss[1] - rss[0], 0.0), rss[2] - max(rss[0], rss[1])
-    print(f"\nRSS samples {rss[0]:.2f}, {rss[1]:.2f}, {rss[2]:.2f} MB: the short window grew "
-          f"{short:+.2f} MB, the long window {long:+.2f} MB (bound on the difference "
-          f"{held_mb:.1f} MB)")
-    assert long - short <= held_mb, (rss, short, long, held_mb)
+    def windows(r):
+        return max(r[1] - r[0], 0.0), r[2] - max(r[0], r[1])
+
+    samples, rss = rss, [s[0] for s in rss]
+    short, long = windows(rss)
+    line = (f"RSS samples {rss[0]:.2f}, {rss[1]:.2f}, {rss[2]:.2f} MB: the short window grew "
+            f"{short:+.2f} MB, the long window {long:+.2f} MB (bound on the difference "
+            f"{held_mb:.1f} MB)")
+    footprint = [s[1] for s in samples]
+    if None not in footprint:
+        f_short, f_long = windows(footprint)
+        line += (f"; physical footprint {footprint[0]:.2f}, {footprint[1]:.2f}, {footprint[2]:.2f} MB: "
+                 f"{f_short:+.2f} MB, then {f_long:+.2f} MB")
+    print("\n" + line)
+    print(line, file=sys.__stderr__)   # shown in a CI log also when the test passes
+    assert long - short <= held_mb, (line,)
     return short, long
 
 
@@ -839,7 +877,7 @@ def test_slow_viewer_latest_wins(server, device):
             for seconds in (0.0, stall_s, 2 * stall_s):              # the viewer reads nothing
                 slow = max(slow, await loop.run_in_executor(None, steps, seconds))
                 gc.collect()
-                rss.append(_rss_now_mb())
+                rss.append(_memory_now_mb())
             st = server.stats()["connections"][0]
             seq_last = server.stats()["views"]["big"]["seq"]
             # Latest wins: once the viewer reads again it gets the last snapshot taken. The
@@ -1156,7 +1194,7 @@ def test_memory_flat_long_run(server):
             for seconds in (0.0, 6.0, 12.0):                        # a window of 6 s, then 12 s
                 await loop.run_in_executor(None, run_for, seconds)
                 gc.collect()
-                rss.append(_rss_now_mb())
+                rss.append(_memory_now_mb())
             reader.cancel()
             return rss, largest[0]
     rss, largest = run(go(), 90)
