@@ -11,7 +11,7 @@ using namespace spec_test;
 
 namespace {
 
-const char* kHead = "caliper_spec = 1\n[applet]\nid = \"o\"\n";
+const char* kHead = "caliper_spec = 2\n[instrument]\nid = \"o\"\n";
 
 cs::ValidationReport check(const std::string& body) { return cs::check_toml(std::string(kHead) + body, fixture_resolver()); }
 

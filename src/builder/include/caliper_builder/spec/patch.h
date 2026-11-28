@@ -1,8 +1,7 @@
 #pragma once
 // JSON merge patches (RFC 7386) of one panel, one source or one control of a
 // spec, which the command layer's panel.patch, source.patch and control.patch
-// call. A patch that makes a panel a scene raises a version 0 spec to version
-// 1 (required_version() in spec.h).
+// call.
 //
 // The patch applies to the item's canonical JSON form (format.h): a key set to
 // null is removed, an object merges key by key, and any other value replaces

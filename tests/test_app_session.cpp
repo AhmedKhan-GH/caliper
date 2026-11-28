@@ -285,8 +285,8 @@ struct RecordingProgramLink final : caliper_live::ProgramLink {
     }
 };
 
-const char* kProgramSpec = R"(caliper_spec = 1
-[applet]
+const char* kProgramSpec = R"(caliper_spec = 2
+[instrument]
 id = "programs"
 [[source]]
 id = "w"
@@ -537,7 +537,7 @@ TEST_CASE("app session: shutdown answers waiting commands and closes the journal
     REQUIRE_MESSAGE(again.session != nullptr, again.error.message);
     const cb::SpecReplay replay = cb::replay_spec_journal(ws);
     REQUIRE(replay.spec.has_value());
-    CHECK(replay.spec->applet.id == "kept");
+    CHECK(replay.spec->instrument.id == "kept");
 }
 
 namespace {
@@ -550,23 +550,23 @@ struct FakeRenderer final : caliper_host::PanelRenderSeam {
 };
 }  // namespace
 
-TEST_CASE("app session: the host serves app.info, app.applets, app.launch, capture.frame and panel.render") {
+TEST_CASE("app session: the host serves app.info, app.instruments, app.launch, capture.frame and panel.render") {
     TempDir t("host");
     FrameLoop loop;
     AppSession::Hooks h;
     h.info_json = [] {
-        return std::string(R"({"abi_epoch":3,"host":"0.6.0","libtorch":null,"sdk":"0.2.0",)"
+        return std::string(R"({"abi_epoch":4,"host":"0.6.0","libtorch":null,"sdk":"0.3.0",)"
                            R"("services":["caliper.log.v1"],"ui_stack":null})");
     };
-    h.applets_json = [] {
-        return std::string(R"({"applets":[{"status":"READY","id":"dev.example.one","version":"1.0.0",)"
+    h.instruments_json = [] {
+        return std::string(R"({"instruments":[{"status":"READY","id":"dev.example.one","version":"1.0.0",)"
                            R"("folder":"/x","reason":""}]})");
     };
     h.launch = [](const std::string& id, const std::string&) -> LaunchOutcome {
         if (id == "dev.example.one")
             return {200, R"({"id":"dev.example.one","version":"1.0.0","status":"ACTIVE","already_open":false})", ""};
         if (id == "dev.example.bad") return {409, "dev.example.bad cannot be launched (REFUSED): too new", "app.launch_refused"};
-        return {404, "no applet with the id " + id, "app.applet_not_found"};
+        return {404, "no instrument with the id " + id, "app.instrument_not_found"};
     };
     loop.run(options(t.str("ws")), h);
     cb::Session& s = loop.open();
@@ -575,9 +575,9 @@ TEST_CASE("app session: the host serves app.info, app.applets, app.launch, captu
     REQUIRE(info.ok);
     CHECK(info.result["host"] == "0.6.0");
     CHECK(info.result["libtorch"].is_null());
-    const cb::CommandResult applets = call(s, inv("app.applets"));
-    REQUIRE(applets.ok);
-    CHECK(applets.result["applets"][0]["id"] == "dev.example.one");
+    const cb::CommandResult instruments = call(s, inv("app.instruments"));
+    REQUIRE(instruments.ok);
+    CHECK(instruments.result["instruments"][0]["id"] == "dev.example.one");
     const cb::CommandResult launched = call(s, inv("app.launch", {{"id", "dev.example.one"}}));
     REQUIRE(launched.ok);
     CHECK(launched.result["status"] == "ACTIVE");
@@ -585,7 +585,7 @@ TEST_CASE("app session: the host serves app.info, app.applets, app.launch, captu
     CHECK(refused.error.code == "app.launch_refused");
     CHECK(refused.error.message.find("too new") != std::string::npos);
     CHECK(refused.error.where == "args.id");
-    CHECK(call(s, inv("app.launch", {{"id", "dev.example.none"}})).error.code == "app.applet_not_found");
+    CHECK(call(s, inv("app.launch", {{"id", "dev.example.none"}})).error.code == "app.instrument_not_found");
 
     // capture.frame waits for the read-back of the next frame.
     const cb::CommandResult frame = call(s, inv("capture.frame"));
@@ -813,13 +813,13 @@ TEST_CASE("app session: an agent's spec edit is held with its diff in the pendin
     CHECK(json::parse(gateway->approval_json(id))["state"] == "decided");
 }
 
-// The app shows the spec page for every applet.open that succeeds, from any
+// The app shows the spec page for every instrument.open that succeeds, from any
 // origin, and for a new or opened spec of an agent (the origins agent and
 // mcp), since the person reviews an agent's edits on that page and would
 // otherwise not see the spec the side chat's agent builds from the live page.
 // The person's own spec.new (F3, a drop) shows the page by its own path, in
 // build mode, and a program with the person's token (api) leaves the page alone.
-TEST_CASE("app session: the spec page shows for every applet.open and for an agent's new or opened spec") {
+TEST_CASE("app session: the spec page shows for every instrument.open and for an agent's new or opened spec") {
     TempDir t("specs-opened");
     FrameLoop loop;
     loop.run(options(t.str("ws")));
@@ -832,18 +832,18 @@ TEST_CASE("app session: the spec page shows for every applet.open and for an age
     };
     REQUIRE(call(s, inv("spec.new", {{"id", "mine"}, {"title", "Mine"}})).ok);   // ui
     CHECK(opened(0) == 0);
-    REQUIRE(call(s, inv("applet.save")).ok);
+    REQUIRE(call(s, inv("instrument.save")).ok);
     REQUIRE(call(s, inv("spec.new", {{"id", "theirs"}, {"title", "Theirs"}}, cb::CommandOrigin::agent)).ok);
     CHECK(opened(1) == 1);
-    REQUIRE(call(s, inv("applet.save")).ok);
-    REQUIRE(call(s, inv("spec.open", {{"path", "applets/mine/mine.spec.toml"}}, cb::CommandOrigin::mcp)).ok);
+    REQUIRE(call(s, inv("instrument.save")).ok);
+    REQUIRE(call(s, inv("spec.open", {{"path", "instruments/mine/mine.spec.toml"}}, cb::CommandOrigin::mcp)).ok);
     CHECK(opened(2) == 2);
     REQUIRE(call(s, inv("spec.new", {{"id", "program"}, {"title", "Program"}}, cb::CommandOrigin::api)).ok);
     CHECK(opened(2) == 2);
     CHECK_FALSE(call(s, inv("spec.new", {{"id", "Bad Id"}}, cb::CommandOrigin::agent)).ok);
     CHECK(opened(2) == 2);
-    REQUIRE(call(s, inv("applet.save")).ok);
-    REQUIRE(call(s, inv("applet.open", {{"id", "theirs"}})).ok);   // ui
+    REQUIRE(call(s, inv("instrument.save")).ok);
+    REQUIRE(call(s, inv("instrument.open", {{"id", "theirs"}})).ok);   // ui
     CHECK(opened(3) == 3);
 }
 
@@ -900,9 +900,9 @@ TEST_CASE("app session: Caliper API's gateway opens the default workspace on the
 #ifndef _WIN32
 TEST_CASE("app session: the hidden app runs a command script on its workspace and closes it on SIGTERM") {
     const char* exe = std::getenv("CALIPER_TEST_CALIPER_EXE");
-    const char* applets = std::getenv("CALIPER_TEST_APPLETS");
-    if (!exe || !*exe || !applets || !*applets) {
-        MESSAGE("CALIPER_TEST_CALIPER_EXE or CALIPER_TEST_APPLETS is not set: run the ctest entry "
+    const char* instruments = std::getenv("CALIPER_TEST_INSTRUMENTS");
+    if (!exe || !*exe || !instruments || !*instruments) {
+        MESSAGE("CALIPER_TEST_CALIPER_EXE or CALIPER_TEST_INSTRUMENTS is not set: run the ctest entry "
                 "caliper_app_session_hidden");
         return;
     }
@@ -925,9 +925,9 @@ TEST_CASE("app session: the hidden app runs a command script on its workspace an
         {{"name", "panel.create"},
          {"args", {{"id", "rows"}, {"primitive", "table"}, {"bind", {{"rows", "t"}}},
                    {"options", {{"columns", {"step", "temp"}}}}}}},
-        {{"name", "applet.save"}, {"args", json::object()}},
+        {{"name", "instrument.save"}, {"args", json::object()}},
         {{"name", "app.info"}},
-        {{"name", "app.applets"}},
+        {{"name", "app.instruments"}},
         {{"name", "app.launch"}, {"args", {{"id", "dev.caliper.hello-world"}}}},
         {{"name", "capture.frame"}},
         {{"name", "panel.render"}, {"args", {{"id", "curve"}}}},
@@ -935,11 +935,11 @@ TEST_CASE("app session: the hidden app runs a command script on its workspace an
     std::string text;
     for (const json& j : script) text += j.dump() + "\n";
     write_text(t.str("script.jsonl"), text);
-    fs::create_directories(t.str("user-applets"));
+    fs::create_directories(t.str("user-instruments"));
 
     Proc p;
-    REQUIRE(p.start(exe, {"--hidden", "--applets", applets, "--workspace", ws},
-                    {"CALIPER_DATA_DIR=" + data, "CALIPER_USER_APPLETS_DIR=" + t.str("user-applets"),
+    REQUIRE(p.start(exe, {"--hidden", "--instruments", instruments, "--workspace", ws},
+                    {"CALIPER_DATA_DIR=" + data, "CALIPER_USER_INSTRUMENTS_DIR=" + t.str("user-instruments"),
                      "CALIPER_WINDOW_SIZE=640x400", "CALIPER_COMMAND_SCRIPT=" + t.str("script.jsonl"),
                      "CALIPER_COMMAND_RESULTS=" + t.str("results.jsonl")}));
     REQUIRE_MESSAGE(p.read_until("[session] script done:", 90000), p.text);
@@ -954,10 +954,10 @@ TEST_CASE("app session: the hidden app runs a command script on its workspace an
         CHECK(results[i]["ok"] == true);
     }
     CHECK(results[1]["result"]["outputs"][0]["rows"] == 50);
-    CHECK(results[6]["result"]["manifest"] == "applets/temps-board/temps-board.caliper.toml");
+    CHECK(results[6]["result"]["manifest"] == "instruments/temps-board/temps-board.caliper.toml");
     CHECK(results[7]["result"]["services"].size() > 0);
     CHECK(results[8]["ok"] == true);
-    // app.launch opens the fixture's page, as POST /v0/applets/{id}/launch does.
+    // app.launch opens the fixture's page, as POST /v0/instruments/{id}/launch does.
     REQUIRE_MESSAGE(results[9]["ok"] == true, results[9].dump());
     CHECK(results[9]["result"]["id"] == "dev.caliper.hello-world");
     CHECK(results[9]["result"]["status"] == "ACTIVE");
@@ -991,11 +991,11 @@ TEST_CASE("app session: the hidden app runs a command script on its workspace an
     CHECK_MESSAGE(p.wait(30000) == 0, p.text);
     CHECK(p.text.find("[session] workspace " + ws + " (--workspace) opened in ") != std::string::npos);
     CHECK(p.text.find("[session] command loader.run (ui)") != std::string::npos);
-    CHECK(p.text.find("[session] command applet.save (ui)") != std::string::npos);
+    CHECK(p.text.find("[session] command instrument.save (ui)") != std::string::npos);
     CHECK(p.text.find("[session] workspace " + ws + " closed") != std::string::npos);
 
-    CHECK(fs::is_regular_file(ws + "/applets/temps-board/temps-board.spec.toml"));
-    CHECK(fs::is_regular_file(ws + "/applets/temps-board/temps-board.caliper.toml"));
+    CHECK(fs::is_regular_file(ws + "/instruments/temps-board/temps-board.spec.toml"));
+    CHECK(fs::is_regular_file(ws + "/instruments/temps-board/temps-board.caliper.toml"));
     CHECK(fs::is_regular_file(ws + "/loaders/temps.loader.toml"));
     CHECK(fs::is_regular_file(ws + "/workspace.duckdb"));
     CHECK_FALSE(fs::exists(data + "/workspace"));   // the chosen workspace, not the default one
@@ -1008,16 +1008,16 @@ TEST_CASE("app session: the hidden app runs a command script on its workspace an
         names.push_back(e.name);
     }
     CHECK(names == std::vector<std::string>{"data.import", "loader.run", "spec.new", "source.add", "panel.create",
-                                            "panel.create", "applet.save"});
+                                            "panel.create", "instrument.save"});
     // The workspace the app left opens here to the same spec.
     const cb::SpecReplay replay = cb::replay_spec_journal(ws);
     REQUIRE(replay.spec.has_value());
     CHECK(replay.spec->panels.size() == 2);
     auto again = cb::Session::open(ws);
     REQUIRE_MESSAGE(again.session != nullptr, again.error.message);
-    const cb::CommandResult listed = again.session->invoke(inv("applet.list"));
+    const cb::CommandResult listed = again.session->invoke(inv("instrument.list"));
     REQUIRE(listed.ok);
-    CHECK(listed.result["applets"][0]["id"] == "temps-board");
+    CHECK(listed.result["instruments"][0]["id"] == "temps-board");
 }
 #endif
 

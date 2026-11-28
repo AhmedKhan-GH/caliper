@@ -60,7 +60,7 @@ public:
 };
 
 spec::Spec parse(const std::string& body) {
-    auto parsed = spec::parse_toml("caliper_spec = 1\n[applet]\nid = \"a\"\n" + body);
+    auto parsed = spec::parse_toml("caliper_spec = 2\n[instrument]\nid = \"a\"\n" + body);
     REQUIRE_MESSAGE(parsed.ok(), body);
     return parsed.spec;
 }

@@ -194,7 +194,7 @@ entries:
   - SPC-03
 - heading: The file drop
   item: 'A drop lands according to the page: build mode on the spec page, a new or open spec from the
-    landing, a new Untitled spec beside live sources on the live page, and a log line on an applet''s
+    landing, a new Untitled spec beside live sources on the live page, and a log line on an instrument''s
     page.'
   ids:
   - SPC-07
@@ -257,7 +257,7 @@ entries:
   - EMB-06
   - AGT-01
 - heading: Decisions
-  item: 'An agent never ends the person''s running applet: an agent''s spec.new, spec.open or applet.open
+  item: 'An agent never ends the person''s running instrument: an agent''s spec.new, spec.open or instrument.open
     opens the spec in the session, and F6 Dashboard on the landing returns to it.'
   ids:
   - SPC-07

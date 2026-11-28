@@ -12,7 +12,7 @@
 //   into caliper-mcp. The answer is kept for as long as the API file names the
 //   same port and token.
 // - call() runs one tool: it checks the arguments against the command's schema
-//   with the commands library's validator, then sends app.info, app.applets,
+//   with the commands library's validator, then sends app.info, app.instruments,
 //   app.launch and capture.frame to their API v0 endpoints and every other
 //   command to POST /v0/commands/{name} with X-Caliper-Origin. The outcome is
 //   an MCP CallToolResult (tools.h), a tool error for every fault.

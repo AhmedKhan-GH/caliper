@@ -48,7 +48,7 @@ using nlohmann::json;
 
 // The value that `r` reads now: the session's value, else its default, else
 // null.
-json spec_reference_value(const spec::Reference& r, const SpecInstrumentHost& host) {
+json spec_reference_value(const spec::Reference& r, const SpecLiveHost& host) {
     if (r.kind == spec::Reference::Kind::control && host.spec) {
         const spec::Control* control = host.spec->find_control(r.target);
         const auto target = control ? spec::parse_control_target(control->bind) : std::nullopt;
@@ -73,13 +73,13 @@ json spec_reference_value(const spec::Reference& r, const SpecInstrumentHost& ho
 namespace {
 
 // A literal or a reference at a value place.
-json place_value(const json& v, const SpecInstrumentHost& host) {
+json place_value(const json& v, const SpecLiveHost& host) {
     if (spec::looks_like_reference(v))
         if (std::optional<spec::Reference> r = spec::parse_reference(v)) return spec_reference_value(*r, host);
     return v;
 }
 
-std::optional<double> place_number(const json& v, const SpecInstrumentHost& host) {
+std::optional<double> place_number(const json& v, const SpecLiveHost& host) {
     json x = place_value(v, host);
     if (x.is_array() && x.size() == 1) x = x[0];
     if (!x.is_number()) return std::nullopt;
@@ -101,7 +101,7 @@ json tensor_json(const caliper_builder::TensorData& t) {
 // The values of a bound text's fields at the cursor: a reference's value, or
 // a source's kept value at the cursor's step. A source that keeps no step
 // there gives null, which formats as a dash.
-std::map<std::string, json> spec_bound_text_values(const spec::BoundText& text, const SpecInstrumentHost& host) {
+std::map<std::string, json> spec_bound_text_values(const spec::BoundText& text, const SpecLiveHost& host) {
     std::map<std::string, json> out;
     for (const auto& [name, field] : text.fields) {
         if (const spec::Reference* r = std::get_if<spec::Reference>(&field)) {
@@ -123,7 +123,7 @@ std::map<std::string, json> spec_bound_text_values(const spec::BoundText& text, 
 // text panel's bound `value`; empty when its format does not parse. The
 // format is parsed once, and the text is formatted again only when a value
 // changed, so that a new value shows in the same frame.
-std::string spec_bound_text_string(const spec::BoundText& text, const SpecInstrumentHost& host,
+std::string spec_bound_text_string(const spec::BoundText& text, const SpecLiveHost& host,
                                    const std::map<std::string, json>& extra) {
     struct Kept {
         caliper_builder::text::ParsedText parsed;
@@ -194,7 +194,7 @@ struct PlotLabel {
     double x = 0, y = 0;     // the anchor in data units, for a pick
 };
 
-void push_annotation_pick(const spec::Panel& panel, const PlotLabel& l, const SpecInstrumentHost& host) {
+void push_annotation_pick(const spec::Panel& panel, const PlotLabel& l, const SpecLiveHost& host) {
     if (!host.events) return;
     caliper_builder::Event ev;
     ev.kind = caliper_builder::EventKind::pick;
@@ -206,7 +206,7 @@ void push_annotation_pick(const spec::Panel& panel, const PlotLabel& l, const Sp
 
 }  // namespace
 
-void draw_plot_annotations(const spec::Panel& panel, const SpecInstrumentHost& host) {
+void draw_plot_annotations(const spec::Panel& panel, const SpecLiveHost& host) {
     if (panel.primitive == spec::Primitive::series && panel.options.legend.is_boolean()) {
         if (ImPlotPlot* plot = ImPlot::GetCurrentPlot()) {
             if (panel.options.legend.get<bool>()) plot->Flags &= ~ImPlotFlags_NoLegend;
@@ -348,7 +348,7 @@ void draw_plot_annotations(const spec::Panel& panel, const SpecInstrumentHost& h
 }
 
 void draw_panel_overlays(const spec::Panel& panel, const ImRect& content, const SpecLook& look,
-                         const SpecInstrumentHost& host) {
+                         const SpecLiveHost& host) {
     // A 2-D panel draws its annotations inside its plot
     // (draw_plot_annotations), a scene panel through its scene
     // (scene_annotation_marks) and a text panel its bound text; the legend of
@@ -360,7 +360,7 @@ void draw_panel_overlays(const spec::Panel& panel, const ImRect& content, const 
     (void)host;
 }
 
-std::vector<SceneAnnotationMark> scene_annotation_marks(const spec::Panel& panel, const SpecInstrumentHost& host) {
+std::vector<SceneAnnotationMark> scene_annotation_marks(const spec::Panel& panel, const SpecLiveHost& host) {
     std::vector<SceneAnnotationMark> out;
     for (const spec::Annotation& a : panel.annotations) {
         SceneAnnotationMark m;

@@ -11,7 +11,7 @@ What moves work to Caliper Cloud and Caliper Web is being online: syncing and sh
 - **Caliper Cloud** offers the desktop app's history and recordings online and runs hosted compute sessions, for example for models larger than local hardware can hold.
 - **Caliper Web** is the browser workspace.
 
-Caliper Platform, the registry and exchange of applets and widgets, is a third product. Phase 4 of the roadmap plans it as the [Applet registry](registry.md). The desktop app can install from it but never needs it, because sideloading keeps working.
+Caliper Platform, the registry and exchange of instruments and widgets, is a third product. Phase 4 of the roadmap plans it as the [Instrument registry](registry.md). The desktop app can install from it but never needs it, because sideloading keeps working.
 
 ## Local history and recording
 

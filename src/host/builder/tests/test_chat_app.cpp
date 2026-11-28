@@ -21,7 +21,7 @@
 //
 // They need the caliper executable (CALIPER_TEST_CALIPER_EXE) and a Metal
 // device, and the second the producer (CALIPER_TEST_PRODUCER_EXE) and the
-// test applets (CALIPER_TEST_APPLETS); without them they say they are skipped.
+// test instruments (CALIPER_TEST_INSTRUMENTS); without them they say they are skipped.
 #include <stb_image.h>
 
 #include <caliper_builder/acp/subprocess.h>
@@ -142,8 +142,8 @@ TEST_CASE("chat app: the side chat on the hidden app's spec page, with the cards
          {{"name", "panel.create"},
           {"args", {{"id", "rows"}, {"primitive", "table"}, {"bind", {{"rows", "metrics"}}},
                     {"place", {{"target", "curves"}, {"where", "below"}}}}}},
-         {{"name", "applet.save"}, {"args", {{"overwrite", true}}}},
-         {{"name", "applet.open"}, {"args", {{"id", "run42-dashboard"}}}}});
+         {{"name", "instrument.save"}, {"args", {{"overwrite", true}}}},
+         {{"name", "instrument.open"}, {"args", {{"id", "run42-dashboard"}}}}});
     {
         std::ofstream f(root / "build.jsonl");
         for (const json& l : build) f << l.dump() << "\n";
@@ -174,7 +174,7 @@ TEST_CASE("chat app: the side chat on the hidden app's spec page, with the cards
     acp::SpawnOptions o;
     o.argv = {exe, "--hidden", "--workspace", ws.string()};
     o.env = {{"CALIPER_DATA_DIR", data.string()},
-             {"CALIPER_USER_APPLETS_DIR", (root / "apps").string()},
+             {"CALIPER_USER_INSTRUMENTS_DIR", (root / "apps").string()},
              {"CALIPER_WINDOW_SIZE", "960x600"},
              {"CALIPER_COMMAND_SCRIPT", (root / "build.jsonl").string()},
              {"CALIPER_TEST_APPROVALS", decisions.string()},
@@ -260,10 +260,10 @@ TEST_CASE("chat app: plot attention entropy per layer while it trains, from the 
           doctest::test_suite("app")) {
     const char* exe = std::getenv("CALIPER_TEST_CALIPER_EXE");
     const char* producer_exe = std::getenv("CALIPER_TEST_PRODUCER_EXE");
-    const char* applets = std::getenv("CALIPER_TEST_APPLETS");
-    if (!exe || !*exe || !producer_exe || !*producer_exe || !applets || !*applets) {
+    const char* instruments = std::getenv("CALIPER_TEST_INSTRUMENTS");
+    if (!exe || !*exe || !producer_exe || !*producer_exe || !instruments || !*instruments) {
         std::printf("caliper_side_chat_app skipped: needs CALIPER_TEST_CALIPER_EXE, CALIPER_TEST_PRODUCER_EXE and "
-                    "CALIPER_TEST_APPLETS\n");
+                    "CALIPER_TEST_INSTRUMENTS\n");
         return;
     }
     const fs::path root = fresh("chat-live");
@@ -282,7 +282,7 @@ TEST_CASE("chat app: plot attention entropy per layer while it trains, from the 
         std::ofstream d(decisions);
         for (int i = 0; i < 10; ++i) d << "approve source.add agent\n";
         for (int i = 0; i < 3; ++i) d << "approve panel.create agent\n";
-        d << "approve layout.set agent\napprove spec.new agent\napprove applet.save agent\n";
+        d << "approve layout.set agent\napprove spec.new agent\napprove instrument.save agent\n";
     }
 
     // The training script's stand-in: 6 layers of 8 heads over 64 tokens.
@@ -314,9 +314,9 @@ TEST_CASE("chat app: plot attention entropy per layer while it trains, from the 
         "wait 60; shot live-2a; wait 90; shot live-2b; chat focus; wait 3; "
         "type Compare the first and the last layer; wait 3; key enter; chat until exited; wait 30; quit";
     acp::SpawnOptions o;
-    o.argv = {exe, "--hidden", "--applets", applets, "--url", link, "--api", "--api-port", "0", "--workspace", ws.string()};
+    o.argv = {exe, "--hidden", "--instruments", instruments, "--url", link, "--api", "--api-port", "0", "--workspace", ws.string()};
     o.env = {{"CALIPER_DATA_DIR", data.string()},
-             {"CALIPER_USER_APPLETS_DIR", (root / "apps").string()},
+             {"CALIPER_USER_INSTRUMENTS_DIR", (root / "apps").string()},
              {"CALIPER_WINDOW_SIZE", "960x600"},
              {"CALIPER_TEST_APPROVALS", decisions.string()},
              {"CALIPER_AGENT_OFFLINE", "1"},
@@ -360,10 +360,10 @@ TEST_CASE("chat app: the Shared GPU note while a live run is attached and the ag
           doctest::test_suite("app")) {
     const char* exe = std::getenv("CALIPER_TEST_CALIPER_EXE");
     const char* producer_exe = std::getenv("CALIPER_TEST_PRODUCER_EXE");
-    const char* applets = std::getenv("CALIPER_TEST_APPLETS");
-    if (!exe || !*exe || !producer_exe || !*producer_exe || !applets || !*applets) {
+    const char* instruments = std::getenv("CALIPER_TEST_INSTRUMENTS");
+    if (!exe || !*exe || !producer_exe || !*producer_exe || !instruments || !*instruments) {
         std::printf("caliper_side_chat_app skipped: needs CALIPER_TEST_CALIPER_EXE, CALIPER_TEST_PRODUCER_EXE and "
-                    "CALIPER_TEST_APPLETS\n");
+                    "CALIPER_TEST_INSTRUMENTS\n");
         return;
     }
     const fs::path root = fresh("chat-gpu-note");
@@ -405,9 +405,9 @@ TEST_CASE("chat app: the Shared GPU note while a live run is attached and the ag
         "page live; chat open; chat until idle; chat note none; chat local on; chat note Shared GPU; wait 5; shot gpu; "
         "key cmd+d; page landing; chat note none; quit";
     acp::SpawnOptions o;
-    o.argv = {exe, "--hidden", "--applets", applets, "--url", link, "--workspace", ws.string()};
+    o.argv = {exe, "--hidden", "--instruments", instruments, "--url", link, "--workspace", ws.string()};
     o.env = {{"CALIPER_DATA_DIR", data.string()},
-             {"CALIPER_USER_APPLETS_DIR", (root / "apps").string()},
+             {"CALIPER_USER_INSTRUMENTS_DIR", (root / "apps").string()},
              {"CALIPER_WINDOW_SIZE", "960x600"},
              {"CALIPER_AGENT_OFFLINE", "1"},
              {"CALIPER_TEST_SPEC_UI", ui},
@@ -461,7 +461,7 @@ TEST_CASE("chat app: a step of the input script waits as long as patience says, 
     acp::SpawnOptions o;
     o.argv = {exe, "--hidden", "--workspace", ws.string()};
     o.env = {{"CALIPER_DATA_DIR", data.string()},
-             {"CALIPER_USER_APPLETS_DIR", (root / "apps").string()},
+             {"CALIPER_USER_INSTRUMENTS_DIR", (root / "apps").string()},
              {"CALIPER_WINDOW_SIZE", "640x400"},
              {"CALIPER_AGENT_OFFLINE", "1"},
              {"CALIPER_TEST_SPEC_UI", ui},
@@ -526,8 +526,8 @@ TEST_CASE("chat app: Caliper's modes for the chat's agent, the card's three answ
          {{"name", "panel.create"},
           {"args", {{"id", "curves"}, {"primitive", "series"}, {"title", "Loss"},
                     {"bind", {{"x", "metrics.step"}, {"y", "metrics.loss"}}}}}},
-         {{"name", "applet.save"}, {"args", {{"overwrite", true}}}},
-         {{"name", "applet.open"}, {"args", {{"id", "run42-dashboard"}}}}});
+         {{"name", "instrument.save"}, {"args", {{"overwrite", true}}}},
+         {{"name", "instrument.open"}, {"args", {{"id", "run42-dashboard"}}}}});
     {
         std::ofstream f(root / "build.jsonl");
         for (const json& l : build) f << l.dump() << "\n";
@@ -574,14 +574,14 @@ TEST_CASE("chat app: Caliper's modes for the chat's agent, the card's three answ
         "chat allow-all on; chat mode allow_all; chat focus; wait 5; shot m-banner; "
         R"(type call panel_remove {"id":"note"}; key enter; )"
         "chat item applied panel.remove; chat until ready; chat focus; wait 3; "
-        R"(type call applet_save {"overwrite":true}; key enter; )"
-        "chat item approval applet.save waiting; cards 1; wait 5; shot m-bound; append " + d + " approve applet.save agent; "
+        R"(type call instrument_save {"overwrite":true}; key enter; )"
+        "chat item approval instrument.save waiting; cards 1; wait 5; shot m-bound; append " + d + " approve instrument.save agent; "
         "chat until ready; chat allow-all off; chat mode ask; settings perm chat read_only; chat mode read_only; "
         "wait 5; quit";
     acp::SpawnOptions o;
     o.argv = {exe, "--hidden", "--workspace", ws.string()};
     o.env = {{"CALIPER_DATA_DIR", data.string()},
-             {"CALIPER_USER_APPLETS_DIR", (root / "apps").string()},
+             {"CALIPER_USER_INSTRUMENTS_DIR", (root / "apps").string()},
              {"CALIPER_WINDOW_SIZE", size},
              {"CALIPER_COMMAND_SCRIPT", (root / "build.jsonl").string()},
              {"CALIPER_TEST_APPROVALS", decisions.string()},
@@ -625,7 +625,7 @@ TEST_CASE("chat app: Caliper's modes for the chat's agent, the card's three answ
         "ui history.undo undo ok",                        // the APPLIED row's Undo
         "agent panel.patch do command.denied",            // Read only
         "agent panel.remove do ok allow_all",             // Allow all
-        "agent applet.save do ok",                        // an overwrite still asks, under Allow all
+        "agent instrument.save do ok",                        // an overwrite still asks, under Allow all
     };
     CHECK(seen == want);
     // The saved file: owner-only, the chat's saved mode, mcp's Allow all kept, the rule revoked.

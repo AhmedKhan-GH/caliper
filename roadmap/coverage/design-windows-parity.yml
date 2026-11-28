@@ -39,7 +39,7 @@ entries:
   - COR-08
   - EMB-07
 - heading: Where Windows stands
-  item: No one has yet run on Windows hardware applets from outside the repository, the CLI subcommands,
+  item: No one has yet run on Windows hardware instruments from outside the repository, the CLI subcommands,
     caliper shot or the embed package.
   ids:
   - PLT-06
@@ -111,47 +111,47 @@ entries:
   item: Add a web job on a Windows runner (1 day).
   ids:
   - PLT-09
-- heading: 2. The applet platform
-  item: 'Loading: LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR or AddDllDirectory so DLLs beside an applet are found.'
+- heading: 2. The instrument platform
+  item: 'Loading: LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR or AddDllDirectory so DLLs beside an instrument are found.'
   ids:
   - PLT-06
-- heading: 2. The applet platform
+- heading: 2. The instrument platform
   item: 'Search paths: long paths and paths with spaces.'
   ids:
   - PLT-06
-- heading: 2. The applet platform
+- heading: 2. The instrument platform
   item: The libtorch pin names the CUDA variant, such as cu124, and the loader refuses a mismatch.
   ids:
   - PLT-06
-- heading: 2. The applet platform
-  item: Install over a loaded DLL says clearly that the running app has the applet loaded.
+- heading: 2. The instrument platform
+  item: Install over a loaded DLL says clearly that the running app has the instrument loaded.
   ids:
   - PLT-06
-- heading: 2. The applet platform
+- heading: 2. The instrument platform
   item: 'The CLI and the app''s console: a GUI-subsystem app plus a console entry point such as caliper.com.'
   ids:
   - PLT-06
-- heading: 2. The applet platform
+- heading: 2. The instrument platform
   item: caliper shot kept as is and compared with a macOS shot.
   ids:
   - PLT-06
   - COR-08
-- heading: 2. The applet platform
+- heading: 2. The instrument platform
   item: Dock roles need nothing Windows-specific; check them in a shot capture.
   ids:
   - PLT-06
-- heading: 2. The applet platform
+- heading: 2. The instrument platform
   item: caliper build on Windows through a CreateProcess runner, lifting its refusal.
   ids:
   - PLT-06
   - COR-10
-- heading: 2. The applet platform
+- heading: 2. The instrument platform
   ref: sprint4-pr1-main2
   item: caliper build on Windows depends on the process helper of step 9 (2 days).
   ids:
   - PLT-06
   - PLT-13
-- heading: 2. The applet platform
+- heading: 2. The instrument platform
   ref: sprint4-pr1-main2
   item: 'The hidden app mode caliper --hidden on Windows: window, taskbar button and focus stay hidden
     (1 day).'
@@ -378,11 +378,11 @@ entries:
   - REN-10
   - REN-53
 - heading: 8. Signing, packaging and distribution
-  item: Authenticode-sign the app, CLI entry point and first-party applet DLLs; plan for SmartScreen reputation.
+  item: Authenticode-sign the app, CLI entry point and first-party instrument DLLs; plan for SmartScreen reputation.
   ids:
   - PLT-12
 - heading: 8. Signing, packaging and distribution
-  item: Decide the signing policy for third-party applet DLLs, the Windows side of the macOS question.
+  item: Decide the signing policy for third-party instrument DLLs, the Windows side of the macOS question.
   ids:
   - COR-23
   - COR-24

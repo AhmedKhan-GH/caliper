@@ -1,5 +1,5 @@
-// The browser viewer of spec applets: the page that Caliper API serves at
-// /v0/spec?token=<token>&applet=<id>. It reads the token and the applet's id
+// The browser viewer of instruments: the page that Caliper API serves at
+// /v0/spec?token=<token>&instrument=<id>. It reads the token and the instrument's id
 // from its own address, as the viewer page reads the stream's, asks the app
 // for the saved spec (spec.get) and for each shown panel's data (panel.data),
 // and draws them with the native runtime's layout and look. The app resolves
@@ -73,27 +73,27 @@ export interface PageParts {
   title: HTMLElement; area: HTMLElement; canvas: HTMLCanvasElement; status: HTMLElement; list: HTMLElement;
   /** Optional top canvas over WebGPU mounts for panel progress overlays. */
   overlay?: HTMLCanvasElement;
-  /** The line under the bar that says why no live data shows (a dashboard the app does not have open). */
+  /** The line under the bar that says why no live data shows (an instrument the app does not have open). */
   banner?: HTMLElement;
   /** The Lock Layout toggle in the page bar. */
   lock?: HTMLButtonElement;
 }
 
-/** What the page says when the app does not have the dashboard open: no live source, value or kept step reaches it. */
-export const NOT_OPEN_BANNER = 'The app does not have this dashboard open. It shows data when the dashboard is open in the app.';
-export const NOT_OPEN_STATE = { label: 'Dashboard not open in the app', detail: 'shows data when it is open in the app' };
+/** What the page says when the app does not have the instrument open: no live source, value or kept step reaches it. */
+export const NOT_OPEN_BANNER = 'The app does not have this instrument open. It shows data when the instrument is open in the app.';
+export const NOT_OPEN_STATE = { label: 'Instrument not open in the app', detail: 'shows data when it is open in the app' };
 
 interface PanelEntry { version: string; prepared: PreparedPanel | null; busy: boolean; view: PanelView; control: ControlData | null }
 
 /** What a test reads of the page. */
 export interface SpecPageState {
   status: string;
-  /** The state the whole page shows in place of the applet, or null. */
+  /** The state the whole page shows in place of the instrument, or null. */
   state: string | null;
-  /** The app does not have this dashboard open (spec.get's open_in_app), and the banner that says so. */
+  /** The app does not have this instrument open (spec.get's open_in_app), and the banner that says so. */
   notOpen: boolean;
   banner: string;
-  applet: string;
+  instrument: string;
   title: string;
   layoutLocked: boolean;
   panels: { id: string; title: string; primitive: string; drawn: boolean; state: string | null; info: string;
@@ -141,7 +141,7 @@ export class SpecPage {
   readonly programs: ProgramViews;
 
   constructor(private readonly parts: PageParts, private readonly base: URL, private readonly token: string,
-              private readonly applet: string, private readonly period = 1000) {
+              private readonly instrument: string, private readonly period = 1000) {
     this.programs = new ProgramViews(parts.area, base, token, () => this.redraw());
     new ResizeObserver(() => this.redraw()).observe(parts.area);
     parts.canvas.addEventListener('click', (e) => this.onClick(e));
@@ -166,7 +166,7 @@ export class SpecPage {
       return { ok: false, error: { code: 'panel.not_found', message: `The spec has no panel ${id}.`, where: 'args.id' } };
     }
     if (this.layoutLocked) {
-      return { ok: false, error: { code: 'layout.locked', message: "The instrument's layout is locked; unlock Lock Layout first.", where: 'applet.layout_locked' } };
+      return { ok: false, error: { code: 'layout.locked', message: "The instrument's layout is locked; unlock Lock Layout first.", where: 'instrument.layout_locked' } };
     }
     if (panel.closable === false) {
       return { ok: false, error: { code: 'panel.not_closable', message: `The panel ${id} is not closable.`, where: 'args.id' } };
@@ -185,7 +185,7 @@ export class SpecPage {
       return { ok: false, error: { code: 'control.not_found', message: `The spec has no control ${id}.`, where: 'args.id' } };
     }
     if (this.layoutLocked) {
-      return { ok: false, error: { code: 'layout.locked', message: "The instrument's layout is locked; unlock Lock Layout first.", where: 'applet.layout_locked' } };
+      return { ok: false, error: { code: 'layout.locked', message: "The instrument's layout is locked; unlock Lock Layout first.", where: 'instrument.layout_locked' } };
     }
     if (control.closable === false) {
       return { ok: false, error: { code: 'control.not_closable', message: `The control ${id} is not closable.`, where: 'args.id' } };
@@ -209,8 +209,8 @@ export class SpecPage {
   }
 
   start(): void {
-    if (!this.applet) {
-      void this.listApplets();
+    if (!this.instrument) {
+      void this.listInstruments();
       return;
     }
     this.draw();
@@ -230,13 +230,13 @@ export class SpecPage {
     }
   }
 
-  /** Without an applet in the address, the page lists the workspace's saved spec applets as links. */
-  private async listApplets(): Promise<void> {
-    this.parts.title.textContent = 'Spec applets';
+  /** Without an instrument in the address, the page lists the workspace's saved instruments as links. */
+  private async listInstruments(): Promise<void> {
+    this.parts.title.textContent = 'Instruments';
     this.parts.canvas.hidden = true;
     let env: CommandEnvelope;
     try {
-      env = await command(this.base, this.token, 'applet.list', {});
+      env = await command(this.base, this.token, 'instrument.list', {});
     } catch {
       this.setStatus('offline');
       return;
@@ -245,11 +245,11 @@ export class SpecPage {
     const list = this.parts.list;
     list.hidden = false;
     list.replaceChildren();
-    for (const a of env.ok ? (env.result.applets as { id: string; title: string }[]) : []) {
+    for (const a of env.ok ? (env.result.instruments as { id: string; title: string }[]) : []) {
       const li = document.createElement('li');
       const link = document.createElement('a');
       const url = new URL(location.href);
-      url.searchParams.set('applet', a.id);
+      url.searchParams.set('instrument', a.id);
       link.href = url.toString();
       link.textContent = a.title;
       const id = document.createElement('span');
@@ -270,16 +270,16 @@ export class SpecPage {
     let env: CommandEnvelope;
     try {
       this.requests++;
-      env = await command(this.base, this.token, 'spec.get', { applet: this.applet });
+      env = await command(this.base, this.token, 'spec.get', { instrument: this.instrument });
     } catch {
       this.setStatus('offline');
       return;
     }
     if (!env.ok) {
       const code = env.error?.code ?? '';
-      const label = code === 'applet.not_found' ? 'Missing applet'
+      const label = code === 'instrument.not_found' ? 'Missing instrument'
         : code === 'http.401' || code === 'http.403' ? 'Access refused' : code === 'http.404' ? 'No command layer' : 'No spec';
-      this.whole = { label, detail: code === 'applet.not_found' ? this.applet : code };
+      this.whole = { label, detail: code === 'instrument.not_found' ? this.instrument : code };
       this.spec = null;
       this.specText = '';
       this.layoutLocked = false;
@@ -295,7 +295,7 @@ export class SpecPage {
     } else if (env.result.open_in_app === false) {
       this.runProgress = null;
     }
-    // A saved dashboard that the app does not have open gets no live data: the page says so, and asks
+    // A saved instrument that the app does not have open gets no live data: the page says so, and asks
     // for every panel again when that changes.
     const notOpen = env.result.open_in_app === false;
     if (notOpen !== this.notOpen) {
@@ -310,7 +310,7 @@ export class SpecPage {
     if (env.result.text !== this.specText) {
       this.specText = env.result.text;
       this.spec = env.result.json as Spec;
-      this.layoutLocked = Boolean(this.spec.applet.layout_locked);
+      this.layoutLocked = Boolean(this.spec.instrument.layout_locked);
       this.closed.clear();
       this.hoverPanel = '';
       this.hoverClose = '';
@@ -318,7 +318,7 @@ export class SpecPage {
       this.key = new ColorKey(this.spec);
       this.programs.setSpec(this.spec);
       for (const id of [...this.panels.keys()]) if (!findPanel(this.spec, id) && !findControl(this.spec, id)) this.panels.delete(id);
-      const t = this.spec.applet.title ?? this.spec.applet.id;
+      const t = this.spec.instrument.title ?? this.spec.instrument.id;
       this.parts.title.textContent = t;
       document.title = `${t} · Caliper`;
     }
@@ -349,7 +349,7 @@ export class SpecPage {
     e.busy = true;
     try {
       this.requests++;
-      const env = await command(this.base, this.token, 'panel.data', { applet: this.applet, panel: id, known: e.version });
+      const env = await command(this.base, this.token, 'panel.data', { instrument: this.instrument, panel: id, known: e.version });
       if (this.spec !== spec) return;
       if (control) {
         if (env.ok && !env.result.unchanged && env.result.data) {
@@ -372,7 +372,7 @@ export class SpecPage {
         const r = env.result as PanelDataResult;
         if (!r.unchanged) {
           e.prepared = preparePanel(spec, panel!, r);
-          // An offline source of a dashboard that the app does not have open: say that, not "Source offline".
+          // An offline source of an instrument that the app does not have open: say that, not "Source offline".
           if (this.notOpen && e.prepared.state?.label === 'Source offline') e.prepared.state = { ...NOT_OPEN_STATE };
           e.version = r.version;
           if (e.prepared.programs) this.programs.update(panel!, e.prepared.programs);
@@ -508,7 +508,7 @@ export class SpecPage {
         }, { x: 0, y: 0, w, h }, nowMs);
         needsAnim = true;
       } else {
-        const st = this.whole ?? (spec ? { label: 'No panels', detail: spec.applet.id } : { label: this.status === 'offline' ? 'Offline' : 'Connecting', detail: this.applet });
+        const st = this.whole ?? (spec ? { label: 'No panels', detail: spec.instrument.id } : { label: this.status === 'offline' ? 'Offline' : 'Connecting', detail: this.instrument });
         drawState(ctx, st, { x: 0, y: 0, w, h });
       }
     } else {
@@ -573,7 +573,7 @@ export class SpecPage {
     const nPanels = spec ? (spec.panel ?? []).filter((p) => !this.closed.has(p.id)).length : 0;
     const nSources = spec?.source?.length ?? 0;
     const liveStatus = this.notOpen ? '' : formatProgressStatus(this.runProgress);
-    const items = [this.status, ...(spec ? [`applet ${spec.applet.id}`, `${nPanels} panel${nPanels === 1 ? '' : 's'}`,
+    const items = [this.status, ...(spec ? [`instrument ${spec.instrument.id}`, `${nPanels} panel${nPanels === 1 ? '' : 's'}`,
       `${nSources} source${nSources === 1 ? '' : 's'}`, ...(this.layoutLocked ? ['layout locked'] : [])] : []),
       ...(liveStatus ? [liveStatus] : [])];
     const text = items.join('  ·  ');
@@ -668,8 +668,8 @@ export class SpecPage {
       state: this.whole?.label ?? null,
       notOpen: this.notOpen,
       banner: this.parts.banner && !this.parts.banner.hidden ? this.parts.banner.textContent ?? '' : '',
-      applet: this.applet,
-      title: spec ? spec.applet.title ?? spec.applet.id : '',
+      instrument: this.instrument,
+      title: spec ? spec.instrument.title ?? spec.instrument.id : '',
       layoutLocked: this.layoutLocked,
       controls: this.layout.panels.filter((lp) => lp.control).map((lp) => {
         const c = this.panels.get(lp.id)?.control ?? null;
@@ -683,7 +683,7 @@ export class SpecPage {
         const e = this.panels.get(lp.id);
         const p = e?.prepared ?? null;
         const panel = spec ? findPanel(spec, lp.id) : undefined;
-        // A scene panel's programs may show a state over it: the dashboard not open, or no program views.
+        // A scene panel's programs may show a state over it: the instrument not open, or no program views.
         const over = panel?.primitive === 'scene' && this.programs.has(lp.id)
           ? (this.notOpen ? NOT_OPEN_STATE : this.programs.stateOf(lp.id)) : null;
         const hit = this.closeHits.find((h) => h.id === lp.id);

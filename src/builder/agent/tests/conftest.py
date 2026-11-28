@@ -70,7 +70,7 @@ class FakeCaliper:
         self.calls: list[dict] = []
         self.command_layer = command_layer
         self.capture_status = capture_status
-        self.spec_text = 'caliper_spec = 0\n\n[applet]\nid = "demo"\ntitle = "Demo"\n'
+        self.spec_text = 'caliper_spec = 2\n\n[instrument]\nid = "demo"\ntitle = "Demo"\n'
         self.handlers: dict[str, Callable[[dict], dict]] = {}
         self._lock = threading.Lock()
         fake = self
@@ -100,10 +100,10 @@ class FakeCaliper:
                     return
                 fake._record(self, "GET", None)
                 if self.path == "/v0/info":
-                    self._json(200, {"abi_epoch": 3, "host": "0.6.0", "libtorch": None, "sdk": "0.2.0",
+                    self._json(200, {"abi_epoch": 4, "host": "0.6.0", "libtorch": None, "sdk": "0.2.0",
                                      "services": ["caliper.ui.v1"], "ui_stack": None})
-                elif self.path == "/v0/applets":
-                    self._json(200, {"applets": []})
+                elif self.path == "/v0/instruments":
+                    self._json(200, {"instruments": []})
                 elif self.path == "/v0/capture.png":
                     if fake.capture_status == 200:
                         self._reply(200, tiny_png(4, 3), "image/png")
@@ -119,9 +119,9 @@ class FakeCaliper:
                 body = self.rfile.read(length) if length else b""
                 args = json.loads(body) if body else None
                 fake._record(self, "POST", args)
-                if self.path.startswith("/v0/applets/") and self.path.endswith("/launch"):
-                    applet = self.path[len("/v0/applets/"):-len("/launch")]
-                    self._json(200, {"already_open": False, "id": applet, "status": "ACTIVE", "version": "0.1.0"})
+                if self.path.startswith("/v0/instruments/") and self.path.endswith("/launch"):
+                    instrument = self.path[len("/v0/instruments/"):-len("/launch")]
+                    self._json(200, {"already_open": False, "id": instrument, "status": "ACTIVE", "version": "0.1.0"})
                     return
                 if self.path.startswith("/v0/commands/"):
                     if not fake.command_layer:
@@ -162,7 +162,7 @@ class FakeCaliper:
         if name in self.handlers:
             return self.handlers[name](args)
         if name == "spec.get":
-            return {"ok": True, "result": {"id": "demo", "path": "applets/demo/demo.spec.toml", "dirty": True,
+            return {"ok": True, "result": {"id": "demo", "path": "instruments/demo/demo.spec.toml", "dirty": True,
                                            "text": self.spec_text, "json": {}}}
         if name == "panel.create":
             if f'id = "{args.get("id")}"' in self.spec_text:

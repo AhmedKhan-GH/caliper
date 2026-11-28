@@ -18,7 +18,7 @@ using namespace session_internal;
 }  // namespace
 
 const std::vector<std::string>& session_host_commands() {
-    static const std::vector<std::string> names = {"app.info", "app.applets", "app.launch", "panel.render",
+    static const std::vector<std::string> names = {"app.info", "app.instruments", "app.launch", "panel.render",
                                                    "capture.frame", "camera.get", "camera.set"};
     return names;
 }
@@ -61,7 +61,7 @@ fs::path Session::Impl::ws() const { return fs::u8path(workspace); }
 
 std::string Session::Impl::spec_label() const {
     if (doc && doc->path) return *doc->path;
-    return (doc ? doc->spec.applet.id : std::string("spec")) + ".spec.toml";
+    return (doc ? doc->spec.instrument.id : std::string("spec")) + ".spec.toml";
 }
 
 // Reads, parses and validates a spec file given relative to the workspace.
@@ -102,15 +102,15 @@ LoadedSpec Session::Impl::load_spec_file(const std::string& rel_path, const spec
     return out;
 }
 
-// The spec of a saved applet, by its folder id.
-LoadedSpec Session::Impl::load_applet(const std::string& id, const spec::SourceResolver& res) const {
+// The spec of a saved instrument, by its folder id.
+LoadedSpec Session::Impl::load_instrument(const std::string& id, const spec::SourceResolver& res) const {
     LoadedSpec out;
-    const fs::path folder = ws() / "applets" / fs::u8path(id);
+    const fs::path folder = ws() / "instruments" / fs::u8path(id);
     const fs::path manifest = folder / fs::u8path(id + ".caliper.toml");
     std::error_code ec;
     if (!valid_id(id) || !fs::is_regular_file(manifest, ec)) {
         out.error =
-            Error("applet.not_found", "The workspace has no applet " + id + "; applet.list shows the saved ones.",
+            Error("instrument.not_found", "The workspace has no instrument " + id + "; instrument.list shows the saved ones.",
                   "args.id");
         return out;
     }
@@ -122,7 +122,7 @@ LoadedSpec Session::Impl::load_applet(const std::string& id, const spec::SourceR
     }
     if (m.kind != "spec" || !plain_file_name(m.spec)) {
         out.error =
-            Error("applet.not_spec", "The applet " + id + " is not a spec applet, so it cannot be edited here.",
+            Error("instrument.not_spec", "The instrument " + id + " is not written as a spec, so it cannot be edited here.",
                   "args.id");
         return out;
     }
@@ -201,10 +201,10 @@ UndoRecord Session::Impl::change_spec(spec::Spec after, bool merging, std::size_
     return UndoRecord::closures(std::move(undo), std::move(redo), bytes);
 }
 
-bool Session::Impl::applet_saved(const std::string& id) const {
+bool Session::Impl::instrument_saved(const std::string& id) const {
     if (!valid_id(id)) return false;
     std::error_code ec;
-    const fs::path folder = ws() / "applets" / fs::u8path(id);
+    const fs::path folder = ws() / "instruments" / fs::u8path(id);
     return fs::exists(folder / fs::u8path(id + ".caliper.toml"), ec) ||
            fs::exists(folder / fs::u8path(id + ".spec.toml"), ec);
 }
@@ -293,9 +293,9 @@ CommandOutput Session::Impl::program_cmd(const CommandContext& ctx) {
 }
 
 // The commands of design/instrument-interface.md that change or read
-// session state (instrument_commands.h). They run on a copy of the open
+// session state (interactive_commands.h). They run on a copy of the open
 // spec, without the document's lock.
-CommandOutput Session::Impl::instrument_cmd(const CommandContext& ctx) {
+CommandOutput Session::Impl::interactive_cmd(const CommandContext& ctx) {
     spec::Spec open;
     bool is_open = false;
     {
@@ -305,8 +305,8 @@ CommandOutput Session::Impl::instrument_cmd(const CommandContext& ctx) {
             is_open = true;
         }
     }
-    InstrumentContext ic{open, is_open, values, history, events.get(), store.get(), &sources, options.resolve,
-                         workspace};
+    InteractiveContext ic{open, is_open, values, history, events.get(), store.get(), &sources, options.resolve,
+                          workspace};
     const std::string& n = ctx.invocation.name;
     if (n == "state.set" || n == "state.get" || n == "control.set") return state_command(ctx, ic);
     if (n == "selection.set" || n == "selection.get") return selection_command(ctx, ic);
@@ -363,10 +363,10 @@ void Session::Impl::approval_event(const PendingApproval& p, std::string_view st
     events->push(std::move(e));
 }
 
-// The applet id of the open spec, for the spec events of the journal.
-std::string Session::Impl::open_applet_id() const {
+// The instrument id of the open spec, for the spec events of the journal.
+std::string Session::Impl::open_instrument_id() const {
     std::lock_guard<std::mutex> lock(doc_mutex);
-    return doc ? doc->spec.applet.id : std::string();
+    return doc ? doc->spec.instrument.id : std::string();
 }
 
 // Makes the host of GPU programs run what the open spec holds
@@ -435,7 +435,7 @@ void Session::Impl::bind_all() {
     // The session state of instruments (design/instrument-interface.md).
     for (const char* name : {"state.set", "state.get", "control.set", "selection.set", "selection.get", "cursor.get",
                              "cursor.set", "cursor.step"})
-        bind(name, &Impl::instrument_cmd);
+        bind(name, &Impl::interactive_cmd);
     // The programs and interventions (design/gpu-programs.md).
     bind("program.status", &Impl::program_cmd);
     for (const char* name : {"piece.check", "piece.list", "piece.show", "piece.copy", "piece.update", "piece.remove"})
@@ -456,9 +456,9 @@ void Session::Impl::bind_all() {
     bind("preview.diff", &Impl::preview_diff);
     bind("preview.commit", &Impl::preview_commit);
     bind("preview.discard", &Impl::preview_discard);
-    bind("applet.save", &Impl::applet_save);
-    bind("applet.open", &Impl::applet_open);
-    bind("applet.list", &Impl::applet_list);
+    bind("instrument.save", &Impl::instrument_save);
+    bind("instrument.open", &Impl::instrument_open);
+    bind("instrument.list", &Impl::instrument_list);
     bind("panel.data", &Impl::panel_data);
     bind("review.status", &Impl::review_status);
 }
@@ -487,7 +487,7 @@ Session::Open Session::open(const std::string& workspace, SessionOptions options
         im.store = std::move(opened.store);
         im.workspace = im.store->workspace();
         std::error_code ec;
-        fs::create_directories(im.ws() / "applets", ec);
+        fs::create_directories(im.ws() / "instruments", ec);
         im.provider = std::make_shared<LoaderCatalogProvider>(*im.store);
         im.catalog = std::make_unique<Catalog>();
         if (Error e = im.catalog->add_provider("loaders", im.provider, 10)) {
@@ -500,7 +500,7 @@ Session::Open Session::open(const std::string& workspace, SessionOptions options
                                            const JournalEvent& e) {
             // The journal appends after the command's handler returned, so
             // the open spec is not locked here.
-            note_journal_event(*ring, e, self->open_applet_id());
+            note_journal_event(*ring, e, self->open_instrument_id());
             // A host's reconcile() runs here, under the journal's lock: it
             // sends and compiles, and never invokes a command.
             self->reconcile_hosts();
@@ -606,9 +606,9 @@ void Session::set_host(std::shared_ptr<SessionHost> host) {
         auto h = raw->current_host();
         return h ? h->app_info() : fail("command.not_bound", "app.info needs the app.");
     });
-    im.registry->bind("app.applets", [raw](const CommandContext&) {
+    im.registry->bind("app.instruments", [raw](const CommandContext&) {
         auto h = raw->current_host();
-        return h ? h->app_applets() : fail("command.not_bound", "app.applets needs the app.");
+        return h ? h->app_instruments() : fail("command.not_bound", "app.instruments needs the app.");
     });
     im.registry->bind("app.launch", [raw](const CommandContext& ctx) {
         auto h = raw->current_host();
@@ -706,7 +706,7 @@ SpecReplay replay_spec_journal(const std::string& workspace) {
             out.error = read.error;
             return out;
         }
-        // A session-less Impl serves the file reading of spec.open and applet.open.
+        // A session-less Impl serves the file reading of spec.open and instrument.open.
         Session::Impl im;
         im.workspace = canonical.u8string();
         const spec::SourceResolver none;
@@ -717,9 +717,9 @@ SpecReplay replay_spec_journal(const std::string& workspace) {
                 current = new_spec_from_args(args);
                 return {};
             }
-            if (e.name == "spec.open" || e.name == "applet.open") {
+            if (e.name == "spec.open" || e.name == "instrument.open") {
                 LoadedSpec loaded = e.name == "spec.open" ? im.load_spec_file(str_arg(args, "path"), none)
-                                                          : im.load_applet(str_arg(args, "id"), none);
+                                                          : im.load_instrument(str_arg(args, "id"), none);
                 if (loaded.error) return loaded.error;
                 current = std::move(loaded.spec);
                 return {};

@@ -28,8 +28,8 @@ namespace sp = caliper_builder::spec;
 // The library's points@1, pinned with its hash, drawing in the scene panel "world".
 sp::Spec points_spec(const std::string& hash) {
     sp::Spec s;
-    s.version = 1;
-    s.applet.id = "viewer";
+    s.version = 2;
+    s.instrument.id = "viewer";
     sp::Panel world;
     world.id = "world";
     world.primitive = sp::Primitive::scene;
@@ -230,8 +230,8 @@ TEST_CASE("an inline piece goes to the viewer from the spec itself") {
 
 TEST_CASE("a control shows the run's and the session's state to the viewer, which cannot change it") {
     sp::Spec s;
-    s.version = 1;
-    s.applet.id = "viewer";
+    s.version = 2;
+    s.instrument.id = "viewer";
     sp::Control ablate;
     ablate.id = "ablate";
     ablate.kind = sp::ControlKind::toggle;
@@ -283,8 +283,8 @@ TEST_CASE("panel.data answers a control of the layout to the viewer origin, vers
     const std::string ws = fresh_dir("viewer-controls") + "/workspace";
     std::unique_ptr<Session> s = open_session(ws);
     ok(*s, "spec.new", {{"id", "ctl"}});
-    ok(*s, "spec.set_text", {{"text", R"toml(caliper_spec = 1
-[applet]
+    ok(*s, "spec.set_text", {{"text", R"toml(caliper_spec = 2
+[instrument]
 id = "ctl"
 [[control]]
 id = "lr"
@@ -292,26 +292,26 @@ kind = "slider"
 bind = "value"
 options = { min = 0.0, max = 2.0, value = 0.5 }
 )toml"}});
-    ok(*s, "applet.save", json::object());
-    const json a = ok(*s, "panel.data", {{"applet", "ctl"}, {"panel", "lr"}}, CommandOrigin::viewer);
+    ok(*s, "instrument.save", json::object());
+    const json a = ok(*s, "panel.data", {{"instrument", "ctl"}, {"panel", "lr"}}, CommandOrigin::viewer);
     CHECK(a["primitive"] == "control");
     CHECK(a["data"]["kind"] == "slider");
     CHECK(a["data"]["value"] == 0.5);
     CHECK(a["data"]["enabled"] == false);
-    const json b = ok(*s, "panel.data", {{"applet", "ctl"}, {"panel", "lr"}, {"known", a["version"]}}, CommandOrigin::viewer);
+    const json b = ok(*s, "panel.data", {{"instrument", "ctl"}, {"panel", "lr"}, {"known", a["version"]}}, CommandOrigin::viewer);
     CHECK(b["unchanged"] == true);
     // The viewer still may not set it.
     const auto set = invoke(*s, "control.set", {{"id", "lr"}, {"value", 1.0}}, CommandOrigin::viewer);
     CHECK_FALSE(set.ok);
     CHECK(set.error.code == "command.not_allowed");
-    const auto none = invoke(*s, "panel.data", {{"applet", "ctl"}, {"panel", "nothing"}}, CommandOrigin::viewer);
+    const auto none = invoke(*s, "panel.data", {{"instrument", "ctl"}, {"panel", "nothing"}}, CommandOrigin::viewer);
     CHECK_FALSE(none.ok);
     CHECK(none.error.code == "panel.not_found");
-    // spec.get says whether the app has the applet open, which a viewer cannot change.
-    CHECK(ok(*s, "spec.get", {{"applet", "ctl"}}, CommandOrigin::viewer)["open_in_app"] == true);
+    // spec.get says whether the app has the instrument open, which a viewer cannot change.
+    CHECK(ok(*s, "spec.get", {{"instrument", "ctl"}}, CommandOrigin::viewer)["open_in_app"] == true);
     ok(*s, "spec.new", {{"id", "other"}});
-    CHECK(ok(*s, "spec.get", {{"applet", "ctl"}}, CommandOrigin::viewer)["open_in_app"] == false);
-    const auto reopen = invoke(*s, "applet.open", {{"id", "ctl"}}, CommandOrigin::viewer);
+    CHECK(ok(*s, "spec.get", {{"instrument", "ctl"}}, CommandOrigin::viewer)["open_in_app"] == false);
+    const auto reopen = invoke(*s, "instrument.open", {{"id", "ctl"}}, CommandOrigin::viewer);
     CHECK_FALSE(reopen.ok);
     CHECK(reopen.error.code == "command.not_allowed");
 }

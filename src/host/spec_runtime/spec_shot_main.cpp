@@ -1,8 +1,8 @@
 // caliper-spec-shot: a development tool that draws a spec with the spec
 // runtime into an offscreen canvas and writes a PNG, as `caliper shot` does
-// for an applet page. It opens no window and is not installed.
+// for an instrument page. It opens no window and is not installed.
 //
-//   caliper-spec-shot --workspace <dir> --applet <id> [options]
+//   caliper-spec-shot --workspace <dir> --instrument <id> [options]
 //   caliper-spec-shot --spec <file> [--workspace <dir>] [options]
 //
 // Options: --size WxH (1440x900), --out <file.png> (spec-shot.png),
@@ -10,7 +10,7 @@
 // to show another tab of a tabs node (the path is the node's child indices
 // from the root joined by '.', "" or "root" for the root).
 //
-// With --applet it reads the saved spec applet applets/<id>/ of the
+// With --instrument it reads the saved instrument instruments/<id>/ of the
 // workspace, through its manifest, without changing the workspace: the spec
 // is not made the open spec and no command runs. It resolves each panel over
 // the workspace's loader outputs with a builder Session. A spec given with
@@ -45,7 +45,7 @@ namespace {
 int usage(const char* why) {
     std::fprintf(stderr, "caliper-spec-shot: %s\n", why);
     std::fprintf(stderr,
-                 "usage: caliper-spec-shot (--workspace <dir> --applet <id> | --spec <file> [--workspace <dir>])\n"
+                 "usage: caliper-spec-shot (--workspace <dir> --instrument <id> | --spec <file> [--workspace <dir>])\n"
                  "                         [--size WxH] [--out <file.png>] [--frames N] [--text-scale S]\n"
                  "                         [--tab <path>=<index>]...\n");
     return 2;
@@ -67,16 +67,16 @@ bool read_file(const fs::path& path, std::string* out, size_t max_bytes) {
     return (bool)in || in.eof();
 }
 
-// The spec file of a saved spec applet, through its manifest.
-bool applet_spec_path(const fs::path& workspace, const std::string& id, fs::path* out, std::string* why) {
+// The spec file of a saved instrument written as a spec, through its manifest.
+bool instrument_spec_path(const fs::path& workspace, const std::string& id, fs::path* out, std::string* why) {
     if (!std::regex_match(id, std::regex("[a-z][a-z0-9_-]{0,63}"))) {
-        *why = "the applet id " + id + " is not a workspace id";
+        *why = "the instrument id " + id + " is not a workspace id";
         return false;
     }
-    const fs::path dir = workspace / "applets" / id;
+    const fs::path dir = workspace / "instruments" / id;
     std::string text;
     if (!read_file(dir / (id + ".caliper.toml"), &text, 64 << 10)) {
-        *why = "the workspace has no applet " + id + " (no manifest " + (dir / (id + ".caliper.toml")).string() + ")";
+        *why = "the workspace has no instrument " + id + " (no manifest " + (dir / (id + ".caliper.toml")).string() + ")";
         return false;
     }
     toml::table parsed;
@@ -95,10 +95,10 @@ bool applet_spec_path(const fs::path& workspace, const std::string& id, fs::path
     }
     parsed = std::move(result).table();
 #endif
-    const auto kind = parsed["applet"]["kind"].value<std::string>();
-    const auto file = parsed["applet"]["spec"].value<std::string>();
+    const auto kind = parsed["instrument"]["kind"].value<std::string>();
+    const auto file = parsed["instrument"]["spec"].value<std::string>();
     if (!kind || *kind != "spec" || !file) {
-        *why = id + " is not a spec applet";
+        *why = id + " is not written as a spec";
         return false;
     }
     if (file->empty() || file->find('/') != std::string::npos || file->find('\\') != std::string::npos ||
@@ -113,7 +113,7 @@ bool applet_spec_path(const fs::path& workspace, const std::string& id, fs::path
 }  // namespace
 
 int main(int argc, char** argv) {
-    std::string workspace, applet, spec_file, out = "spec-shot.png";
+    std::string workspace, instrument, spec_file, out = "spec-shot.png";
     int width = 1440, height = 900, frames = 4;
     float text_scale = 1.0f;
     SpecTabChoice tabs;
@@ -126,7 +126,7 @@ int main(int argc, char** argv) {
         };
         const char* v = nullptr;
         if (a == "--workspace" && (v = next("--workspace"))) workspace = v;
-        else if (a == "--applet" && (v = next("--applet"))) applet = v;
+        else if (a == "--instrument" && (v = next("--instrument"))) instrument = v;
         else if (a == "--spec" && (v = next("--spec"))) spec_file = v;
         else if (a == "--out" && (v = next("--out"))) out = v;
         else if (a == "--frames" && (v = next("--frames"))) frames = std::atoi(v);
@@ -144,8 +144,8 @@ int main(int argc, char** argv) {
             return usage(("unknown or incomplete option " + a).c_str());
         }
     }
-    if (applet.empty() == spec_file.empty()) return usage("give either --applet with --workspace, or --spec");
-    if (!applet.empty() && workspace.empty()) return usage("--applet needs --workspace");
+    if (instrument.empty() == spec_file.empty()) return usage("give either --instrument with --workspace, or --spec");
+    if (!instrument.empty() && workspace.empty()) return usage("--instrument needs --workspace");
     if (width < 64 || height < 64 || width > 8192 || height > 8192) return usage("--size must be from 64x64 to 8192x8192");
     if (frames < 1 || frames > 120) return usage("--frames must be from 1 to 120");
     if (!(text_scale >= 0.5f && text_scale <= 4.0f)) return usage("--text-scale must be from 0.5 to 4");
@@ -157,9 +157,9 @@ int main(int argc, char** argv) {
 
     // The spec.
     fs::path spec_path = spec_file;
-    if (!applet.empty()) {
+    if (!instrument.empty()) {
         std::string why;
-        if (!applet_spec_path(workspace, applet, &spec_path, &why)) return fail(why);
+        if (!instrument_spec_path(workspace, instrument, &spec_path, &why)) return fail(why);
     }
     std::string text;
     if (!read_file(spec_path, &text, 512 << 10)) return fail("cannot read the spec " + spec_path.string());
@@ -205,7 +205,7 @@ int main(int argc, char** argv) {
     if (!export_write_png_atomic(out_path.string(), rgba.data(), (uint32_t)width, (uint32_t)height, &why))
         return fail("cannot write " + out_path.string() + (why.empty() ? "" : ": " + why));
     std::printf("wrote %s: %s at %dx%d with the %s renderer\n", out_path.string().c_str(),
-                parsed.spec.applet.id.c_str(), width, height, canvas->renderer_name());
+                parsed.spec.instrument.id.c_str(), width, height, canvas->renderer_name());
     for (const auto& b : bounds) std::printf("  %s\n", b.c_str());
     canvas.reset();
     if (session) session->close();

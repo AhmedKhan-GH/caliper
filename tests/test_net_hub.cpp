@@ -2158,7 +2158,7 @@ AppRun run_hidden_app(const char* exe, bool allow_control, const std::string& ui
     fs::create_directories(dir / "user");
     Proc app;
     REQUIRE(app.start(exe, {"--hidden", "--url", h.url(), "--api", "--api-port", "0"},
-                      {"CALIPER_DATA_DIR=" + (dir / "data").string(), "CALIPER_USER_APPLETS_DIR=" + (dir / "user").string(),
+                      {"CALIPER_DATA_DIR=" + (dir / "data").string(), "CALIPER_USER_INSTRUMENTS_DIR=" + (dir / "user").string(),
                        "CALIPER_WINDOW_SIZE=1280x800", "CALIPER_TEST_UI=" + ui}));
     std::string state = CALIPER_NET_RUN_RUNNING;
     double lr = 0.001;

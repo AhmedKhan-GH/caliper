@@ -2,9 +2,9 @@
 
 namespace caliper_host {
 
-// Makes the platform threading rule observable (docs/applets/trust-model.md): frame()
-// exceeding budget repeatedly flags the applet — "long work belongs in
-// caliper.jobs". Latches until reset (applet relaunch).
+// Makes the platform threading rule observable (docs/instruments/trust-model.md): frame()
+// exceeding budget repeatedly flags the instrument — "long work belongs in
+// caliper.jobs". Latches until reset (instrument relaunch).
 class FrameWatchdog {
 public:
     explicit FrameWatchdog(double budget_ms = 250.0, int threshold = 3)

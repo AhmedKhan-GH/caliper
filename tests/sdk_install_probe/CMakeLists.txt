@@ -4,7 +4,7 @@
 # source tree.
 cmake_minimum_required(VERSION 3.18)
 project(sdk_install_probe LANGUAGES CXX)
-find_package(caliper-sdk 0.2 CONFIG REQUIRED)
+find_package(caliper-sdk 0.3 CONFIG REQUIRED)
 
 foreach(var CALIPER_SDK_VERSION CALIPER_SDK_ABI_EPOCH CALIPER_UI_STACK_HASH)
     if(NOT ${var})

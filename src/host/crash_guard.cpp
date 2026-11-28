@@ -50,7 +50,7 @@ FaultKind fault_kind_of(const std::string& fault) {
 namespace caliper_host {
 namespace {
 // A C++ throw is itself an SEH exception (0xE06D7363); caught in its own
-// frame it is reported by name, and the applet quarantines exactly as it
+// frame it is reported by name, and the instrument quarantines exactly as it
 // would for a signal on POSIX. (SEH __try cannot share a function with C++
 // try, hence the split.) Returns 0 ok, 1 threw.
 int cxx_invoke(const std::function<void()>* fn, std::string* fault) {
@@ -179,7 +179,7 @@ struct sigaction ours() {
 }
 
 // Installed ONCE for the process (first guarded_call), not swapped per call:
-// four sigactions in and four out per applet entry point was eight syscalls
+// four sigactions in and four out per instrument entry point was eight syscalls
 // a frame, and the saved-and-restored dance is what the chaining above
 // replaces.
 void install_handlers() {
@@ -198,7 +198,7 @@ void install_handlers() {
 // displacer meanwhile and restoring it once no guarded call needs ours.
 //
 // Dispositions are process-wide while guarded calls run on several threads
-// at once (the frame thread and applet job workers), so the re-arm is shared:
+// at once (the frame thread and instrument job workers), so the re-arm is shared:
 // whoever finds the guard displaced swaps it back in, and only the LAST
 // guarded call out restores the displacer. A per-call restore would pull the
 // guard out from under a call still running on another thread. The mutex is
@@ -228,7 +228,7 @@ struct Rearm {
                 g_rearm_warned = true;
                 std::fprintf(stderr,
                              "[guard] another library replaced the %s handler; "
-                             "re-arming the guard around each applet call\n",
+                             "re-arming the guard around each instrument call\n",
                              describe(kSignals[i]));
             }
         }
@@ -293,8 +293,9 @@ GuardResult guarded_call(const std::function<void()>& fn) {
     GuardResult r;
     t_active = 1;
     if (sigsetjmp(t_jmp, 1) == 0) {
-        // A C++ exception out of an applet entry point is contained the same
-        // way a signal is: the applet quarantines, the host keeps its frame.
+        // A C++ exception out of an instrument entry point is contained the
+        // same way a signal is: the instrument quarantines, the host keeps its
+        // frame.
         try {
             fn();
         } catch (const std::exception& e) {

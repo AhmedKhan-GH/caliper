@@ -8,7 +8,7 @@
 // annotation table) and hand the result to the validator, whose first error
 // refuses the edit and whose warnings are kept. An edit that adds an
 // annotation to a version 0 spec raises the version to 1 in the same edit.
-#include <caliper_builder/session/instrument_commands.h>
+#include <caliper_builder/session/interactive_commands.h>
 
 #include <caliper_builder/spec/format.h>
 #include <caliper_builder/spec/validate.h>
@@ -66,7 +66,7 @@ SpecEdit annotation_set(const spec::Spec& s, const json& args, const spec::Sourc
     if (Error err = first_spec_error(decoded.diagnostics)) return refuse(std::move(err));
 
     spec::Spec next = s;
-    if (next.version < spec::kInstrumentVersion) next.version = spec::kInstrumentVersion;
+    next.version = std::max(next.version, spec::kFormatVersion);
     std::vector<spec::Annotation>& list = next.panels[pi].annotations;
     bool replaced = false;
     for (spec::Annotation& a : list)

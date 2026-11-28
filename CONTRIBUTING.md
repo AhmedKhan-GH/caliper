@@ -49,7 +49,7 @@ PYTHONPATH=python CALIPER_TEST_CALIPER_EXE="$PWD/cmake-build-release/caliper" \
   -m "not gpu and not window and not notebook and not timing" --strict-markers
 ```
 
-The shaders of the graphics layer are written once in WGSL under `src/host/gfx/shaders/`, and their MSL and SPIR-V are generated and committed. After changing one, run `python3 tools/shaders/generate.py` (it needs a Rust toolchain) and commit the generated files with it; [Shader Authoring](docs/applets/shader-authoring.md) describes the generator and its checks.
+The shaders of the graphics layer are written once in WGSL under `src/host/gfx/shaders/`, and their MSL and SPIR-V are generated and committed. After changing one, run `python3 tools/shaders/generate.py` (it needs a Rust toolchain) and commit the generated files with it; [Shader Authoring](docs/instruments/shader-authoring.md) describes the generator and its checks.
 
 To check the documentation, build it from the repository root with the pinned `docs` extra in `pyproject.toml` (`[project.optional-dependencies].docs`). Install those packages directly into a virtual environment instead of `pip install ".[docs]"` so `scikit-build-core` does not compile the C++ extension. The first `mkdocs` command builds the docs site. Its API reference comes from the code: mkdocstrings renders the Python calls from the docstrings of Caliper LIB, and the hook `docs-theme/hooks/c_reference.py` renders the C tables from the `/** */` comments of the headers. `python3 scripts/check_api_reference.py` fails when a public symbol has no docstring or comment, or no page. The second `mkdocs` command checks the design pages, which are built apart from the docs site and are not published.
 
@@ -68,7 +68,7 @@ Caliper keeps third-party code as git submodules in `third_party/`. Run `./init-
 
 - One logical change per commit. Code, its tests and its documentation go in the same commit.
 - Every pull request updates the documentation that its change affects, or states in the pull request description why no documentation page changes.
-- When a change updates `src/builder/commands/command_table.json`, `src/builder/include/caliper_builder/spec/piece.h`, `src/builder/include/caliper_builder/programs/pieces.h`, `src/builder/programs/piece_checks.cpp`, `src/builder/spec/schema/caliper-spec-v1.schema.json`, `pyproject.toml`, `.gitmodules`, `cmake/Dependencies.cmake`, `web/package.json`, or `web/wasm/emscripten-version.txt`, regenerate the matching reference page (`scripts/generate_mcp_reference.py --write`, `scripts/generate_piece_reference.py --write`, or `scripts/generate_packages_reference.py --write`) in the same pull request.
+- When a change updates `src/builder/commands/command_table.json`, `src/builder/include/caliper_builder/spec/piece.h`, `src/builder/include/caliper_builder/programs/pieces.h`, `src/builder/programs/piece_checks.cpp`, `src/builder/spec/schema/caliper-spec-v2.schema.json`, `pyproject.toml`, `.gitmodules`, `cmake/Dependencies.cmake`, `web/package.json`, or `web/wasm/emscripten-version.txt`, regenerate the matching reference page (`scripts/generate_mcp_reference.py --write`, `scripts/generate_piece_reference.py --write`, or `scripts/generate_packages_reference.py --write`) in the same pull request.
 - The subject line says what changed, in plain words. Start it with the area when that helps, as in `Site: ...`, `CI: ...` or `Docs: ...`.
 - The body says why, and anything a reviewer cannot see in the diff.
 
@@ -77,8 +77,8 @@ Caliper keeps third-party code as git submodules in `third_party/`. Run `./init-
 | Path | Contents |
 |---|---|
 | `src/`, `include/` | the host, the embeddable core and its C interfaces |
-| `sdk/` | the applet SDK: the ABI, the service headers, the C++ sugar, the adapters, the test fixture host and the `caliper-sdk` CMake package |
-| `examples/` | the tutorial, embedding and MNIST examples; each example applet builds against the installed SDK, and the core build compiles none of them |
+| `sdk/` | the instrument SDK: the ABI, the service headers, the C++ sugar, the adapters, the test fixture host and the `caliper-sdk` CMake package |
+| `examples/` | the tutorial, embedding and MNIST examples; each example instrument builds against the installed SDK, and the core build compiles none of them |
 | `python/` | the `caliper` Python package |
 | `tests/` | the test suites, including the pixel-exact `tests/gfx` suite |
 | `docs/` | the documentation, published as the docs site (`mkdocs.yml`) |
@@ -89,7 +89,7 @@ Caliper keeps third-party code as git submodules in `third_party/`. Run `./init-
 
 ## Documentation Rules
 
-- **One home per kind of document.** The docs site lives under `docs/`, in one folder per area: `introduction/`, `python/`, `applets/`, `builder/`, `agents/`, `web/`, `reference/`, `development/` and `roadmap/`, whose feature pages are generated from the roadmap registry. A page covers one topic, has a lowercase hyphenated file name, and sits in its area's folder; only `applets/services/` goes deeper. Each folder's `index.md` introduces the section and lists its pages. The site navigation follows the folders; a `.nav.yml` file in a folder sets its order. A design decision is not a document of its own: the rule goes, with its reason, in the page it shapes, and an open question goes in the design pages.
+- **One home per kind of document.** The docs site lives under `docs/`, in one folder per area: `introduction/`, `python/`, `instruments/`, `builder/`, `agents/`, `web/`, `reference/`, `development/` and `roadmap/`, whose feature pages are generated from the roadmap registry. A page covers one topic, has a lowercase hyphenated file name, and sits in its area's folder; only `instruments/services/` goes deeper. Each folder's `index.md` introduces the section and lists its pages. The site navigation follows the folders; a `.nav.yml` file in a folder sets its order. A design decision is not a document of its own: the rule goes, with its reason, in the page it shapes, and an open question goes in the design pages.
 - **Nothing new at the root.** The repository root holds only `README.md`, `CONTRIBUTING.md` and `LICENSE` among documents. Proposals go in `design/`, and every other document in `docs/`.
 - **Code and docs change together.** A change to a header, a service or a behaviour updates its doc comment or docstring, and its page, in the same commit. Reference pages render headers and docstrings and embed examples with snippets, so a moved or renamed file fails `mkdocs build --strict`.
 - **Living pages say what is true now.** Tutorials, guides, references and explanations describe the current code. They hold no status tables, schedules or history.

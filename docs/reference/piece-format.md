@@ -4,13 +4,13 @@
 
 A piece defines a portable unit of programmable graphics with `piece.toml` and up to three WGSL files (`common.wgsl`, `derive.wgsl`, `draw.wgsl`).
 Library pieces, workspace pieces, and inline `[[piece]]` entries in a spec share one schema, one manifest validator, and one SHA-256 content hash.
-The script `scripts/generate_piece_reference.py` generates this page from `piece.h`, `pieces.h`, `piece_checks.cpp`, and `caliper-spec-v1.schema.json`.
+The script `scripts/generate_piece_reference.py` generates this page from `piece.h`, `pieces.h`, `piece_checks.cpp`, and `caliper-spec-v2.schema.json`.
 Continuous integration runs `python scripts/generate_piece_reference.py --check` and fails when this page drifts from those sources.
 Run `python3 scripts/generate_piece_reference.py --write` after any change to piece limits, manifest schema keys, or check codes.
 
 ## Schema Definitions
 
-The canonical JSON Schema in `src/builder/spec/schema/caliper-spec-v1.schema.json` validates piece keys, types, patterns, and array bounds.
+The canonical JSON Schema in `src/builder/spec/schema/caliper-spec-v2.schema.json` validates piece keys, types, patterns, and array bounds.
 Tensor inputs accept element types `f32`, `i32`, `u32`, `u8`, `u16`, or distinct combinations joined by `|`.
 Texture resources accept formats `rgba8unorm`, `r8unorm`, `r32uint`.
 See [Pieces](../agents/pieces.md) for authoring workflows and [MCP Command Reference](mcp-commands.md#piece-library-commands) for `piece.*` tools.

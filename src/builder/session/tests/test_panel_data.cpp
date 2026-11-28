@@ -1,7 +1,7 @@
 // Tests of panel.data, one panel's data for the browser's spec page
-// (panel_data.h): the dashboard's three panels from a saved applet and from
+// (panel_data.h): the dashboard's three panels from a saved instrument and from
 // the open spec, the version and `known`, the native runtime's bounds on each
-// primitive, the states and errors, spec.get of a saved applet, and the viewer
+// primitive, the states and errors, spec.get of a saved instrument, and the viewer
 // origin, which runs reads only.
 #include <caliper_builder/session/panel_data.h>
 #include <caliper_builder/session/session.h>
@@ -70,8 +70,8 @@ std::vector<double> numbers(const json& a, const std::string& dtype, const std::
     return out;
 }
 
-const char* const kDashboard = R"toml(caliper_spec = 0
-[applet]
+const char* const kDashboard = R"toml(caliper_spec = 2
+[instrument]
 id = "dash"
 title = "Run 42"
 [[source]]
@@ -138,23 +138,23 @@ json panel_data(Session& s, json args, CommandOrigin origin = CommandOrigin::ui)
 
 }  // namespace
 
-TEST_CASE("panel.data gives the dashboard's three panels from the saved applet, bounded and versioned") {
+TEST_CASE("panel.data gives the dashboard's three panels from the saved instrument, bounded and versioned") {
     Fixture f("dashboard");
     ok(*f.s, "spec.set_text", {{"text", kDashboard}});
-    ok(*f.s, "applet.save", json::object());
-    // Another spec is open now; the saved applet is still what applet reads.
-    ok(*f.s, "spec.set_text", {{"text", "caliper_spec = 0\n[applet]\nid = \"other\"\n"}});
+    ok(*f.s, "instrument.save", json::object());
+    // Another spec is open now; the saved instrument is still what instrument reads.
+    ok(*f.s, "spec.set_text", {{"text", "caliper_spec = 2\n[instrument]\nid = \"other\"\n"}});
 
-    const json got = ok(*f.s, "spec.get", {{"applet", "dash"}});
+    const json got = ok(*f.s, "spec.get", {{"instrument", "dash"}});
     CHECK(got["id"] == "dash");
-    CHECK(got["path"] == "applets/dash/dash.spec.toml");
+    CHECK(got["path"] == "instruments/dash/dash.spec.toml");
     CHECK(got["dirty"] == false);
     CHECK(got["json"]["panel"].size() == 3);
     CHECK(ok(*f.s, "spec.get")["id"] == "other");
 
     // The series: x from the step column, the accuracy of step 0 left out by
     // the log axis but counted, and its last value.
-    const json curves = panel_data(*f.s, {{"applet", "dash"}, {"panel", "curves"}});
+    const json curves = panel_data(*f.s, {{"instrument", "dash"}, {"panel", "curves"}});
     CHECK(curves["primitive"] == "series");
     CHECK(curves["unchanged"] == false);
     CHECK(curves["error"].is_null());
@@ -179,14 +179,14 @@ TEST_CASE("panel.data gives the dashboard's three panels from the saved applet, 
     CHECK(d["lines"][1]["last"].get<double>() == doctest::Approx(0.9));
 
     // The heatmap: layer 0, the mean over heads, minmax: (4r + c) / 15.
-    const json heat = panel_data(*f.s, {{"applet", "dash"}, {"panel", "attention"}});
+    const json heat = panel_data(*f.s, {{"instrument", "dash"}, {"panel", "attention"}});
     CHECK(heat["data"]["source_rows"] == 4);
     CHECK(heat["data"]["stride_rows"] == 1);
     const auto v = numbers(heat["data"]["values"], "f32", {4, 4});
     for (int i = 0; i < 16; ++i) CHECK(v[i] == doctest::Approx(i / 15.0));
 
     // The table: the chosen columns, with their types, and every row.
-    const json rows = panel_data(*f.s, {{"applet", "dash"}, {"panel", "rows"}});
+    const json rows = panel_data(*f.s, {{"instrument", "dash"}, {"panel", "rows"}});
     CHECK(rows["data"]["columns"] == json::parse(R"([{"name":"step","type":"BIGINT"},{"name":"loss","type":"DOUBLE"}])"));
     CHECK(rows["data"]["rows"].size() == 10);
     CHECK(rows["data"]["rows"][3][0] == 3);
@@ -195,23 +195,23 @@ TEST_CASE("panel.data gives the dashboard's three panels from the saved applet, 
 
     // known: unchanged without data until the spec or the catalog changes.
     const std::string version = rows["version"];
-    const json same = panel_data(*f.s, {{"applet", "dash"}, {"panel", "rows"}, {"known", version}});
+    const json same = panel_data(*f.s, {{"instrument", "dash"}, {"panel", "rows"}, {"known", version}});
     CHECK(same["unchanged"] == true);
     CHECK(same["data"].is_null());
     CHECK(same["version"] == version);
-    CHECK(panel_data(*f.s, {{"applet", "dash"}, {"panel", "curves"}, {"known", version}})["unchanged"] == false);
+    CHECK(panel_data(*f.s, {{"instrument", "dash"}, {"panel", "curves"}, {"known", version}})["unchanged"] == false);
     // A loader run moves the catalog's revision.
     const json loaders = ok(*f.s, "loader.list");
     ok(*f.s, "loader.run", {{"id", loaders["loaders"][0]["id"]}});
-    const json after = panel_data(*f.s, {{"applet", "dash"}, {"panel", "rows"}, {"known", version}});
+    const json after = panel_data(*f.s, {{"instrument", "dash"}, {"panel", "rows"}, {"known", version}});
     CHECK(after["unchanged"] == false);
     CHECK(after["version"] != version);
 
     // Errors of the arguments.
-    CHECK(err(*f.s, "panel.data", {{"applet", "dash"}, {"panel", "nope"}}) == "panel.not_found");
-    CHECK(err(*f.s, "panel.data", {{"applet", "gone"}, {"panel", "rows"}}) == "applet.not_found");
-    CHECK(err(*f.s, "spec.get", {{"applet", "gone"}}) == "applet.not_found");
-    // Without applet, the open spec, which has no such panel.
+    CHECK(err(*f.s, "panel.data", {{"instrument", "dash"}, {"panel", "nope"}}) == "panel.not_found");
+    CHECK(err(*f.s, "panel.data", {{"instrument", "gone"}, {"panel", "rows"}}) == "instrument.not_found");
+    CHECK(err(*f.s, "spec.get", {{"instrument", "gone"}}) == "instrument.not_found");
+    // Without instrument, the open spec, which has no such panel.
     CHECK(err(*f.s, "panel.data", {{"panel", "rows"}}) == "panel.not_found");
 }
 
@@ -229,8 +229,8 @@ TEST_CASE("panel.data keeps the native runtime's bounds on every primitive") {
     for (int i = 0; i < 300000; ++i) cloud[i] = static_cast<float>(i % 1000);
     write_safetensors_f32(f.ws + "/data/cloud.safetensors", "p", {150000, 2}, cloud);
     ok(*f.s, "data.import", {{"paths", {"data/long.parquet", "data/grid.safetensors", "data/cloud.safetensors"}}});
-    ok(*f.s, "spec.set_text", {{"text", R"toml(caliper_spec = 0
-[applet]
+    ok(*f.s, "spec.set_text", {{"text", R"toml(caliper_spec = 2
+[instrument]
 id = "b"
 [[source]]
 id = "long"
@@ -338,8 +338,8 @@ options = { text = "Last value" }
 
 TEST_CASE("panel.data reports a state or the resolver's error in place of data") {
     Fixture f("states");
-    ok(*f.s, "spec.set_text", {{"text", R"toml(caliper_spec = 0
-[applet]
+    ok(*f.s, "spec.set_text", {{"text", R"toml(caliper_spec = 2
+[instrument]
 id = "st"
 [[source]]
 id = "m"
@@ -393,15 +393,15 @@ bind = { values = "live" }
 TEST_CASE("the viewer origin runs reads and is refused every command that changes the workspace") {
     Fixture f("viewer");
     ok(*f.s, "spec.set_text", {{"text", kDashboard}});
-    ok(*f.s, "applet.save", json::object());
+    ok(*f.s, "instrument.save", json::object());
     const std::string journal = read_text(f.ws + "/journal/commands.jsonl");
-    CHECK(panel_data(*f.s, {{"applet", "dash"}, {"panel", "rows"}}, CommandOrigin::viewer)["data"]["rows"].size() == 10);
-    CHECK(ok(*f.s, "spec.get", {{"applet", "dash"}}, CommandOrigin::viewer)["id"] == "dash");
-    CHECK(ok(*f.s, "applet.list", json::object(), CommandOrigin::viewer)["applets"].size() == 1);
+    CHECK(panel_data(*f.s, {{"instrument", "dash"}, {"panel", "rows"}}, CommandOrigin::viewer)["data"]["rows"].size() == 10);
+    CHECK(ok(*f.s, "spec.get", {{"instrument", "dash"}}, CommandOrigin::viewer)["id"] == "dash");
+    CHECK(ok(*f.s, "instrument.list", json::object(), CommandOrigin::viewer)["instruments"].size() == 1);
     for (const auto& call : std::vector<std::pair<std::string, json>>{
              {"panel.remove", {{"id", "rows"}}},
-             {"spec.set_text", {{"text", "caliper_spec = 0\n[applet]\nid = \"x\"\n"}}},
-             {"applet.save", {{"overwrite", true}}},
+             {"spec.set_text", {{"text", "caliper_spec = 2\n[instrument]\nid = \"x\"\n"}}},
+             {"instrument.save", {{"overwrite", true}}},
              {"history.undo", json::object()},
              {"loader.delete", {{"id", "run42_metrics"}}}}) {
         const std::string& name = call.first;
@@ -421,7 +421,7 @@ TEST_CASE("the viewer origin runs reads and is refused every command that change
 TEST_CASE("the version of a panel's data follows the spec, the catalog's revision and the generation") {
     const spec::Spec a = parse_fixture("dashboard.spec.toml");
     spec::Spec b = a;
-    b.applet.title = "Run 43";
+    b.instrument.title = "Run 43";
     const std::string v = panel_data_version(a, "rows", 1, 0);
     CHECK(v.size() == 16);
     CHECK(panel_data_version(a, "rows", 1, 0) == v);

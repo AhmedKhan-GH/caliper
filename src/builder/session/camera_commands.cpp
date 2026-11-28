@@ -3,7 +3,7 @@
 // session adds the argument `orbit` from the app before the edit runs; without
 // it, as in a replay of the journal with no app, the edit is refused with
 // camera.no_orbit. The validator refuses a 17th view.
-#include <caliper_builder/session/instrument_commands.h>
+#include <caliper_builder/session/interactive_commands.h>
 
 #include <utility>
 
@@ -55,7 +55,7 @@ SpecEdit camera_save(const spec::Spec& s, const json& args, const spec::SourceRe
 
     spec::Spec next = s;
     // Saved views are a key of version 1, as the other instrument edits raise it.
-    if (next.version < spec::kInstrumentVersion) next.version = spec::kInstrumentVersion;
+    next.version = std::max(next.version, spec::kFormatVersion);
     spec::Panel* panel = nullptr;
     for (spec::Panel& p : next.panels)
         if (p.id == id) panel = &p;

@@ -147,7 +147,7 @@ def test_the_messages_of_a_widget_session_follow_the_protocol(tracked, caliper):
         "id": args["id"], "applied": True, "diff": "--- a\n+++ b\n@@ -1 +1 @@\n-a\n+b\n", "warnings": []}}
     steps = [message(text("Turning the log scale off."),
                      tool_use("p1", "panel_patch", {"id": "curves", "patch": {"options": {"y_log": False}}}),
-                     tool_use("x1", "applet_save", {}), stop="tool_use"),
+                     tool_use("x1", "instrument_save", {}), stop="tool_use"),
              message(text("The y axis is linear now.")),
              message(tool_use("h1", "handoff", {"kind": "loader", "reason": "Loaders belong in the side chat."}),
                      stop="tool_use")]

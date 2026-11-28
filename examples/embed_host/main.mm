@@ -2,24 +2,24 @@
 // examples/embed_host — a SECOND embedder of libcaliper, on a bare AppKit
 // window (no GLFW, no ImGui link, no renderer type in sight). The whole point:
 // prove the embed C ABI (caliper/embed.h) from OUTSIDE the caliper exe's
-// assumptions. Any toolkit that owns a native view can host the applet canvas;
-// here that toolkit is raw Cocoa.
+// assumptions. Any toolkit that owns a native view can host the instrument
+// canvas; here that toolkit is raw Cocoa.
 //
 // EMBEDDING IS FIVE CALLS (grep for STEP 1..5 below):
-//   1. caliper_core_create      — spin up the core (renderer + services + loader)
-//   2. caliper_core_attach_canvas — hand it the NSView it should paint
-//   3. caliper_core_load_applet  — launch one applet by manifest id
-//   4. caliper_core_frame        — pump ONE frame from OUR event loop (the core
-//                                  never owns the loop — that is the library/host
-//                                  line), plus caliper_core_event to feed input
-//   5. caliper_core_shutdown     — tear it all down on window close
+//   1. caliper_core_create          — spin up the core (renderer + services + loader)
+//   2. caliper_core_attach_canvas   — hand it the NSView it should paint
+//   3. caliper_core_load_instrument — launch one instrument by manifest id
+//   4. caliper_core_frame           — pump ONE frame from OUR event loop (the core
+//                                     never owns the loop — that is the library/host
+//                                     line), plus caliper_core_event to feed input
+//   5. caliper_core_shutdown        — tear it all down on window close
 //
 // Everything else in this file is ordinary Cocoa boilerplate — window, view,
 // timer, event translation — deliberately sparse so the five calls stand out.
 //
 // Run:  ./embed_host [manifest-id]        (default: dev.caliper.hello-world;
 //                                         pass dev.caliper.mnist in a torch build)
-//   CALIPER_EMBED_APPLETS=<dir>          the applets folder (applets_dir).
+//   CALIPER_EMBED_INSTRUMENTS=<dir>       the instruments folder (instruments_dir).
 //   CALIPER_EMBED_EXIT_AFTER=<seconds>   close the window after that long.
 //   CALIPER_EMBED_OFFSCREEN=1            no window at all: an offscreen canvas,
 //                                        pumped for EXIT_AFTER seconds (default
@@ -39,18 +39,19 @@
 static CaliperCore* g_core = nullptr;
 
 // --- The core's OWN diagnostics sink -------------------------------------
-// This carries renderer pick, applet load/refusal, and crash text — the lines
-// the CORE emits. It is NOT the applet log service: caliper.log.v1 is a separate
-// process-global stderr sink in v0, so an applet's own provenance lines (e.g.
-// the zero-copy line) still print themselves and do NOT arrive here.
+// This carries renderer pick, instrument load/refusal, and crash text — the
+// lines the CORE emits. It is NOT the instrument log service: caliper.log.v1
+// is a separate process-global stderr sink in v0, so an instrument's own
+// provenance lines (e.g. the zero-copy line) still print themselves and do NOT
+// arrive here.
 static void embed_log(void*, int level, const char* msg) {
     static const char* kTag[] = {"debug", "info", "warn", "error"};
     std::fprintf(stderr, "[embed-host] %s: %s\n",
                  kTag[(level >= 0 && level <= 3) ? level : 1], msg);
 }
-static void embed_crash(void*, const char* applet_id, const char* fault) {
-    std::fprintf(stderr, "[embed-host] applet '%s' faulted and was quarantined "
-                         "(the host lives on): %s\n", applet_id, fault);
+static void embed_crash(void*, const char* instrument_id, const char* fault) {
+    std::fprintf(stderr, "[embed-host] instrument '%s' faulted and was quarantined "
+                         "(the host lives on): %s\n", instrument_id, fault);
 }
 
 // Physical-pixel, top-left-origin mouse position from a Cocoa event. The core
@@ -121,7 +122,7 @@ static void send(CaliperInputEvent ev) {
 }
 
 // Text only: NSEvent keycode -> ImGuiKey is a big lookup table this tutorial
-// leaves out. Applet camera control is mouse-driven; text covers ImGui fields.
+// leaves out. Instrument camera control is mouse-driven; text covers ImGui fields.
 - (void)keyDown:(NSEvent*)e {
     for (NSUInteger i = 0; i < e.characters.length; ++i) {
         CaliperInputEvent ev{}; ev.type = CALIPER_EVENT_TEXT;
@@ -138,7 +139,7 @@ static void send(CaliperInputEvent ev) {
 @property(nonatomic, strong) NSWindow* window;
 @property(nonatomic, strong) CanvasView* view;
 @property(nonatomic, strong) NSTimer* pump;
-@property(nonatomic, assign) const char* appletId;
+@property(nonatomic, assign) const char* instrumentId;
 @end
 
 @implementation HostDelegate
@@ -192,14 +193,15 @@ static void send(CaliperInputEvent ev) {
 
     CGFloat scale = self.window.backingScaleFactor;
 
-    // STEP 1: create the core. Renderer DEFAULT resolves to Metal here; applets
-    // are discovered from applets_dir (the build's applets tree, passed in main).
+    // STEP 1: create the core. Renderer DEFAULT resolves to Metal here;
+    // instruments are discovered from instruments_dir (the build's instruments
+    // tree, passed in main).
     CaliperCoreDesc desc{};
-    desc.struct_size = sizeof desc;
-    desc.renderer    = CALIPER_RENDERER_DEFAULT;
-    desc.applets_dir = std::getenv("CALIPER_EMBED_APPLETS");  // may be NULL
-    desc.log_fn      = &embed_log;
-    desc.crash_fn    = &embed_crash;
+    desc.struct_size     = sizeof desc;
+    desc.renderer        = CALIPER_RENDERER_DEFAULT;
+    desc.instruments_dir = std::getenv("CALIPER_EMBED_INSTRUMENTS");  // may be NULL
+    desc.log_fn          = &embed_log;
+    desc.crash_fn        = &embed_crash;
     g_core = caliper_core_create(&desc);
     if (!g_core) { std::fprintf(stderr, "[embed-host] core create failed\n"); [NSApp terminate:nil]; return; }
 
@@ -217,10 +219,10 @@ static void send(CaliperInputEvent ev) {
         [NSApp terminate:nil]; return;
     }
 
-    // STEP 3: load one applet by manifest id (argv[1], default set in main).
-    if (!caliper_core_load_applet(g_core, self.appletId)) {
-        std::fprintf(stderr, "[embed-host] load_applet '%s' failed: %s\n",
-                     self.appletId, caliper_core_last_error(g_core));
+    // STEP 3: load one instrument by manifest id (argv[1], default set in main).
+    if (!caliper_core_load_instrument(g_core, self.instrumentId)) {
+        std::fprintf(stderr, "[embed-host] load_instrument '%s' failed: %s\n",
+                     self.instrumentId, caliper_core_last_error(g_core));
         [NSApp terminate:nil]; return;
     }
 
@@ -241,7 +243,7 @@ static void send(CaliperInputEvent ev) {
 
 - (void)windowWillClose:(NSNotification*)n {
     [self.pump invalidate]; self.pump = nil;
-    // STEP 5: tear down the core (unload applet, join jobs, drop renderer +
+    // STEP 5: tear down the core (unload instrument, join jobs, drop renderer +
     // ImGui) — the exact reverse of create.
     caliper_core_shutdown(g_core);
     g_core = nullptr;
@@ -251,16 +253,16 @@ static void send(CaliperInputEvent ev) {
 int main(int argc, const char* argv[]) {
     // Loads dev.caliper.hello-world by default, or dev.caliper.mnist when passed
     // on the command line in a torch build.
-    const char* applet_id = (argc > 1) ? argv[1] : "dev.caliper.hello-world";
+    const char* instrument_id = (argc > 1) ? argv[1] : "dev.caliper.hello-world";
     if (!embed_version_ok()) return 1;
     // The offscreen mode returns before any NSApplication or window exists.
     if (embed_offscreen_requested())
-        return embed_run_offscreen(applet_id, &embed_log, &embed_crash);
+        return embed_run_offscreen(instrument_id, &embed_log, &embed_crash);
     @autoreleasepool {
         [NSApplication sharedApplication];
         [NSApp setActivationPolicy:NSApplicationActivationPolicyRegular];
         HostDelegate* d = [HostDelegate new];
-        d.appletId = applet_id;
+        d.instrumentId = instrument_id;
         [NSApp setDelegate:d];
         [NSApp run];
     }

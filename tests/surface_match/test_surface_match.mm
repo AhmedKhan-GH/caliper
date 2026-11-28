@@ -346,7 +346,7 @@ struct Case {
 };
 
 std::string spec_text(const Case& k) {
-    return "caliper_spec = 1\n[applet]\nid = \"surface\"\n[[source]]\nid = \"grid\"\ncatalog = \"live:grid\"\n"
+    return "caliper_spec = 2\n[instrument]\nid = \"surface\"\n[[source]]\nid = \"grid\"\ncatalog = \"live:grid\"\n"
            "[[panel]]\nid = \"world\"\nprimitive = \"scene\"\noptions = { " +
            k.panel_options + " }\n[[panel.entity]]\npath = \"terrain\"\ndraw = \"surface\"\nbind = \"grid\"\noptions = { " +
            k.entity_options + " }\n";

@@ -88,7 +88,7 @@ std::string spec_event_panel(const JournalEvent& e) {
 // command that opens another spec. A dry run is never journaled; an edit of a
 // stacked preview is not journaled either.
 bool changes_open_spec(const std::string& name) {
-    return is_spec_edit_command(name) || name == "spec.new" || name == "spec.open" || name == "applet.open";
+    return is_spec_edit_command(name) || name == "spec.new" || name == "spec.open" || name == "instrument.open";
 }
 
 // The callers inside wait_for_events(), by ring. It is never destroyed, so
@@ -143,7 +143,7 @@ const std::vector<const char*>& kind_keys(EventKind kind) {
     static const std::vector<const char*> run = {"change", "state",  "step",   "name",      "value", "status", "text",
                                                  "attached", "script", "run", "parent", "exit_code", "error",
                                                  "point", "op"};
-    static const std::vector<const char*> spec = {"command", "event", "applet"};
+    static const std::vector<const char*> spec = {"command", "event", "instrument"};
     static const std::vector<const char*> approval = {"approval", "command", "state", "target"};
     // design/gpu-programs.md, Program Events; an instance of a piece adds
     // half and pass (design/programmable-graphics.md, Status and Events).
@@ -358,7 +358,7 @@ CommandResult wait_for_events(CommandQueue& queue, EventRing& ring, CommandInvoc
     return queue.submit(std::move(invocation)).get();
 }
 
-void note_journal_event(EventSink& sink, const JournalEvent& event, const std::string& applet) {
+void note_journal_event(EventSink& sink, const JournalEvent& event, const std::string& instrument) {
     if (!event.ok) return;
     const bool history = event.event == "undo" || event.event == "redo";
     if (!history && !(event.event == "do" && changes_open_spec(event.name))) return;
@@ -367,7 +367,7 @@ void note_journal_event(EventSink& sink, const JournalEvent& event, const std::s
     e.origin = command_origin_name(event.origin);
     e.panel = history ? std::string() : spec_event_panel(event);
     e.fields = {{"command", event.name}, {"event", event.event}};
-    if (!applet.empty()) e.fields["applet"] = applet;
+    if (!instrument.empty()) e.fields["instrument"] = instrument;
     sink.push(std::move(e));
 }
 

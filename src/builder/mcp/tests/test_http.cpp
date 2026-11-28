@@ -81,7 +81,7 @@ TEST_CASE("a well-formed exchange carries the request and the response") {
     s.clear_requests();
     HttpRequest post;
     post.method = "POST";
-    post.target = "/v0/applets/x/launch";
+    post.target = "/v0/instruments/x/launch";
     CHECK(loopback_http_request("127.0.0.1", s.port(), post, quick()).ok());
     CHECK(get(s).ok());
     const auto two = s.requests();

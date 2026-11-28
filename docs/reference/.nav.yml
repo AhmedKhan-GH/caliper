@@ -1,7 +1,7 @@
 nav:
   - index.md
   - cli.md
-  - applet-commands.md
+  - instrument-commands.md
   - shot-and-serve-commands.md
   - mcp-commands.md
   - piece-format.md

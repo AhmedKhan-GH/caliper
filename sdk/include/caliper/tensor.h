@@ -27,7 +27,7 @@ typedef enum CaliperDType {
 /**
  * A block of memory with a dtype, a shape, strides, a device and an optional stream.
  *
- * The layout follows DLPack, so a torch, numpy or mlx tensor is a cast away. An applet passes a tensor into a service.
+ * The layout follows DLPack, so a torch, numpy or mlx tensor is a cast away. An instrument passes a tensor into a service.
  * The struct does not own the memory, and no service returns one.
  */
 typedef struct CaliperTensor {

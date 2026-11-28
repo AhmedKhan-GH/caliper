@@ -167,7 +167,7 @@ TEST_CASE("sources the session cannot read answer clearly") {
 TEST_CASE("resolve_panel follows a spec that the validator would refuse without looping") {
     Fixture f("cycle");
     spec::Spec s;
-    s.applet.id = "c";
+    s.instrument.id = "c";
     spec::Source a;
     a.id = "a";
     a.from = "b";
@@ -220,8 +220,8 @@ TensorData row(float v, std::int64_t n = 2) {
     return r.tensor;
 }
 
-const char* kCursorSpec = R"(caliper_spec = 1
-[applet]
+const char* kCursorSpec = R"(caliper_spec = 2
+[instrument]
 id = "cursor"
 
 [[source]]
@@ -381,8 +381,8 @@ TEST_CASE("a window whose steps read a state refuses a value outside the range o
     const std::string ws = fresh_dir("resolve-window-range");
     StoreOpen opened = LoaderStore::open(ws);
     REQUIRE(opened.error.ok());
-    spec::ParseResult parsed = spec::parse_toml(R"(caliper_spec = 1
-[applet]
+    spec::ParseResult parsed = spec::parse_toml(R"(caliper_spec = 2
+[instrument]
 id = "steps"
 
 [[state]]
@@ -443,7 +443,7 @@ TEST_CASE("the arrays of one panel stop at 64 MiB, at the entity that passes the
     const std::string ws = fresh_dir("resolve-panel-arrays");
     StoreOpen opened = LoaderStore::open(ws);
     REQUIRE(opened.error.ok());
-    std::string text = "caliper_spec = 1\n[applet]\nid = \"big\"\n[[source]]\nid = \"cloud\"\ncatalog = \"live:act\"\n"
+    std::string text = "caliper_spec = 2\n[instrument]\nid = \"big\"\n[[source]]\nid = \"cloud\"\ncatalog = \"live:act\"\n"
                        "[[panel]]\nid = \"world\"\nprimitive = \"scene\"\n";
     for (int k = 1; k <= 6; ++k)
         text += "[[panel.entity]]\npath = \"e" + std::to_string(k) +

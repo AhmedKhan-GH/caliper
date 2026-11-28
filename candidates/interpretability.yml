@@ -479,7 +479,7 @@ candidates:
     depends_on: [RUN-01]
   - key: superposition-toy-model
     title: "Superposition Toy Model"
-    summary: "An applet trains a small autoencoder across a sparsity sweep and draws the geometry of its features."
+    summary: "An instrument trains a small autoencoder across a sparsity sweep and draws the geometry of its features."
     serves: "Superposition is taught and tested."
     origin: field
     depends_on: [INT-30]

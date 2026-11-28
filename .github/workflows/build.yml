@@ -117,7 +117,7 @@ jobs:
       # slang (SystemVerilog) is vendored but linked by nothing; its submodule pin is not always
       # fetchable, and the fallback is a newer slang that needs C++20, so CI skips configuring it.
       # The Metal backend is Objective-C++, so the OBJC/OBJCXX launchers are set as well.
-      # The core build compiles no applets. The caliper_sdk_install test installs
+      # The core build compiles no instruments. The caliper_sdk_install test installs
       # the SDK and builds a copy of examples/hello_world in CALIPER_SDK_PROBE_DIR,
       # outside the checkout. The caliper_embed_install test installs the embed
       # package and builds a copy of examples/embed_host against it in
@@ -537,24 +537,24 @@ jobs:
           name: macos-ctest-log
           path: cmake-build-release/Testing/Temporary/LastTest.log
           if-no-files-found: ignore
-      # Install the SDK and build hello_world and the MNIST applet against it
+      # Install the SDK and build hello_world and the MNIST instrument against it
       # in their own build folders, as a developer outside this repository would.
-      - run: scripts/build_applets_against_sdk.sh cmake-build-release "$RUNNER_TEMP/applets"
+      - run: scripts/build_instruments_against_sdk.sh cmake-build-release "$RUNNER_TEMP/instruments"
         env:
           CMAKE_GENERATOR: Ninja
           CMAKE_C_COMPILER_LAUNCHER: sccache
           CMAKE_CXX_COMPILER_LAUNCHER: sccache
       # What was built against the installed packages carries their minimum
-      # macOS too: the applets above, and the copies of examples/hello_world and
+      # macOS too: the instruments above, and the copies of examples/hello_world and
       # examples/embed_host that the install tests built.
       - run: >-
           python3 scripts/check_macos_min.py 14.0
-          "$RUNNER_TEMP"/applets/build/*/applets/*.dylib
-          "$RUNNER_TEMP/sdk-probe/hello_world-build/applets/libhello_world.dylib"
+          "$RUNNER_TEMP"/instruments/build/*/instruments/*.dylib
+          "$RUNNER_TEMP/sdk-probe/hello_world-build/instruments/libhello_world.dylib"
           "$RUNNER_TEMP/embed-probe/embed_host-build/embed_host"
-      # The host must name no applet: no applet id, name or window title may
+      # The host must name no instrument: no instrument id, name or window title may
       # appear as a string literal in src/ or include/.
-      - run: python3 scripts/check_host_names_no_applet.py
+      - run: python3 scripts/check_host_names_no_instrument.py
       # The theme reads its colours from the design tokens and holds no raw colour.
       - run: python3 scripts/check_theme_colors.py
       - if: always()
@@ -604,17 +604,17 @@ jobs:
           name: windows-ctest-log
           path: cmake-build-release/Testing/Temporary/LastTest.log
           if-no-files-found: ignore
-      # Build hello_world and the MNIST applet against the installed SDK, as on macOS.
+      # Build hello_world and the MNIST instrument against the installed SDK, as on macOS.
       - run: >-
-          scripts/build_applets_against_sdk.sh cmake-build-release
-          "$(cygpath -m "$RUNNER_TEMP")/applets"
+          scripts/build_instruments_against_sdk.sh cmake-build-release
+          "$(cygpath -m "$RUNNER_TEMP")/instruments"
         env:
           CMAKE_GENERATOR: Ninja
           CMAKE_C_COMPILER_LAUNCHER: sccache
           CMAKE_CXX_COMPILER_LAUNCHER: sccache
-      # The host must name no applet, checked here as on macOS. The runner's
+      # The host must name no instrument, checked here as on macOS. The runner's
       # Python is `python`; `python3` is not on PATH in every Windows image.
-      - run: python scripts/check_host_names_no_applet.py
+      - run: python scripts/check_host_names_no_instrument.py
       - run: python scripts/check_theme_colors.py
       - if: always()
         run: sccache --show-stats

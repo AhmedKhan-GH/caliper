@@ -1,4 +1,4 @@
-// Unit tests for the applet-side torch adapter (sdk/include/caliper/adapters/
+// Unit tests for the instrument-side torch adapter (sdk/include/caliper/adapters/
 // torch.hpp). This target links libtorch, so it lives in its OWN binary
 // (caliper_torch_tests, ctest label "torch") — never in caliper_tests, to keep
 // the fast unit suite free of the torch link cost.

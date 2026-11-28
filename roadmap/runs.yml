@@ -10,7 +10,7 @@ features:
     scope: peripheral
     summary: The metrics service logs scalars, histograms, images and hyperparameters under an experiment, a run, a tag and a step, and stores them so that each run's curves can be read back in order.
     depends_on: []
-    docs: docs/applets/services/caliper-metrics-v1.md
+    docs: docs/instruments/services/caliper-metrics-v1.md
     issue: null
 
   - id: RUN-02
@@ -19,7 +19,7 @@ features:
     scope: peripheral
     summary: The artifacts service is a content-addressed store of checkpoints and exports, deduplicated on disk by their sha256 digest and linked to the run that produced them.
     depends_on: []
-    docs: docs/applets/services/caliper-artifacts-v1.md
+    docs: docs/instruments/services/caliper-artifacts-v1.md
     issue: null
 
   - id: RUN-03

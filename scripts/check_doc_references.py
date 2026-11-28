@@ -97,7 +97,16 @@ DOCUMENTED_DOTTED_FIELDS = frozenset(
         "data.v1",
         "panel.annotation",
         "panel.entity",
-        "applet.spec",
+        "instrument.id",
+        "instrument.name",
+        "instrument.version",
+        "instrument.summary",
+        "instrument.tag",
+        "instrument.kind",
+        "instrument.spec",
+        "instrument.title",
+        "instrument.description",
+        "instrument.layout_locked",
     }
 )
 NATIVE_PYTHON_ATTRS = frozenset(

@@ -38,7 +38,7 @@ PROMPT = (
     "a slice of axis 0 at index 0, a mean over axis 0, and a minmax normalise. Add three panels: a series panel "
     "curves with x metrics.step and y metrics.loss and metrics.accuracy; a heatmap panel attention bound to attn "
     "with the magma colormap; and a table panel rows bound to metrics that shows the columns step and loss. Lay "
-    "them out with curves and attention side by side above rows. Then save the applet."
+    "them out with curves and attention side by side above rows. Then save the instrument."
 )
 
 
@@ -134,7 +134,7 @@ def main() -> int:
     print("tool calls:", [(calls[c], outcome.get(c, "open")) for c in calls])
     print("result:", [line for line in lines if line["type"] == "result"])
     print("reply:", said[:600])
-    saved = ws / "applets" / "run42-dashboard" / "run42-dashboard.spec.toml"
+    saved = ws / "instruments" / "run42-dashboard" / "run42-dashboard.spec.toml"
     print("saved spec:", saved.read_text() if saved.exists() else "none")
     return 0
 

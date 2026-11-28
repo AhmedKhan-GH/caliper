@@ -1,7 +1,7 @@
 # A dashboard of three panels over one table source and one tensor source.
-caliper_spec = 0
+caliper_spec = 2
 
-[applet]
+[instrument]
 id = "run42-dashboard"
 title = "Run 42"
 description = """

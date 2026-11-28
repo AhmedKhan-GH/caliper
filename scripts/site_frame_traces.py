@@ -19,7 +19,7 @@ from pathlib import Path
 REPO = "https://github.com/AhmedKhan-GH/caliper"
 PAGE = Path(__file__).resolve().parents[1] / "site/index.html"
 
-MN = "examples/mnist/applet/mnist_applet.cpp"
+MN = "examples/mnist/instrument/mnist_instrument.cpp"
 TORCH = "sdk/include/caliper/adapters/torch.hpp"
 MR = "src/host/renderer/metal_renderer.mm"
 VR = "src/host/renderer/vulkan_renderer.cpp"
@@ -71,12 +71,12 @@ METAL = {
     "label": "Metal, one frame: the frame thread hands torch's tensor to Caliper's command queue, which waits on a "
              "shared event torch's queue signals, colormaps the buffer in place, and draws the frame that the display "
              "shows at the next vsync; the training thread blocks only on its own reads",
-    "lanes": [("TRAINING THREAD", "CPU · mnist_applet train_job"), ("FRAME THREAD", "CPU · Caliper host"),
+    "lanes": [("TRAINING THREAD", "CPU · mnist_instrument train_job"), ("FRAME THREAD", "CPU · Caliper host"),
               ("TORCH'S QUEUE", "GPU · MTLCommandQueue"), ("CALIPER'S QUEUE", "GPU · MTLCommandQueue"),
               ("DISPLAY", "scan-out")],
     "segs": training(2.2, 4.6, 8.9, 9.9, 12.1, 14.3, 16.7) + [
         (1, 0.8, 1.3, "caliper", "new_frame", "new_frame: the next drawable and the frame's command buffer", MR_NEW_FRAME),
-        (1, 1.3, 2.8, "caliper", "applet UI", "the applet's draw_ui builds its widgets", [WIDGETS]),
+        (1, 1.3, 2.8, "caliper", "instrument UI", "the instrument's draw_ui builds its widgets", [WIDGETS]),
         (1, 2.8, 3.0, "caliper", "tensor", "to_tensor: the MPS storage's MTLBuffer becomes the descriptor's data",
          [(TORCH, "out.data = t.storage().mutable_data();"), (TORCH, "out.device = CALIPER_DEV_METAL;"), HANDOFF]),
         (1, 3.0, 3.2, "caliper", "commit", "stream_to_tensor: commit torch's pending kernels and take its queue",
@@ -93,11 +93,11 @@ METAL = {
          [(MR, "[enc dispatchThreadgroups:groups threadsPerThreadgroup:tg];", MR_CCF),
           (MR, "[enc setBuffer:src offset:(NSUInteger)src_offset atIndex:0];", MR_CCF),
           (MR, "[enc setTexture:dst atIndex:0];", MR_CCF), (MR, "[cb commit];", MR_CCF)]),
-        (1, 3.9, 5.6, "caliper", "applet UI", "the applet draws the texture with ImGui::Image", [IMAGE]),
+        (1, 3.9, 5.6, "caliper", "instrument UI", "the instrument draws the texture with ImGui::Image", [IMAGE]),
         (1, 5.6, 6.4, "caliper", "render", "render: ImGui's draw encoded, the drawable presented, the frame committed",
          [MR_RENDER, MR_PRESENT, (MR, "[frame_cmd_ commit];", MR_FRAME)]),
         (1, 17.5, 18.0, "caliper", "new_frame", "next frame: new_frame", MR_NEW_FRAME),
-        (1, 18.0, 20.0, "caliper", "applet UI", "next frame: the applet's draw_ui", [WIDGETS]),
+        (1, 18.0, 20.0, "caliper", "instrument UI", "next frame: the instrument's draw_ui", [WIDGETS]),
         (2, 0.4, 5.0, "torch", "torch's kernels", "torch's kernels committed before the handoff: forward, start of backward", []),
         (2, 5.0, 5.15, "caliper", "", "signal v: runs once everything committed before it has finished", [MR_SIGNAL]),
         (2, 5.15, 8.85, "torch", "torch's kernels", "torch's kernels: rest of backward, grad norms", []),
@@ -148,12 +148,12 @@ NVIDIA = {
     "label": "NVIDIA, one frame: the frame thread enqueues a colormap kernel and a timeline signal on torch's CUDA "
              "stream; the kernel reads the tensor in place and writes the back VkImage, which swaps with the front "
              "one; the frame waits for that signal, samples the image and is presented at the next vsync",
-    "lanes": [("TRAINING THREAD", "CPU · mnist_applet train_job"), ("FRAME THREAD", "CPU · Caliper host"),
+    "lanes": [("TRAINING THREAD", "CPU · mnist_instrument train_job"), ("FRAME THREAD", "CPU · Caliper host"),
               ("TORCH'S STREAM", "GPU · CUDA stream"), ("CALIPER'S QUEUE", "GPU · VkQueue"),
               ("DISPLAY", "swapchain")],
     "segs": training(1.8, 3.9, 8.3, 9.0, 10.6, 12.4, 14.5) + [
         (1, 0.8, 1.1, "caliper", "new_frame", "new_frame: ImGui's Vulkan frame begins", VR_NEW_FRAME),
-        (1, 1.1, 2.8, "caliper", "applet UI", "the applet's draw_ui builds its widgets", [WIDGETS]),
+        (1, 1.1, 2.8, "caliper", "instrument UI", "the instrument's draw_ui builds its widgets", [WIDGETS]),
         (1, 2.78, 2.96, "caliper", "tensor", "to_tensor: the CUDA tensor's device address becomes the descriptor's data",
          [(TORCH, "out.data = t.data_ptr();", "if (t.is_cuda()) {"), (TORCH, "out.device = CALIPER_DEV_CUDA;"), HANDOFF]),
         (1, 2.96, 3.1, "caliper", "stream", "stream_to_tensor: torch's current CUDA stream goes in the descriptor",
@@ -164,9 +164,9 @@ NVIDIA = {
          [VR_LAUNCH, (VR, "if (last_sampler != 0 &&", VR_DIRECT)]),
         (1, 3.45, 3.6, "caliper", "signal", "the semaphore signal, base+1, enqueued on torch's stream",
          [VR_SIGNAL, (VR, "sp.params.fence.value = base + 1;", VR_DIRECT), (VR, "cudadrv::ExternalSemaphoreSignalParams sp{};", VR_DIRECT)]),
-        (1, 3.6, 3.75, "caliper", "swap", "the two images trade places; the id the applet holds does not change",
+        (1, 3.6, 3.75, "caliper", "swap", "the two images trade places; the id the instrument holds does not change",
          [(VR, "if (!in_place) swap_images(dst);"), (VR, "std::swap(t.image, b.image);")]),
-        (1, 3.75, 5.4, "caliper", "applet UI", "the applet draws the texture with ImGui::Image", [IMAGE]),
+        (1, 3.75, 5.4, "caliper", "instrument UI", "the instrument draws the texture with ImGui::Image", [IMAGE]),
         (1, 5.4, 5.65, "caliper", "", "frame_render: acquire a swapchain image, send draws to the front image, wait for its frame's fence",
          [(VR, "VkResult err = vkAcquireNextImageKHR(device_, wd_.Swapchain, UINT64_MAX,"), (VR, "resolve_swapped_textures(dd);"),
           (VR, "vkWaitForFences(device_, 1, &fd->Fence, VK_TRUE, UINT64_MAX);", "void frame_render(")]),
@@ -176,7 +176,7 @@ NVIDIA = {
           (VR, "for (const auto& pw : pending_frame_waits_) {", "void frame_render(")]),
         (1, 6.45, 6.6, "caliper", "", "vkQueuePresentKHR: queued behind render-complete", [VR_PRESENT]),
         (1, 17.5, 17.8, "caliper", "new_frame", "next frame: new_frame", VR_NEW_FRAME),
-        (1, 17.8, 20.0, "caliper", "applet UI", "next frame: the applet's draw_ui", [WIDGETS]),
+        (1, 17.8, 20.0, "caliper", "instrument UI", "next frame: the instrument's draw_ui", [WIDGETS]),
         (2, 0.3, 4.6, "torch", "torch's kernels", "torch's kernels launched before the handoff: forward, start of backward", []),
         (2, 4.6, 5.05, "caliper", "colormap", "the kernel reads the tensor in place and writes the back VkImage, with no copy",
          [(KERNEL, "const float v = *(const float*)(src + y * stride_y + x * stride_x);"), (KERNEL, "surf2Dwrite(lut.v[idx], dst, x * 4, y);")]),

@@ -1,17 +1,17 @@
-# caliper::ui_stack for an applet built against the installed SDK.
+# caliper::ui_stack for an instrument built against the installed SDK.
 #
 # The package ships the pinned sources of ImGui, ImPlot, ImPlot3D and
 # ImGuiFileDialog (share/caliper-sdk/ui_stack) and compiles them here, inside
 # the consumer's build, into one static library with position-independent code
 # and the host's UI-stack definitions (CALIPER_UI_STACK_DEFINITIONS). Prebuilt
-# static libraries would tie every applet to the compiler, standard library,
+# static libraries would tie every instrument to the compiler, standard library,
 # build type and CRT the SDK was built with: on Windows a Release /MD library
-# fails to link into a Debug applet, and ImGuiFileDialog uses the STL. Sources
-# compiled with the applet's own toolchain avoid that, and the UI-stack hash
+# fails to link into a Debug instrument, and ImGuiFileDialog uses the STL. Sources
+# compiled with the instrument's own toolchain avoid that, and the UI-stack hash
 # still names exactly what was compiled. The cost is a few seconds of compile
-# time per applet build folder.
+# time per instrument build folder.
 #
-# No GLFW or ImGui backend is part of it: an applet draws into the
+# No GLFW or ImGui backend is part of it: an instrument draws into the
 # host's ImGui context and never talks to a window or a graphics API.
 if(NOT TARGET caliper_sdk_ui_stack)
     get_filename_component(_caliper_ui_root

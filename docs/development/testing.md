@@ -8,22 +8,22 @@ Caliper's tests use doctest and run through ctest. The sources are in `tests/`, 
 
 | Layer | What it proves |
 |---|---|
-| Manifest | The parser accepts a valid manifest, rejects a missing or malformed field, validates the applet id and ignores unknown keys. |
+| Manifest | The parser accepts a valid manifest, rejects a missing or malformed field, validates the instrument id and ignores unknown keys. |
 | Negotiation | The pre-load checks run in order: epoch, `min_host`, then required services, each with its refusal message. |
-| Loader | The loader scans a folder, runs the `hello_world` applet through its full lifecycle, tears down an old instance before a relaunch, checks the descriptor against the manifest, shows a missing binary as a failed card, and refuses a path-escaping id. |
-| Crash guard | A fault or an exception in an applet call is contained and reported, in the frame call and in a background job. The exception cases use `tests/fixtures/throwing_applet`, a hand-written descriptor that throws across the ABI, which the sugar would otherwise catch. |
-| UI recovery | The host unwinds its UI stack after an applet fault leaves windows, plots and style pushes open. |
+| Loader | The loader scans a folder, runs the `hello_world` instrument through its full lifecycle, tears down an old instance before a relaunch, checks the descriptor against the manifest, shows a missing binary as a failed card, and refuses a path-escaping id. |
+| Crash guard | A fault or an exception in an instrument call is contained and reported, in the frame call and in a background job. The exception cases use `tests/fixtures/throwing_instrument`, a hand-written descriptor that throws across the ABI, which the sugar would otherwise catch. |
+| UI recovery | The host unwinds its UI stack after an instrument fault leaves windows, plots and style pushes open. |
 | Frame watchdog | Three consecutive slow frames latch the flag, a good frame resets the streak, and the flag stays until a reset. |
 | Services | Each service store and wrapper has its own tests: jobs, device, metrics, feed, artifacts, data and the tensor bridge. |
-| Sugar | `CALIPER_APPLET`, the typed service wrappers, exception catching at the ABI edge and a run at a `dpi_scale` of 2. |
+| Sugar | `CALIPER_INSTRUMENT`, the typed service wrappers, exception catching at the ABI edge and a run at a `dpi_scale` of 2. |
 | ABI | `test_abi.cpp` asserts that the ABI structs are standard layout with `struct_size` first, and checks the epoch and every published table. |
 | C compile check | `abi_c_check.c` includes every public header, newest first, in a C translation unit. A header that lacks its own includes cannot hide behind another one. |
 
-The build makes the `hello_world` applet and `throwing_applet` first, because the loader tests load them from the build folder.
+The build makes the `hello_world` instrument and `throwing_instrument` first, because the loader tests load them from the build folder.
 
 ## Fixture Host
 
-`sdk/testing/caliper/fixture_host.h` is a headless fake `CaliperHost`. It serves `caliper.log.v1` and returns `NULL` for every other service. A test can inject a table for any other service with `provide`. The fixture lets an applet's logic and the sugar run without the UI. Only one fixture exists per process. The CMake target is `caliper::sdk_testing`. See [C++ sugar](../applets/cpp-sugar.md) for its use in an applet's own tests.
+`sdk/testing/caliper/fixture_host.h` is a headless fake `CaliperHost`. It serves `caliper.log.v1` and returns `NULL` for every other service. A test can inject a table for any other service with `provide`. The fixture lets an instrument's logic and the sugar run without the UI. Only one fixture exists per process. The CMake target is `caliper::sdk_testing`. See [C++ Sugar](../instruments/cpp-sugar.md) for its use in an instrument's own tests.
 
 ## Pixel-Exact Graphics Suite
 
@@ -56,13 +56,13 @@ The current renderer cannot write replacement references through these tests.
 `web/test/scenes.spec.ts` checks that every scene fixture draws pieces, produces nonclear pixels and has no notes.
 `web/test/draw_parity.spec.ts` compares the same scenes between the app and browser, including color, IDs and picks.
 `caliper_scene_tests` checks the CPU scene model, camera, labels and frame-pick decode without a GPU.
-[Scene Rendering](../applets/scene-rendering.md) describes the shared view code.
+[Scene Rendering](../instruments/scene-rendering.md) describes the shared view code.
 
 ### Timing Rows
 
 The suite also has a timing row on Vulkan with CUDA for the update cost by size and the cost of a create and release cycle against an update, which prints numbers and proves nothing by itself.
 
-Run them with `-s` to see their messages. The layer timing rows run only when requested, with `CALIPER_GFX_LAYER_BENCH=1` ([Graphics Layer](../applets/graphics-layer.md)). The migration of the renderer core compares them before and after each step, with the benchmarks in `python/bench/`.
+Run them with `-s` to see their messages. The layer timing rows run only when requested, with `CALIPER_GFX_LAYER_BENCH=1` ([Graphics Layer](../instruments/graphics-layer.md)). The migration of the renderer core compares them before and after each step, with the benchmarks in `python/bench/`.
 
 ### Shader Tests
 
@@ -72,11 +72,11 @@ Run them with `-s` to see their messages. The layer timing rows run only when re
 - Every compute entry and checked pair of entries becomes a pipeline state.
 - The colormap decided by integer keys matches `map_f32_to_rgba8` byte for byte on its boundary cases, with the compiler's fast math on and off.
 
-`web/test/shaders.spec.ts` checks the WGSL of the same programs in headless Chromium on a default and a compatibility-mode device. [Shader Authoring](../applets/shader-authoring.md) describes the programs and their checks.
+`web/test/shaders.spec.ts` checks the WGSL of the same programs in headless Chromium on a default and a compatibility-mode device. [Shader Authoring](../instruments/shader-authoring.md) describes the programs and their checks.
 
 ### Colormap Proof
 
-The colormap by keys ([Colormap by Keys](../applets/graphics-layer.md#colormap-by-keys)) is proved at three levels, on one set of boundary cases. `tests/shaders/colormap_cases.h` holds fourteen ranges, and for each its keys and their neighbours, special values and 65,536 random bit patterns.
+The colormap by keys ([Colormap by Keys](../instruments/graphics-layer.md#colormap-by-keys)) is proved at three levels, on one set of boundary cases. `tests/shaders/colormap_cases.h` holds fourteen ranges, and for each its keys and their neighbours, special values and 65,536 random bit patterns.
 
 - On the CPU, `caliper_tests --test-case="colormap keys*"` compares the C++ decision of `src/host/gfx/colormap_keys.h` with `map_f32_to_rgba8` on those cases. `caliper_colormap_exhaustive` does so for all 2<sup>32</sup> inputs of each range.
 - On Metal, `caliper_colormap_gpu_exhaustive` runs the generated `colormap_texture` through the layer, compiled as the layer compiles it, on the same 2<sup>32</sup> inputs of each range. It works in 256 chunks of 4,096 x 4,096 texels that it reads back and compares with the reference in up to 6 CPU threads.
@@ -133,9 +133,9 @@ The app uses the same mechanism with `--hidden` or `CALIPER_HIDDEN=1` ([The hidd
 
 ## Embedding and Live Streaming
 
-`caliper_embed_tests` drives `libcaliper` as a third-party embedder would. It creates an offscreen core, loads the `hello_world` applet, pumps frames, reads pixels back, shuts down and checks the refusal gates.
+`caliper_embed_tests` drives `libcaliper` as a third-party embedder would. It creates an offscreen core, loads the `hello_world` instrument, pumps frames, reads pixels back, shuts down and checks the refusal gates.
 
-`caliper_live_tests` and `caliper_live_views_tests` cover live streaming on macOS only, in one process over an offscreen core. See [Live streaming](../python/live-streaming.md). Both check the copy counters of [Rendering](../applets/rendering.md#copy-counters-and-frame-statistics) on every route:
+`caliper_live_tests` and `caliper_live_views_tests` cover live streaming on macOS only, in one process over an offscreen core. See [Live Streaming](../python/live-streaming.md). Both check the copy counters of [Rendering](../instruments/rendering.md#copy-counters-and-frame-statistics) on every route:
 
 - An MPS-style heatmap through the shared-memory session, and `MTLBuffer` payloads of every kind, count no copy in their frames.
 - A CPU heatmap, image and points payload count their uploads.
@@ -152,11 +152,11 @@ The ctest entry `caliper_app_live_controls` (`tests/test_net_hub.cpp`) starts th
 
 ## Command Line
 
-The entries named `caliper_cli_*` (label `cli`) run the `caliper` executable as a user runs it, through `tests/cli_run.cmake`. Each entry checks the exit code and the output. The entries run with `CALIPER_APPLET_PATH` unset and with `CALIPER_DATA_DIR` on a folder that must not exist after the run. This proves that the read-only subcommands create nothing in the app-data folder. `caliper_cli_new_builds` (labels `cli` and `sdk`) configures, builds and tests the project that `caliper new` writes, against the SDK that this build installs.
+The entries named `caliper_cli_*` (label `cli`) run the `caliper` executable as a user runs it, through `tests/cli_run.cmake`. Each entry checks the exit code and the output. The entries run with `CALIPER_INSTRUMENT_PATH` unset and with `CALIPER_DATA_DIR` on a folder that must not exist after the run. This proves that the read-only subcommands create nothing in the app-data folder. `caliper_cli_new_builds` (labels `cli` and `sdk`) configures, builds and tests the project that `caliper new` writes, against the SDK that this build installs.
 
-`caliper_cli_shot_temp` and `caliper_cli_shot_data_dir` (labels `cli` and `shot`) run [`caliper shot`](../reference/shot-and-serve-commands.md#caliper-shot) on the `hello_world` fixture through `tests/shot_run.cmake`. `caliper_png_check` checks that the image has the requested size and is not one flat color. The first entry runs without `CALIPER_DATA_DIR` and checks that the temporary data folder is gone and that nothing exists under `HOME`. The second entry runs with it and checks that the applet's data folder exists and that no `imgui.ini` was written. Without a GPU both entries are skipped, unless `CALIPER_REQUIRE_GPU=1` makes the skip a failure.
+`caliper_cli_shot_temp` and `caliper_cli_shot_data_dir` (labels `cli` and `shot`) run [`caliper shot`](../reference/shot-and-serve-commands.md#caliper-shot) on the `hello_world` fixture through `tests/shot_run.cmake`. `caliper_png_check` checks that the image has the requested size and is not one flat color. The first entry runs without `CALIPER_DATA_DIR` and checks that the temporary data folder is gone and that nothing exists under `HOME`. The second entry runs with it and checks that the instrument's data folder exists and that no `imgui.ini` was written. Without a GPU both entries are skipped, unless `CALIPER_REQUIRE_GPU=1` makes the skip a failure.
 
-Caliper has no fallback renderer ([No Fallback Renderer](../applets/rendering.md#no-fallback-renderer)). Four entries check the refusals where the renderer cannot start, on any machine and with no GPU:
+Caliper has no fallback renderer ([No Fallback Renderer](../instruments/rendering.md#no-fallback-renderer)). Four entries check the refusals where the renderer cannot start, on any machine and with no GPU:
 
 - `caliper_cli_app_no_renderer` and `caliper_cli_shot_no_renderer` run the hidden app and `caliper shot` with the test variable `CALIPER_TEST_RENDERER_FAIL=1`, which makes the start of the Metal or Vulkan renderer fail.
 - `caliper_cli_app_renderer_gl` and `caliper_cli_shot_renderer_gl` run them with `CALIPER_RENDERER=gl`.
@@ -171,25 +171,25 @@ No test reads or writes your own app-data folder. ctest runs every entry with `C
 - Every command-line test has its own `CALIPER_DATA_DIR`.
 - Every test that starts the hidden app, `caliper shot` or a producer gives that process its own folder.
 
-`CALIPER_DATA_DIR` moves the whole app-data folder, so the stores, the applets' data folders, `imgui.ini`, the live session files, the stream files, the API files and the default user applets folder all stay in the build folder. The tests of Caliper LIB (`python/tests/conftest.py`) set `CALIPER_TEST_RUN=1` and give every test a temporary `CALIPER_DATA_DIR`.
+`CALIPER_DATA_DIR` moves the whole app-data folder, so the stores, the instruments' data folders, `imgui.ini`, the live session files, the stream files, the API files and the default user instruments folder all stay in the build folder. The tests of Caliper LIB (`python/tests/conftest.py`) set `CALIPER_TEST_RUN=1` and give every test a temporary `CALIPER_DATA_DIR`.
 
-The app-data guard backs this up ([Folders and environment variables](../reference/folders-and-environment.md#app-data-folder)). A test or hidden run that would use your own app-data folder stops at once with exit code 1, before it creates anything there. The guard applies to `--hidden`, `CALIPER_HIDDEN=1`, any `CALIPER_TEST_*` variable and any test binary, because each binary links `tests/test_run_marker.cpp`. A test binary that you run by hand, from a shell or an IDE, therefore needs `CALIPER_DATA_DIR`, as ctest gives it.
+The app-data guard backs this up ([App-Data Folder](../reference/folders-and-environment.md#app-data-folder)). A test or hidden run that would use your own app-data folder stops at once with exit code 1, before it creates anything there. The guard applies to `--hidden`, `CALIPER_HIDDEN=1`, any `CALIPER_TEST_*` variable and any test binary, because each binary links `tests/test_run_marker.cpp`. A test binary that you run by hand, from a shell or an IDE, therefore needs `CALIPER_DATA_DIR`, as ctest gives it.
 
 `caliper_test_data_guard` (labels `cli` and `shot`, `tests/data_guard_run.cmake`) runs the typical launches with `HOME` on a stand-in folder: the hidden app, `caliper_embed_tests`, `caliper shot` and `caliper.serve()`. It checks that each refusal happens and that nothing appears in the stand-in's app-data folder. A test that needs another root, such as the embedding tests of `CaliperCoreDesc.data_dir`, sets its own.
 
-## Applet and Adapter Tests
+## Instrument and Adapter Tests
 
 `caliper_torch_tests` tests the torch adapter in `adapters/torch.hpp`. It links libtorch and exists only when torch is enabled, which keeps the torch link cost out of `caliper_tests`.
 
 ## Package and Boundary Tests
 
-`caliper_sdk_install` (label `sdk`) proves that an applet can build against the installed SDK alone and cannot include `<caliper/embed.h>`. It installs the SDK component into a work folder and builds `tests/sdk_install_probe` and `examples/hello_world` there with only `-DCMAKE_PREFIX_PATH` set to the install. It runs the probe, checks the library and stamped manifest of `hello_world`, and fails if either build refers to a file in the source tree. It also builds an applet that includes `caliper/embed.h` against every SDK target, and each build must fail. `tests/sdk_install_probe/run.cmake` holds the steps, and `CALIPER_SDK_PROBE_DIR` sets the work folder. See [SDK package](../applets/sdk-package.md).
+`caliper_sdk_install` (label `sdk`) proves that an instrument can build against the installed SDK alone and cannot include `<caliper/embed.h>`. It installs the SDK component into a work folder and builds `tests/sdk_install_probe` and `examples/hello_world` there with only `-DCMAKE_PREFIX_PATH` set to the install. It runs the probe, checks the library and stamped manifest of `hello_world`, and fails if either build refers to a file in the source tree. It also builds an instrument that includes `caliper/embed.h` against every SDK target, and each build must fail. `tests/sdk_install_probe/run.cmake` holds the steps, and `CALIPER_SDK_PROBE_DIR` sets the work folder. See [SDK Package](../instruments/sdk-package.md).
 
-`caliper_embed_install` (label `embed`) does the same for the embedding package. It installs the embed component alone and checks the installed tree. On macOS it checks that the library exports exactly the C functions that `libcaliper` defines. It builds `examples/embed_host` against the install and runs it offscreen on a copy of the `hello_world` fixture. Without a GPU the run is skipped, unless `CALIPER_REQUIRE_GPU=1` makes the skip a failure. `tests/embed_install/run.cmake` holds the steps, and `CALIPER_EMBED_PROBE_DIR` sets the work folder. See [Embedding Caliper](../web/embedding-api.md).
+`caliper_embed_install` (label `embed`) does the same for the embedding package. It installs the embed component alone and checks the installed tree. On macOS it checks that the library exports exactly the C functions that `libcaliper` defines. It builds `examples/embed_host` against the install and runs it offscreen on a copy of the `hello_world` fixture. Without a GPU the run is skipped, unless `CALIPER_REQUIRE_GPU=1` makes the skip a failure. `tests/embed_install/run.cmake` holds the steps, and `CALIPER_EMBED_PROBE_DIR` sets the work folder. See [Embedding API](../web/embedding-api.md).
 
 `caliper_theme_colors` (label `boundary`) runs `scripts/check_theme_colors.py`. The script fails if the theme sources `src/host/ui/sternbild_theme.h`, `sternbild_theme.cpp` and `sternbild_fonts.h` hold a color written by hand outside the lines marked `colours without a token`. The script finds `IM_COL32(...)`, `ImVec4` and `ImColor` constructions with parentheses or braces, declarations such as `ImVec4 c(1, 0, 0, 1)`, three or four numbers in braces when one of them is a float literal, and `0xRRGGBB` constants. The theme may hold only one marked region, and each marker must stand on a line of its own. The theme reads every other color from the generated header of the Sternbild design tokens. `caliper_theme_colors_script` runs the tests of the script.
 
-`caliper_host_names_no_applet` (label `boundary`) runs `scripts/check_host_names_no_applet.py`. The script fails if the `[applet]` id or name of a manifest under `applets/` or `examples/`, or a window title that their sources pass to `ImGui::Begin()`, is a whole string literal in `src/` or `include/`. The script skips comments. CMake registers the test only when it finds Python 3.
+`caliper_host_names_no_instrument` (label `boundary`) runs `scripts/check_host_names_no_instrument.py`. The script fails if the `[instrument]` id or name of a manifest under `instruments/` or `examples/`, or a window title that their sources pass to `ImGui::Begin()`, is a whole string literal in `src/` or `include/`. The script skips comments. CMake registers the test only when it finds Python 3.
 
 ## Builder Suites
 
@@ -204,11 +204,11 @@ The builder session in the app has its own entries. The entries that start the h
 
 | Entry | What it checks |
 |---|---|
-| `caliper_app_session`, `caliper_app_session_hidden` | The session in `src/host/builder/app_session.h`. The first uses a fake frame loop. The second runs a command script ([The workspace](../reference/cli.md#workspace)) that imports a CSV file, builds and saves a spec applet and renders a panel, then checks the workspace and its journal. |
+| `caliper_app_session`, `caliper_app_session_hidden` | The session in `src/host/builder/app_session.h`. The first uses a fake frame loop. The second runs a command script ([Workspace](../reference/cli.md#workspace)) that imports a CSV file, builds and saves a spec-based instrument and renders a panel, then checks the workspace and its journal. |
 | `caliper_app_route` | The route of an outside agent against the real app, started with `--hidden --api --api-port 0 --workspace`. It imports a Parquet file and a safetensors file, builds, saves and opens the three-panel dashboard, and captures a non-blank frame through Caliper API. Then it runs `caliper-mcp` and `caliper shot --launch` against the app. |
 | `caliper_app_live_entropy` and four `caliper_app_live_*` entries | The case "plot attention entropy per layer while it trains" (`tests/test_app_live.cpp`, macOS), and the landing screen and live page of the hidden app. `caliper_attention_producer` is a test tool with its own hub and no torch. The entries cover stream attach and detach, a second stream, Home from the live page, and dropped files. |
 | `caliper_app_save_new`, `caliper_app_save_open`, `caliper_app_save_close` | The "Save changes to <name>?" question, through the `save` and `close` steps of the input driver. `app.launch` never asks. |
-| `caliper_app_launch_mcp`, `caliper_app_launch_agent`, `caliper_app_launch_reply` | A launch from the origin `mcp` or `agent`, through `POST /v0/applets/{id}/launch` and `app.launch`. Over unsaved changes it waits on an approval card and answers `PENDING_APPROVAL` until the person decides. |
+| `caliper_app_launch_mcp`, `caliper_app_launch_agent`, `caliper_app_launch_reply` | A launch from the origin `mcp` or `agent`, through `POST /v0/instruments/{id}/launch` and `app.launch`. Over unsaved changes it waits on an approval card and answers `PENDING_APPROVAL` until the person decides. |
 | `caliper_widget_surface`, `caliper_widget_surface_gpu`, `caliper_widget_surface_agent`, `caliper_widget_app` | The inline surface of the widget agent (`src/host/builder/widget_surface.h`), headless, offscreen, with the real `caliper-agent` on a scripted model, and in the hidden app. The agent entry is skipped without `CALIPER_BUILDER_TEST_PYTHON`. |
 | `caliper_approval_cards`, `caliper_approval_cards_app` | The approval cards (`src/host/builder/approval_cards.h`): Approve, Deny (`command.denied`), timeout, conflict and destructive commands, then the same through the real `caliper-mcp` and `CALIPER_TEST_APPROVALS`. |
 | `caliper_builder_pane`, `caliper_builder_pane_gpu`, `caliper_builder_app` | The builder pane (`src/host/builder/builder_pane.h`), headless, offscreen with `caliper-builder-shot`, and as a whole build in the hidden app. |
@@ -356,7 +356,7 @@ A ctest label selects a group:
 - `cli`: the command-line tests.
 - `shot`: the `caliper shot` runs.
 - `sdk` and `embed`: the package tests.
-- `boundary`: `caliper_host_names_no_applet`.
+- `boundary`: `caliper_host_names_no_instrument`.
 
 For example, `ctest --test-dir cmake-build-release -L gfx` runs only the pixel-exact graphics suite. CI runs the whole set on macOS and Windows. See [Continuous integration](ci.md).
 

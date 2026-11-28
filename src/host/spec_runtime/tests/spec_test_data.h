@@ -26,7 +26,7 @@ inline spec::Spec parse(const std::string& toml) {
 
 // A spec of one panel `p` over the sources given, from TOML lines.
 inline spec::Spec one_panel(const std::string& sources, const std::string& panel) {
-    return parse("caliper_spec = 0\n[applet]\nid = \"t\"\n" + sources + "\n[[panel]]\nid = \"p\"\n" + panel + "\n");
+    return parse("caliper_spec = 2\n[instrument]\nid = \"t\"\n" + sources + "\n[[panel]]\nid = \"p\"\n" + panel + "\n");
 }
 
 inline SlotData column(const std::string& slot, const std::string& binding, json values, size_t index = 0) {

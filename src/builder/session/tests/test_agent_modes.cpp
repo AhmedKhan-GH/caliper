@@ -48,7 +48,7 @@ struct Fixture {
         ok(*s, "spec.new", {{"id", "dash"}});
         ok(*s, "source.add", {{"id", "m"}, {"catalog", "table:metrics"}});
         ok(*s, "panel.create", {{"id", "loss"}, {"primitive", "series"}, {"bind", {{"x", "m.step"}, {"y", "m.loss"}}}});
-        ok(*s, "applet.save");
+        ok(*s, "instrument.save");
     }
     void reopen() {
         s.reset();
@@ -125,10 +125,10 @@ TEST_CASE("Allow all: saved for each principal, loaded at launch, no card but a 
     // The replacement of an open spec with unsaved changes still asks.
     ok(*f.s, "panel.patch", retitle("Unsaved"));
     CHECK(chat(*f.s, "spec.new", {{"id", "other"}}).error.code == "command.needs_approval");
-    CHECK(chat(*f.s, "applet.open", {{"id", "dash"}}).error.code == "command.needs_approval");
+    CHECK(chat(*f.s, "instrument.open", {{"id", "dash"}}).error.code == "command.needs_approval");
     CHECK(f.title() == "Unsaved");
-    // So does an overwrite of a saved applet, and undo stays the person's.
-    CHECK(chat(*f.s, "applet.save", {{"overwrite", true}}).error.code == "command.needs_approval");
+    // So does an overwrite of a saved instrument, and undo stays the person's.
+    CHECK(chat(*f.s, "instrument.save", {{"overwrite", true}}).error.code == "command.needs_approval");
     CHECK(chat(*f.s, "history.undo").error.code == "command.not_allowed");
     f.s->registry().cancel_pending();
     // A deletion runs without a card.
@@ -141,7 +141,7 @@ TEST_CASE("Allow all: saved for each principal, loaded at launch, no card but a 
     ok(*f.s, "data.import", {{"paths", {"data/other.csv"}}});
     REQUIRE(send(*f.s, "loader.delete", {{"id", f.loader()}}, CommandOrigin::mcp, "").ok);
     CHECK(f.last_event().allowed_by == "allow_all");
-    CHECK(send(*f.s, "applet.save", {{"overwrite", true}}, CommandOrigin::mcp, "").error.code == "command.needs_approval");
+    CHECK(send(*f.s, "instrument.save", {{"overwrite", true}}, CommandOrigin::mcp, "").error.code == "command.needs_approval");
     f.s->registry().cancel_pending();
     // The end of the chat's agent leaves it on, and a new launch loads it.
     f.s->end_chat_session();
@@ -278,7 +278,7 @@ TEST_CASE("no rule or mode makes a viewer write or covers what binds to content 
     // A viewer only reads, whatever client it names.
     CHECK(send(*f.s, "panel.patch", retitle("V"), CommandOrigin::viewer, "chat").error.code == "command.not_allowed");
     // An overwrite's card offers no rule.
-    const CommandResult r = chat(*f.s, "applet.save", {{"overwrite", true}});
+    const CommandResult r = chat(*f.s, "instrument.save", {{"overwrite", true}});
     REQUIRE(r.error.code == "command.needs_approval");
     const PendingApproval p = f.s->registry().pending_approvals().at(0);
     CHECK_FALSE(f.s->approval_offers_rules(p.invocation));
@@ -315,7 +315,7 @@ TEST_CASE("no command reads or sets a mode or a rule, from any origin") {
     CHECK(chat(*f.s, "panel.patch", {{"id", "loss"}, {"patch", {{"title", "X"}}}, {"mode", "allow_all"}}).error.code ==
           "command.invalid_args");
     // Nor does a spec that names it, opened by the person or written by an agent.
-    const std::string named = read_text(f.ws + "/applets/dash/dash.spec.toml") +
+    const std::string named = read_text(f.ws + "/instruments/dash/dash.spec.toml") +
                               "\n[permissions]\nchat = \"allow_all\"\nmcp = \"allow_all\"\n";
     write_text(f.ws + "/named.spec.toml", named);
     invoke(*f.s, "spec.open", {{"path", "named.spec.toml"}});
@@ -350,10 +350,10 @@ TEST_CASE("a workspace in the settings folder, or that is the settings folder, w
         REQUIRE(send(s, "panel.create", {{"id", "loss"}, {"primitive", "series"}, {"bind", {{"x", "m.step"}, {"y", "m.loss"}}}},
                      CommandOrigin::agent, "chat")
                     .ok);
-        const CommandResult saved = send(s, "applet.save", json::object(), CommandOrigin::agent, "chat");
+        const CommandResult saved = send(s, "instrument.save", json::object(), CommandOrigin::agent, "chat");
         INFO(saved.error.code << ": " << saved.error.message);
         CHECK(saved.ok);
-        CHECK(fs::exists(ws + "/applets/dash/dash.spec.toml"));
+        CHECK(fs::exists(ws + "/instruments/dash/dash.spec.toml"));
         CHECK(read_text(o.permissions_file) == before);
     }
 }
@@ -382,22 +382,22 @@ TEST_CASE("no command writes a protected file, by its name, a relative path, a l
     ok(s, "data.import", {{"paths", {"data/metrics.csv"}}});
     ok(s, "spec.new", {{"id", "dash"}});
     // Under the protected names: every write has its own folder and suffix.
-    CHECK(chat(s, "applet.save", {{"id", "agent-permissions"}}).ok);
-    CHECK(fs::exists(settings + "/applets/agent-permissions/agent-permissions.spec.toml"));
+    CHECK(chat(s, "instrument.save", {{"id", "agent-permissions"}}).ok);
+    CHECK(fs::exists(settings + "/instruments/agent-permissions/agent-permissions.spec.toml"));
     unchanged();
     // A relative path or ".." in an id is refused before anything is written.
-    for (const char* id : {"../agent-permissions", "../../app-data/side-chat", "applets/../agent-permissions"})
-        CHECK_FALSE(chat(s, "applet.save", {{"id", id}}).ok);
+    for (const char* id : {"../agent-permissions", "../../app-data/side-chat", "instruments/../agent-permissions"})
+        CHECK_FALSE(chat(s, "instrument.save", {{"id", id}}).ok);
     CHECK(chat(s, "loader.create", {{"text", "caliper_loader = 0\n[loader]\nid = \"../agent-permissions\"\n[input]\n"
                                              "path = \"data/metrics.csv\"\n[[output]]\nname = \"x\"\n"}})
               .error.code == "loader.invalid");
     unchanged();
 #ifndef _WIN32
-    // A link from an applet's spec file to each protected file, by its name
+    // A link from an instrument's spec file to each protected file, by its name
     // and by a case variant: the save is refused even after the person
     // approved the overwrite.
     auto approve_save = [&](const std::string& id) {
-        const CommandResult r = chat(s, "applet.save", {{"id", id}, {"overwrite", true}});
+        const CommandResult r = chat(s, "instrument.save", {{"id", id}, {"overwrite", true}});
         if (r.error.code != "command.needs_approval") return r;
         return s.registry().approve(r.approval);
     };
@@ -405,18 +405,18 @@ TEST_CASE("no command writes a protected file, by its name, a relative path, a l
         {"linked", perms}, {"chatlink", chat_file}, {"casevariant", settings + "/AGENT-PERMISSIONS.JSON"}};
     for (const auto& link : links) {
         INFO(link.first);
-        fs::create_directories(settings + "/applets/" + link.first);
-        fs::create_symlink(link.second, settings + "/applets/" + link.first + "/" + link.first + ".spec.toml");
+        fs::create_directories(settings + "/instruments/" + link.first);
+        fs::create_symlink(link.second, settings + "/instruments/" + link.first + "/" + link.first + ".spec.toml");
         const CommandResult r = approve_save(link.first);
-        CHECK(r.error.code == "applet.write_failed");
+        CHECK(r.error.code == "instrument.write_failed");
         CHECK(r.error.message.find("protected") != std::string::npos);
-        CHECK(fs::is_symlink(settings + "/applets/" + link.first + "/" + link.first + ".spec.toml"));
+        CHECK(fs::is_symlink(settings + "/instruments/" + link.first + "/" + link.first + ".spec.toml"));
         unchanged();
     }
-    // A hard link to the permissions file under an applet's name.
-    fs::create_directories(settings + "/applets/hard");
-    fs::create_hard_link(perms, settings + "/applets/hard/hard.spec.toml");
-    CHECK(approve_save("hard").error.code == "applet.write_failed");
+    // A hard link to the permissions file under an instrument's name.
+    fs::create_directories(settings + "/instruments/hard");
+    fs::create_hard_link(perms, settings + "/instruments/hard/hard.spec.toml");
+    CHECK(approve_save("hard").error.code == "instrument.write_failed");
     unchanged();
     // A loader file that is a link to the permissions file.
     fs::create_directories(settings + "/loaders");

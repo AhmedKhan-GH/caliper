@@ -4,19 +4,19 @@
 // (design/builder-session.md, The spec page). It draws the builder session's
 // open spec with the spec runtime (spec_runtime/spec_runtime.h) in the work
 // area that the host's strips leave: the page bar with Home and the spec's
-// title where an applet's name goes, the status bar with the machine and the
+// title where an instrument's name goes, the status bar with the machine and the
 // page's facts (the workspace, the number of panels and of sources), and the
 // jobs tray's strip above the status bar while it is open.
 //
-// When it opens. Every applet.open that succeeds, from any origin (the
+// When it opens. Every instrument.open that succeeds, from any origin (the
 // person's UI, a command script, Caliper API, an agent over MCP), and every
 // spec.new or spec.open of an agent (the side chat's or one over MCP), asks
 // the app to show the page: take_open() is true once for each, read from a
 // counter of the session's journal (AppSession::specs_opened()), and the app
 // leaves the page it shows and enters this one, so that the person sees the
 // spec an agent builds while they review its edits. request_open() is the
-// seam for a list of spec applets, such as the landing screen's later: it
-// sends applet.open from the ui origin through the session's queue, so the
+// seam for a list of saved instruments, such as the landing screen's later: it
+// sends instrument.open from the ui origin through the session's queue, so the
 // page opens by the same path.
 //
 // Its data. The page reads the open spec again only when the session's
@@ -57,7 +57,7 @@
 #include <string>
 #include <vector>
 
-struct SpecAppletFacts;   // ui/landing_screen.h
+struct SpecInstrumentFacts;   // ui/landing_screen.h
 namespace caliper_builder {
 class Session;
 }
@@ -102,21 +102,21 @@ public:
     // False when the builder is not in this build.
     static bool built();
 
-    // True once for each applet.open, or agent's spec.new or spec.open, that
+    // True once for each instrument.open, or agent's spec.new or spec.open, that
     // succeeded since the last call.
     bool take_open(const AppSession& session);
     // Whether every open that the last true take_open() took was an agent's
     // (AppSession::agent_specs_opened()), not the person's own.
     bool opened_by_agent() const;
 
-    // Sends applet.open for the workspace's spec applet `id` through the
+    // Sends instrument.open for the workspace's instrument `id` through the
     // session's queue, without waiting, from `origin`: "ui" for the person's
     // own launch, or the origin of the agent or program that asked ("api",
     // "mcp", "agent"), whose replacement of unsaved changes then waits on an
     // approval card as its own command would. The page opens when it
     // succeeds. False when the session is not open.
     bool request_open(AppSession& session, const std::string& id, const std::string& origin = "ui");
-    // What an applet.open from `origin` would meet now, by the command
+    // What an instrument.open from `origin` would meet now, by the command
     // layer's own condition for replacing an open spec (review on for that
     // origin, and an open spec with unsaved changes): `opens` at once,
     // `waits` for the person's approval, or `unknown` while the session's
@@ -133,18 +133,18 @@ public:
 
     // A new spec from the app (the landing's F3 New dashboard, or a drop with
     // no open spec): spec.new from the ui origin through the session's queue,
-    // with the applet id pane_new_spec_id() derives from `title` among the
-    // workspace's saved applets. request_answered() reports it as it does an
+    // with the instrument id pane_new_spec_id() derives from `title` among the
+    // workspace's saved instruments. request_answered() reports it as it does an
     // open, and take_new() is true once after it succeeded; the app then
     // shows the page in build mode. False when the session is not open.
     bool request_new(AppSession& session, const std::string& title);
     bool take_new();
-    // The session holds an open spec (spec.new or applet.open ran).
+    // The session holds an open spec (spec.new or instrument.open ran).
     static bool has_open_spec(AppSession& session);
     // ... and it has changes that are not saved (a new spec that was never
     // saved has).
     static bool has_unsaved_spec(AppSession& session);
-    // The open spec's title, or its applet id when it has none; "" when no
+    // The open spec's title, or its instrument id when it has none; "" when no
     // spec is open or a long command holds the session.
     static std::string open_title(AppSession& session);
     // An import from drop_files() still runs.
@@ -152,9 +152,9 @@ public:
 
     // Shows the page from the next draw() on, with the session's open spec.
     void enter(AppSession& session);
-    // Shows the page with the spec of a spec applet found outside the
+    // Shows the page with the spec of an instrument found outside the
     // workspace, read from `spec_path` and drawn as it is, over the
-    // session's data, without becoming the open spec; an applet.open later
+    // session's data, without becoming the open spec; an instrument.open later
     // shows the open spec again. False, with the reason, when the file does
     // not read or validate.
     bool enter_file(AppSession& session, const std::string& spec_path, std::string* error);
@@ -202,8 +202,8 @@ public:
     // once the link has gone to the browser, or why not, which the page keeps
     // for the button's tooltip. Null leaves the button out. The button is
     // disabled, with the reason, for a dashboard that was never saved and for
-    // a spec applet's file from outside the workspace.
-    void set_open_in_browser(std::function<std::string(const std::string& applet_id)> open);
+    // an instrument's file from outside the workspace.
+    void set_open_in_browser(std::function<std::string(const std::string& instrument_id)> open);
     // Where Properties reads the names of a catalog source's dims, such as a
     // live view's (AppProviders::dim_names()); none without it.
     void set_dim_names(std::function<std::vector<std::string>(const std::string& catalog_id)> names);
@@ -267,7 +267,7 @@ public:
     using PanelOverlay = std::function<void(const std::string& panel_id, const std::string& title, float x, float y,
                                             float w, float h, float strip)>;
     void set_panel_overlay(PanelOverlay overlay);
-    // Build mode, for the open spec the page shows (not for a spec applet's
+    // Build mode, for the open spec the page shows (not for an instrument's
     // file drawn from outside the workspace).
     bool build_mode() const;
     void set_build_mode(bool on);
@@ -285,15 +285,15 @@ public:
     // After the last frame that drew the page has been rendered: releases
     // the page's textures and forgets the spec.
     void leave();
-    // The open spec's title, or its applet id when it has none.
+    // The open spec's title, or its instrument id when it has none.
     const std::string& title() const;
-    // The shown spec's applet id ([applet].id), "" when none is shown.
-    const std::string& applet_id() const;
+    // The shown spec's instrument id ([instrument].id), "" when none is shown.
+    const std::string& instrument_id() const;
 
-    // What the landing screen's Inspector shows of a spec applet: its format
+    // What the landing screen's Inspector shows of an instrument written as a spec: its format
     // version and its numbers of panels and sources, read from its spec file
     // and kept until the file changes. False without the builder.
-    static bool facts(const std::string& spec_path, SpecAppletFacts* out);
+    static bool facts(const std::string& spec_path, SpecInstrumentFacts* out);
 
     // After the renderer has shut down and before the UI context is
     // destroyed: frees what the page made in that context.

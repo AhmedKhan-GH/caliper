@@ -200,7 +200,7 @@ struct WidgetWorkspace {
         CHECK(requests.find(kFakeKey) == std::string::npos);
         CHECK(requests.find("\"handoff\"") != std::string::npos);
         CHECK(requests.find("\"preview_commit\"") == std::string::npos);
-        CHECK(requests.find("\"applet_save\"") == std::string::npos);
+        CHECK(requests.find("\"instrument_save\"") == std::string::npos);
     }
 };
 

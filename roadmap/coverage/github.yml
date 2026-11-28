@@ -23,7 +23,7 @@ entries:
   ids:
   - PLT-03
 - pr: 13
-  item: 'Pull request 13 (merged) delivers roadmap Phase 1: the SDK package, a core that compiles no applets,
+  item: 'Pull request 13 (merged) delivers roadmap Phase 1: the SDK package, a core that compiles no instruments,
     loading from outside, the Caliper CLI, Caliper Embed as a package, and docs and plans.'
   ids:
   - COR-04
@@ -107,7 +107,7 @@ entries:
 - pr: 17
   item: 'Pull request 17 (merged) delivers sprint 3: the builder libraries, spec format, loaders, catalog,
     command layer and session, caliper-mcp, the side chat, the widget agent, command endpoints of Caliper
-    API, the spec runtime and applets, the builder pane, drag and drop, approval cards and the first slice
+    API, the spec runtime and instruments, the builder pane, drag and drop, approval cards and the first slice
     of the browser spec page.'
   ids:
   - SPC-01

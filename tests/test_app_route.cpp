@@ -8,7 +8,7 @@
 // the app's spec page, renders one panel with panel.render and captures the
 // frame. Then caliper-mcp runs against the same app's API file and calls one
 // command tool, and SIGTERM closes the app. A second case runs `caliper
-// shot` on a workspace's spec applet that a command script builds. POSIX
+// shot` on a workspace's spec-based instrument that a command script builds. POSIX
 // only; without a Metal device the cases say they are skipped.
 #include <doctest/doctest.h>
 
@@ -227,14 +227,14 @@ TEST_CASE("app route: an agent builds, opens, renders and captures a dashboard i
                                 "SELECT i AS step, 0.1 + 2.0 * exp(-i / 300.0) AS loss, "
                                 "0.1 + 0.85 * (1 - exp(-i / 400.0)) AS accuracy FROM range(2000) t(i)");
     write_attention(ws + "/data/attn.safetensors");
-    fs::create_directories(t.str("user-applets"));
+    fs::create_directories(t.str("user-instruments"));
 
     Proc p;
     REQUIRE(p.start(exe, {"--hidden", "--api", "--api-port", "0", "--workspace", ws},
-                    {"CALIPER_DATA_DIR=" + data, "CALIPER_USER_APPLETS_DIR=" + t.str("user-applets"),
+                    {"CALIPER_DATA_DIR=" + data, "CALIPER_USER_INSTRUMENTS_DIR=" + t.str("user-instruments"),
                      "CALIPER_WINDOW_SIZE=800x500"}));
     REQUIRE_MESSAGE(p.read_until("[api] Caliper API on ", 60000), p.text);
-    REQUIRE_MESSAGE(p.read_until("[api] Spec applets in a browser", 10000), p.text);   // after the start line
+    REQUIRE_MESSAGE(p.read_until("[api] Instruments in a browser", 10000), p.text);   // after the start line
     if (p.text.find("[renderer] metal") == std::string::npos) {
         const char* require = std::getenv("CALIPER_REQUIRE_GPU");
         REQUIRE_MESSAGE(!(require && std::string(require) == "1"), p.text);
@@ -307,29 +307,29 @@ TEST_CASE("app route: an agent builds, opens, renders and captures a dashboard i
           {"nodes",
            {{{"id", "main"}, {"split", "vertical"}, {"ratio", 0.65}, {"children", {"top", "rows"}}},
             {{"id", "top"}, {"split", "horizontal"}, {"children", {"curves", "attention"}}}}}}}});
-    const json saved = ok(port, token, "applet.save");
-    CHECK(saved["manifest"] == "applets/run42-dashboard/run42-dashboard.caliper.toml");
+    const json saved = ok(port, token, "instrument.save");
+    CHECK(saved["manifest"] == "instruments/run42-dashboard/run42-dashboard.caliper.toml");
 
-    // The app lists the saved applet at once, as a spec applet.
-    std::string applets_body;
-    INFO("GET /v0/applets: " << applets_body);
-    auto applet_status = [&](const std::string& id) {
-        const Http r = http(port, "GET", "/v0/applets", token);
+    // The app lists the saved instrument at once, as a spec-based instrument.
+    std::string instruments_body;
+    INFO("GET /v0/instruments: " << instruments_body);
+    auto instrument_status = [&](const std::string& id) {
+        const Http r = http(port, "GET", "/v0/instruments", token);
         REQUIRE(r.status == 200);
-        applets_body = r.body;
+        instruments_body = r.body;
         const json listed = json::parse(r.body);   // kept alive through the loop
-        for (const json& a : listed["applets"])
+        for (const json& a : listed["instruments"])
             if (a["id"] == id) return a["status"].get<std::string>();
         return std::string("absent");
     };
-    CHECK(applet_status("local.run42-dashboard") == "READY");
+    CHECK(instrument_status("local.run42-dashboard") == "READY");
 
-    // Opening it shows the app's spec page, and the applet is ACTIVE while
+    // Opening it shows the app's spec page, and the instrument is ACTIVE while
     // the page shows it.
-    CHECK(ok(port, token, "applet.open", {{"id", "run42-dashboard"}})["title"] == "Run 42");
-    CHECK(applet_status("local.run42-dashboard") == "ACTIVE");
-    // A launch of the applet that the page shows finds it open.
-    const Http launched = http(port, "POST", "/v0/applets/local.run42-dashboard/launch", token);
+    CHECK(ok(port, token, "instrument.open", {{"id", "run42-dashboard"}})["title"] == "Run 42");
+    CHECK(instrument_status("local.run42-dashboard") == "ACTIVE");
+    // A launch of the instrument that the page shows finds it open.
+    const Http launched = http(port, "POST", "/v0/instruments/local.run42-dashboard/launch", token);
     REQUIRE_MESSAGE(launched.status == 200, launched.body);
     CHECK(json::parse(launched.body)["status"] == "ACTIVE");
 
@@ -352,7 +352,7 @@ TEST_CASE("app route: an agent builds, opens, renders and captures a dashboard i
         const json got = child.call("get", "spec_get", json::object());
         INFO(got.dump());
         CHECK(got["isError"] == false);
-        CHECK(got["structuredContent"]["json"]["applet"]["id"] == "run42-dashboard");
+        CHECK(got["structuredContent"]["json"]["instrument"]["id"] == "run42-dashboard");
         CHECK(child.finish().success());
         CHECK(child.all_err().find(token) == std::string::npos);
         CHECK(child.all_err().find(api["token"].get<std::string>()) == std::string::npos);
@@ -362,10 +362,10 @@ TEST_CASE("app route: an agent builds, opens, renders and captures a dashboard i
     // goes.
     ::kill(p.pid, SIGTERM);
     CHECK_MESSAGE(p.wait(30000) == 0, p.text);
-    CHECK(p.text.find("[session] command applet.open (api)") != std::string::npos);
+    CHECK(p.text.find("[session] command instrument.open (api)") != std::string::npos);
     CHECK(p.text.find("[session] workspace " + ws + " closed") != std::string::npos);
     CHECK_FALSE(fs::exists(data + "/api.json"));
-    CHECK(fs::is_regular_file(ws + "/applets/run42-dashboard/run42-dashboard.spec.toml"));
+    CHECK(fs::is_regular_file(ws + "/instruments/run42-dashboard/run42-dashboard.spec.toml"));
 }
 
 TEST_CASE("app route: the API file's token is an outside agent's, mcp, so its spec edits are reviewed whatever the "
@@ -378,7 +378,7 @@ TEST_CASE("app route: the API file's token is an outside agent's, mcp, so its sp
     TempDir t("tokens");
     const std::string ws = t.str("ws");
     const std::string data = t.str("data");
-    fs::create_directories(t.str("user-applets"));
+    fs::create_directories(t.str("user-instruments"));
     fs::create_directories(data);
     // The person denies the outside agent's two edits on the approval cards
     // (the hidden app's test decisions), so a held request answers at once.
@@ -388,10 +388,10 @@ TEST_CASE("app route: the API file's token is an outside agent's, mcp, so its sp
     }
     Proc p;
     REQUIRE(p.start(exe, {"--hidden", "--api", "--api-port", "0", "--workspace", ws},
-                    {"CALIPER_DATA_DIR=" + data, "CALIPER_USER_APPLETS_DIR=" + t.str("user-applets"),
+                    {"CALIPER_DATA_DIR=" + data, "CALIPER_USER_INSTRUMENTS_DIR=" + t.str("user-instruments"),
                      "CALIPER_WINDOW_SIZE=640x400", "CALIPER_TEST_APPROVALS=" + t.str("decisions.txt")}));
     REQUIRE_MESSAGE(p.read_until("[api] Caliper API on ", 60000), p.text);
-    REQUIRE_MESSAGE(p.read_until("[api] Spec applets in a browser", 10000), p.text);   // after the start line
+    REQUIRE_MESSAGE(p.read_until("[api] Instruments in a browser", 10000), p.text);   // after the start line
     if (p.text.find("[renderer] metal") == std::string::npos) {
         MESSAGE("caliper --hidden --api: run skipped: no GPU (no Metal device)");
         ::kill(p.pid, SIGTERM);
@@ -435,7 +435,7 @@ TEST_CASE("app route: the API file's token is an outside agent's, mcp, so its sp
     CHECK(p.text.find("[session] command panel.create (api)") != std::string::npos);
 }
 
-TEST_CASE("app route: caliper shot draws a workspace's spec applet on the spec page, built by a command script") {
+TEST_CASE("app route: caliper shot draws a workspace's spec-based instrument on the spec page, built by a command script") {
     const char* exe = std::getenv("CALIPER_TEST_CALIPER_EXE");
     if (!exe || !*exe) {
         MESSAGE("CALIPER_TEST_CALIPER_EXE is not set: run the ctest entry caliper_app_route");
@@ -445,7 +445,7 @@ TEST_CASE("app route: caliper shot draws a workspace's spec applet on the spec p
     const std::string ws = t.str("ws");
     session_test::write_parquet(t.str("inputs/temps.parquet"),
                                 "SELECT i AS step, 20 + 3 * sin(i / 20.0) AS temp FROM range(500) t(i)");
-    // The script builds and saves the applet from the ui origin, which may
+    // The script builds and saves the instrument from the ui origin, which may
     // import a file outside the workspace; shot then opens it.
     const std::vector<json> script = {
         {{"name", "data.import"}, {"args", {{"paths", {t.str("inputs/temps.parquet")}}, {"run", true}}}},
@@ -453,7 +453,7 @@ TEST_CASE("app route: caliper shot draws a workspace's spec applet on the spec p
         {{"name", "source.add"}, {"args", {{"id", "t"}, {"catalog", "table:temps"}}}},
         {{"name", "panel.create"},
          {"args", {{"id", "curve"}, {"primitive", "series"}, {"bind", {{"x", "t.step"}, {"y", {"t.temp"}}}}}}},
-        {{"name", "applet.save"}},
+        {{"name", "instrument.save"}},
     };
     std::string text;
     for (const json& j : script) text += j.dump() + "\n";
@@ -461,9 +461,9 @@ TEST_CASE("app route: caliper shot draws a workspace's spec applet on the spec p
         std::ofstream out(t.str("build.jsonl"));
         out << text;
     }
-    fs::create_directories(t.str("user-applets"));
+    fs::create_directories(t.str("user-instruments"));
     const std::vector<std::string> env = {"CALIPER_DATA_DIR=" + t.str("data"),
-                                          "CALIPER_USER_APPLETS_DIR=" + t.str("user-applets")};
+                                          "CALIPER_USER_INSTRUMENTS_DIR=" + t.str("user-instruments")};
 
     Proc p;
     std::vector<std::string> env1 = env;
@@ -478,7 +478,7 @@ TEST_CASE("app route: caliper shot draws a workspace's spec applet on the spec p
     }
     REQUIRE_MESSAGE(rc == 0, p.text);
     CHECK(p.text.find("[session] script done: 5 commands, 0 failed") != std::string::npos);
-    CHECK(p.text.find("[session] command applet.open (ui)") != std::string::npos);
+    CHECK(p.text.find("[session] command instrument.open (ui)") != std::string::npos);
     CHECK(p.text.find(": Temperatures at 640x400 after ") != std::string::npos);
     int w = 0, h = 0, n = 0;
     unsigned char* px = stbi_load(t.str("board.png").c_str(), &w, &h, &n, 4);
@@ -492,8 +492,8 @@ TEST_CASE("app route: caliper shot draws a workspace's spec applet on the spec p
     CHECK(h == 400);
     CHECK(img.colours() > 16);
 
-    // The saved applet by its manifest id, which the loader lists from the
-    // workspace's applets/ folder.
+    // The saved instrument by its manifest id, which the loader lists from the
+    // workspace's instruments/ folder.
     Proc again;
     REQUIRE(again.start(exe, {"shot", "--workspace", ws, "--launch", "local.temps-board", "--size", "320x200",
                               "--frames", "3", "--out", t.str("again.png")},
@@ -508,7 +508,7 @@ TEST_CASE("app route: caliper shot draws a workspace's spec applet on the spec p
                           t.str("none.png")},
                     env));
     CHECK(q.wait(120000) == 1);
-    CHECK_MESSAGE(q.text.find("caliper: no applet with the id nowhere in the search folders or the workspace") !=
+    CHECK_MESSAGE(q.text.find("caliper: no instrument with the id nowhere in the search folders or the workspace") !=
                       std::string::npos,
                   q.text);
     CHECK_FALSE(fs::exists(t.str("none.png")));

@@ -955,7 +955,7 @@ def window(width: int = 1280, height: int = 800, title: str = "caliper", *,
 
     The core of the window keeps its data in `$CALIPER_DATA_DIR`, else in a private temporary
     directory that closes with the window. The data are its stores, the data folders of the
-    applets and its `imgui.ini`.
+    instruments and its `imgui.ini`.
 
     The window has these limits:
 

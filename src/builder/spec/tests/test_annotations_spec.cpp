@@ -13,12 +13,12 @@ using namespace spec_test;
 
 namespace {
 
-// A version 1 spec with a table source, a state, a range control and a
-// series panel `loss`; `panel_tail` follows the panel's keys, and `tail`
-// follows everything.
+// A spec with a table source, a state, a range control and a series panel
+// `loss`; `panel_tail` follows the panel's keys, and `tail` follows
+// everything.
 std::string doc(const std::string& panel_tail, const std::string& tail = "") {
-    return "caliper_spec = 1\n"                               // 1
-           "[applet]\n"                                       // 2
+    return "caliper_spec = 2\n"                               // 1
+           "[instrument]\n"                                   // 2
            "id = \"a\"\n"                                     // 3
            "[[source]]\n"                                     // 4
            "id = \"m\"\n"                                     // 5

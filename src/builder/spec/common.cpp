@@ -103,11 +103,10 @@ const std::vector<std::string>& catalog_kinds() {
 
 const std::vector<std::string>& all_primitive_names() { return primitive_names(kLatestFormatVersion); }
 
-const std::vector<std::string>& primitive_names(std::int64_t version) {
-    static const std::vector<std::string> v0 = {"series", "heatmap", "points", "histogram", "table", "image", "text"};
-    static const std::vector<std::string> v1 = {"series", "heatmap", "points", "histogram",
-                                                "table",  "image",   "text",   "scene"};
-    return version >= kInstrumentVersion ? v1 : v0;
+const std::vector<std::string>& primitive_names(std::int64_t /*version*/) {
+    static const std::vector<std::string> v = {"series", "heatmap", "points", "histogram",
+                                               "table",  "image",   "text",   "scene"};
+    return v;
 }
 
 const std::vector<std::string>& control_kind_names() {

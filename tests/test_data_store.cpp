@@ -1,5 +1,5 @@
 // DataStore — SQL over the host store, results out as Arrow C streams
-// (caliper.data.v1, docs/applets/services/caliper-data-v1.md, docs/development/testing.md): a known table queried
+// (caliper.data.v1, docs/instruments/services/caliper-data-v1.md, docs/development/testing.md): a known table queried
 // back yields exact rows through the stream; bad SQL fails with a reason,
 // never a crash; registered datasets round-trip.
 #include <doctest/doctest.h>

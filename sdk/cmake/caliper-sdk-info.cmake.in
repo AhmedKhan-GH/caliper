@@ -5,11 +5,11 @@ set(CALIPER_UI_STACK_HASH "@CALIPER_UI_STACK_HASH@")
 set(CALIPER_UI_STACK_DEFINITIONS "@CALIPER_UI_STACK_DEFINITIONS@")
 set(CALIPER_TORCH_VERSION "@CALIPER_TORCH_VERSION@")
 set(CALIPER_TORCH_DIR "@CALIPER_TORCH_DIR@" CACHE PATH
-    "Root of the libtorch that caliper_add_applet(... TORCH) links (version @CALIPER_TORCH_VERSION@)")
-# The host's minimum macOS. An applet built against this package gets it unless
+    "Root of the libtorch that caliper_add_instrument(... TORCH) links (version @CALIPER_TORCH_VERSION@)")
+# The host's minimum macOS. An instrument built against this package gets it unless
 # the project, -DCMAKE_OSX_DEPLOYMENT_TARGET or MACOSX_DEPLOYMENT_TARGET chose
 # one; CMake reads the variable per directory when it generates, so setting it
-# after project() still applies to the applet's targets.
+# after project() still applies to the instrument's targets.
 set(CALIPER_MACOS_MIN "@CMAKE_OSX_DEPLOYMENT_TARGET@")
 if(APPLE AND NOT CMAKE_OSX_DEPLOYMENT_TARGET AND "$ENV{MACOSX_DEPLOYMENT_TARGET}" STREQUAL "")
     set(CMAKE_OSX_DEPLOYMENT_TARGET "${CALIPER_MACOS_MIN}")

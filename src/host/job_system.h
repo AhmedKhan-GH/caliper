@@ -11,10 +11,10 @@
 
 namespace caliper_host {
 
-// The applet a guarded job runs for (submit_guarded). The loader makes one per
-// applet instance and puts it in scope around every call into the instance
-// (JobOwnerScope); a jobs.v1 submit made inside such a call carries it to the
-// worker. A fault there is recorded here, and the loader quarantines the
+// The instrument a guarded job runs for (submit_guarded). The loader makes one
+// per instrument instance and puts it in scope around every call into the
+// instance (JobOwnerScope); a jobs.v1 submit made inside such a call carries it
+// to the worker. A fault there is recorded here, and the loader quarantines the
 // instance on its own thread before calling it again — a worker never touches
 // loader state. Shared ownership: a worker that outlives the instance still
 // writes somewhere valid.
@@ -43,24 +43,24 @@ public:
     JobOwnerScope& operator=(const JobOwnerScope&) = delete;
 
     // The owner a submission on this thread is attributed to; null outside
-    // any scope (a thread the applet made itself, an embedder's own call).
+    // any scope (a thread the instrument made itself, an embedder's own call).
     static std::shared_ptr<JobOwner> current();
 
 private:
     const std::shared_ptr<JobOwner>* prev_;
 };
 
-// Thread-per-job v1 (docs/applets/services/caliper-jobs-v1.md), the pattern extracted from an earlier applet's
-// train_engine (atomic stop flag polled by the loop; state published under a
-// mutex). Two ways in:
+// Thread-per-job v1 (docs/instruments/services/caliper-jobs-v1.md), the pattern
+// extracted from an earlier instrument's train_engine (atomic stop flag polled
+// by the loop; state published under a mutex). Two ways in:
 //   submit()          host-internal work: trusted, NOT crash-guarded, so a
 //                     fault in it still takes the host down (fail loudly). A
 //                     C++ exception does not: it is caught on the worker,
 //                     recorded as the job's failure, surfaced via views().
-//   submit_guarded()  caliper.jobs.v1 (applet code): fn runs under the crash
-//                     guard, so a fault or an exception fails the job with the
-//                     guard's reason, and the submitting applet's JobOwner (if
-//                     one was in scope) is told.
+//   submit_guarded()  caliper.jobs.v1 (instrument code): fn runs under the
+//                     crash guard, so a fault or an exception fails the job
+//                     with the guard's reason, and the submitting instrument's
+//                     JobOwner (if one was in scope) is told.
 class JobSystem {
 public:
     // Ctor + dtor are out-of-line: member jobs_ holds unique_ptr<Job> and Job

@@ -65,8 +65,8 @@ TEST_CASE("approval cards: an outside agent's panel.create over MCP waits in the
         {{"name", "panel.create"},
          {"args", {{"id", "curve"}, {"primitive", "series"}, {"title", "Temperature"},
                    {"bind", {{"x", "t.step"}, {"y", {"t.temp"}}}}}}},
-        {{"name", "applet.save"}},
-        {{"name", "applet.open"}, {"args", {{"id", "temps-board"}}}},
+        {{"name", "instrument.save"}},
+        {{"name", "instrument.open"}, {"args", {{"id", "temps-board"}}}},
     };
     {
         std::ofstream out(root + "/build.jsonl");
@@ -74,11 +74,11 @@ TEST_CASE("approval cards: an outside agent's panel.create over MCP waits in the
     }
     const std::string decisions = root + "/decisions.txt";
     { std::ofstream touch(decisions); }
-    fs::create_directories(root + "/user-applets");
+    fs::create_directories(root + "/user-instruments");
 
     Proc p;
     REQUIRE(p.start(exe, {"--hidden", "--api", "--api-port", "0", "--workspace", ws},
-                    {"CALIPER_DATA_DIR=" + data, "CALIPER_USER_APPLETS_DIR=" + root + "/user-applets",
+                    {"CALIPER_DATA_DIR=" + data, "CALIPER_USER_INSTRUMENTS_DIR=" + root + "/user-instruments",
                      "CALIPER_WINDOW_SIZE=800x500", "CALIPER_AGENT_OFFLINE=1",
                      "CALIPER_COMMAND_SCRIPT=" + root + "/build.jsonl",
                      "CALIPER_COMMAND_RESULTS=" + root + "/build-results.jsonl",

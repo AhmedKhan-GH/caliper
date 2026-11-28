@@ -28,18 +28,18 @@ entries:
   ids:
   - SPC-08
 - heading: What is built and what is planned
-  item: 'The first slice of the browser viewer: a saved spec applet opens in a browser tab from the running
+  item: 'The first slice of the browser viewer: a saved spec-based instrument opens in a browser tab from the running
     app.'
   ids:
   - EMB-06
 - heading: What is built and what is planned
-  item: The loader knows the spec applet's manifest, lists spec applets from the search folders and the
+  item: The loader knows the spec-based instrument's manifest, lists spec-based instruments from the search folders and the
     workspace, and validates their spec with the builder.
   ids:
   - SPC-08
   - COR-06
 - heading: What is built and what is planned
-  item: 'Planned: the page of the app that shows a spec applet, which calls the runtime.'
+  item: 'Planned: the page of the app that shows a spec-based instrument, which calls the runtime.'
   ids:
   - SPC-07
   - SPC-08
@@ -59,13 +59,13 @@ entries:
   ids:
   - SPC-01
 - heading: The document
-  item: A spec is one strict TOML table with caliper_spec, applet, source, panel, layout and x; an unknown
+  item: A spec is one strict TOML table with caliper_spec, instrument, source, panel, layout and x; an unknown
     key is spec.unknown_key and a spec with no panels is valid.
   ids:
   - SPC-01
-- heading: The applet
-  item: The applet table gives the spec's id, title, description and extensions, and the id grammar shared
-    by the applet, sources and panels.
+- heading: The instrument
+  item: The instrument table gives the spec's id, title, description and extensions, and the id grammar shared
+    by the instrument, sources and panels.
   ids:
   - SPC-01
 - heading: Sources
@@ -133,7 +133,7 @@ entries:
   ids:
   - SPC-01
 - heading: Extensions
-  item: A table named x is allowed in the document, applet, sources, transforms, panels, options and layout
+  item: A table named x is allowed in the document, instrument, sources, transforms, panels, options and layout
     nodes for a tool's own data; validation ignores it and the writers keep it.
   ids:
   - SPC-01
@@ -169,7 +169,7 @@ entries:
   ids:
   - SPC-01
 - heading: Canonical JSON
-  item: The canonical JSON form has sorted keys and compact UTF-8, and the JSON Schema caliper-spec-v0.schema.json
+  item: The canonical JSON form has sorted keys and compact UTF-8, and the JSON Schema caliper-spec-v2.schema.json
     (draft 2020-12) describes its structure.
   ids:
   - SPC-01
@@ -273,7 +273,7 @@ entries:
   - SPC-08
   - COR-08
 - heading: The spec runtime
-  item: The development tool caliper-spec-shot draws a saved spec applet or a spec file to a PNG; it is
+  item: The development tool caliper-spec-shot draws a saved spec-based instrument or a spec file to a PNG; it is
     not installed.
   ids:
   - SPC-08
@@ -286,27 +286,27 @@ entries:
     x column is not read, and only one offscreen canvas may exist without an ImGui context.'
   ids:
   - SPC-08
-- heading: The manifest of a spec applet
-  item: A saved spec applet is a folder with <id>.caliper.toml (kind = "spec", spec = file name) and <id>.spec.toml
+- heading: The manifest of a spec-based instrument
+  item: A saved spec-based instrument is a folder with <id>.caliper.toml (kind = "spec", spec = file name) and <id>.spec.toml
     and no library; library-only manifest keys are refused.
   ids:
   - SPC-08
-- heading: The manifest of a spec applet
-  item: applet.save maps the workspace id to a manifest id local.<id> with _ replaced by -, writes name
+- heading: The manifest of a spec-based instrument
+  item: instrument.save maps the workspace id to a manifest id local.<id> with _ replaced by -, writes name
     and summary from the spec and version 0.1.0.
   ids:
   - SPC-08
   - SPC-05
-- heading: The spec applet in the loader
-  item: The manifest parser reads kind without the builder, and the loader lists spec applets in the search
-    folders, one folder down and in the workspace's applets/ folder.
+- heading: The spec-based instrument in the loader
+  item: The manifest parser reads kind without the builder, and the loader lists spec-based instruments in the search
+    folders, one folder down and in the workspace's instruments/ folder.
   ids:
   - SPC-08
   - COR-06
-- heading: The spec applet in the loader
-  item: check_spec parses and validates a spec when the applet is checked or launched; caliper list and
-    caliper check print the kind and the validator's diagnostics, caliper install refuses a spec applet
-    and GET /v0/applets has a kind field.
+- heading: The spec-based instrument in the loader
+  item: check_spec parses and validates a spec when the instrument is checked or launched; caliper list and
+    caliper check print the kind and the validator's diagnostics, caliper install refuses a spec-based instrument
+    and GET /v0/instruments has a kind field.
   ids:
   - SPC-08
   - COR-07
@@ -368,8 +368,8 @@ entries:
   ids:
   - SPC-40
 - heading: Defects in the contracts
-  item: 'Four fixes to the sprint 3 contracts: no x table in bind, ratio only with two children, applet.save
-    maps _ to -, and abi_epoch not required for a spec applet.'
+  item: 'Four fixes to the sprint 3 contracts: no x table in bind, ratio only with two children, instrument.save
+    maps _ to -, and abi_epoch not required for a spec-based instrument.'
   ids:
   - SPC-01
   - SPC-08

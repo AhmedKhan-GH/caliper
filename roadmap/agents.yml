@@ -8,7 +8,7 @@ features:
     title: Caliper API v0
     status: shipped
     scope: core
-    summary: Caliper API v0 is an HTTP interface to the running app, on the loopback address and behind tokens, that lists and launches applets, returns a capture, serves a stream and runs the commands of the command layer.
+    summary: Caliper API v0 is an HTTP interface to the running app, on the loopback address and behind tokens, that lists and launches instruments, returns a capture, serves a stream and runs the commands of the command layer.
     depends_on: [COR-01, SPC-05]
     docs: docs/agents/http-api.md
     issue: null
@@ -112,7 +112,7 @@ features:
     title: Held Launches
     status: planned
     scope: core
-    summary: A launch of a workspace spec applet by an origin under review waits on its own approval card, like any other held command.
+    summary: A launch of a workspace spec-based instrument by an origin under review waits on its own approval card, like any other held command.
     depends_on: [AGT-06]
     sprint: "3.2"
     issue: null
@@ -291,5 +291,5 @@ features:
     scope: core
     summary: Tools for entities, cameras, state variables, selections, controls, the time cursor and annotations let an agent build an instrument and drive it through MCP.
     depends_on: [AGT-02, SPC-11]
-    docs: docs/agents/instrument-tools.md#tool-kinds
+    docs: docs/agents/scene-and-state-tools.md#tool-kinds
     issue: null

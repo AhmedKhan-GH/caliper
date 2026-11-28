@@ -1,6 +1,6 @@
 # Streaming and embedding
 
-This page plans what remains of using Caliper from other programs: the browser views beyond the live views, applets in a browser, the rest of C++ embedding, and the steps before a stream may leave the machine. The [roadmap](roadmap.md#streaming-and-embedding) gives the order and status.
+This page plans what remains of using Caliper from other programs: the browser views beyond the live views, instruments in a browser, the rest of C++ embedding, and the steps before a stream may leave the machine. The [roadmap](roadmap.md#streaming-and-embedding) gives the order and status.
 
 What is built is described in the docs site, under `docs/`: the explanations Network streaming, Live streaming and Rendering give the design; the references Caliper LIB, Wire protocol v3, Browser elements, Caliper CLI, Caliper API and Embedding Caliper list the interfaces; and the tutorial Watch a training run in a notebook and the guides Run a hub, Attach to a running script and Control a running script show them in use.
 
@@ -27,12 +27,12 @@ The web viewer is Caliper's own view layer, which is the live views, ImGui, ImPl
 1. Done: Caliper's real views in notebooks and browsers, for every live view kind.
 2. Every built-in view. Points are built; the geometry path and ImPlot3D remain, and need a WebGPU geometry pipeline within WebGPU's limit on the storage buffers of a vertex stage.
 3. The whole Caliper interface in a browser, with the landing screen, docking and the panes. It needs storage in the browser's file system, DuckDB's WebAssembly build, and cross-origin isolation, without which a browser does not let a page use threads.
-4. Applets in the browser, through the split into computation and interface described in [Applets in the browser](#applets-in-the-browser).
+4. Instruments in the browser, through the split into computation and interface described in [Instruments in the browser](#instruments-in-the-browser).
 5. The same WebGPU backend as the native fallback through Dawn, described in [Renderers](#renderers).
 
 Smaller steps remain for the views of the first step: the clipboard and multi-touch gestures in the canvas, a CI job that runs the module's checks on SwiftShader (the recipe is in `web/wasm/README.md`), and testing in Safari, in Firefox and on Windows.
 
-No computation runs in the browser. libtorch does not run there, and the plan adds no second ML stack: the browser shows what a producer sends. An applet reaches a browser through the split described in [Applets in the browser](#applets-in-the-browser): its interface, compiled to WebAssembly, draws there from the data stream. An applet that has not been ported to the split is shown only in the native app.
+No computation runs in the browser. libtorch does not run there, and the plan adds no second ML stack: the browser shows what a producer sends. An instrument reaches a browser through the split described in [Instruments in the browser](#instruments-in-the-browser): its interface, compiled to WebAssembly, draws there from the data stream. An instrument that has not been ported to the split is shown only in the native app.
 
 ## Limits in the browser
 
@@ -42,20 +42,20 @@ The limits of the browser views as they are, such as the bounded heap, the secon
 - **Headless tests depend on flags.** Headless Chromium presents a WebGPU canvas on SwiftShader only with `--use-angle=swiftshader`, and a Chromium update can change which flags work.
 - **The download grows with the views.** The module is about 495 KB with Brotli, of which Dear ImGui and ImPlot are more than half of the code and the two embedded faces most of the data. ImPlot3D and the geometry path will add to it.
 
-## Applets in the browser
+## Instruments in the browser
 
-Every applet splits into a computation and an interface. This is a design decision that the roadmap settles at the start of Phase 2.
+Every instrument splits into a computation and an interface. This is a design decision that the roadmap settles at the start of Phase 2.
 
 - The computation runs natively, with torch, on the machine that has the GPU.
-- The interface is ImGui code that compiles to WebAssembly, so the same applet runs in the native app and in a browser, where it draws from the data stream.
+- The interface is ImGui code that compiles to WebAssembly, so the same instrument runs in the native app and in a browser, where it draws from the data stream.
 - The SDK enforces the rule: interface code may use only services that have a wire form.
-- Applets built before the rule stay native-only until they are ported. Until then they are shown only in the native app.
+- Instruments built before the rule stay native-only until they are ported. Until then they are shown only in the native app.
 
-## Spec applets
+## Spec-based instruments
 
-The spec applets of Phase 3 ([Applet builder](applet-builder.md)) are designed to run in the browser unchanged, and they satisfy the split by construction. Their primitives are the live view types, and they bind only to sources that have a wire form.
+The spec-based instruments of Phase 3 ([Instrument builder](instrument-builder.md)) are designed to run in the browser unchanged, and they satisfy the split by construction. Their primitives are the live view types, and they bind only to sources that have a wire form.
 
-Built, as a first slice: a saved spec applet opens in a browser tab from the running app, at the link the app prints with `--api`. The page is an entry of the web package, `web/src/spec/`, served by Caliper API at `/v0/spec` from a copy built into the executable. It lays the panels out with a port of the native runtime's layout rectangles and draws them in the app's look on a canvas, from the data that the read-only command `panel.data` sends: the app resolves each panel, transforms and queries included, and bounds it as the native runtime does, so the browser computes nothing but the drawing. The page polls once a second with the version it has, and the app answers "unchanged" until a panel's sources, the spec or the catalog change. Its link carries a viewer token that opens only the page and its three read-only commands, from the viewer origin, which the command layer lets run reads only. [Spec format](spec-format.md#what-is-built-of-the-browser-viewer) records the decisions and limits, and the Caliper API reference (`docs/agents/http-api.md`) the endpoint.
+Built, as a first slice: a saved spec-based instrument opens in a browser tab from the running app, at the link the app prints with `--api`. The page is an entry of the web package, `web/src/spec/`, served by Caliper API at `/v0/spec` from a copy built into the executable. It lays the panels out with a port of the native runtime's layout rectangles and draws them in the app's look on a canvas, from the data that the read-only command `panel.data` sends: the app resolves each panel, transforms and queries included, and bounds it as the native runtime does, so the browser computes nothing but the drawing. The page polls once a second with the version it has, and the app answers "unchanged" until a panel's sources, the spec or the catalog change. Its link carries a viewer token that opens only the page and its three read-only commands, from the viewer origin, which the command layer lets run reads only. [Spec format](spec-format.md#what-is-built-of-the-browser-viewer) records the decisions and limits, and the Caliper API reference (`docs/agents/http-api.md`) the endpoint.
 
 What remains: the same page fed by a hub or by `caliper.serve()`, live sources over the stream rather than polls, and the three tensor transforms in the page for producers that send raw snapshots.
 

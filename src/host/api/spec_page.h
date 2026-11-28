@@ -1,6 +1,6 @@
 #pragma once
 // ============================================================================
-// spec_page.h: the browser viewer of spec applets, the page that
+// spec_page.h: the browser viewer of spec-based instruments, the page that
 // GET /v0/spec answers (api_server.h, Options::spec_page_html). It is the web
 // package's spec page (web/src/spec/, built by web/build.mjs) as the checked-in
 // copy python/caliper/_web/spec.html holds it, embedded at build time by

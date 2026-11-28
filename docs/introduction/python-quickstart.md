@@ -44,7 +44,7 @@ MACOSX_DEPLOYMENT_TARGET=14.0 uv build --wheel --no-build-isolation --python .ve
 uv pip install --python .venv/bin/python --reinstall --no-deps dist/caliper-*.whl
 ```
 
-With plain pip, the command `pip install dist/caliper-0.1.0-cp312-cp312-macosx_14_0_arm64.whl` does the same. The first build compiles `libcaliper` and its dependencies, DuckDB among them, from source for several minutes, and later builds reuse `build/<wheel tag>`.
+With plain pip, the command `pip install dist/caliper-0.1.0-cp312-cp312-macosx_14_0_arm64.whl` does the same. To run the MNIST Python examples (`examples/mnist/train.py` and `examples/mnist/train.ipynb`), install the `examples` extra (`pip install -e ".[examples]"`), which adds `torch` and `torchvision`. The first build compiles `libcaliper` and its dependencies, DuckDB among them, from source for several minutes, and later builds reuse `build/<wheel tag>`.
 
 ### Installation Check
 

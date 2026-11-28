@@ -2,11 +2,11 @@
 #include <cstdint>
 #include <set>
 #include <string>
-#include <caliper/services/log_v1.h>   // CaliperLogLevel (applet log sink)
+#include <caliper/services/log_v1.h>   // CaliperLogLevel (instrument log sink)
 
 namespace caliper_host {
 
-// Applet log routing (embed v1.1, §3.3 — the ledgered de-singletonization).
+// Instrument log routing (the ledgered de-singletonization).
 // caliper.log.v1 was a process-wide stderr singleton. Install a sink and every
 // log.v1 line is delivered to it INSTEAD of stderr; pass nullptr to restore the
 // built-in timestamped stderr writer (the caliper exe path, which never installs
@@ -15,17 +15,17 @@ namespace caliper_host {
 // AFTER joining workers, so the read on worker threads (log.v1 is callable from
 // workers) is ordered by thread create/join — no lock needed (mirrors the
 // existing set_bridge_log_sink pattern).
-void set_applet_log_sink(void (*sink)(void* userdata, CaliperLogLevel level,
-                                      const char* message_utf8),
-                         void* userdata);
-// caliper.ui.v1_1 dock_hint routing: every hint an applet gives is passed to
+void set_instrument_log_sink(void (*sink)(void* userdata, CaliperLogLevel level,
+                                          const char* message_utf8),
+                             void* userdata);
+// caliper.ui.v1_1 dock_hint routing: every hint an instrument gives is passed to
 // the sink with its window title and role (CaliperDockRole). The caliper
-// executable installs one for its applet page's docked layout; with none
+// executable installs one for its instrument page's docked layout; with none
 // installed a hint does nothing. UI thread only. Pass nullptr to remove it.
 void set_dock_hint_sink(void (*sink)(void* userdata, const char* window_title,
                                      uint32_t role),
                         void* userdata);
-// Host-side service registry (docs/applets/applet-contract.md). Call services_init() once
+// Host-side service registry (docs/instruments/instrument-contract.md). Call services_init() once
 // after the ImGui/ImPlot/ImPlot3D contexts exist; tables are static and live
 // for the process lifetime (the ABI's pointer-validity guarantee).
 void services_init();
@@ -52,7 +52,7 @@ class MetricsStore;
 MetricsStore& host_metrics_store();
 
 // The process-wide feed store backing caliper.feed.v1 (feed spec §4); telemetry
-// providers (T2) push samples in, applets/embedders read them out. In T1 it has
+// providers (T2) push samples in, instruments/embedders read them out. In T1 it has
 // no provider thread and no channels — the service is vended but inert (caps 0)
 // until a provider or a test registers channels.
 class FeedStore;
@@ -81,7 +81,7 @@ void services_set_renderer(HostRenderer* renderer);
 // The HostRenderer currently backing caliper.tensor_bridge.v1 (or nullptr).
 // White-box use (the §7 host-axis byte-compare in caliper_embed_tests): read a
 // bridge texture back with debug_readback_rgba8, which is renderer-side. Not on
-// the applet-facing surface — applets never see the renderer type.
+// the instrument-facing surface — instruments never see the renderer type.
 HostRenderer* services_renderer();
 
 // The process TensorBridge behind caliper.tensor_bridge.v1..v1_2 (lazily built

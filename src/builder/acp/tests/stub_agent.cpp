@@ -144,7 +144,7 @@ void run_turn(json id, std::string text) {
         chunk("world.");
         update({{"sessionUpdate", "available_commands_update"},
                 {"availableCommands",
-                 json::array({{{"name", "spec"}, {"description", "Show the open spec"}, {"input", {{"hint", "applet id"}}}},
+                 json::array({{{"name", "spec"}, {"description", "Show the open spec"}, {"input", {{"hint", "instrument id"}}}},
                               {{"name", "help"}, {"description", "List the commands"}}})}});
         update({{"sessionUpdate", "current_mode_update"}, {"currentModeId", "plan"}});
         update({{"sessionUpdate", "future_update_kind"}, {"value", 1}});

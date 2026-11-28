@@ -14,8 +14,8 @@ test.beforeEach(({}, info) => test.skip(info.project.name !== 'swiftshader', 'th
 const LINES = ['digit_0', 'digit_1', 'digit_2', 'digit_3', 'digit_4', 'digit_5', 'digit_6', 'digit_7'];
 
 export const MNIST_DASHBOARD: Json = {
-  caliper_spec: 1,
-  applet: { id: 'mnist_dashboard', title: 'MNIST Probe Dashboard' },
+  caliper_spec: 2,
+  instrument: { id: 'mnist_dashboard', title: 'MNIST Probe Dashboard' },
   state: [{ id: 'digit', type: 'integer', default: 0, min: 0, max: 9, title: 'Digit' }],
   source: [
     { id: 'loss', catalog: 'live:loss', history: 4096 },
@@ -156,10 +156,10 @@ test('a dashboard that the app does not have open says so, and an offline source
   await page.setViewportSize({ width: 1280, height: 800 });
   await openSpec(page, 'mnist_dashboard');
   const state = (s: Json) => s.panels.find((p: Json) => p.id === 'class_scores')?.state;
-  await expect.poll(async () => state(await page.evaluate(() => (window as any).caliperSpec.debugState()))).toBe('Dashboard not open in the app');
+  await expect.poll(async () => state(await page.evaluate(() => (window as any).caliperSpec.debugState()))).toBe('Instrument not open in the app');
   let s = await page.evaluate(() => (window as any).caliperSpec.debugState());
   expect(s.notOpen).toBe(true);
-  expect(s.banner).toBe('The app does not have this dashboard open. It shows data when the dashboard is open in the app.');
+  expect(s.banner).toBe('The app does not have this instrument open. It shows data when the instrument is open in the app.');
   await expect(page.locator('#banner')).toBeVisible();
   // The person opens it in the app: the banner goes, and an offline source says so plainly.
   app.openInApp = { mnist_dashboard: true };

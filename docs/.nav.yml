@@ -5,7 +5,7 @@ nav:
       - introduction/python-quickstart.md
       - introduction/architecture.md
   - Python: python
-  - Applets: applets
+  - Instruments: instruments
   - Builder: builder
   - Agents: agents
   - Web and Embedding: web

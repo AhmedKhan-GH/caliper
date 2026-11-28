@@ -3,7 +3,7 @@
 //   caliper-widget.js            the anywidget module of caliper.widget()
 //   caliper-controls-widget.js   the anywidget module of the controls panel (caliper.controls())
 //   index.html                   the viewer page, with its fonts and script inlined
-//   spec.html                    the browser viewer of spec applets, one file with its fonts and
+//   spec.html                    the browser viewer of instruments, one file with its fonts and
 //                                script inlined, which Caliper API serves at /v0/spec (the app
 //                                embeds the checked-in copy, python/caliper/_web/spec.html)
 // and, with --test, the test harness bundle into test-dist/.

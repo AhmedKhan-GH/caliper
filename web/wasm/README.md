@@ -41,7 +41,7 @@ The module compiles the native app's view code unchanged, so the views in the br
 | `src/host/net/wire.cpp`, `json.cpp` | Compiled unchanged into `caliper_wire`, the codec of wire protocol v3 that the native source and the hub use too |
 | `src/host/ui/sternbild_fonts.cpp`, `sternbild_theme.cpp` | Compiled unchanged: the app's faces and style |
 | `src/host/host_services.cpp` | Replaced by `src/web_services.cpp`, which provides the three functions the views use (`services_set_renderer`, `services_renderer`, `services_bridge`); the real file pulls in DuckDB, the stores and the job system |
-| `embed_core.cpp`, `live_core.cpp`, `live_attach.cpp`, `live_net_source.mm`, `live_session.mm`, `live_client.mm`, `live_views_metal.mm`, `viewer_main.mm` | Not compiled: the applet loader, the services, the jobs and the app paths, the native transports and the macOS viewer shell |
+| `embed_core.cpp`, `live_core.cpp`, `live_attach.cpp`, `live_net_source.mm`, `live_session.mm`, `live_client.mm`, `live_views_metal.mm`, `viewer_main.mm` | Not compiled: the instrument loader, the services, the jobs and the app paths, the native transports and the macOS viewer shell |
 | `src/host/gfx/core.cpp`, `src/host/renderer/webgpu_backend.cpp` | Compiled: the graphics layer's core (validation, the uniform arena, frames, serials and readback) and its WebGPU backend on the standard `webgpu.h` |
 | `metal_renderer.mm`, `vulkan_renderer.cpp` | Not compiled. `src/host/renderer/webgpu_renderer.cpp` draws instead |
 | Dear ImGui, ImPlot, `imgui_impl_wgpu` | Compiled unchanged. ImPlot3D, the node editor and the text editor are not compiled |

@@ -80,4 +80,4 @@ The pause of the run and the cursor are two things. A pause stops the script at 
 
 ## Cursor Events
 
-The event kind `cursor` has the keys `change`, `step`, `first`, `latest`, `playing` and `speed`. The change is `live`, `held`, `playing`, `moved` or `clamped`. A move by a command, a step or a key adds `moved`. A move by play or by a new live step adds no event, so that the ring of 1,024 events keeps room for decisions. [Instrument Tools](../agents/instrument-tools.md#cursor-commands) lists the commands.
+The event kind `cursor` has the keys `change`, `step`, `first`, `latest`, `playing` and `speed`. The change is `live`, `held`, `playing`, `moved` or `clamped`. A move by a command, a step or a key adds `moved`. A move by play or by a new live step adds no event, so that the ring of 1,024 events keeps room for decisions. [Scene and State Tools](../agents/scene-and-state-tools.md#cursor-commands) lists the commands.

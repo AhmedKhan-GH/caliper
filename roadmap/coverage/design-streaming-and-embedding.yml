@@ -53,7 +53,7 @@ entries:
   ids:
   - EMB-10
 - heading: The web viewer
-  item: 'Order 4: applets in the browser through the split.'
+  item: 'Order 4: instruments in the browser through the split.'
   ids:
   - EMB-11
 - heading: The web viewer
@@ -73,7 +73,7 @@ entries:
   ids:
   - EMB-20
 - heading: The web viewer
-  item: No computation runs in the browser; no second ML stack; an unported applet is shown only in the
+  item: No computation runs in the browser; no second ML stack; an unported instrument is shown only in the
     native app.
   ids:
   - EMB-11
@@ -86,28 +86,28 @@ entries:
   ids:
   - EMB-08
   - EMB-09
-- heading: Applets in the browser
-  item: Every applet splits into a native computation and an interface compiled to WebAssembly; the SDK
-    allows interface code only services with a wire form; earlier applets stay native-only.
+- heading: Instruments in the browser
+  item: Every instrument splits into a native computation and an interface compiled to WebAssembly; the SDK
+    allows interface code only services with a wire form; earlier instruments stay native-only.
   ids:
   - EMB-11
   - SPC-21
-- heading: Spec applets
-  item: Spec applets run in the browser unchanged and satisfy the split by construction.
+- heading: Spec-based instruments
+  item: Spec-based instruments run in the browser unchanged and satisfy the split by construction.
   ids:
   - EMB-06
   - SPC-08
-- heading: Spec applets
-  item: 'Built first slice: a saved spec applet opens in a browser tab at /v0/spec, drawn from panel.data
+- heading: Spec-based instruments
+  item: 'Built first slice: a saved spec-based instrument opens in a browser tab at /v0/spec, drawn from panel.data
     under a viewer token.'
   ids:
   - EMB-06
-- heading: Spec applets
+- heading: Spec-based instruments
   item: 'What remains: the page fed by a hub or caliper.serve(), live sources over the stream rather than
     polls.'
   ids:
   - EMB-27
-- heading: Spec applets
+- heading: Spec-based instruments
   item: 'What remains: the three tensor transforms in the page for producers that send raw snapshots.'
   ids:
   - EMB-27

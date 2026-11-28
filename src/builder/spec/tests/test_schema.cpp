@@ -122,9 +122,9 @@ TEST_CASE("the canonical JSON of every valid fixture passes the schema") {
 
 TEST_CASE("more valid specs pass the schema, canonical or not") {
     const std::vector<std::string> documents = {
-        R"({"caliper_spec": 0, "applet": {"id": "a"}, "source": [], "panel": [], "x": {}})",
-        R"({"caliper_spec": 0.0, "applet": {"id": "a", "title": "A", "description": ""}})",
-        R"({"caliper_spec": 0, "applet": {"id": "a"},
+        R"({"caliper_spec": 2, "instrument": {"id": "a"}, "source": [], "panel": [], "x": {}})",
+        R"({"caliper_spec": 2.0, "instrument": {"id": "a", "title": "A", "description": ""}})",
+        R"({"caliper_spec": 2, "instrument": {"id": "a"},
             "source": [{"id": "t", "catalog": "tensor:t", "transform": [
                 {"op": "slice", "axis": 0, "index": -1},
                 {"op": "reduce", "axis": [2.0], "fn": "argmax", "keepdims": true},
@@ -132,13 +132,13 @@ TEST_CASE("more valid specs pass the schema, canonical or not") {
             "panel": [{"id": "v", "primitive": "text", "bind": {"value": "t"}},
                       {"id": "h", "primitive": "histogram", "bind": {"values": "t"}}],
             "layout": {"split": "horizontal", "children": ["v", "h"], "title": "Both"}})",
-        R"({"caliper_spec": 0, "applet": {"id": "a"},
+        R"({"caliper_spec": 2, "instrument": {"id": "a"},
             "source": [{"id": "m", "catalog": "metric:run/loss"}],
             "panel": [{"id": "p", "primitive": "points",
                        "bind": {"x": "m.step", "y": "m.value", "z": "m.value", "color": "m.step", "size": "m.value"},
                        "options": {"colormap": "greys", "z_label": "", "x": {"k": [1, "two", true, {"n": null}]}}}],
             "layout": "p"})",
-        R"({"caliper_spec": 0, "applet": {"id": "a"},
+        R"({"caliper_spec": 2, "instrument": {"id": "a"},
             "source": [{"id": "m", "sql": "SELECT 1 AS v"}],
             "panel": [{"id": "a1", "primitive": "table", "bind": {"rows": "m"}},
                       {"id": "a2", "primitive": "series", "bind": {"y": "m.v"}},
@@ -166,15 +166,18 @@ TEST_CASE("more valid specs pass the schema, canonical or not") {
 }
 
 TEST_CASE("documents the schema refuses are refused by the library too") {
-    const std::string head = R"("caliper_spec": 0, "applet": {"id": "a"})";
+    const std::string head = R"("caliper_spec": 2, "instrument": {"id": "a"})";
     auto doc = [&](const std::string& rest) { return json::parse("{" + head + (rest.empty() ? "" : ", " + rest) + "}"); };
     const std::string tensor = R"("source": [{"id": "t", "catalog": "tensor:t"}])";
     const std::string table = R"("source": [{"id": "m", "catalog": "table:m"}])";
     const std::vector<json> documents = {
+        json::parse(R"({"caliper_spec": 0, "instrument": {"id": "a"}})"),
+        json::parse(R"({"caliper_spec": 1, "instrument": {"id": "a"}})"),
+        json::parse(R"({"caliper_spec": 3, "instrument": {"id": "a"}})"),
         json::parse(R"({"caliper_spec": 2, "applet": {"id": "a"}})"),
-        json::parse(R"({"caliper_spec": 0})"),
-        json::parse(R"({"caliper_spec": 0, "applet": {"id": "Bad"}})"),
-        json::parse(R"({"caliper_spec": 0, "applet": {"id": "a", "title": ""}})"),
+        json::parse(R"({"caliper_spec": 2})"),
+        json::parse(R"({"caliper_spec": 2, "instrument": {"id": "Bad"}})"),
+        json::parse(R"({"caliper_spec": 2, "instrument": {"id": "a", "title": ""}})"),
         doc(R"("panels": [])"),
         doc(R"("x": 3)"),
         doc(R"("source": [{"id": "s", "catalog": "tensor:t", "sql": "SELECT 1"}])"),
@@ -210,7 +213,7 @@ TEST_CASE("documents the schema refuses are refused by the library too") {
         doc(tensor + R"(, "panel": [{"id": "p", "primitive": "histogram", "bind": {"values": "t"}}], "layout": {"tabs": []})"),
         doc(tensor + R"(, "panel": [{"id": "p", "primitive": "histogram", "bind": {"values": "t"}}], "layout": {"tabs": ["p"], "split": "vertical"})"),
         doc(tensor + R"(, "panel": [{"id": "p", "primitive": "histogram", "bind": {"values": "t"}}], "layout": 3)"),
-        doc(R"("applet": {"id": "a", "title": null})"),
+        doc(R"("instrument": {"id": "a", "title": null})"),
     };
     for (const json& d : documents) {
         CAPTURE(d.dump());
@@ -220,22 +223,11 @@ TEST_CASE("documents the schema refuses are refused by the library too") {
     }
 }
 
-// ---- the JSON Schema of version 1 ---------------------------------------------
-
-namespace {
-
-// The schema of version 1 sits beside the fixtures' parent folder in the source tree.
-const SchemaChecker& checker_v1() {
-    static const SchemaChecker c(
-        json::parse(read_file(std::string(CALIPER_SPEC_FIXTURES) + "/../../schema/caliper-spec-v1.schema.json")));
-    return c;
-}
-
-}  // namespace
+// ---- interactive, scene, control, program and layout-lock schema checks -------
 
 TEST_CASE("the text control schema accepts parameter bindings at the byte limit") {
     const auto document = [](const char* bind, int limit) {
-        return json{{"caliper_spec", 1}, {"applet", {{"id", "text-control"}}},
+        return json{{"caliper_spec", 2}, {"instrument", {{"id", "text-control"}}},
                     {"control", json::array({{{"id", "prompt"}, {"kind", "text"}, {"bind", bind},
                         {"options", {{"max_length", limit}}}}})}};
     };
@@ -249,7 +241,7 @@ TEST_CASE("the text control schema accepts parameter bindings at the byte limit"
     REQUIRE(parsed.ok());
     for (const auto& doc : {prompt, cs::to_json(parsed.spec), document("value", 1024)}) {
         CHECK(library_accepts(doc));
-        const auto errors = checker_v1().errors(doc);
+        const auto errors = checker().errors(doc);
         CHECK_MESSAGE(errors.empty(), join_errors(errors));
         keep(doc, true);
     }
@@ -259,14 +251,13 @@ TEST_CASE("the text control schema accepts parameter bindings at the byte limit"
     prompt["control"][0]["options"]["value"] = value + "\xc3\xa9";
     CHECK_FALSE(library_accepts(prompt));
     for (const char* bind : {"param:", "action:save", "intervene:head"}) {
-        CHECK_FALSE(checker_v1().passes(document(bind, 4096)));
+        CHECK_FALSE(checker().passes(document(bind, 4096)));
         CHECK_FALSE(library_accepts(document(bind, 4096)));
     }
 }
 
 TEST_CASE("the selected label schema accepts integer references and refuses malformed declarations") {
-    const auto root = json::parse(read_file(std::string(CALIPER_SPEC_FIXTURES) + "/../../schema/caliper-spec-v1.schema.json"));
-    const SchemaChecker selected(root.at("$defs").at("piece_draw").at("properties").at("text").at("properties").at("selected"));
+    const SchemaChecker selected(schema().at("$defs").at("piece_draw").at("properties").at("text").at("properties").at("selected"));
     json value = {{"anchor", 32}, {"param", "selected_node"}, {"string_offset", 32}};
     REQUIRE(selected.passes(value));
     SUBCASE("required anchor") { value.erase("anchor"); }
@@ -286,26 +277,24 @@ TEST_CASE("the selected label schema accepts integer references and refuses malf
     CHECK_FALSE(selected.passes(value));
 }
 
-TEST_CASE("the schema of version 1 accepts the version 1 fixture and every version 0 fixture raised to 1") {
-    auto v1 = cs::parse_toml(fixture("instruments.spec.toml"));
-    REQUIRE(v1.ok());
-    std::vector<std::string> errors = checker_v1().errors(cs::to_json(v1.spec));
+TEST_CASE("the schema accepts the instruments fixture and every valid fixture") {
+    auto inst = cs::parse_toml(fixture("instruments.spec.toml"));
+    REQUIRE(inst.ok());
+    std::vector<std::string> errors = checker().errors(cs::to_json(inst.spec));
     CHECK_MESSAGE(errors.empty(), join_errors(errors));
-    CHECK_FALSE(checker().passes(cs::to_json(v1.spec)));   // version 0's schema refuses it
     for (const std::string& name : valid_fixtures()) {
         CAPTURE(name);
         auto parsed = cs::parse_toml(fixture(name));
         REQUIRE(parsed.ok());
         json doc = cs::to_json(parsed.spec);
-        doc["caliper_spec"] = 1;
-        errors = checker_v1().errors(doc);
+        errors = checker().errors(doc);
         CHECK_MESSAGE(errors.empty(), join_errors(errors));
         CHECK(library_accepts(doc));
     }
 }
 
-TEST_CASE("documents the schema of version 1 refuses are refused by the library too") {
-    const std::string head = R"("caliper_spec": 1, "applet": {"id": "a"})";
+TEST_CASE("scene and control documents refused by the schema are refused by the library too") {
+    const std::string head = R"("caliper_spec": 2, "instrument": {"id": "a"})";
     auto doc = [&](const std::string& rest) { return json::parse("{" + head + ", " + rest + "}"); };
     const std::string scene = R"("panel": [{"id": "w", "primitive": "scene", "bind": {"scene": "live:model"}}])";
     const std::vector<json> documents = {
@@ -325,30 +314,30 @@ TEST_CASE("documents the schema of version 1 refuses are refused by the library 
         doc(R"("panel": [{"id": "w", "primitive": "scene", "bind": {"scene": "live:model"}, "options": {"include": []}}])"),
         doc(R"("panel": [{"id": "w", "primitive": "scene", "bind": {"scene": "live:model"}, "options": {"view_camera": {"elevation": 90}}}])"),
         doc(R"("panel": [{"id": "w", "primitive": "scene", "bind": {"scene": "live:model"}, "options": {"colormap": "magma"}}])"),
-        json::parse(R"({"caliper_spec": 0, "applet": {"id": "a"}, "control": [{"id": "k", "kind": "button", "bind": "run:pause"}]})"),
+        json::parse(R"({"caliper_spec": 1, "instrument": {"id": "a"}, "control": [{"id": "k", "kind": "button", "bind": "run:pause"}]})"),
     };
     for (const json& d : documents) {
         CAPTURE(d.dump());
-        if (d.at("caliper_spec") == 1) CHECK_FALSE(checker_v1().passes(d));
+        CHECK_FALSE(checker().passes(d));
         CHECK_FALSE(library_accepts(d));
     }
     // And what both accept.
     for (const json& d : {doc(scene), doc(R"("control": [{"id": "k", "kind": "slider", "bind": "param:lr", "options": {"min": 0.001, "max": 1, "log": true}}])")}) {
         CAPTURE(d.dump());
-        const std::vector<std::string> errors = checker_v1().errors(d);
+        const std::vector<std::string> errors = checker().errors(d);
         CHECK_MESSAGE(errors.empty(), join_errors(errors));
         CHECK(library_accepts(d));
     }
 }
 
-TEST_CASE("the schema of version 1 takes programs and provenance, and refuses what the library refuses") {
+TEST_CASE("the schema takes programs and provenance, and refuses what the library refuses") {
     auto parsed = cs::parse_toml(fixture("programs.spec.toml"));
     REQUIRE(parsed.ok());
     const json canonical = cs::to_json(parsed.spec);
-    std::vector<std::string> errors = checker_v1().errors(canonical);
+    std::vector<std::string> errors = checker().errors(canonical);
     CHECK_MESSAGE(errors.empty(), join_errors(errors));
 
-    const std::string head = R"("caliper_spec": 1, "applet": {"id": "a"}, "panel": [{"id": "w", "primitive": "scene", "bind": {"scene": "live:model"}}])";
+    const std::string head = R"("caliper_spec": 2, "instrument": {"id": "a"}, "panel": [{"id": "w", "primitive": "scene", "bind": {"scene": "live:model"}}])";
     auto doc = [&](const std::string& rest) { return json::parse("{" + head + ", " + rest + "}"); };
     const std::string geometry = R"({"kind": "geometry", "panel": "w", "max_count": 8, "arrays": ["positions"]})";
     auto program = [&](const std::string& output, const std::string& more = "") {
@@ -374,7 +363,7 @@ TEST_CASE("the schema of version 1 takes programs and provenance, and refuses wh
     };
     for (const json& d : refused) {
         CAPTURE(d.dump());
-        CHECK_FALSE(checker_v1().passes(d));
+        CHECK_FALSE(checker().passes(d));
         CHECK_FALSE(library_accepts(d));
     }
     const std::vector<json> accepted = {
@@ -386,16 +375,16 @@ TEST_CASE("the schema of version 1 takes programs and provenance, and refuses wh
     };
     for (const json& d : accepted) {
         CAPTURE(d.dump());
-        errors = checker_v1().errors(d);
+        errors = checker().errors(d);
         CHECK_MESSAGE(errors.empty(), join_errors(errors));
         CHECK(library_accepts(d));
     }
 }
 
-TEST_CASE("closable and layout_locked validate, round-trip, and stay gated to version 1") {
-    const json v1_doc = {
-        {"caliper_spec", 1},
-        {"applet", {{"id", "locked-instrument"}, {"layout_locked", true}}},
+TEST_CASE("closable and layout_locked validate and round-trip in version 2") {
+    const json v2_doc = {
+        {"caliper_spec", 2},
+        {"instrument", {{"id", "locked-instrument"}, {"layout_locked", true}}},
         {"panel", json::array({
                       {{"id", "notes"}, {"primitive", "text"}, {"closable", false}, {"options", {{"text", "Fixed"}}}},
                       {{"id", "scene"}, {"primitive", "scene"}, {"closable", true}, {"bind", {{"scene", "live:model"}}}},
@@ -405,19 +394,19 @@ TEST_CASE("closable and layout_locked validate, round-trip, and stay gated to ve
                     })},
         {"layout", {{"split", "horizontal"}, {"children", json::array({"notes", "scene", "gain"})}}},
     };
-    const auto schema_errors = checker_v1().errors(v1_doc);
+    const auto schema_errors = checker().errors(v2_doc);
     CHECK_MESSAGE(schema_errors.empty(), join_errors(schema_errors));
-    CHECK(library_accepts(v1_doc));
+    CHECK(library_accepts(v2_doc));
 
-    const auto parsed = cs::from_json(v1_doc);
+    const auto parsed = cs::from_json(v2_doc);
     REQUIRE(parsed.ok());
-    CHECK(parsed.spec.applet.layout_locked == std::optional<bool>(true));
+    CHECK(parsed.spec.instrument.layout_locked == std::optional<bool>(true));
     REQUIRE(parsed.spec.panels.size() == 2);
     CHECK(parsed.spec.panels[0].closable == std::optional<bool>(false));
     CHECK(parsed.spec.panels[1].closable == std::optional<bool>(true));
     REQUIRE(parsed.spec.controls.size() == 1);
     CHECK(parsed.spec.controls[0].closable == std::optional<bool>(false));
-    CHECK(cs::required_version(parsed.spec) == cs::kInstrumentVersion);
+    CHECK(cs::required_version(parsed.spec) == cs::kFormatVersion);
 
     const std::string toml = cs::to_toml(parsed.spec);
     CHECK(toml.find("layout_locked = true") != std::string::npos);
@@ -425,42 +414,42 @@ TEST_CASE("closable and layout_locked validate, round-trip, and stay gated to ve
     const auto reparsed = cs::parse_toml(toml);
     REQUIRE(reparsed.ok());
     CHECK(reparsed.spec == parsed.spec);
-    CHECK_MESSAGE(checker_v1().errors(cs::to_json(reparsed.spec)).empty(), "round-tripped JSON fails v1 schema");
+    CHECK_MESSAGE(checker().errors(cs::to_json(reparsed.spec)).empty(), "round-tripped JSON fails v2 schema");
 
-    // Patching closable on a version 0 spec raises it to version 1 and round-trips through merge patch.
-    const auto v0_base = cs::parse_toml(R"(
-caliper_spec = 0
-[applet]
+    // Patching closable round-trips through merge patch.
+    const auto base = cs::parse_toml(R"(
+caliper_spec = 2
+[instrument]
 id = "base"
 [[panel]]
 id = "note"
 primitive = "text"
 options = { text = "hi" }
 )");
-    REQUIRE(v0_base.ok());
-    CHECK(cs::required_version(v0_base.spec) == 0);
-    const auto patched = cs::patch_panel(v0_base.spec, "note", json{{"closable", false}});
+    REQUIRE(base.ok());
+    CHECK(cs::required_version(base.spec) == 2);
+    const auto patched = cs::patch_panel(base.spec, "note", json{{"closable", false}});
     REQUIRE(patched.ok());
-    CHECK(patched.spec.version == cs::kInstrumentVersion);
+    CHECK(patched.spec.version == cs::kFormatVersion);
     CHECK(patched.spec.panels[0].closable == std::optional<bool>(false));
     const auto cleared = cs::patch_panel(patched.spec, "note", json{{"closable", nullptr}});
     REQUIRE(cleared.ok());
     CHECK_FALSE(cleared.spec.panels[0].closable.has_value());
 
-    // Version 0 rejects closable and layout_locked; non-boolean values fail both v1 schema and library.
+    // Retired versions and non-boolean values fail both schema and library.
     const std::vector<json> refused = {
-        json::parse(R"({"caliper_spec": 0, "applet": {"id": "a", "layout_locked": true}})"),
-        json::parse(R"({"caliper_spec": 0, "applet": {"id": "a"},
+        json::parse(R"({"caliper_spec": 0, "instrument": {"id": "a", "layout_locked": true}})"),
+        json::parse(R"({"caliper_spec": 1, "instrument": {"id": "a"},
                         "panel": [{"id": "n", "primitive": "text", "closable": false, "options": {"text": "x"}}]})"),
-        json::parse(R"({"caliper_spec": 1, "applet": {"id": "a", "layout_locked": "yes"}})"),
-        json::parse(R"({"caliper_spec": 1, "applet": {"id": "a"},
+        json::parse(R"({"caliper_spec": 2, "instrument": {"id": "a", "layout_locked": "yes"}})"),
+        json::parse(R"({"caliper_spec": 2, "instrument": {"id": "a"},
                         "panel": [{"id": "n", "primitive": "text", "closable": 0, "options": {"text": "x"}}]})"),
-        json::parse(R"({"caliper_spec": 1, "applet": {"id": "a"},
+        json::parse(R"({"caliper_spec": 2, "instrument": {"id": "a"},
                         "control": [{"id": "c", "kind": "slider", "closable": "no", "bind": "value"}]})"),
     };
     for (const json& d : refused) {
         CAPTURE(d.dump());
-        if (d.at("caliper_spec") == 1) CHECK_FALSE(checker_v1().passes(d));
+        CHECK_FALSE(checker().passes(d));
         CHECK_FALSE(library_accepts(d));
     }
 }

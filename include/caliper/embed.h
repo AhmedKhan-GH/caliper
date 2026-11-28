@@ -1,9 +1,9 @@
 /* ===========================================================================
  * caliper/embed.h - the embed C ABI of libcaliper
  *
- * The small C ABI that a host binary uses to run the applet canvas inside a view it owns, without
- * linking ImGui, torch or any renderer type. Embedders call it, applets never do. The header sits
- * on its own include root, so an applet that links caliper::sdk cannot include it.
+ * The small C ABI that a host binary uses to run the instrument canvas inside a view it owns, without
+ * linking ImGui, torch or any renderer type. Embedders call it, instruments never do. The header sits
+ * on its own include root, so an instrument that links caliper::sdk cannot include it.
  * The docs page "Embedding API" explains ownership, threading and limits.
  * ===========================================================================*/
 #ifndef CALIPER_EMBED_H
@@ -11,7 +11,7 @@
 
 #include <stddef.h>   /* size_t   */
 #include <stdint.h>   /* uint32_t */
-/* v1.2 views: CaliperTensor, the SDK interchange type (pure C). */
+/* Views: CaliperTensor, the SDK interchange type (pure C). */
 #include <caliper/tensor.h>
 
 #ifdef __cplusplus
@@ -21,17 +21,16 @@ extern "C" {
 /**
  * The major version of this ABI, which is the major part of `CALIPER_EMBED_VERSION`.
  *
- * It bumps when the ABI grows a field. Every struct starts with `struct_size`, which is the
+ * It bumps when the ABI grows a field or breaks compatibility. Every struct starts with `struct_size`, which is the
  * compatibility gate. The core requires `struct_size` to be at least its own `sizeof` for the struct
  * and refuses a smaller one, so a caller built against an older header is rejected and never
  * misread. Fields are append-only and land after the old ones. A caller built against a header at
  * least as new as the core passes the gate and finds every field the core reads. A newer caller
  * with an older core is not supported.
  */
-#define CALIPER_EMBED_API_VERSION 1
+#define CALIPER_EMBED_API_VERSION 2
 
-/* v1.1 added `caliper_core_get_service`, the `data_dir` root and the routing of applet log lines.
- * It changed no struct, so `CALIPER_EMBED_API_VERSION` stays 1. */
+/* v2.0.0 starts the v2 ABI line with instrument lifecycle functions and fields. */
 
 /** The opaque handle of one core. A process holds one live core at a time. */
 typedef struct CaliperCore CaliperCore;
@@ -56,22 +55,22 @@ typedef enum CaliperRenderer {
  * The diagnostics sink of a core.
  *
  * The callback receives two streams, which differ by a prefix on the message. Core diagnostics
- * such as the renderer choice, refusals and crash text arrive untagged. Applet `caliper.log.v1`
- * lines arrive tagged with `[applet] `. `level` is a `CaliperLogLevel` value, from 0 for debug to
+ * such as the renderer choice, refusals and crash text arrive untagged. Instrument `caliper.log.v1`
+ * lines arrive tagged with `[instrument] `. `level` is a `CaliperLogLevel` value, from 0 for debug to
  * 3 for error. `message` is valid only during the call. The core calls the sink from the frame
- * thread for its own lines and from any thread for applet lines, so a sink that touches shared
+ * thread for its own lines and from any thread for instrument lines, so a sink that touches shared
  * UI state must marshal to its UI thread. With a `NULL` sink, both streams go to stderr.
  */
 typedef void (*CaliperLogFn)(void* userdata, int level, const char* message);
 
 /**
- * The applet-fault callback of a core.
+ * The instrument-fault callback of a core.
  *
- * The core fires it after it has quarantined and torn down the faulting applet, and the core keeps
- * running. `applet_id` and `fault` are valid only during the call. With a `NULL` callback, the core
+ * The core fires it after it has quarantined and torn down the faulting instrument, and the core keeps
+ * running. `instrument_id` and `fault` are valid only during the call. With a `NULL` callback, the core
  * logs the fault and swallows it.
  */
-typedef void (*CaliperCrashFn)(void* userdata, const char* applet_id,
+typedef void (*CaliperCrashFn)(void* userdata, const char* instrument_id,
                                const char* fault);
 
 /**
@@ -86,16 +85,16 @@ typedef struct CaliperCoreDesc {
     CaliperRenderer renderer;
     /**
      * The per-core app-data root, or `NULL` for the default of the operating system. A directory
-     * (created if missing) holds the metrics, artifacts and applet data stores of this core and
+     * (created if missing) holds the metrics, artifacts and instrument data stores of this core and
      * the window layout in `imgui.ini`. With `NULL`, the core keeps no layout and writes nothing to
      * the working directory. The setting lasts for the one live core and ends at shutdown.
      */
     const char*     data_dir;
-    /** An extra applet search folder, or `NULL` for the default discovery. */
-    const char*     applets_dir;
+    /** An extra instrument search folder, or `NULL` for the default discovery. */
+    const char*     instruments_dir;
     /** The diagnostics sink, or `NULL` for stderr. */
     CaliperLogFn    log_fn;
-    /** The applet-fault callback, or `NULL` to log and swallow faults. */
+    /** The instrument-fault callback, or `NULL` to log and swallow faults. */
     CaliperCrashFn  crash_fn;
     /** The pointer that the core passes back to `log_fn` and `crash_fn`. */
     void*           userdata;
@@ -204,7 +203,7 @@ typedef struct CaliperInputEvent {
 CaliperCore* caliper_core_create(const CaliperCoreDesc* desc);
 
 /**
- * Tear down the core in the reverse order of creation: unload the applet, join the jobs, close the
+ * Tear down the core in the reverse order of creation: unload the instrument, join the jobs, close the
  * stores and drop the renderer and the ImGui context. Safe on `NULL`. The call also ends the
  * one-core-per-process limit, and the `CaliperCore*` is dead afterward.
  */
@@ -222,7 +221,7 @@ int  caliper_core_attach_canvas(CaliperCore* core, void* native_view,
                                 const CaliperCanvasDesc* desc);
 
 /**
- * Run exactly one frame: clear the canvas, draw the loaded applet under the crash guard, then
+ * Run exactly one frame: clear the canvas, draw the loaded instrument under the crash guard, then
  * composite and present or store the result. The call never polls, sleeps or waits for vsync.
  * Without an attached canvas it does nothing except set the last error.
  */
@@ -231,24 +230,24 @@ void caliper_core_frame(CaliperCore* core);
 /** Feed one input event into the core. The call does nothing before a canvas exists. */
 void caliper_core_event(CaliperCore* core, const CaliperInputEvent* event);
 
-/* --- Applet control ------------------------------------------------------ */
+/* --- Instrument control -------------------------------------------------- */
 
 /**
- * Load and launch the applet whose manifest id is `manifest_id`, for example
- * `dev.example.my-applet`. Return 1 on success, or 0 when the id is unknown or the launch is refused
- * or fails, with the last error set. Attach a canvas first, because the first frame of an applet
- * touches the ImGui backend of the renderer. The core tears down a loaded applet first, so
- * reloading the same id restarts the applet with no carried state, and a failed launch leaves no
- * applet loaded. An unknown id is the one exception: the call refuses it at once and leaves a
- * running applet alone.
+ * Load and launch the instrument whose manifest id is `manifest_id`, for example
+ * `dev.example.my-instrument`. Return 1 on success, or 0 when the id is unknown or the launch is refused
+ * or fails, with the last error set. Attach a canvas first, because the first frame of an instrument
+ * touches the ImGui backend of the renderer. The core tears down a loaded instrument first, so
+ * reloading the same id restarts the instrument with no carried state, and a failed launch leaves no
+ * instrument loaded. An unknown id is the one exception: the call refuses it at once and leaves a
+ * running instrument alone.
  */
-int  caliper_core_load_applet(CaliperCore* core, const char* manifest_id);
+int  caliper_core_load_instrument(CaliperCore* core, const char* manifest_id);
 
 /**
- * Tear down the loaded applet by joining its jobs and then dropping the instance. The call does
- * nothing when no applet is loaded. Call it between frames.
+ * Tear down the loaded instrument by joining its jobs and then dropping the instance. The call does
+ * nothing when no instrument is loaded. Call it between frames.
  */
-void caliper_core_unload_applet(CaliperCore* core);
+void caliper_core_unload_instrument(CaliperCore* core);
 
 /* --- Offscreen readback -------------------------------------------------- */
 
@@ -265,13 +264,13 @@ int  caliper_core_read_pixels(CaliperCore* core, void* buf, int stride);
  */
 const char* caliper_core_last_error(CaliperCore* core);
 
-/* --- Service consumption (v1.1) ------------------------------------------ */
+/* --- Service consumption ------------------------------------------------- */
 
 /**
- * Return the service table that an applet receives from `CaliperHost.get_service` for `id`, such as
+ * Return the service table that an instrument receives from `CaliperHost.get_service` for `id`, such as
  * `caliper.metrics.v1` or `caliper.jobs.v1`, or `NULL` for an unknown id or a `NULL` core. Cast the
  * result to the matching struct of the `caliper/services` headers and call its function pointers
- * as an applet does. The table is static for the process and valid from creation until
+ * as an instrument does. The table is static for the process and valid from creation until
  * `caliper_core_shutdown`. The metrics, artifacts, data, jobs, device and log services may run on
  * any thread, while the tensor bridge, geometry and UI services are frame-thread only.
  */
@@ -392,7 +391,7 @@ int caliper_core_view_readback(CaliperCore* core, const char* name, void* buf, s
  */
 int caliper_core_colormap_lut(int32_t colormap, uint32_t out256[256]);
 
-/* --- Version (v1.4) ------------------------------------------------------- */
+/* --- Version -------------------------------------------------------------- */
 
 /**
  * Build a version number from its parts, in the encoding `(major << 16) | (minor << 8) | patch`. The
@@ -402,14 +401,13 @@ int caliper_core_colormap_lut(int32_t colormap, uint32_t out256[256]);
     (((major) << 16) | ((minor) << 8) | (patch))
 /**
  * The major version of this header, which equals `CALIPER_EMBED_API_VERSION`. It bumps when a
- * struct grows.
+ * struct grows or the ABI breaks compatibility.
  */
 #define CALIPER_EMBED_VERSION_MAJOR CALIPER_EMBED_API_VERSION
 /**
- * The minor version of this header. It counts the additive sections: v1.1 services, v1.2 tensor
- * views, v1.3 typed live views and v1.4 the version call.
+ * The minor version of this header. It counts additive sections within the current major version.
  */
-#define CALIPER_EMBED_VERSION_MINOR 4
+#define CALIPER_EMBED_VERSION_MINOR 0
 /** The patch version of this header. It counts library fixes that change no declaration. */
 #define CALIPER_EMBED_VERSION_PATCH 0
 /**

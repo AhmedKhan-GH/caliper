@@ -3,9 +3,9 @@ pillar: AGT
 title: Agents and Automation
 proposed: false
 candidates:
-  - key: widget-agent-loaders-and-applets
-    title: "Loader Creation and Applet Saving by the Widget Agent"
-    summary: "The widget agent creates loaders, saves a spec as an applet, undoes its steps and replaces a whole spec."
+  - key: widget-agent-loaders-and-instruments
+    title: "Loader Creation and Instrument Saving by the Widget Agent"
+    summary: "The widget agent creates loaders, saves a spec as an instrument, undoes its steps and replaces a whole spec."
     serves: "A person builds a complete dashboard from raw files by asking, without leaving the chat."
     origin: cut
     depends_on: [AGT-05, SPC-03, SPC-08]

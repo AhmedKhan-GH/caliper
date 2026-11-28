@@ -24,7 +24,7 @@ option(CALIPER_WEB_CLOSURE "Run the Closure compiler over the JavaScript glue (R
 
 # ---- the view layer, without the native embed core ---------------------------
 # The live views, the embed v1.2 views and the hosted core (embed_views.cpp,
-# split out of embed_core.cpp so the applet loader, the service registry, the
+# split out of embed_core.cpp so the instrument loader, the service registry, the
 # job system and the app paths stay out), the tensor bridge, the WebGPU
 # renderer with the graphics layer's core and WebGPU backend, Dear ImGui and
 # ImPlot. live_unsupported.cpp is the existing
@@ -121,8 +121,8 @@ add_library(caliper_spec_reader STATIC
     ${_spec}/annotation.cpp
     ${_spec}/colormaps.cpp
     ${_spec}/common.cpp
+    ${_spec}/control.cpp
     ${_spec}/entity.cpp
-    ${_spec}/instrument.cpp
     ${_spec}/json_form.cpp
     ${_spec}/reference.cpp
     ${_spec}/spec.cpp

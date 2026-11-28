@@ -78,7 +78,7 @@ namespace caliper_host {
 
 class SpecScene;   // spec_entities.h
 
-struct SpecInstrumentHost;   // spec_instruments.h
+struct SpecLiveHost;   // spec_live_host.h
 
 // The type and colours the runtime draws with. house_spec_look() gives the
 // Sternbild faces and tokens; the defaults are the same tokens with ImGui's
@@ -259,7 +259,7 @@ struct SpecPanelView {
     // instrument hooks, for the cursor line and the annotations that a 2-D
     // panel draws inside its plot. Null: none drawn.
     const caliper_builder::spec::Panel* spec_panel = nullptr;
-    const SpecInstrumentHost* instruments = nullptr;
+    const SpecLiveHost* instruments = nullptr;
     // A 3-D points panel's box (draw_points3d): where it was drawn last, in window points (x, y,
     // width, height), and its turn after the last frame, as a quaternion (x, y, z, w). A right press
     // on the box turns it from the first point of motion, and a release within the click's tolerance
@@ -344,13 +344,13 @@ public:
     // Lays the spec out in `area` and draws it, on the frame thread, inside a
     // window that covers the area.
     void draw(const ImRect& area, const SpecLook& look);
-    // A spec with no panels shows "No panels" over its applet id; with a hint
+    // A spec with no panels shows "No panels" over its instrument id; with a hint
     // (the builder's, in build mode), "No panels" over the hint instead.
     void set_empty_hint(std::string hint) { empty_hint_ = std::move(hint); }
 
     // Instruments (spec version 1, design/instruments.md). The runtime pushes
     // the picks and selections of its scene panels to `events` with the
-    // panel's id, and hands both to the control leaves (spec_instruments.h).
+    // panel's id, and hands both to the control leaves (spec_live_host.h).
     // Either may be null; neither is owned.
     void set_instruments(caliper_builder::EventSink* events, caliper_builder::RunControl* run);
     // The session's values and kept steps (design/instrument-interface.md),
@@ -454,7 +454,7 @@ private:
     caliper_builder::ValueStore* values_ = nullptr;
     caliper_builder::StepHistory* history_ = nullptr;
     // What the instrument hooks get, for the spec shown.
-    SpecInstrumentHost instrument_host(const caliper_builder::spec::Spec* shown) const;
+    SpecLiveHost instrument_host(const caliper_builder::spec::Spec* shown) const;
     std::function<CaliperCore*()> core_;
     SceneLayer scene_layer_;
     std::unique_ptr<SceneStates> scenes_;

@@ -1,4 +1,4 @@
-// session_spec.cpp: open-spec, applet save/list/open, and panel.data command
+// session_spec.cpp: open-spec, instrument save/list/open, and panel.data command
 // handlers of Session::Impl (session_internal.h).
 #include "session_internal.h"
 
@@ -19,7 +19,7 @@ using namespace session_internal;
 // ---- the open spec ---------------------------------------------------------
 
 CommandOutput Session::Impl::no_open_spec() {
-    return fail("spec.no_open_spec", "No spec is open; spec.new starts one and applet.open opens a saved one.");
+    return fail("spec.no_open_spec", "No spec is open; spec.new starts one and instrument.open opens a saved one.");
 }
 
 CommandOutput Session::Impl::spec_new(const CommandContext& ctx) {
@@ -33,7 +33,7 @@ CommandOutput Session::Impl::spec_new(const CommandContext& ctx) {
         return CommandOutput::fail(e);
     }
     const std::string text = spec::to_toml(next.spec);
-    const std::string id = next.spec.applet.id;
+    const std::string id = next.spec.instrument.id;
     return CommandOutput::ok({{"id", id}, {"text", text}}, replace_document(std::move(next)));
 }
 
@@ -51,26 +51,26 @@ CommandOutput Session::Impl::spec_open(const CommandContext& ctx) {
     std::lock_guard<std::mutex> lock(doc_mutex);
     LoadedSpec loaded = load_spec_file(str_arg(ctx.invocation.args, "path"), resolver());
     if (loaded.error) return CommandOutput::fail(loaded.error);
-    json result{{"id", loaded.spec.applet.id}, {"path", loaded.path}};
+    json result{{"id", loaded.spec.instrument.id}, {"path", loaded.path}};
     return open_loaded(std::move(loaded), std::move(result));
 }
 
-CommandOutput Session::Impl::applet_open(const CommandContext& ctx) {
+CommandOutput Session::Impl::instrument_open(const CommandContext& ctx) {
     std::lock_guard<std::mutex> lock(doc_mutex);
     const std::string id = str_arg(ctx.invocation.args, "id");
-    LoadedSpec loaded = load_applet(id, resolver());
+    LoadedSpec loaded = load_instrument(id, resolver());
     if (loaded.error) return CommandOutput::fail(loaded.error);
-    json result{{"id", id}, {"title", loaded.spec.applet.title.value_or(loaded.spec.applet.id)}};
+    json result{{"id", id}, {"title", loaded.spec.instrument.title.value_or(loaded.spec.instrument.id)}};
     return open_loaded(std::move(loaded), std::move(result));
 }
 
 // The spec that the read-only commands of the browser's spec page read: a
-// saved applet's, read from its files without opening it, or else the
+// saved instrument's, read from its files without opening it, or else the
 // open spec or the preview the invocation names.
-Error Session::Impl::view_spec(const std::string& applet, const std::string& preview, spec::Spec* out) {
-    if (!applet.empty()) {
-        LoadedSpec loaded = load_applet(applet, {});
-        if (loaded.error) return Error(loaded.error.code, loaded.error.message, "args.applet");
+Error Session::Impl::view_spec(const std::string& instrument, const std::string& preview, spec::Spec* out) {
+    if (!instrument.empty()) {
+        LoadedSpec loaded = load_instrument(instrument, {});
+        if (loaded.error) return Error(loaded.error.code, loaded.error.message, "args.instrument");
         *out = std::move(loaded.spec);
         return {};
     }
@@ -86,19 +86,19 @@ Error Session::Impl::view_spec(const std::string& applet, const std::string& pre
 }
 
 CommandOutput Session::Impl::spec_get(const CommandContext& ctx) {
-    const std::string applet = str_arg(ctx.invocation.args, "applet");
-    if (!applet.empty()) {
-        LoadedSpec loaded = load_applet(applet, {});
-        if (loaded.error) return fail(loaded.error.code, loaded.error.message, "args.applet");
-        // Whether the app has this applet open: only then do its live sources, the session's
+    const std::string instrument = str_arg(ctx.invocation.args, "instrument");
+    if (!instrument.empty()) {
+        LoadedSpec loaded = load_instrument(instrument, {});
+        if (loaded.error) return fail(loaded.error.code, loaded.error.message, "args.instrument");
+        // Whether the app has this instrument open: only then do its live sources, the session's
         // values and the kept steps reach panel.data (the browser's viewer says so when not).
         bool shown = false;
         {
             std::lock_guard<std::mutex> lock(doc_mutex);
-            shown = doc && doc->spec.applet.id == loaded.spec.applet.id;
+            shown = doc && doc->spec.instrument.id == loaded.spec.instrument.id;
         }
         json out = {{"open", true},
-                    {"id", loaded.spec.applet.id},
+                    {"id", loaded.spec.instrument.id},
                     {"path", loaded.path},
                     {"dirty", false},
                     {"open_in_app", shown},
@@ -125,7 +125,7 @@ CommandOutput Session::Impl::spec_get(const CommandContext& ctx) {
     }
     const std::string text = spec::to_toml(*s);
     return CommandOutput::ok({{"open", true},
-                              {"id", s->applet.id},
+                              {"id", s->instrument.id},
                               {"path", doc->path ? json(*doc->path) : json(nullptr)},
                               {"dirty", !doc->path || text != doc->saved_text},
                               {"text", text},
@@ -186,7 +186,7 @@ SpecEdit Session::Impl::edit_spec(const spec::Spec& s, const std::string& name, 
 // the redo stack stays, no undo step is filed and the journal is not
 // written.
 CommandOutput Session::Impl::spec_edit(const CommandContext& ctx) {
-    // camera.save saves the app's current orbit (instrument_commands.h):
+    // camera.save saves the app's current orbit (interactive_commands.h):
     // the session asks the app for it before the edit, without the lock.
     json camera_args;
     if (ctx.invocation.name == "camera.save" && !ctx.invocation.args.contains("orbit")) {
@@ -243,34 +243,34 @@ CommandOutput Session::Impl::spec_edit(const CommandContext& ctx) {
     return out;
 }
 
-// ---- applets and panel data ------------------------------------------------
+// ---- instruments and panel data --------------------------------------------
 
-CommandOutput Session::Impl::applet_save(const CommandContext& ctx) {
+CommandOutput Session::Impl::instrument_save(const CommandContext& ctx) {
     std::lock_guard<std::mutex> lock(doc_mutex);
     if (!doc) return no_open_spec();
     const json& a = ctx.invocation.args;
-    const std::string id = str_arg(a, "id", doc->spec.applet.id);
+    const std::string id = str_arg(a, "id", doc->spec.instrument.id);
     const bool overwrite = bool_arg(a, "overwrite", false);
     if (Error e = first_spec_error(spec::validate(doc->spec, resolver()).diagnostics)) return CommandOutput::fail(e);
-    if (!valid_id(id)) return fail("spec.invalid_id", "An applet id matches [a-z][a-z0-9_-]{0,63}.", "args.id");
+    if (!valid_id(id)) return fail("spec.invalid_id", "An instrument id matches [a-z][a-z0-9_-]{0,63}.", "args.id");
 
-    const fs::path folder = ws() / "applets" / fs::u8path(id);
+    const fs::path folder = ws() / "instruments" / fs::u8path(id);
     const fs::path manifest = folder / fs::u8path(id + ".caliper.toml");
     const fs::path spec_file = folder / fs::u8path(id + ".spec.toml");
-    const bool exists = applet_saved(id);
+    const bool exists = instrument_saved(id);
     if (exists && !overwrite)
-        return fail("applet.exists", "An applet " + id + " is saved already; set overwrite to replace it.", "args.id");
+        return fail("instrument.exists", "An instrument " + id + " is saved already; set overwrite to replace it.", "args.id");
     const std::string manifest_id = manifest_id_for(id);
     std::error_code ec;
-    for (fs::directory_iterator it(ws() / "applets", ec), end; !ec && it != end; it.increment(ec)) {
+    for (fs::directory_iterator it(ws() / "instruments", ec), end; !ec && it != end; it.increment(ec)) {
         const std::string other = it->path().filename().u8string();
         if (other == id || !valid_id(other)) continue;
         const fs::path m = it->path() / fs::u8path(other + ".caliper.toml");
         std::error_code mec;
         if (!fs::is_regular_file(m, mec)) continue;
         if (read_manifest(m.u8string()).id == manifest_id)
-            return fail("applet.exists",
-                        "The applet " + other + " already has the manifest id " + manifest_id + "; choose another id.",
+            return fail("instrument.exists",
+                        "The instrument " + other + " already has the manifest id " + manifest_id + "; choose another id.",
                         "args.id");
     }
     std::string version = "0.1.0";
@@ -279,33 +279,33 @@ CommandOutput Session::Impl::applet_save(const CommandContext& ctx) {
         if (!old.error && !old.version.empty()) version = old.version;
     }
     spec::Spec saved = doc->spec;
-    saved.applet.id = id;
+    saved.instrument.id = id;
     const std::string text = spec::to_toml(saved);
     std::optional<std::string> summary;
-    if (saved.applet.description && saved.applet.description->find_first_of("\r\n") == std::string::npos &&
-        command_code_points(*saved.applet.description) <= 200)
-        summary = *saved.applet.description;
-    const std::string name = saved.applet.title.value_or(id);
+    if (saved.instrument.description && saved.instrument.description->find_first_of("\r\n") == std::string::npos &&
+        command_code_points(*saved.instrument.description) <= 200)
+        summary = *saved.instrument.description;
+    const std::string name = saved.instrument.title.value_or(id);
     if (Error e = write_file_atomic(spec_file.u8string(), text))
-        return fail("applet.write_failed", "The spec file could not be written: " + e.message, rel(spec_file));
+        return fail("instrument.write_failed", "The spec file could not be written: " + e.message, rel(spec_file));
     if (Error e = write_file_atomic(manifest.u8string(),
                                     manifest_text(manifest_id, name, version, summary, id + ".spec.toml")))
-        return fail("applet.write_failed", "The manifest could not be written: " + e.message, rel(manifest));
+        return fail("instrument.write_failed", "The manifest could not be written: " + e.message, rel(manifest));
     // Saving under the spec's own id makes the files the open spec's
     // home; saving under another id writes a copy and leaves it as it was.
-    if (id == doc->spec.applet.id) {
+    if (id == doc->spec.instrument.id) {
         doc->path = rel(spec_file);
         doc->saved_text = text;
     }
     return CommandOutput::ok({{"id", id}, {"manifest", rel(manifest)}, {"spec", rel(spec_file)}});
 }
 
-CommandOutput Session::Impl::applet_list(const CommandContext&) {
+CommandOutput Session::Impl::instrument_list(const CommandContext&) {
     std::vector<json> found;
     std::error_code ec;
     std::size_t seen = 0;
-    for (fs::directory_iterator it(ws() / "applets", ec), end; !ec && it != end; it.increment(ec)) {
-        if (++seen > kMaxAppletFolders) break;
+    for (fs::directory_iterator it(ws() / "instruments", ec), end; !ec && it != end; it.increment(ec)) {
+        if (++seen > kMaxInstrumentFolders) break;
         const std::string id = it->path().filename().u8string();
         std::error_code dec;
         if (!valid_id(id) || !it->is_directory(dec)) continue;
@@ -321,7 +321,7 @@ CommandOutput Session::Impl::applet_list(const CommandContext&) {
                          {"updated_at", updated ? json(*updated) : json(nullptr)}});
     }
     std::sort(found.begin(), found.end(), [](const json& x, const json& y) { return x["id"] < y["id"]; });
-    return CommandOutput::ok({{"applets", json(found)}});
+    return CommandOutput::ok({{"instruments", json(found)}});
 }
 
 // One panel's data for the browser's spec page (panel_data.h); with
@@ -329,17 +329,17 @@ CommandOutput Session::Impl::applet_list(const CommandContext&) {
 CommandOutput Session::Impl::panel_data(const CommandContext& ctx) {
     const json& args = ctx.invocation.args;
     spec::Spec s;
-    if (Error e = view_spec(str_arg(args, "applet"), ctx.invocation.preview, &s)) return CommandOutput::fail(e);
+    if (Error e = view_spec(str_arg(args, "instrument"), ctx.invocation.preview, &s)) return CommandOutput::fail(e);
     const std::string id = str_arg(args, "panel");
     // The session's values and kept steps belong to its open spec: a page
-    // of that applet reads them, a page of another saved applet does not.
+    // of that instrument reads them, a page of another saved instrument does not.
     ViewerInputs in;
     in.library = &PieceLibrary::builtin();
     in.workspace = workspace;
     {
         std::lock_guard<std::mutex> lock(doc_mutex);
-        const std::string applet = str_arg(args, "applet");
-        if (doc && (applet.empty() || doc->spec.applet.id == applet)) {
+        const std::string instrument = str_arg(args, "instrument");
+        if (doc && (instrument.empty() || doc->spec.instrument.id == instrument)) {
             in.values = &values;
             in.history = &history;
         }

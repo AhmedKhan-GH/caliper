@@ -15,6 +15,7 @@ classifiers = [
 
 [project.optional-dependencies]
 torch = ["torch"]
+examples = ["torch", "torchvision"]
 agent = [
     "pydantic-ai-slim[anthropic]>=2.68,<3",
     "anthropic>=2.8,<3",
@@ -96,7 +97,7 @@ sdist.exclude = ["build", "dist", ".venv", "cmake-build-*", "site", "dump"]
 [tool.scikit-build.cmake.define]
 CALIPER_BUILD_PYTHON = "ON"
 CALIPER_WITH_TORCH = "OFF"
-CALIPER_BUILD_APPLETS = "OFF"
+CALIPER_BUILD_INSTRUMENTS = "OFF"
 CALIPER_BUILD_EXAMPLES = "OFF"
 BUILD_TESTS = "OFF"
 USE_CUDA = "OFF"

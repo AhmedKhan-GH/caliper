@@ -10,7 +10,7 @@ features:
     scope: supporting
     summary: The Metal renderer is the default on macOS and reads PyTorch's MPS buffers in place with a compute pass or a blit, so a tensor reaches a texture without a CPU copy.
     depends_on: []
-    docs: docs/applets/rendering.md#backends
+    docs: docs/instruments/rendering.md#backends
     issue: null
 
   - id: REN-02
@@ -86,7 +86,7 @@ features:
     scope: core
     summary: The graphics layer, an internal C++ layer shaped like WebGPU, holds buffers, textures, pipelines, draw lists and a uniform arena, validates every frame, and has a Metal backend.
     depends_on: [REN-01]
-    docs: docs/applets/graphics-layer.md#backends
+    docs: docs/instruments/graphics-layer.md#backends
     issue: null
 
   - id: REN-10
@@ -95,7 +95,7 @@ features:
     scope: core
     summary: Scene shaders are written once in WGSL, and a generator with a pinned Naga translates them into the programs that each backend of the graphics layer loads.
     depends_on: [REN-09]
-    docs: docs/applets/shader-authoring.md#translator
+    docs: docs/instruments/shader-authoring.md#translator
     issue: null
 
   - id: REN-11
@@ -104,7 +104,7 @@ features:
     scope: core
     summary: "The scene core is the one camera and scene model of the views: an entity tree with cameras, bounds and fitting, which it compiles into a draw list of the graphics layer, with a pick pass."
     depends_on: [REN-10]
-    docs: docs/applets/scene-rendering.md#scene-core
+    docs: docs/instruments/scene-rendering.md#scene-core
     issue: null
 
   - id: REN-12
@@ -113,7 +113,7 @@ features:
     scope: core
     summary: The scene view is a live view of kind scene that draws the points, lines and meshes of a protocol 3.2 scene through the scene core, in the app and in the browser, with an orbit camera.
     depends_on: [REN-11, REN-14, STR-09]
-    docs: docs/applets/scene-rendering.md#scene-view
+    docs: docs/instruments/scene-rendering.md#scene-view
     issue: null
 
   - id: REN-13
@@ -122,7 +122,7 @@ features:
     scope: core
     summary: The WebGPU backend of the graphics layer runs in the browser, so the WebAssembly views draw scenes through the same layer as the native renderers.
     depends_on: [EMB-04, REN-10]
-    docs: docs/applets/rendering.md#webgpu-backend
+    docs: docs/instruments/rendering.md#webgpu-backend
     issue: null
 
   - id: REN-14
@@ -131,7 +131,7 @@ features:
     scope: core
     summary: A colormap is decided by integer comparisons against keys derived once from the CPU reference, so every shader and adapter gives the same colours as the reference.
     depends_on: [REN-13]
-    docs: docs/applets/graphics-layer.md#colormap-by-keys
+    docs: docs/instruments/graphics-layer.md#colormap-by-keys
     issue: null
 
   - id: REN-15
@@ -140,14 +140,14 @@ features:
     scope: core
     summary: Picking finds the entity, item and row under the pointer through a pick pass of the scene core on the graphics layer, natively and in a browser.
     depends_on: [REN-11]
-    docs: docs/applets/scene-rendering.md#scene-core
+    docs: docs/instruments/scene-rendering.md#scene-core
     issue: null
 
   - id: REN-16
-    title: Applets on the Scene Service
+    title: Instruments on the Scene Service
     status: planned
     scope: supporting
-    summary: Native 3-D applets draw through the scene service, so that every 3-D applet uses one scene model.
+    summary: Native 3-D instruments draw through the scene service, so that every 3-D instrument uses one scene model.
     depends_on: [REN-35]
     sprint: 4
     design: design/roadmap.md#renderers
@@ -212,7 +212,7 @@ features:
     title: Saved Viewpoints
     status: planned
     scope: core
-    summary: Saved viewpoints keep a view's camera in views, recordings and spec applets, so that a person returns to the same angle.
+    summary: Saved viewpoints keep a view's camera in views, recordings and spec-based instruments, so that a person returns to the same angle.
     depends_on: [REN-45]
     sprint: 5
     issue: null
@@ -286,7 +286,7 @@ features:
     scope: supporting
     summary: Copy counters, frame-time statistics on Metal and benchmark rows record a baseline before the renderer core's migration, so that every later step is measured against it.
     depends_on: [REN-01, REN-02]
-    docs: docs/applets/rendering.md#copy-counters-and-frame-statistics
+    docs: docs/instruments/rendering.md#copy-counters-and-frame-statistics
     issue: null
 
   - id: REN-32
@@ -295,7 +295,7 @@ features:
     scope: core
     summary: The points live view draws as a scene of one entity through the scene core, with its pixels checked against references from the old path, which is deleted.
     depends_on: [REN-11, REN-31]
-    docs: docs/applets/scene-rendering.md#points-view
+    docs: docs/instruments/scene-rendering.md#points-view
     issue: null
 
   - id: REN-33
@@ -318,10 +318,10 @@ features:
     issue: null
 
   - id: REN-35
-    title: Scene Service for Applets
+    title: Scene Service for Instruments
     status: planned
     scope: supporting
-    summary: The scene service offers the scene model to applets through the ABI, with the shared camera, the up-axis switch, the scale bar and picks returned as events.
+    summary: The scene service offers the scene model to instruments through the ABI, with the shared camera, the up-axis switch, the scale bar and picks returned as events.
     depends_on: [REN-15, REN-34]
     sprint: 4
     issue: null
@@ -330,7 +330,7 @@ features:
     title: Final Renderer Seam
     status: planned
     scope: supporting
-    summary: HostRenderer is reduced to the window, the frame loop, the canvas, window capture and the graphics layer, once every applet draws through the scene service.
+    summary: HostRenderer is reduced to the window, the frame loop, the canvas, window capture and the graphics layer, once every instrument draws through the scene service.
     depends_on: [REN-16]
     sprint: 4
     issue: null
@@ -587,7 +587,7 @@ features:
     scope: peripheral
     summary: caliper.tensor_bridge.v1 to v1_2 turn a CaliperTensor into a live texture in the same frame, with a handoff ordered on the stream and imported device allocations.
     depends_on: [COR-49, REN-08]
-    docs: docs/applets/services/caliper-tensor-bridge-v1.md
+    docs: docs/instruments/services/caliper-tensor-bridge-v1.md
     issue: null
 
   - id: REN-65
@@ -606,7 +606,7 @@ features:
     scope: core
     summary: torch.hpp turns a torch tensor into a CaliperTensor, refuses a tensor it cannot share rather than copying it, and applies the rules of MPS and CUDA.
     depends_on: [COR-49, REN-08]
-    docs: docs/applets/adapters.md#torchhpp
+    docs: docs/instruments/adapters.md#torchhpp
     issue: null
 
   - id: REN-67
@@ -615,16 +615,16 @@ features:
     scope: core
     summary: ExportablePool allocates the tensors that the renderer draws in place, and an allocation registry tracks the allocations the host can import.
     depends_on: [REN-08]
-    docs: docs/applets/adapters.md#exportable_poolhpp
+    docs: docs/instruments/adapters.md#exportable_poolhpp
     issue: null
 
   - id: REN-68
     title: OBJ Loader and Orbit Camera
     status: shipped
     scope: supporting
-    summary: Two adapters give an applet an OBJ mesh loader and an orbit camera with picking under the cursor.
+    summary: Two adapters give an instrument an OBJ mesh loader and an orbit camera with picking under the cursor.
     depends_on: [COR-04]
-    docs: docs/applets/adapters.md#objhpp
+    docs: docs/instruments/adapters.md#objhpp
     issue: null
 
   - id: REN-69
@@ -633,14 +633,14 @@ features:
     scope: core
     summary: The WebGPU renderer draws the browser views of the WebAssembly module, with a colormap pass whose thresholds come from the CPU reference and instanced quads for points.
     depends_on: [EMB-04]
-    docs: docs/applets/rendering.md#webgpu-backend
+    docs: docs/instruments/rendering.md#webgpu-backend
     issue: null
 
   - id: REN-70
     title: FieldScope
     status: built
     scope: peripheral
-    summary: Deleted demo applet (removed in epoch 3). Simulated charged particles in electromagnetic fields on a GPU.
+    summary: Deleted demo instrument (removed in epoch 3). Simulated charged particles in electromagnetic fields on a GPU.
     depends_on: [REN-04]
     branches: [playground-m6]
     issue: null
@@ -650,7 +650,7 @@ features:
     title: FlowScope
     status: built
     scope: peripheral
-    summary: Deleted demo applet (removed in epoch 3). Drove a flow field of one million particles on a GPU.
+    summary: Deleted demo instrument (removed in epoch 3). Drove a flow field of one million particles on a GPU.
     depends_on: [REN-04]
     branches: [playground-m6]
     issue: null
@@ -660,7 +660,7 @@ features:
     title: InstanceScope
     status: built
     scope: peripheral
-    summary: Deleted demo applet (removed in epoch 3). Drew a field of procedural gems with one instanced draw call.
+    summary: Deleted demo instrument (removed in epoch 3). Drew a field of procedural gems with one instanced draw call.
     depends_on: [REN-07]
     branches: [playground-m6]
     issue: null
@@ -670,7 +670,7 @@ features:
     title: SculptScope
     status: built
     scope: peripheral
-    summary: Deleted demo applet (removed in epoch 3). Trained a small network mapping latent codes to a 3-D point cloud.
+    summary: Deleted demo instrument (removed in epoch 3). Trained a small network mapping latent codes to a 3-D point cloud.
     depends_on: [REN-04]
     branches: [playground-m6]
     issue: null
@@ -680,7 +680,7 @@ features:
     title: TwinScope
     status: built
     scope: peripheral
-    summary: Deleted demo applet (removed in epoch 3). Ran a synthetic heat twin of a textured housing.
+    summary: Deleted demo instrument (removed in epoch 3). Ran a synthetic heat twin of a textured housing.
     depends_on: [REN-06, REN-65]
     branches: [playground-m6]
     issue: null

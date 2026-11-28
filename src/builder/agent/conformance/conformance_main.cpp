@@ -235,7 +235,7 @@ std::string hardware() {
 
 json normal(const json& spec) {
     json out = json::object();
-    out["applet"] = spec.value("applet", json::object());
+    out["instrument"] = spec.value("instrument", json::object());
     json panels = json::object(), sources = json::object();
     for (const auto& p : spec.value("panel", json::array())) panels[p.value("id", "")] = p;
     for (const auto& s : spec.value("source", json::array())) sources[s.value("id", "")] = s;
@@ -495,7 +495,7 @@ class RenderHost final : public SessionHost {
 public:
     std::atomic<int> colour{0};
     CommandOutput app_info() override { return CommandOutput::fail({"command.not_bound", "No app here."}); }
-    CommandOutput app_applets() override { return CommandOutput::fail({"command.not_bound", "No app here."}); }
+    CommandOutput app_instruments() override { return CommandOutput::fail({"command.not_bound", "No app here."}); }
     CommandOutput app_launch(const std::string&) override { return CommandOutput::fail({"command.not_bound", "No app here."}); }
     CommandOutput capture_frame() override { return CommandOutput::fail({"command.not_bound", "No app here."}); }
     // The suite's stand-in for drawing a panel: a small picture of one colour,

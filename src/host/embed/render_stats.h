@@ -1,5 +1,5 @@
 // render_stats.h: the copy counters and frame statistics of a core
-// (host-internal; docs/applets/rendering.md, "Copy Counters and Frame
+// (host-internal; docs/instruments/rendering.md, "Copy Counters and Frame
 // Statistics"). Step 0 of the renderer core's migration adds them, so that the
 // copies each route makes on the way to pixels, the frame times and the GPU
 // times can be compared before and after every later step.

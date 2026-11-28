@@ -15,7 +15,7 @@
 #include <unordered_map>
 #include <vector>
 
-#include "applet_loader.h"
+#include "instrument_loader.h"
 #include "frame_watchdog.h"
 #include "renderer/host_renderer.h"
 #include "tensor_bridge.h"
@@ -79,8 +79,8 @@ struct CaliperCore {
     std::unique_ptr<caliper_host::HostRenderer> renderer;
     // The deleter is a function pointer set where the loader is made
     // (embed_core.cpp), so destroying a core without one (a hosted core, the
-    // browser's views) references nothing of the applet loader.
-    std::unique_ptr<caliper_host::AppletLoader, void (*)(caliper_host::AppletLoader*)> loader{
+    // browser's views) references nothing of the instrument loader.
+    std::unique_ptr<caliper_host::InstrumentLoader, void (*)(caliper_host::InstrumentLoader*)> loader{
         nullptr, nullptr};
     caliper_host::FrameWatchdog                 watchdog;
 
@@ -94,7 +94,7 @@ struct CaliperCore {
     int                                    canvas_w = 0, canvas_h = 0;
     float                                  scale = 1.0f;
 
-    int    active_applet = -1;
+    int    active_instrument = -1;
     double last_frame_time = 0.0;
     std::string last_error;
 

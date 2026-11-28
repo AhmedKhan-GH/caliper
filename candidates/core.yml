@@ -3,16 +3,16 @@ pillar: COR
 title: Core Runtime and SDK
 proposed: false
 candidates:
-  - key: single-applet-app
-    title: "Single-Applet App"
-    summary: "A second small host packages one applet as an app of its own."
+  - key: single-instrument-app
+    title: "Single-Instrument App"
+    summary: "A second small host packages one instrument as an app of its own."
     serves: "A research group hands a collaborator one instrument, not a platform."
     origin: cut
     depends_on: [COR-04, EMB-07]
-  - key: applet-shaders
-    title: "Applet-Supplied Shaders"
-    summary: "A native applet supplies its own checked shaders to the graphics layer."
-    serves: "Field-specific rendering, such as a custom transfer function, is written by the applet's author."
+  - key: instrument-shaders
+    title: "Instrument-Supplied Shaders"
+    summary: "A native instrument supplies its own checked shaders to the graphics layer."
+    serves: "Field-specific rendering, such as a custom transfer function, is written by the instrument's author."
     origin: plan-idea
     depends_on: [REN-10, REN-35]
   - key: unicode-text

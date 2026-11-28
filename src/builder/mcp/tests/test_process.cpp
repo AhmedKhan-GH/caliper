@@ -46,7 +46,7 @@ using Clock = std::chrono::steady_clock;
 
 namespace {
 
-const char* const kV0Commands[] = {"app.info", "app.applets", "app.launch", "capture.frame"};
+const char* const kV0Commands[] = {"app.info", "app.instruments", "app.launch", "capture.frame"};
 
 std::string tiny_png() {
     return std::string("\x89PNG\r\n\x1a\n", 8) + std::string("\0\0\0\x0d", 4) + "IHDR" + std::string("\0\0\0\x02", 4) +
@@ -197,10 +197,10 @@ private:
         };
         const std::string& p = r.target;
         if (r.method == "GET" && p == "/v0/info") return answer(200, sample_of("app.info"));
-        if (r.method == "GET" && p == "/v0/applets") return answer(200, sample_of("app.applets"));
-        if (r.method == "POST" && p.rfind("/v0/applets/", 0) == 0) {
+        if (r.method == "GET" && p == "/v0/instruments") return answer(200, sample_of("app.instruments"));
+        if (r.method == "POST" && p.rfind("/v0/instruments/", 0) == 0) {
             if (!r.body.empty()) return answer(413, {{"error", "Caliper API v0 takes no request body"}});
-            if (p == "/v0/applets/com.example.missing/launch") return answer(404, {{"error", "no applet with that id"}});
+            if (p == "/v0/instruments/com.example.missing/launch") return answer(404, {{"error", "no instrument with that id"}});
             return answer(200, sample_of("app.launch"));
         }
         if (r.method == "GET" && p == "/v0/capture.png") {
@@ -298,9 +298,9 @@ TEST_CASE("a modern session drives every route of the fake API") {
     CHECK(info["isError"] == false);
     CHECK(info["structuredContent"] == test::sample_for_schema(find_descriptor(app_table, "app.info")["result"]));
     CHECK(json::parse(info["content"][0]["text"].get<std::string>()) == info["structuredContent"]);
-    CHECK(child.call(2, "app_applets", json::object())["isError"] == false);
+    CHECK(child.call(2, "app_instruments", json::object())["isError"] == false);
     CHECK(child.call(3, "app_launch", {{"id", "com.example.viewer"}})["isError"] == false);
-    CHECK(error_of(child.call(4, "app_launch", {{"id", "com.example.missing"}}))["code"] == "app.applet_not_found");
+    CHECK(error_of(child.call(4, "app_launch", {{"id", "com.example.missing"}}))["code"] == "app.instrument_not_found");
     std::size_t before = api.log_size();
     CHECK(error_of(child.call(5, "app_launch", {{"id", "../../etc"}}))["code"] == "command.invalid_args");
     CHECK(api.log_size() == before);

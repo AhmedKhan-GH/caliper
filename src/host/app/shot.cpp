@@ -1,10 +1,10 @@
-// caliper shot (shot.h): the app's applet page, or its spec page, drawn into
-// an offscreen canvas and written as a PNG.
+// caliper shot (shot.h): the app's instrument page, or its spec page, drawn
+// into an offscreen canvas and written as a PNG.
 #include "app/shot.h"
 
 #include "api/app_api.h"
 #include "app_paths.h"
-#include "applet_loader.h"
+#include "instrument_loader.h"
 #include "background_process.h"
 #include "builder/app_hooks.h"
 #include "builder/spec_page.h"
@@ -13,7 +13,7 @@
 #include "host_services.h"
 #include "job_system.h"
 #include "negotiation.h"
-#include "pages/applet_page.h"
+#include "pages/instrument_page.h"
 #include "renderer/host_renderer.h"
 #include "ui/dock_layout.h"
 #include "ui/sternbild_fonts.h"
@@ -76,8 +76,8 @@ struct ShotSession {
     fs::path temp_root;                      // removed last, when set
     std::unique_ptr<AppApi> api;             // stopped first: waiting calls get 503
     std::unique_ptr<AppSession> session;     // closed next, before the host's stores
-    std::unique_ptr<AppletLoader> loader;
-    std::unique_ptr<AppletPage> page;        // the dock-hint sink points into it
+    std::unique_ptr<InstrumentLoader> loader;
+    std::unique_ptr<InstrumentPage> page;    // the dock-hint sink points into it
     std::unique_ptr<SpecPage> spec_page;     // its records go after the canvas
     std::unique_ptr<HostRenderer> renderer;
     bool ui_context = false;
@@ -96,7 +96,7 @@ struct ShotSession {
             session->close();
         }
         if (services) {
-            // Workers first: a job may hold a pointer into applet state.
+            // Workers first: a job may hold a pointer into instrument state.
             host_job_system().cancel_all_and_join();
             if (loader) loader->close_all();
             set_dock_hint_sink(nullptr, nullptr);
@@ -139,10 +139,10 @@ int run_shot(const CommandLine& cl) {
                     out.parent_path().string() + " does not exist");
 
     // The folders the app searches, worked out before any folder is created:
-    // the user applets folder is the app's, even when the data root below is
-    // a temporary one.
-    const std::string user_dir = caliper::user_applets_dir();
-    const std::string shipped_dir = caliper::shipped_applets_dir();
+    // the user instruments folder is the app's, even when the data root below
+    // is a temporary one.
+    const std::string user_dir = caliper::user_instruments_dir();
+    const std::string shipped_dir = caliper::shipped_instruments_dir();
     const char* data_env = std::getenv("CALIPER_DATA_DIR");
     const bool own_root = !(data_env && *data_env);
 
@@ -155,34 +155,35 @@ int run_shot(const CommandLine& cl) {
     const fs::path data_root =
         own_root ? s.temp_root : fs::path(caliper::app_data_location());
 
-    // The applet, found as the app finds it, the workspace's spec applets
-    // included. Scanning reads manifests only and creates nothing.
+    // The instrument, found as the app finds it, the workspace's spec-based
+    // instruments included. Scanning reads manifests only and creates nothing.
     const std::string workspace =
         workspace_choice(cl, std::getenv("CALIPER_WORKSPACE"), (data_root / "workspace").string()).dir;
-    s.loader = std::make_unique<AppletLoader>(host_caps(), (data_root / "data").string());
-    AppletLoader& loader = *s.loader;
+    s.loader = std::make_unique<InstrumentLoader>(host_caps(), (data_root / "data").string());
+    InstrumentLoader& loader = *s.loader;
     loader.set_workspace(workspace);
-    loader.scan(applet_search_dirs(cl.applet_dirs, std::getenv("CALIPER_APPLET_PATH"),
-                                   user_dir, shipped_dir, workspace));
+    loader.scan(instrument_search_dirs(cl.instrument_dirs, std::getenv("CALIPER_INSTRUMENT_PATH"),
+                                       user_dir, shipped_dir, workspace));
     int idx = loader.find(id);
-    if (idx >= 0 && loader.at(idx).status != AppletStatus::Ready)
+    if (idx >= 0 && loader.at(idx).status != InstrumentStatus::Ready)
         return fail(id + " cannot be launched (" +
-                    applet_status_word(loader.at(idx).status) +
+                    instrument_status_word(loader.at(idx).status) +
                     "): " + loader.at(idx).status_text);
-    // A spec applet draws the spec page (builder/spec_page.h): one in the
-    // workspace's applets/ folder opens with applet.open under its folder's
-    // name, one found elsewhere is drawn from its file. An id that no search
-    // folder has, written as a workspace's applet id (no dots), names a spec
-    // applet of the workspace that a command script may still build. Either
-    // opens once the workspace is open and the script, if any, is done.
-    std::string spec_id;     // applet.open's id
-    std::string spec_file;   // a spec applet's file outside the workspace
-    if (idx >= 0 && loader.at(idx).manifest.kind == AppletKind::Spec) {
+    // An instrument written as a spec draws the spec page
+    // (builder/spec_page.h): one in the workspace's instruments/ folder opens
+    // with instrument.open under its folder's name, one found elsewhere is
+    // drawn from its file. An id that no search folder has, written as a
+    // workspace's instrument id (no dots), names a spec-based instrument of
+    // the workspace that a command script may still build. Either opens once
+    // the workspace is open and the script, if any, is done.
+    std::string spec_id;     // instrument.open's id
+    std::string spec_file;   // a spec-based instrument's file outside the workspace
+    if (idx >= 0 && loader.at(idx).manifest.kind == InstrumentKind::Spec) {
         if (!loader.check_spec(idx))
             return fail(id + " failed to launch: " + loader.at(idx).status_text);
         const fs::path folder(loader.at(idx).folder);
         std::error_code wec;
-        if (fs::equivalent(folder.parent_path(), fs::path(workspace) / "applets", wec))
+        if (fs::equivalent(folder.parent_path(), fs::path(workspace) / "instruments", wec))
             spec_id = folder.filename().string();
         else
             spec_file = loader.at(idx).spec_path;
@@ -192,11 +193,11 @@ int run_shot(const CommandLine& cl) {
     }
     const bool spec_shot = !spec_id.empty() || !spec_file.empty();
     if (idx < 0 && !spec_shot)
-        return fail("no applet with the id " + id +
+        return fail("no instrument with the id " + id +
                     " in the search folders (caliper list shows them)");
 
-    // The stores, the applet's data folder and the display font path resolve
-    // under the temporary root from here on.
+    // The stores, the instrument's data folder and the display font path
+    // resolve under the temporary root from here on.
     if (own_root) caliper::set_app_data_dir_override(s.temp_root.string());
 
     // The renderer's offscreen canvas: Metal on macOS, Vulkan on Windows. There
@@ -213,7 +214,7 @@ int run_shot(const CommandLine& cl) {
     s.ui_context = true;
     ImGui::GetIO().IniFilename = nullptr;
     sternbild::FontPaths fonts = sternbild::default_font_paths();
-    // The display face draws only the landing's wordmark, which the applet
+    // The display face draws only the landing's wordmark, which the instrument
     // page has not; it is loaded only when CALIPER_DISPLAY_FONT names it.
     if (const char* f = std::getenv("CALIPER_DISPLAY_FONT"); !f || !*f)
         fonts.display_font.clear();
@@ -226,8 +227,8 @@ int run_shot(const CommandLine& cl) {
     s.canvas = true;
 
     // Services, the dock-hint sink and the bridge, in the app's order.
-    s.page = std::make_unique<AppletPage>();
-    AppletPage& page = *s.page;
+    s.page = std::make_unique<InstrumentPage>();
+    InstrumentPage& page = *s.page;
     services_init();
     s.services = true;
     set_dock_hint_sink(
@@ -243,40 +244,41 @@ int run_shot(const CommandLine& cl) {
     // Launched as CALIPER_AUTOLAUNCH launches it, before the first frame.
     if (!spec_shot) {
         const UiCheckpoint ui_checkpoint = UiCheckpoint::store();
-        if (!loader.launch(idx, applet_host_proto())) {
+        if (!loader.launch(idx, instrument_host_proto())) {
             ui_checkpoint.recover();
             return fail(id + " failed to launch: " + loader.at(idx).status_text);
         }
         page.enter();
     }
-    // The applet the page shows, -1 while the spec page shows; a launch
-    // through the API, and an applet.open, change it.
+    // The instrument the page shows, -1 while the spec page shows; a launch
+    // through the API, and an instrument.open, change it.
     int current = idx;
     s.spec_page = std::make_unique<SpecPage>();
     SpecPage& spec_page = *s.spec_page;
     bool on_spec = spec_shot;
 
     // A launch through the API or the session's app.launch: the page shows
-    // that applet from this frame on. The applet shown goes first, as Home
-    // takes it in the app; when the new one fails to launch, the previous one
-    // is launched again, and `lost` is set when that fails too and the shot
-    // has no applet left.
+    // that instrument from this frame on. The instrument shown goes first, as
+    // Home takes it in the app; when the new one fails to launch, the previous
+    // one is launched again, and `lost` is set when that fails too and the
+    // shot has no instrument left.
     bool lost = false;
     auto launch = [&](const std::string& want_id) -> LaunchOutcome {
         const int want = loader.find(want_id);
         if (want < 0)
-            return {404, "no applet with the id " + want_id + " in the search folders (GET /v0/applets lists them)",
-                    "app.applet_not_found"};
-        const AppletEntry& w = loader.at(want);
+            return {404,
+                    "no instrument with the id " + want_id + " in the search folders (GET /v0/instruments lists them)",
+                    "app.instrument_not_found"};
+        const InstrumentEntry& w = loader.at(want);
         if (want == current) return {200, launched_json(w.manifest.id, w.manifest.version, true), ""};
-        if (w.status != AppletStatus::Ready)
-            return {409, want_id + " cannot be launched (" + applet_status_word(w.status) + "): " + w.status_text,
+        if (w.status != InstrumentStatus::Ready)
+            return {409, want_id + " cannot be launched (" + instrument_status_word(w.status) + "): " + w.status_text,
                     "app.launch_refused"};
         host_job_system().cancel_all_and_join();
         if (current >= 0) loader.teardown(current);
         {
             const UiCheckpoint ui_checkpoint = UiCheckpoint::store();
-            if (loader.launch(want, applet_host_proto())) {
+            if (loader.launch(want, instrument_host_proto())) {
                 current = want;
                 page.enter();
                 if (on_spec) spec_page.leave();
@@ -290,7 +292,7 @@ int run_shot(const CommandLine& cl) {
                                    "app.launch_failed"};
         if (current < 0) return failed;   // the spec page stays
         const UiCheckpoint ui_checkpoint = UiCheckpoint::store();
-        if (loader.launch(current, applet_host_proto())) {
+        if (loader.launch(current, instrument_host_proto())) {
             page.enter();
             return failed;
         }
@@ -307,13 +309,13 @@ int run_shot(const CommandLine& cl) {
     s.session = std::make_unique<AppSession>();
     {
         AppSession::Hooks h = app_session_hooks();
-        h.applets_json = [&] { return applets_json(loader); };
+        h.instruments_json = [&] { return instruments_json(loader); };
         h.launch = [&launch](const std::string& id, const std::string&) { return launch(id); };
         h.request_capture = [&] { capture_wanted = true; };
         s.session->start(app_session_options(cl, /*scripts_allowed=*/true), std::move(h));   // no window
         // panel.render draws on a canvas that shares this canvas's font atlas.
         s.session->set_panel_renderer(SpecPage::make_panel_renderer([&s] { return s.session->session(); }));
-        // A spec applet needs the workspace, also the default one.
+        // A spec-based instrument needs the workspace, also the default one.
         if (spec_shot) s.session->ensure_open();
     }
 
@@ -338,7 +340,7 @@ int run_shot(const CommandLine& cl) {
 
 
     // N frames at about 60 a second, as the app draws them, so jobs and
-    // workers the applet starts get the time they get in the app.
+    // workers the instrument starts get the time they get in the app.
     ImGuiIO& io = ImGui::GetIO();
     JobsTray tray;
     using clock = std::chrono::steady_clock;
@@ -350,7 +352,7 @@ int run_shot(const CommandLine& cl) {
     // drawn at least this many frames after it opens.
     constexpr int kSpecSettle = 10;
     int spec_frames = 0;
-    bool spec_asked = false;     // applet.open of a spec shot was sent
+    bool spec_asked = false;     // instrument.open of a spec shot was sent
     bool spec_waiting = spec_shot;   // and has not opened the page yet
     // A command script keeps the frames coming until it is done, and a spec
     // page until it has opened and settled.
@@ -358,17 +360,17 @@ int run_shot(const CommandLine& cl) {
                      (on_spec && spec_frames < kSpecSettle)) &&
                     alive && !g_stop;
          ++f) {
-        // The API's calls of this frame: the applets and launches now, before
-        // the frame is drawn, and captures once it is rendered.
+        // The API's calls of this frame: the instruments and launches now,
+        // before the frame is drawn, and captures once it is rendered.
         std::vector<uint64_t> captures;
         if (s.api) {
             for (const caliper_api::Call& c : s.api->take()) {
-                if (c.kind == caliper_api::Call::Kind::Applets) {
-                    s.api->reply(c.ticket, 200, applets_json(loader));
+                if (c.kind == caliper_api::Call::Kind::Instruments) {
+                    s.api->reply(c.ticket, 200, instruments_json(loader));
                 } else if (c.kind == caliper_api::Call::Kind::Capture) {
                     captures.push_back(c.ticket);
                 } else {
-                    const LaunchOutcome o = launch(c.applet_id);
+                    const LaunchOutcome o = launch(c.instrument_id);
                     if (o.status == 200) s.api->reply(c.ticket, 200, o.body);
                     else s.api->reply_error(c.ticket, o.status, o.body);
                 }
@@ -378,8 +380,8 @@ int run_shot(const CommandLine& cl) {
         if (lost)
             return fail(loader.at(current).manifest.id + " failed to launch again after a launch: " +
                         loader.at(current).status_text);
-        // A spec shot opens its applet once the workspace is open and the
-        // command script is done, so a script can build the applet first.
+        // A spec shot opens its instrument once the workspace is open and the
+        // command script is done, so a script can build the instrument first.
         if (spec_waiting) {
             const std::string why = s.session->open_error();
             if (!why.empty()) return fail("cannot open the workspace for " + id + ": " + why);
@@ -394,11 +396,11 @@ int run_shot(const CommandLine& cl) {
             }
             std::string error;
             if (spec_page.request_answered(&error) && !error.empty())
-                return fail("no applet with the id " + id + " in the search folders or the workspace (" + error +
+                return fail("no instrument with the id " + id + " in the search folders or the workspace (" + error +
                             ")");
         }
-        // Every applet.open that succeeded shows the spec page, as in the
-        // app: the applet shown goes first.
+        // Every instrument.open that succeeded shows the spec page, as in the
+        // app: the instrument shown goes first.
         if (spec_page.take_open(*s.session)) {
             if (current >= 0) {
                 host_job_system().cancel_all_and_join();
@@ -436,7 +438,7 @@ int run_shot(const CommandLine& cl) {
             spec_page.draw(*s.session, s.renderer->name(), &tray);
             ++spec_frames;
         } else {
-            const AppletPage::Result r =
+            const InstrumentPage::Result r =
                 page.draw(loader, current, fi, s.renderer->name(), chromeless, &tray);
             alive = r.alive;
         }

@@ -15,7 +15,7 @@ on:
             'src/builder/include/caliper_builder/spec/piece.h',
             'src/builder/include/caliper_builder/programs/pieces.h',
             'src/builder/programs/piece_checks.cpp',
-            'src/builder/spec/schema/caliper-spec-v1.schema.json',
+            'src/builder/spec/schema/caliper-spec-v2.schema.json',
             'src/host/host_cli.h',
             'scripts/check_api_reference.py', 'scripts/test_check_api_reference.py',
             'scripts/generate_mcp_reference.py',

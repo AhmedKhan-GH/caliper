@@ -30,7 +30,7 @@ constexpr uint32_t kRingCapacity = 4096;
 constexpr int      kPeriodMs     = 100;    // 10 Hz (spec §4)
 
 // Host steady clock in ns. MSVC's steady_clock is QueryPerformanceCounter
-// underneath — the same epoch across channels so applets can align series.
+// underneath — the same epoch across channels so instruments can align series.
 int64_t now_ns() {
     return (int64_t)std::chrono::duration_cast<std::chrono::nanoseconds>(
                std::chrono::steady_clock::now().time_since_epoch())

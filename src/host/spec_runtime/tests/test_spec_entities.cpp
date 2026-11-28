@@ -64,8 +64,8 @@ namespace {
 
 constexpr int kRows = 128, kCols = 16;
 
-const char* const kSpec = R"(caliper_spec = 1
-[applet]
+const char* const kSpec = R"(caliper_spec = 2
+[instrument]
 id = "terrain"
 [[source]]
 id = "act"
@@ -909,7 +909,7 @@ struct NoData : SpecPanelSource {
 // One scene panel `world` whose program tower_arcs draws the inline attention arcs: on the live
 // scene `model` when `live`, else in the panel's own scene.
 spec::Spec arcs_spec(bool live) {
-    std::string text = "caliper_spec = 1\n[applet]\nid = \"arcs\"\n[[panel]]\nid = \"world\"\nprimitive = \"scene\"\n";
+    std::string text = "caliper_spec = 2\n[instrument]\nid = \"arcs\"\n[[panel]]\nid = \"world\"\nprimitive = \"scene\"\n";
     if (live) text += "bind = { scene = \"live:model\" }\n";
     spec::Spec s = parse(text);
     const spec::Piece piece = hashed_arcs();

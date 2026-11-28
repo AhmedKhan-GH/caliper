@@ -52,19 +52,9 @@ bool as_integer(const json& v, std::int64_t& out) {
     return false;
 }
 
-// Whether `name` is an option that format version 1 adds to `p`: a document of
-// version 0 reads it as an unknown option.
-bool version_one_option(Primitive p, const std::string& name) {
-    for (const char* n : {"legend", "box", "views", "select", "format", "fields"})
-        if (name == n) return true;
-    return name == "scale_bar" && p != Primitive::scene;
-}
-
 class Decoder {
 public:
-    // `version` is the format version whose keys and primitives the items may
-    // use; a whole document sets it from its caliper_spec.
-    explicit Decoder(Sink& sink, std::int64_t version = kLatestFormatVersion) : sink_(sink), version_(version) {}
+    explicit Decoder(Sink& sink) : sink_(sink) {}
 
     bool table(const json& v, const std::string& path, const std::string& what) {
         if (v.is_object()) return true;
@@ -88,10 +78,9 @@ public:
 
     // A binding reference at a key that takes a literal is
     // spec.reference_not_allowed (design/instrument-interface.md, Reference
-    // Places) from version 1 on; any other value of the wrong type is
-    // spec.wrong_type, as is a reference in a version 0 document.
+    // Places); any other value of the wrong type is spec.wrong_type.
     void wrong(const std::string& path, const json& v, const std::string& expected) {
-        if (version_ >= kInstrumentVersion && looks_like_reference(v)) {
+        if (looks_like_reference(v)) {
             sink_.error("spec.reference_not_allowed",
                         path + " takes " + expected +
                             " only; a reference stands only where a value changes data, never where it changes the "
@@ -180,12 +169,12 @@ public:
 
     enum class Ref { none, read, bad };
 
-    // Reads the table `v` at `path` as a reference when the version allows one
-    // and the table has the form of one. A table of that form that is not a
-    // reference that parse_reference() reads, or that holds a key outside the
-    // form or a nested reference, is spec.bad_reference.
+    // Reads the table `v` at `path` as a reference when the table has the form
+    // of one. A table of that form that is not a reference that
+    // parse_reference() reads, or that holds a key outside the form or a nested
+    // reference, is spec.bad_reference.
     Ref reference(const json& v, const std::string& path, Reference& out) {
-        if (version_ < kInstrumentVersion || !looks_like_reference(v)) return Ref::none;
+        if (!looks_like_reference(v)) return Ref::none;
         bool ok = false;
         if (auto r = parse_reference(v)) {
             ok = !looks_like_reference(r->fallback);
@@ -327,8 +316,7 @@ public:
             } else if (v < kFormatVersion || v > kLatestFormatVersion) {
                 sink_.error("spec.unsupported_version",
                             "This spec has format version " + std::to_string(v) +
-                                ", and this reader knows the versions " + std::to_string(kFormatVersion) + " to " +
-                                std::to_string(kLatestFormatVersion) +
+                                ", and this reader knows format version " + std::to_string(kFormatVersion) +
                                 (v > kLatestFormatVersion ? "; open it with a newer Caliper." : "."),
                             "caliper_spec");
                 return s;
@@ -336,35 +324,26 @@ public:
                 s.version = v;
             }
         }
-        version_ = s.version;
-        if (version_ >= kInstrumentVersion) {
-            keys(root, "",
-                 {"caliper_spec", "applet", "source", "panel", "control", "state", "program", "stage", "provenance",
-                  "layout", kPiecesKey},
-                 "a spec");
-        } else {
-            keys(root, "", {"caliper_spec", "applet", "source", "panel", "layout"}, "a spec");
-        }
+        keys(root, "",
+             {"caliper_spec", "instrument", "source", "panel", "control", "state", "program", "stage", "provenance",
+              "layout", kPiecesKey},
+             "a spec");
 
-        auto applet = root.find("applet");
-        if (applet == root.end()) {
-            missing("", "applet", "A spec");
-        } else if (table(*applet, "applet", "applet")) {
-            if (version_ >= kInstrumentVersion) {
-                keys(*applet, "applet", {"id", "title", "description", "layout_locked"}, "the applet table");
-            } else {
-                keys(*applet, "applet", {"id", "title", "description"}, "the applet table");
-            }
-            auto id = string(*applet, "id", "applet");
+        auto inst = root.find("instrument");
+        if (inst == root.end()) {
+            missing("", "instrument", "A spec");
+        } else if (table(*inst, "instrument", "instrument")) {
+            keys(*inst, "instrument", {"id", "title", "description", "layout_locked"}, "the instrument table");
+            auto id = string(*inst, "id", "instrument");
             if (id) {
-                s.applet.id = *id;
-            } else if (applet->find("id") == applet->end()) {
-                missing("applet", "id", "The applet table");
+                s.instrument.id = *id;
+            } else if (inst->find("id") == inst->end()) {
+                missing("instrument", "id", "The instrument table");
             }
-            s.applet.title = string(*applet, "title", "applet");
-            s.applet.description = string(*applet, "description", "applet");
-            if (version_ >= kInstrumentVersion) s.applet.layout_locked = boolean(*applet, "layout_locked", "applet");
-            s.applet.x = extension(*applet, "applet");
+            s.instrument.title = string(*inst, "title", "instrument");
+            s.instrument.description = string(*inst, "description", "instrument");
+            s.instrument.layout_locked = boolean(*inst, "layout_locked", "instrument");
+            s.instrument.x = extension(*inst, "instrument");
         }
 
         if (auto it = root.find("source"); it != root.end()) {
@@ -385,7 +364,7 @@ public:
                     s.panels.push_back(panel((*it)[i], index_path("panel", i)));
             }
         }
-        if (auto it = root.find("control"); it != root.end() && version_ >= kInstrumentVersion) {
+        if (auto it = root.find("control"); it != root.end()) {
             if (!it->is_array()) {
                 sink_.error("spec.wrong_type",
                             "control must be an array of tables; write each one as [[control]].", "control");
@@ -394,49 +373,47 @@ public:
                     s.controls.push_back(control((*it)[i], index_path("control", i)));
             }
         }
-        if (version_ >= kInstrumentVersion) {
-            if (auto it = root.find("state"); it != root.end()) {
-                if (!it->is_array()) {
-                    sink_.error("spec.wrong_type", "state must be an array of tables; write each one as [[state]].",
-                                "state");
-                } else {
-                    for (std::size_t i = 0; i < it->size(); ++i)
-                        s.states.push_back(state((*it)[i], index_path("state", i)));
-                }
+        if (auto it = root.find("state"); it != root.end()) {
+            if (!it->is_array()) {
+                sink_.error("spec.wrong_type", "state must be an array of tables; write each one as [[state]].",
+                            "state");
+            } else {
+                for (std::size_t i = 0; i < it->size(); ++i)
+                    s.states.push_back(state((*it)[i], index_path("state", i)));
             }
-            if (auto it = root.find("program"); it != root.end()) {
-                if (!it->is_array()) {
-                    sink_.error("spec.wrong_type",
-                                "program must be an array of tables; write each one as [[program]].", "program");
-                } else {
-                    for (std::size_t i = 0; i < it->size(); ++i)
-                        s.programs.push_back(program((*it)[i], index_path("program", i)));
-                }
-            }
-            // Inline pieces (design/programmable-graphics.md, Piece Files).
-            if (auto it = root.find(kPiecesKey); it != root.end()) {
-                if (!it->is_array()) {
-                    sink_.error("spec.wrong_type", "piece must be an array of tables; write each one as [[piece]].",
-                                kPiecesKey);
-                } else {
-                    for (std::size_t i = 0; i < it->size(); ++i)
-                        s.pieces.push_back(piece((*it)[i], index_path(kPiecesKey, i)));
-                }
-            }
-            if (auto it = root.find("stage"); it != root.end()) {
-                if (!it->is_array()) {
-                    sink_.error("spec.wrong_type", "stage must be an array of tables; write each one as [[stage]].",
-                                "stage");
-                } else {
-                    for (std::size_t i = 0; i < it->size(); ++i) {
-                        // Stages were replaced by pieces: the spec opens without the stage.
-                        const Diagnostic d = stage_replaced((*it)[i], index_path("stage", i));
-                        sink_.warning(d.code, d.message, d.path);
-                    }
-                }
-            }
-            if (auto it = root.find("provenance"); it != root.end()) s.provenance = provenance(*it, "provenance");
         }
+        if (auto it = root.find("program"); it != root.end()) {
+            if (!it->is_array()) {
+                sink_.error("spec.wrong_type",
+                            "program must be an array of tables; write each one as [[program]].", "program");
+            } else {
+                for (std::size_t i = 0; i < it->size(); ++i)
+                    s.programs.push_back(program((*it)[i], index_path("program", i)));
+            }
+        }
+        // Inline pieces (design/programmable-graphics.md, Piece Files).
+        if (auto it = root.find(kPiecesKey); it != root.end()) {
+            if (!it->is_array()) {
+                sink_.error("spec.wrong_type", "piece must be an array of tables; write each one as [[piece]].",
+                            kPiecesKey);
+            } else {
+                for (std::size_t i = 0; i < it->size(); ++i)
+                    s.pieces.push_back(piece((*it)[i], index_path(kPiecesKey, i)));
+            }
+        }
+        if (auto it = root.find("stage"); it != root.end()) {
+            if (!it->is_array()) {
+                sink_.error("spec.wrong_type", "stage must be an array of tables; write each one as [[stage]].",
+                            "stage");
+            } else {
+                for (std::size_t i = 0; i < it->size(); ++i) {
+                    // Stages were replaced by pieces: the spec opens without the stage.
+                    const Diagnostic d = stage_replaced((*it)[i], index_path("stage", i));
+                    sink_.warning(d.code, d.message, d.path);
+                }
+            }
+        }
+        if (auto it = root.find("provenance"); it != root.end()) s.provenance = provenance(*it, "provenance");
         if (auto it = root.find("layout"); it != root.end()) s.layout = layout(*it, "layout");
         s.x = extension(root, "");
         return s;
@@ -1230,11 +1207,7 @@ public:
     Source source(const json& o, const std::string& path) {
         Source s;
         if (!table(o, path, path)) return s;
-        if (version_ >= kInstrumentVersion) {
-            keys(o, path, {"id", "catalog", "sql", "from", "transform", "history"}, "a source");
-        } else {
-            keys(o, path, {"id", "catalog", "sql", "from", "transform"}, "a source");
-        }
+        keys(o, path, {"id", "catalog", "sql", "from", "transform", "history"}, "a source");
         if (auto id = string(o, "id", path)) {
             s.id = *id;
         } else if (o.find("id") == o.end()) {
@@ -1243,7 +1216,7 @@ public:
         s.catalog = string(o, "catalog", path);
         s.sql = string(o, "sql", path);
         s.from = string(o, "from", path);
-        if (version_ >= kInstrumentVersion) s.history = integer(o, "history", path);
+        s.history = integer(o, "history", path);
         if (auto it = o.find("transform"); it != o.end()) {
             const std::string tp = key_path(path, "transform");
             if (!it->is_array()) {
@@ -1266,13 +1239,11 @@ public:
             if (o.find("op") == o.end()) missing(path, "op", "A transform");
             return t;
         }
-        const bool v1_op = transform_op_from_string(*op, t.op) &&
-                           (t.op == TransformOp::window || t.op == TransformOp::surface || t.op == TransformOp::path);
-        if (!transform_op_from_string(*op, t.op) || (v1_op && version_ < kInstrumentVersion)) {
+        if (!transform_op_from_string(*op, t.op)) {
             sink_.error("spec.unknown_transform",
-                        quote(*op) + " is not a transform; the transforms are " +
-                            (version_ >= kInstrumentVersion ? "slice, reduce, normalise, window, surface and path."
-                                                            : "slice, reduce and normalise."),
+                        quote(*op) +
+                            " is not a transform; the transforms are slice, reduce, normalise, window, surface and "
+                            "path.",
                         key_path(path, "op"));
             return t;
         }
@@ -1355,12 +1326,7 @@ public:
     Panel panel(const json& o, const std::string& path) {
         Panel p;
         if (!table(o, path, path)) return p;
-        if (version_ >= kInstrumentVersion) {
-            keys(o, path, {"id", "primitive", "title", "closable", "bind", "options", "entity", "annotation"},
-                 "a panel");
-        } else {
-            keys(o, path, {"id", "primitive", "title", "bind", "options"}, "a panel");
-        }
+        keys(o, path, {"id", "primitive", "title", "closable", "bind", "options", "entity", "annotation"}, "a panel");
         if (auto id = string(o, "id", path)) {
             p.id = *id;
         } else if (o.find("id") == o.end()) {
@@ -1368,20 +1334,17 @@ public:
         }
         bool known = false;
         if (auto prim = string(o, "primitive", path)) {
-            known = primitive_from_string(*prim, p.primitive) && primitive_version(p.primitive) <= version_;
+            known = primitive_from_string(*prim, p.primitive);
             if (!known)
                 sink_.error("spec.unknown_primitive",
-                            quote(*prim) + " is not a primitive" +
-                                (primitive_from_string(*prim, p.primitive) ? " of format version " +
-                                                                                 std::to_string(version_)
-                                                                           : std::string()) +
-                                "; the primitives are " + join(primitive_names(version_)) + ".",
+                            quote(*prim) + " is not a primitive; the primitives are " + join(all_primitive_names()) +
+                                ".",
                             key_path(path, "primitive"));
         } else if (o.find("primitive") == o.end()) {
             missing(path, "primitive", "A panel");
         }
         p.title = string(o, "title", path);
-        if (version_ >= kInstrumentVersion) p.closable = boolean(o, "closable", path);
+        p.closable = boolean(o, "closable", path);
         p.x = extension(o, path);
         if (!known) return p;  // slots and options depend on the primitive
         const std::string prim_name = to_string(p.primitive);
@@ -1429,11 +1392,7 @@ public:
             const std::string op = key_path(path, "options");
             if (table(*it, op, op)) {
                 const json& opts = *it;
-                std::vector<std::string> allowed = options_of(p.primitive);
-                if (version_ < kInstrumentVersion)
-                    allowed.erase(std::remove_if(allowed.begin(), allowed.end(),
-                                                 [&](const std::string& n) { return version_one_option(p.primitive, n); }),
-                                  allowed.end());
+                const std::vector<std::string>& allowed = options_of(p.primitive);
                 for (auto k = opts.begin(); k != opts.end(); ++k) {
                     if (k.key() == "x" || contains(allowed, k.key())) continue;
                     sink_.error("spec.unknown_option",
@@ -1514,26 +1473,24 @@ public:
                 out.x = extension(opts, op);
             }
         }
-        if (version_ >= kInstrumentVersion) {
-            if (auto it = o.find("entity"); it != o.end()) {
-                const std::string ep = key_path(path, "entity");
-                if (!it->is_array()) {
-                    sink_.error("spec.wrong_type",
-                                ep + " must be an array of tables; write each one as [[panel.entity]].", ep);
-                } else {
-                    for (std::size_t i = 0; i < it->size(); ++i)
-                        p.entities.push_back(entity((*it)[i], index_path(ep, i)));
-                }
+        if (auto it = o.find("entity"); it != o.end()) {
+            const std::string ep = key_path(path, "entity");
+            if (!it->is_array()) {
+                sink_.error("spec.wrong_type",
+                            ep + " must be an array of tables; write each one as [[panel.entity]].", ep);
+            } else {
+                for (std::size_t i = 0; i < it->size(); ++i)
+                    p.entities.push_back(entity((*it)[i], index_path(ep, i)));
             }
-            if (auto it = o.find("annotation"); it != o.end()) {
-                const std::string ap = key_path(path, "annotation");
-                if (!it->is_array()) {
-                    sink_.error("spec.wrong_type",
-                                ap + " must be an array of tables; write each one as [[panel.annotation]].", ap);
-                } else {
-                    for (std::size_t i = 0; i < it->size(); ++i)
-                        p.annotations.push_back(annotation((*it)[i], index_path(ap, i)));
-                }
+        }
+        if (auto it = o.find("annotation"); it != o.end()) {
+            const std::string ap = key_path(path, "annotation");
+            if (!it->is_array()) {
+                sink_.error("spec.wrong_type",
+                            ap + " must be an array of tables; write each one as [[panel.annotation]].", ap);
+            } else {
+                for (std::size_t i = 0; i < it->size(); ++i)
+                    p.annotations.push_back(annotation((*it)[i], index_path(ap, i)));
             }
         }
         return p;
@@ -1718,8 +1675,8 @@ public:
         }
         const bool has_split = v.find("split") != v.end();
         const bool has_tabs = v.find("tabs") != v.end();
-        if (version_ >= kInstrumentVersion && v.find("panel") != v.end()) {
-            // A leaf table { panel, min } (spec version 1).
+        if (v.find("panel") != v.end()) {
+            // A leaf table { panel, min }.
             if (has_split || has_tabs) {
                 sink_.error("spec.bad_layout", path + " has panel together with split or tabs; a layout table has one.",
                             path);
@@ -1752,16 +1709,12 @@ public:
         n.x = extension(v, path);
         if (has_split) {
             n.kind = LayoutNode::Kind::split;
-            if (version_ >= kInstrumentVersion) {
-                keys(v, path, {"split", "ratio", "shares", "title", "children"}, "a split");
-            } else {
-                keys(v, path, {"split", "ratio", "title", "children"}, "a split");
-            }
+            keys(v, path, {"split", "ratio", "shares", "title", "children"}, "a split");
             static const std::vector<std::string> directions = {"horizontal", "vertical"};
             if (auto d = enumerated(v, "split", path, directions, "a split direction"))
                 split_from_string(*d, n.split);
             n.ratio = number(v, "ratio", path);
-            if (auto sh = v.find("shares"); sh != v.end() && version_ >= kInstrumentVersion) {
+            if (auto sh = v.find("shares"); sh != v.end()) {
                 const std::string sp = key_path(path, "shares");
                 if (!sh->is_array()) {
                     wrong(sp, *sh, "a list of numbers");
@@ -1801,7 +1754,6 @@ private:
     }
 
     Sink& sink_;
-    std::int64_t version_ = kLatestFormatVersion;
 };
 
 }  // namespace
@@ -2399,13 +2351,13 @@ json to_json(const LayoutNode& n) {
 json to_json(const Spec& spec) {
     json j = json::object();
     j["caliper_spec"] = spec.version;
-    json applet = json::object();
-    applet["id"] = spec.applet.id;
-    if (spec.applet.title) applet["title"] = *spec.applet.title;
-    if (spec.applet.description) applet["description"] = *spec.applet.description;
-    if (spec.applet.layout_locked) applet["layout_locked"] = *spec.applet.layout_locked;
-    if (!spec.applet.x.is_null()) applet["x"] = spec.applet.x;
-    j["applet"] = std::move(applet);
+    json inst = json::object();
+    inst["id"] = spec.instrument.id;
+    if (spec.instrument.title) inst["title"] = *spec.instrument.title;
+    if (spec.instrument.description) inst["description"] = *spec.instrument.description;
+    if (spec.instrument.layout_locked) inst["layout_locked"] = *spec.instrument.layout_locked;
+    if (!spec.instrument.x.is_null()) inst["x"] = spec.instrument.x;
+    j["instrument"] = std::move(inst);
     if (!spec.sources.empty()) {
         json list = json::array();
         for (const Source& s : spec.sources) list.push_back(to_json(s));

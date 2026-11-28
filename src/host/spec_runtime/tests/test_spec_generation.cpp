@@ -37,7 +37,7 @@ struct CountingSource final : SpecPanelSource {
 
 TEST_CASE("spec runtime: a panel whose served generation changes is resolved again, and only it") {
     const spec::Spec s = parse(
-        "caliper_spec = 0\n[applet]\nid = \"t\"\n"
+        "caliper_spec = 2\n[instrument]\nid = \"t\"\n"
         "[[panel]]\nid = \"a\"\nprimitive = \"text\"\noptions = { text = \"one\" }\n"
         "[[panel]]\nid = \"b\"\nprimitive = \"text\"\noptions = { text = \"two\" }\n");
     SpecTextures textures;
@@ -101,7 +101,7 @@ PanelData failed(const std::string& code) {
 // error in its header, and a good value clears it. Without last good data, the
 // panel shows the error state.
 TEST_CASE("spec runtime: a value out of range keeps the panel's last good data with the error in its header") {
-    const spec::Spec s = parse("caliper_spec = 0\n[applet]\nid = \"t\"\n"
+    const spec::Spec s = parse("caliper_spec = 2\n[instrument]\nid = \"t\"\n"
                                "[[panel]]\nid = \"a\"\nprimitive = \"series\"\nbind = { y = \"loss.value\" }\n");
     SpecTextures textures;
     SpecRuntime runtime(textures);

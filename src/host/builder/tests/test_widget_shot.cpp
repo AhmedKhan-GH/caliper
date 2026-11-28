@@ -1,6 +1,6 @@
 // caliper-widget-shot as a process, on an offscreen canvas: a workspace with
 // the dashboard of dashboard.spec.toml built through commands and saved as a
-// spec applet, then the ⌘K scenario on its curves panel with the scripted
+// instrument, then the ⌘K scenario on its curves panel with the scripted
 // agent. The images say what the surface did: the preview differs from the
 // idle state inside the panel's rectangle and nowhere else, and the state
 // after Accept equals a fresh render of the changed spec.
@@ -63,13 +63,13 @@ TEST_CASE("caliper-widget-shot: the ⌘K scenario on a panel of the dashboard" *
     const std::string ws = root + "/ws";
     {
         auto s = dashboard_workspace(ws, root + "/data");
-        ok(*s, "applet.save", {{"overwrite", true}});
+        ok(*s, "instrument.save", {{"overwrite", true}});
         s->close();
     }
     const std::string out = root + "/shots";
     std::filesystem::create_directories(out);
     caliper_builder::acp::SpawnOptions o;
-    o.argv = {CALIPER_WIDGET_SHOT_EXE, "--workspace", ws,        "--applet", "run42-dashboard", "--panel", "curves",
+    o.argv = {CALIPER_WIDGET_SHOT_EXE, "--workspace", ws,        "--instrument", "run42-dashboard", "--panel", "curves",
               "--prompt",              "Use a linear y axis",     "--out-dir", out,  "--size", "960x600", "--prefix", "t"};
     caliper_builder::acp::RunLimits lim;
     lim.timeout_ms = 120000;

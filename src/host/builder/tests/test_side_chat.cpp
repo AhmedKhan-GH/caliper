@@ -458,7 +458,7 @@ TEST_CASE("side chat: an approval reissued for changed content keeps its row wai
     REQUIRE(pump_until(chat, [&] { return chat.state() == ChatState::running; }));
     caliper_builder::PendingApproval a;
     a.approval = "ap-2";
-    a.invocation.name = "applet.save";
+    a.invocation.name = "instrument.save";
     a.invocation.origin = caliper_builder::CommandOrigin::agent;
     pending = {a};
     chat.update();
@@ -500,7 +500,7 @@ TEST_CASE("side chat: the handoff from ⌘K is a draft the person sends, shaped 
          {{"type", "text"}, {"text", "<caliper-data part=\"source\" about=\"1\">\nrows\n</caliper-data>"}},
          {{"type", "image"}, {"mimeType", "image/png"}, {"data", "iVBORw0KGgo="}}});
     caliper_builder::spec::Spec spec;
-    spec.applet.id = "run42-dashboard";
+    spec.instrument.id = "run42-dashboard";
     caliper_builder::spec::Source metrics;
     metrics.id = "metrics";
     metrics.catalog = "table:run42_metrics";
@@ -623,8 +623,8 @@ TEST_CASE("side chat: the stop words and the tool status words") {
 }
 
 TEST_CASE("side chat: the compact diff of a spec file's edit, as the cards show it") {
-    const std::string before = R"(caliper_spec = 0
-[applet]
+    const std::string before = R"(caliper_spec = 2
+[instrument]
 id = "d"
 [[source]]
 id = "metrics"
@@ -644,7 +644,7 @@ primitive = "series"
 title = "Learning rate"
 bind = { x = "metrics.step", y = ["metrics.lr"] }
 )";
-    const std::vector<WidgetDiffLine> d = chat_compact_diff("/w/applets/d/d.spec.toml", before, after);
+    const std::vector<WidgetDiffLine> d = chat_compact_diff("/w/instruments/d/d.spec.toml", before, after);
     REQUIRE(d.size() >= 4);
     CHECK(d[0].key == "primitive");
     CHECK(d[0].after == "\"series\"");

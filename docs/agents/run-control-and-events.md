@@ -1,6 +1,6 @@
 # Run Control and Events
 
-An agent that uses `caliper-mcp` can add a control to the open spec, change a parameter of the script that the app is attached to, and read what happens in the app. This page describes the run commands, their approval rules and errors, and the command `events.wait`. The control commands are on [Spec Version 1](../builder/spec-version-1.md).
+An agent that uses `caliper-mcp` can add a control to the open spec, change a parameter of the script that the app is attached to, and read what happens in the app. This page describes the run commands, their approval rules and errors, and the command `events.wait`. The control commands are on [Spec Format](../builder/spec-format.md).
 
 Each command is one MCP tool with the first dot of its name replaced by `_`, such as `run_set_param` and `events_wait`.
 
@@ -80,7 +80,7 @@ Semantic probes keep `kind: "module"` and add `probe`, `layer` and `pattern` met
 
 ## Toggle Control
 
-A control of the kind `toggle` bound to `intervene:<point>` sets the ablation of the point while it is on and clears it when it is off. A toggle bound to `param:<name>` of a boolean parameter sets that parameter. The click of the person has the origin `ui`, thus it runs at once and shows no card. A toggle is disabled, with the reason beside it, when no script is attached, when the script takes no interventions, or when the model has no such point. `control.create` takes the bind `intervene:<point>`, as [Spec Version 1](../builder/spec-version-1.md) describes.
+A control of the kind `toggle` bound to `intervene:<point>` sets the ablation of the point while it is on and clears it when it is off. A toggle bound to `param:<name>` of a boolean parameter sets that parameter. The click of the person has the origin `ui`, thus it runs at once and shows no card. A toggle is disabled, with the reason beside it, when no script is attached, when the script takes no interventions, or when the model has no such point. `control.create` takes the bind `intervene:<point>`, as [Spec Format](../builder/spec-format.md) describes.
 
 ## Events
 
@@ -108,7 +108,7 @@ Each event has the keys `seq`, `time`, `kind`, `panel`, `view` and `origin`. The
 | `state` | A state variable changed | `state`, `value`, `previous`, `writer` |
 | `cursor` | The time cursor changed | `change`, `step`, `first`, `latest`, `playing`, `speed` |
 | `run` | The attached script changed | `change`, then the keys of the change |
-| `spec` | A command changed the open spec | `command`, `event`, `applet` |
+| `spec` | A command changed the open spec | `command`, `event`, `instrument` |
 | `approval` | A card asked or was decided | `approval`, `command`, `state`, `target` |
 | `program` | A program changed its state or issued a warning ([GPU Programs](gpu-programs.md#program-events)) | `program`, `change`, `host`, `half`, `pass`, `code`, `message`, `line`, `column` |
 
@@ -126,6 +126,6 @@ A `control` event is one event for each finished edit. A slider sends each value
 | `attach` | `attached`, `script` | A script was attached or detached |
 | `intervene` | `point`, `op`, `step` | The script applied or ended an intervention at a step |
 
-A `spec` event comes from the journal. Its `event` is `do`, `undo` or `redo`, and `applet` is the id of the spec that is open after the command. An `approval` event has the `state` `pending`, `approved`, `denied` or `expired`. It also comes for a run command that you deny or that expires. For a run command, `target` names the parameter or the action.
+A `spec` event comes from the journal. Its `event` is `do`, `undo` or `redo`, and `instrument` is the id of the spec that is open after the command. An `approval` event has the `state` `pending`, `approved`, `denied` or `expired`. It also comes for a run command that you deny or that expires. For a run command, `target` names the parameter or the action.
 
 The `step` of a `run` event is the step of the script when it changed, or null before the first step.

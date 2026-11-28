@@ -382,13 +382,13 @@ TEST_CASE("resources are listed in pages and read by URI") {
         REQUIRE(pages < 10);
     }
     CHECK(pages == 3);
-    // 451 pages, the two spec schemas compiled in, the command table, and
+    // 451 pages, the spec schema compiled in, the command table, and
     // the files of the built-in library of pieces.
     std::size_t library = 0;
     for (const std::string& uri : seen) library += uri.rfind(kLibraryUriPrefix, 0) == 0;
     CHECK(library >= 4);
     CHECK(library == caliper_builder::programs::library_files().size());
-    CHECK(seen.size() - library == 454);
+    CHECK(seen.size() - library == 453);
     CHECK(seen.count(std::string(kLibraryUriPrefix) + "lib/colormap/1.wgsl") == 1);
     CHECK(seen.count(kCommandTableUri) == 1);
     CHECK(seen.count(kSpecSchemaUri) == 1);
@@ -416,10 +416,10 @@ TEST_CASE("resources are listed in pages and read by URI") {
     const json schema = h.request("read-3", "resources/read", modern({{"uri", kSpecSchemaUri}}));
     const json parsed = json::parse(schema["result"]["contents"][0]["text"].get<std::string>(), nullptr, false);
     CHECK(parsed.is_object());
-    // Both spec schemas change only with caliper-mcp itself, so they keep for an hour.
-    const json v1 = h.request("read-3b", "resources/read", modern({{"uri", kSpecSchemaV1Uri}}));
-    CHECK(v1["result"]["contents"][0]["uri"] == kSpecSchemaV1Uri);
-    CHECK(v1["result"]["ttlMs"] == schema["result"]["ttlMs"]);
+    CHECK(parsed.at("$id") == "urn:caliper:schema:spec:v2");
+    CHECK(parsed.at("properties").at("caliper_spec").at("const") == 2);
+    CHECK(parsed.at("$defs").contains("panel_scene"));
+    CHECK(parsed.at("$defs").contains("control"));
     CHECK(schema["result"]["ttlMs"] == 3600000);
 
     const json missing = h.request("read-4", "resources/read", modern({{"uri", "caliper://docs/../index.md"}}));

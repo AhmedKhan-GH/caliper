@@ -11,8 +11,8 @@ The button has a bronze outline while the chat is open. The chat is the right co
 window width and at least 300 points wide, and the minimum grows with the text scale. The page bar, the run bar, the
 status bar, the jobs tray and the approval cards keep their places, and the page fills the space that the column leaves.
 
-The chat stays open when the page changes. For each `spec.new`, `spec.open` and `applet.open` of the agent, the app
-shows the spec page, so you see the spec whose edits you review beside the same conversation. A compiled applet's page
+The chat stays open when the page changes. For each `spec.new`, `spec.open` and `instrument.open` of the agent, the app
+shows the spec page, so you see the spec whose edits you review beside the same conversation. A library instrument's page
 is the exception, because an agent never ends it. There the spec opens in the session, the page stays, and Activity says
 how to get to it ([Caliper CLI](../reference/cli.md)).
 
@@ -133,7 +133,7 @@ input has the keyboard.
 | Ask | Edits of the open spec and commands that delete or overwrite saved data or run a Python loader wait for your card. This is the default. |
 | Accept edits | Edits of the open spec apply at once. Everything else that asked still asks. |
 | Read only | The agent can read and propose (dry runs, edits of a preview). Every other change is refused, and the agent is told why. |
-| Allow all | Nothing waits for a card, except an overwrite of a saved applet or the replacement of a spec with unsaved changes. Run commands, managed runs and Python loaders run without a card. You choose it from the last item of the menu or in the settings. Caliper saves it, and it stays on after a restart until you choose another mode. While it is on, a banner, ALLOW ALL with End, stays under the header, and the status bar says "allow all for side chat". End sets Ask. If Caliper cannot save the change, the banner stays with "Still saved" and the settings say why. |
+| Allow all | Nothing waits for a card, except an overwrite of a saved instrument or the replacement of a spec with unsaved changes. Run commands, managed runs and Python loaders run without a card. You choose it from the last item of the menu or in the settings. Caliper saves it, and it stays on after a restart until you choose another mode. While it is on, a banner, ALLOW ALL with End, stays under the header, and the status bar says "allow all for side chat". End sets Ask. If Caliper cannot save the change, the banner stays with "Still saved" and the settings say why. |
 
 A command that runs without a card because of the mode or a rule shows as an APPLIED row with what allowed it. The row
 has Undo, which takes the command back while it is the newest change. An approval card of the chat agent offers Allow

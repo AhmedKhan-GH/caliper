@@ -1,5 +1,5 @@
 #pragma once
-/* caliper.feed.v1 — live telemetry ingestion (docs/applets/services/caliper-feed-v1.md).
+/* caliper.feed.v1 — live telemetry ingestion (docs/instruments/services/caliper-feed-v1.md).
  *
  * The host owns the telemetry providers, buffers their samples in a ring buffer for each channel, and vends a
  * pull-based read surface. Every entry point is callable from any thread and never blocks. The caller holds the
@@ -83,7 +83,7 @@ typedef struct CaliperFeedV1 {
      */
     uint32_t (*read)(const char* channel_id, CaliperFeedSample* buf,
                      uint32_t max, uint64_t* cursor);
-    /** Reserved for sources that applets register. Always `NULL`. */
+    /** Reserved for sources that instruments register. Always `NULL`. */
     void*    reserved0;
 } CaliperFeedV1;
 

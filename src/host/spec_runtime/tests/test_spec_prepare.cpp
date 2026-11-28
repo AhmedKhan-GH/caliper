@@ -293,8 +293,8 @@ TEST_CASE("prepare: a text panel shows its text and the last value") {
 }
 
 TEST_CASE("prepare: states take the panel's place, as short noun phrases naming the source") {
-    const spec::Spec s = parse(R"(caliper_spec = 0
-[applet]
+    const spec::Spec s = parse(R"(caliper_spec = 2
+[instrument]
 id = "t"
 [[source]]
 id = "gpu"
@@ -364,8 +364,8 @@ TEST_CASE("prepare: numbers in the headers' four significant digits") {
 TEST_CASE("prepare: a scene panel names its live scene and keeps its options, with no data") {
     namespace cs = caliper_builder::spec;
     cs::Spec s;
-    s.version = 1;
-    s.applet.id = "t";
+    s.version = spec::kFormatVersion;
+    s.instrument.id = "t";
     cs::Panel p;
     p.id = "world";
     p.primitive = cs::Primitive::scene;

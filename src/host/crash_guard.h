@@ -4,22 +4,22 @@
 
 namespace caliper_host {
 
-// Best-effort containment, not a sandbox (docs/applets/trust-model.md): after a fault the
-// process memory is suspect; callers must quarantine the applet, not retry it.
+// Best-effort containment, not a sandbox (docs/instruments/trust-model.md): after a fault the
+// process memory is suspect; callers must quarantine the instrument, not retry it.
 // Contained: SIGSEGV/SIGBUS/SIGFPE/SIGILL (SEH on Windows), including a stack
 // overflow (the handler runs on a per-thread alternate stack), and any C++
 // exception escaping fn — reported as "C++ exception: <what()>" on every OS.
 
-// What a failed guarded call was, which decides whether the applet may be
-// restarted in this process (AppletLoader::restart):
+// What a failed guarded call was, which decides whether the instrument may be
+// restarted in this process (InstrumentLoader::restart):
 //   Exception  a C++ exception escaped fn. The stack unwound normally and
-//              every destructor on the way ran, so the applet's objects are
+//              every destructor on the way ran, so the instrument's objects are
 //              as sound as its own exception safety left them, and the
 //              process is unharmed.
 //   Signal     a memory fault, stack overflow or illegal instruction (any SEH
 //              exception on Windows, including a C++ throw MSVC could not
 //              unwind through the C ABI). The jump out skipped every
-//              destructor and memory may be corrupt: nothing of that applet
+//              destructor and memory may be corrupt: nothing of that instrument
 //              runs again until the host itself restarts.
 enum class FaultKind { None, Exception, Signal };
 
@@ -42,8 +42,8 @@ FaultKind fault_kind_of(const std::string& fault);
 // region (or on a thread that never guards), so unguarded crashes still reach
 // the default action or an embedder's own reporter. The jump state is
 // thread-local, so guarded regions on different threads do not interfere: the
-// frame thread guards applet entry points while job workers guard applet job
-// fns (JobSystem::submit_guarded), concurrently.
+// frame thread guards instrument entry points while job workers guard
+// instrument job fns (JobSystem::submit_guarded), concurrently.
 //
 // PRECONDITION: never nest guarded_call on one thread — t_jmp is a single
 // buffer, so an inner call silently disarms the outer guard for the rest of

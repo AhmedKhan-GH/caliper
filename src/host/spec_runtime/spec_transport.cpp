@@ -30,7 +30,7 @@ constexpr double kSpeeds[] = {1, 2, 5, 10, 20, 50, 100, 200, 500, 1000};
 
 // Records a move of the cursor by the person: the value store follows it,
 // and a `cursor` event says how it changed (Cursor Events).
-void moved(SpecInstrumentHost& host, const cb::CursorState& c, const char* change) {
+void moved(SpecLiveHost& host, const cb::CursorState& c, const char* change) {
     if (host.values) host.values->set_cursor(c);
     if (!host.events) return;
     cb::Event e;
@@ -44,7 +44,7 @@ void moved(SpecInstrumentHost& host, const cb::CursorState& c, const char* chang
 // The transport's actions, shared by the buttons and the keys.
 enum class Act { back, play_hold, forward, first, live };
 
-bool act(SpecInstrumentHost& host, Act a) {
+bool act(SpecLiveHost& host, Act a) {
     if (!host.history) return false;
     cb::StepHistory& h = *host.history;
     const cb::CursorState now = h.cursor();
@@ -107,7 +107,7 @@ std::string speed_text(double speed) {
 }  // namespace
 
 bool draw_transport_control(const spec::Control& control, const ImRect& rect, const SpecLook& look,
-                            SpecInstrumentHost& host) {
+                            SpecLiveHost& host) {
     (void)control;
     ImDrawList* dl = ImGui::GetWindowDrawList();
     if (!host.history) {
@@ -185,7 +185,7 @@ bool draw_transport_control(const spec::Control& control, const ImRect& rect, co
     return changed;
 }
 
-bool handle_transport_keys(const spec::Spec& spec, SpecInstrumentHost& host) {
+bool handle_transport_keys(const spec::Spec& spec, SpecLiveHost& host) {
     const spec::Control* t = transport_of(spec);
     if (!t || !t->options.keys.value_or(true) || !host.history) return false;
     // A text field that holds the keyboard keeps its keys.
@@ -199,7 +199,7 @@ bool handle_transport_keys(const spec::Spec& spec, SpecInstrumentHost& host) {
     return changed;
 }
 
-void draw_cursor_line(const spec::Panel& panel, const SpecInstrumentHost& host) {
+void draw_cursor_line(const spec::Panel& panel, const SpecLiveHost& host) {
     if (panel.primitive != spec::Primitive::series || !host.history) return;
     const cb::CursorState c = host.history->cursor();
     if (c.live) return;
@@ -217,7 +217,7 @@ void draw_cursor_line(const spec::Panel& panel, const SpecInstrumentHost& host) 
     ImPlot::PopPlotClipRect();
 }
 
-void tick_transport(SpecInstrumentHost& host, double seconds) {
+void tick_transport(SpecLiveHost& host, double seconds) {
     if (!host.history) return;
     host.history->tick(seconds);
     if (host.values) host.values->set_cursor(host.history->cursor());

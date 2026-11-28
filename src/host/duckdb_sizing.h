@@ -2,7 +2,7 @@
 // How large the host's three DuckDB stores may grow, as a
 // rule over the machine rather than fixed numbers. DuckDB's own defaults are
 // ALL hardware threads and 80% of physical RAM — per instance; three of those
-// inside a UI host that also runs applet job threads and libtorch is 3x
+// inside a UI host that also runs instrument job threads and libtorch is 3x
 // oversubscription and no memory budget at all. Memory is a share of physical
 // RAM held between a floor and a ceiling; threads, a share of the cores:
 //

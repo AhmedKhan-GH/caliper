@@ -1,6 +1,6 @@
 #pragma once
 // A test-only JSON Schema (draft 2020-12) checker for exactly the keywords that
-// caliper-spec-v0.schema.json uses. It refuses a schema that uses any other
+// caliper-spec-v2.schema.json uses. It refuses a schema that uses any other
 // keyword, so the schema cannot grow a rule that this checker silently skips.
 //
 // Implemented: boolean schemas, $ref (to a JSON pointer in the same document),

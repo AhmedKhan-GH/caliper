@@ -1,7 +1,7 @@
 #pragma once
 // The host's PNG writers (export_service.cpp, the single stb_image_write TU):
 // an atomic PNG file write for the shot tools and the spec runtime, and an
-// in-memory encode for Caliper API's capture. Not an applet service.
+// in-memory encode for Caliper API's capture. Not an instrument service.
 #include <cstdint>
 #include <string>
 

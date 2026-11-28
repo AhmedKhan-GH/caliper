@@ -2,7 +2,7 @@
 // --api-port 0 --workspace <tmp>` with a command script that imports a small
 // Parquet file and a small safetensors file, runs their loaders, builds the
 // dashboard of src/builder/spec/tests/fixtures/dashboard.spec.toml and saves
-// it as a spec applet; then headless Chromium opens the spec page from the
+// it as an instrument; then headless Chromium opens the spec page from the
 // app's spec_url (the API file) and the test checks that the three panels drew
 // and that the page's link opens nothing else.
 //
@@ -65,7 +65,7 @@ async function startApp(root: string): Promise<App> {
     { name: 'data.import', args: { paths: [path.join(data, 'run42_metrics.parquet'), path.join(data, 'attn.safetensors')], run: true } },
     { name: 'spec.new', args: { id: 'run42-dashboard' } },
     { name: 'spec.set_text', args: { text: fixture } },
-    { name: 'applet.save', args: { overwrite: true } },
+    { name: 'instrument.save', args: { overwrite: true } },
   ].map((l) => JSON.stringify(l)).join('\n') + '\n';
   fs.writeFileSync(path.join(root, 'build.jsonl'), script);
   const results = path.join(root, 'results.jsonl');
@@ -107,7 +107,7 @@ function stopApp(app: App): Promise<void> {
   });
 }
 
-test('a saved spec applet opens in the browser from the running app', async ({ page }) => {
+test('a saved instrument opens in the browser from the running app', async ({ page }) => {
   const root = path.join(WEB, 'test-results', `spec-e2e-${process.pid}`);
   fs.rmSync(root, { recursive: true, force: true });
   fs.mkdirSync(root, { recursive: true });
@@ -116,7 +116,7 @@ test('a saved spec applet opens in the browser from the running app', async ({ p
     const errors: string[] = [];
     page.on('pageerror', (e) => errors.push(e.message));
     await page.setViewportSize({ width: 1440, height: 900 });
-    await page.goto(`${app.specUrl}&applet=run42-dashboard`);
+    await page.goto(`${app.specUrl}&instrument=run42-dashboard`);
     const s = await settled(page, 3);
     expect(s.status).toBe('connected');
     expect(s.title).toBe('Run 42');

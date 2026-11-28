@@ -13,35 +13,35 @@
 //   dock space    four panes in ImGui docking, first-run layout built with
 //                 DockBuilder and persisted in the app-data imgui.ini:
 //                   Projects     (the person's own work: the open
-//                                 workspace's dashboards, its spec applets,
-//                                 with name, id and status, one selection
-//                                 and one ↑↓ list with Instruments, Enter /
-//                                 double-click open; under them, or alone as
-//                                 the empty state, the ways in: F2 Open
-//                                 folder disabled with the reason "not yet
-//                                 available"; F3 New dashboard, a new spec in
-//                                 build mode, titled by "new <title>" on the
-//                                 command line; F4 Attach to process opens
-//                                 the live sessions of training scripts and
-//                                 the streams of caliper.serve() here:
+//                                 workspace's dashboards, its spec-based
+//                                 instruments, with name, id and status, one
+//                                 selection and one ↑↓ list with Instruments,
+//                                 Enter / double-click open; under them, or
+//                                 alone as the empty state, the ways in: F2
+//                                 Open folder disabled with the reason "not
+//                                 yet available"; F3 New dashboard, a new
+//                                 spec in build mode, titled by "new <title>"
+//                                 on the command line; F4 Attach to process
+//                                 opens the live sessions of training scripts
+//                                 and the streams of caliper.serve() here:
 //                                 script, pid, start time, state, views; ↑↓
 //                                 select, Enter / double-click attach, or
 //                                 show the attached one's page, esc back)
-//                   Instruments  (installed applets, every applet but the
-//                                 workspace's dashboards: name, id, version,
-//                                 tag, status; ↑↓ select, Enter /
+//                   Instruments  (installed instruments, every instrument but
+//                                 the workspace's dashboards: name, id,
+//                                 version, tag, status; ↑↓ select, Enter /
 //                                 double-click launch)
-//                   Inspector    (the selected applet's manifest: id, version,
-//                                 tag, summary, libtorch, required / optional
-//                                 services, data schema, SDK, status text,
-//                                 binary path; ⏎ Launch plate,
-//                                 and ⌘R Restart beside it for an applet
+//                   Inspector    (the selected instrument's manifest: id,
+//                                 version, tag, summary, libtorch, required /
+//                                 optional services, data schema, SDK, status
+//                                 text, binary path; ⏎ Launch plate,
+//                                 and ⌘R Restart beside it for an instrument
 //                                 quarantined by a C++ exception)
 //                   Activity     (host log: renderer, scans, launches, jobs,
 //                                 live sessions attached, ended, detached)
 //   jobs tray     above the status bar while a job runs or a failure is kept
 //                 (drawn by the host through Context::after_bars)
-//   status bar    backend · GPU · memory · applet count (facts, no actions)
+//   status bar    backend · GPU · memory · instrument count (facts, no actions)
 //
 // Patterns named in the implementation: status bar (VS Code / JetBrains),
 // command bar of key buttons (Bloomberg command line and function keys),
@@ -55,13 +55,14 @@
 #include <string>
 #include <vector>
 
-namespace caliper_host { class AppletLoader; struct AppletEntry; }
+namespace caliper_host { class InstrumentLoader; struct InstrumentEntry; }
 namespace caliper_live { class SessionList; struct SessionEntry; }
 
-// What the Inspector shows of a spec applet, read from its spec by the app
-// (src/host/builder/spec_page.h): the spec's format version (caliper_spec)
-// and its numbers of panels and sources, or why the spec does not read.
-struct SpecAppletFacts {
+// What the Inspector shows of a spec-based instrument, read from its spec by
+// the app (src/host/builder/spec_page.h): the spec's format version
+// (caliper_spec) and its numbers of panels and sources, or why the spec does
+// not read.
+struct SpecInstrumentFacts {
     long long format = -1;
     size_t panels = 0;
     size_t sources = 0;
@@ -82,11 +83,11 @@ public:
     // Everything the screen reads each frame. The loader is read live so
     // statuses are always fresh; `launch` reproduces a row activation.
     struct Context {
-        caliper_host::AppletLoader* loader = nullptr;
+        caliper_host::InstrumentLoader* loader = nullptr;
         const char* renderer_name = "";          // "metal" / "vulkan"
-        std::function<void(int)> launch;         // launch applet by loader index
-        // Unload and relaunch a quarantined applet (loader index); offered
-        // only when AppletLoader::restartable says so.
+        std::function<void(int)> launch;         // launch instrument by loader index
+        // Unload and relaunch a quarantined instrument (loader index); offered
+        // only when InstrumentLoader::restartable says so.
         std::function<void(int)> restart;
         // F4 Attach to process: the live sessions (relisted once a second
         // while the landing is drawn) and attach-by-token. Null when the build
@@ -111,12 +112,12 @@ public:
         // The builder session's open spec, by its title ("" for none): the
         // command bar shows it with F6 Dashboard, which calls show_spec, as
         // F5 does for the live page, so that a dashboard left with Home, or
-        // one an agent opened behind an applet's page, has a way back.
+        // one an agent opened behind an instrument's page, has a way back.
         std::string open_spec;
         std::function<void()> show_spec;
-        // A spec applet's facts for the Inspector, from its spec file. Null,
-        // or false, leaves the rows that need them out.
-        std::function<bool(const caliper_host::AppletEntry&, SpecAppletFacts*)> spec_facts;
+        // A spec-based instrument's facts for the Inspector, from its spec
+        // file. Null, or false, leaves the rows that need them out.
+        std::function<bool(const caliper_host::InstrumentEntry&, SpecInstrumentFacts*)> spec_facts;
         // F3 New dashboard, the Projects way in: a new spec titled `title`
         // ("" for one without a title), opened in build mode. The command
         // line's "new <title>" and Enter does the same. Null disables it.
@@ -176,11 +177,11 @@ private:
     bool attached(const caliper_live::SessionEntry& e) const;
     void draw_instruments(const Context& ctx);
     void draw_inspector(const Context& ctx);
-    void draw_inspector_rows(const caliper_host::AppletEntry& e, const Context& ctx);
+    void draw_inspector_rows(const caliper_host::InstrumentEntry& e, const Context& ctx);
     void draw_activity();
     void draw_status_bar(const Context& ctx);
     // Filters the loader by command_ and sorts by the table's sort spec.
-    void rebuild_rows(const caliper_host::AppletLoader& loader);
+    void rebuild_rows(const caliper_host::InstrumentLoader& loader);
 
     int selected_ = -1;
     std::function<void()> agent_settings_;   // Context::agent_settings, for the command bar

@@ -99,7 +99,7 @@ entries:
   ids:
   - REN-50
 - heading: 4. Viewport
-  item: Saved viewpoints in views, recordings and spec applets (2 days).
+  item: Saved viewpoints in views, recordings and spec-based instruments (2 days).
   ids:
   - REN-23
   - REN-45
@@ -168,8 +168,8 @@ entries:
   ids:
   - SPC-22
 - heading: 7. Recordings through the hub and in spec panels
-  item: 'Applet scenes in recordings and through the hub: a buffer readback in the graphics layer and
-    the host encoding a wire-capable applet scene as protocol 3.2 (3 days).'
+  item: 'Instrument scenes in recordings and through the hub: a buffer readback in the graphics layer and
+    the host encoding a wire-capable instrument scene as protocol 3.2 (3 days).'
   ids:
   - STR-31
 - heading: 7. Recordings through the hub and in spec panels

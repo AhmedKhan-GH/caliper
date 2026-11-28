@@ -5,10 +5,10 @@
 // caliper-spec-shot does for a spec alone. It opens no window and is not
 // installed.
 //
-//   caliper-widget-shot --workspace <dir> --applet <id> --panel <id>
+//   caliper-widget-shot --workspace <dir> --instrument <id> --panel <id>
 //                       --prompt <text> --out-dir <dir> [options]
 //
-// The applet is opened as the workspace's open spec (applet.open from the ui
+// The instrument is opened as the workspace's open spec (instrument.open from the ui
 // origin), so the workspace is changed: give it a copy. Options:
 //   --size WxH        the canvas (1440x900)
 //   --prefix NAME     the files' prefix (widget)
@@ -59,7 +59,7 @@ namespace {
 int usage(const char* why) {
     std::fprintf(stderr, "caliper-widget-shot: %s\n", why);
     std::fprintf(stderr,
-                 "usage: caliper-widget-shot --workspace <dir> --applet <id> --panel <id> --prompt <text>\n"
+                 "usage: caliper-widget-shot --workspace <dir> --instrument <id> --panel <id> --prompt <text>\n"
                  "                           --out-dir <dir> [--size WxH] [--prefix NAME] [--frames N]\n"
                  "                           [--scenario accept|declined|handoff|unavailable|refine]\n"
                  "                           [--edit JSON] [--reply TEXT]\n");
@@ -99,7 +99,7 @@ WidgetScriptStep edit_step(int ms, const std::string& panel, const json& patch) 
 }  // namespace
 
 int main(int argc, char** argv) {
-    std::string workspace, applet, panel, prompt, out_dir, prefix = "widget", scenario = "accept";
+    std::string workspace, instrument, panel, prompt, out_dir, prefix = "widget", scenario = "accept";
     std::string reply = "Turns off the log scale of the y axis.";
     json patch = {{"options", {{"y_log", false}}}};
     int width = 1440, height = 900, frames = 4;
@@ -109,7 +109,7 @@ int main(int argc, char** argv) {
         if (!v) return usage(("incomplete option " + a).c_str());
         ++i;
         if (a == "--workspace") workspace = v;
-        else if (a == "--applet") applet = v;
+        else if (a == "--instrument") instrument = v;
         else if (a == "--panel") panel = v;
         else if (a == "--prompt") prompt = v;
         else if (a == "--out-dir") out_dir = v;
@@ -126,7 +126,7 @@ int main(int argc, char** argv) {
             return usage(("unknown option " + a).c_str());
         }
     }
-    if (workspace.empty() || applet.empty() || panel.empty() || out_dir.empty()) return usage("missing an option");
+    if (workspace.empty() || instrument.empty() || panel.empty() || out_dir.empty()) return usage("missing an option");
     if (prompt.empty()) prompt = "Use a linear y axis";
     if (width < 64 || height < 64 || width > 8192 || height > 8192) return usage("--size must be from 64x64 to 8192x8192");
     if (frames < 1 || frames > 120) return usage("--frames must be from 1 to 120");
@@ -137,11 +137,11 @@ int main(int argc, char** argv) {
     if (opened.error) return fail("cannot open the workspace " + workspace + ": " + opened.error.message);
     std::unique_ptr<caliper_builder::Session> session = std::move(opened.session);
     {
-        const CommandResult r = invoke(*session, "applet.open", {{"id", applet}}, CommandOrigin::ui);
-        if (!r.ok) return fail("applet.open " + applet + ": " + r.error.code + ": " + r.error.message);
+        const CommandResult r = invoke(*session, "instrument.open", {{"id", instrument}}, CommandOrigin::ui);
+        if (!r.ok) return fail("instrument.open " + instrument + ": " + r.error.code + ": " + r.error.message);
     }
     if (!session->open_spec() || !session->open_spec()->spec.find_panel(panel))
-        return fail("the applet " + applet + " has no panel " + panel);
+        return fail("the instrument " + instrument + " has no panel " + panel);
 
     // The scripted agent, on a clock the scenario moves by hand.
     auto clock_now = std::chrono::steady_clock::now();

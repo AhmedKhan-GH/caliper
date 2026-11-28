@@ -5,7 +5,7 @@ This procedure checks a change on a Windows machine with an NVIDIA GPU. Use it f
 ```mermaid
 flowchart LR
     build[Build] -->|binaries| test[Run tests]
-    test -->|no skips| run[Run an applet]
+    test -->|no skips| run[Run an instrument]
     run -->|log lines| record[Record results]
 ```
 
@@ -16,7 +16,7 @@ The flow runs from build to record, and each step needs the one before it.
 - **Windows with an NVIDIA GPU and a current driver.** The driver provides `vulkan-1.dll` and `nvcuda.dll`. The host loads both at run time, so the build and the host need neither the Vulkan SDK nor the CUDA toolkit.
 - **A desktop session on the machine.** The gfx suite creates hidden windows, and some remote desktop sessions cannot initialize Vulkan. In that case its cases skip.
 - **Visual Studio with the MSVC C++ tools, CMake 3.25 or later, Ninja and Git.** The presets use the Ninja generator, so configure from an x64 developer command prompt.
-- **A CUDA toolkit, for the torch CUDA paths.** The build picks a CUDA libtorch when it configures: CUDA 12.4 or newer selects `cu124`, 12.1 to 12.3 select `cu121`, and 11.8 to 12.0 select `cu118`. With no toolkit, or one older than 11.8, the build uses CPU libtorch, and tests and applets that need CUDA tensors have nothing to run on. The host, the gfx suite and the direct-image kernels do not need the toolkit, because the kernels ship as checked-in PTX that the driver loads.
+- **A CUDA toolkit, for the torch CUDA paths.** The build picks a CUDA libtorch when it configures: CUDA 12.4 or newer selects `cu124`, 12.1 to 12.3 select `cu121`, and 11.8 to 12.0 select `cu118`. With no toolkit, or one older than 11.8, the build uses CPU libtorch, and tests and instruments that need CUDA tensors have nothing to run on. The host, the gfx suite and the direct-image kernels do not need the toolkit, because the kernels ship as checked-in PTX that the driver loads.
 - **One GPU visible to CUDA.** The device rows of the gfx suite run only when the Vulkan device pairs with the single CUDA device. On a hybrid laptop, set Caliper to the high-performance GPU in the Windows graphics settings.
 
 ## Build
@@ -25,11 +25,11 @@ From the repository root in an x64 developer command prompt (or run `./init-subm
 
 ```bat
 init-submodules.bat
-cmake --preset release -DCALIPER_BUILD_APPLETS=ON
+cmake --preset release -DCALIPER_BUILD_INSTRUMENTS=ON
 cmake --build --preset release
 ```
 
-The `release` preset builds into `cmake-build-release` with tests enabled. The core build compiles no applets by default. `CALIPER_BUILD_APPLETS=ON` builds the example applets into `cmake-build-release\applets\`, which the host scans. The first configure downloads libtorch and fetches the Vulkan headers, volk and glslang, which is why no SDK is needed. The build compiles the shaders to SPIR-V and embeds them, so a shader error or a parameter block layout error shows up as a build error.
+The `release` preset builds into `cmake-build-release` with tests enabled. The core build compiles no instruments by default. `CALIPER_BUILD_INSTRUMENTS=ON` builds the example instruments into `cmake-build-release\instruments\`, which the host scans. The first configure downloads libtorch and fetches the Vulkan headers, volk and glslang, which is why no SDK is needed. The build compiles the shaders to SPIR-V and embeds them, so a shader error or a parameter block layout error shows up as a build error.
 
 ## Test Runs
 
@@ -70,7 +70,7 @@ Run the application from a terminal so its standard error is visible:
 .\cmake-build-release\caliper.exe
 ```
 
-Open an applet that trains on CUDA, such as `dev.caliper.mnist`. The host and the Vulkan backend print these lines.
+Open an instrument that trains on CUDA, such as `dev.caliper.mnist`. The host and the Vulkan backend print these lines.
 
 | Line | Meaning |
 |---|---|
@@ -83,7 +83,7 @@ Open an applet that trains on CUDA, such as `dev.caliper.mnist`. The host and th
 | `[vulkan] device path: direct image: ... using the buffer path` | The direct path failed to set up for a texture. The line says why |
 | `[vulkan] device path: import path OK — zero-copy (imported allocation in place)` | An update read an imported allocation |
 
-Each line prints once per process, so a line that never appears means that path never ran. An applet's status line may name a zero-copy path only when one of these lines confirms it. [Vulkan and CUDA on Windows](vulkan-and-cuda.md) describes each path.
+Each line prints once per process, so a line that never appears means that path never ran. An instrument's status line may name a zero-copy path only when one of these lines confirms it. [Vulkan and CUDA](vulkan-and-cuda.md) describes each path.
 
 ## Measurement and Comparison
 
@@ -102,7 +102,7 @@ Two configurations of the same binary isolate a change:
 
 ### Validation Layers
 
-For a change that touches descriptors, pipelines or the parameter block, run once with the Vulkan validation layer. The backend builds without the SDK, so install the Vulkan SDK separately and enable `VK_LAYER_KHRONOS_validation`, for example with `VK_INSTANCE_LAYERS`. Run the gfx suite and a live applet that uses the path, then read the output for complaints in that area. Record findings that predate your change as such, and do not treat them as blockers.
+For a change that touches descriptors, pipelines or the parameter block, run once with the Vulkan validation layer. The backend builds without the SDK, so install the Vulkan SDK separately and enable `VK_LAYER_KHRONOS_validation`, for example with `VK_INSTANCE_LAYERS`. Run the gfx suite and a live instrument that uses the path, then read the output for complaints in that area. Record findings that predate your change as such, and do not treat them as blockers.
 
 ## Recorded Results
 

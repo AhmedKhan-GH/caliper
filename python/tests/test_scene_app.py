@@ -251,10 +251,10 @@ class Subscriber(threading.Thread):
 class App:
     def __init__(self, url, data, ui):
         env = dict(os.environ, CALIPER_DATA_DIR=os.path.join(data, "data"),
-                   CALIPER_USER_APPLETS_DIR=os.path.join(data, "user"), CALIPER_TEST_UI=ui,
+                   CALIPER_USER_INSTRUMENTS_DIR=os.path.join(data, "user"), CALIPER_TEST_UI=ui,
                    CALIPER_WINDOW_SIZE=f"{WINDOW[0]}x{WINDOW[1]}")
         os.makedirs(env["CALIPER_DATA_DIR"])
-        os.makedirs(env["CALIPER_USER_APPLETS_DIR"])
+        os.makedirs(env["CALIPER_USER_INSTRUMENTS_DIR"])
         self.data = env["CALIPER_DATA_DIR"]
         self.p = subprocess.Popen([EXE, "--hidden", "--url", url, "--api", "--api-port", "0"], env=env,
                                   stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)

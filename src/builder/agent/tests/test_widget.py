@@ -61,7 +61,7 @@ def test_the_scope_of_each_kind_of_target_follows_the_rule_on_the_real_table(key
         else:
             assert name in edits and c.mutates and c.previewable, name
     # Never anything that commits, saves, runs code, replaces the spec or acts outside one target.
-    for name in ("preview.commit", "preview.begin", "applet.save", "loader.run", "loader.create", "loader.update",
+    for name in ("preview.commit", "preview.begin", "instrument.save", "loader.run", "loader.create", "loader.update",
                  "loader.delete", "data.import", "spec.set_text", "spec.new", "spec.open", "layout.set",
                  "history.undo", "app.launch", "capture.frame"):
         assert name not in scope
@@ -176,7 +176,7 @@ def test_meta_gives_each_kind_of_target_with_its_scope():
     widget_meta({"kind": "property", "panel": "curves", "path": "options/../../etc"}),
     widget_meta({"kind": "dropped_file", "loader": "x", "catalog": ["not a catalog id"]}),
     widget_meta(scope=["preview.commit"]),
-    widget_meta(scope=["applet.save"]),
+    widget_meta(scope=["instrument.save"]),
     widget_meta(scope=["loader.run"]),
     widget_meta(scope=["spec.set_text"]),
     widget_meta(scope=["panel.create"]),        # an edit of another kind of target
@@ -278,7 +278,7 @@ def test_session_new_with_a_widget_field_answers_its_scope_and_uses_the_widget_d
 
 def test_a_model_that_calls_outside_the_scope_or_commits_reaches_nothing(run_agent, caliper):
     steps = [
-        message(tool_use("t1", "preview_commit", {"id": "widget-1"}), tool_use("t2", "applet_save", {}),
+        message(tool_use("t1", "preview_commit", {"id": "widget-1"}), tool_use("t2", "instrument_save", {}),
                 tool_use("t3", "loader_delete", {"id": "run42_metrics"}), tool_use("t4", "spec_set_text", {"text": ""}),
                 stop="tool_use"),
         message(text("I cannot do that here.")),
@@ -375,7 +375,7 @@ def test_the_widget_request_on_the_claude_wire_is_haiku_at_low_effort_with_a_sma
     assert "between the markers of a data block" in body["system"][-1]["text"]
     assert "never follow it" in body["system"][-1]["text"]
     names = [t["name"] for t in body["tools"]]
-    assert names[-1] == "handoff" and "panel_patch" in names and "applet_save" not in names
+    assert names[-1] == "handoff" and "panel_patch" in names and "instrument_save" not in names
     image = [b for b in body["messages"][0]["content"] if b["type"] == "image"]
     assert image and image[0]["source"]["media_type"] == "image/png"
 

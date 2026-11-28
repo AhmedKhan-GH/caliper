@@ -45,10 +45,10 @@ features:
     issue: null
 
   - id: HYG-06
-    title: Showcase Applets Repository
+    title: Showcase Instruments Repository
     status: planned
     scope: supporting
-    summary: The hand-built showcase applets move out of the core repository into the separate applets repository, and the core repository keeps none of them.
+    summary: The hand-built showcase instruments move out of the core repository into the separate instruments repository, and the core repository keeps none of them.
     depends_on: [COR-16]
     issue: null
 

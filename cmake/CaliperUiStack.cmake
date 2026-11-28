@@ -1,12 +1,12 @@
 # The UI stack and its hash.
 #
-# The host hands its ImGui, ImPlot and ImPlot3D contexts to every applet, and
-# the applet draws into them with its own compiled copy of the same libraries.
+# The host hands its ImGui, ImPlot and ImPlot3D contexts to every instrument, and
+# the instrument draws into them with its own compiled copy of the same libraries.
 # That only works when both copies come from the same sources with the same
 # imconfig and the same definitions, so the SDK ships the host's pinned sources
 # (installed below) and names the set with the UI-stack hash. The loader
 # compares the hash the host was built with (CALIPER_HOST_UI_STACK_HASH) with
-# the one caliper_add_applet() stamps into each applet's manifest.
+# the one caliper_add_instrument() stamps into each instrument's manifest.
 #
 # The hash is the first 16 hex digits of the SHA-256 of these lines, each ending
 # in a newline:

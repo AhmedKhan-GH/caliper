@@ -258,8 +258,8 @@ std::string root_text(const RootData& r, const Level& lv, bool* cut) {
 std::string fragment_toml(const Gathered& g, bool with_sources) {
     spec::Spec frag;
     frag.version = g.spec.version;
-    frag.applet.id = g.spec.applet.id;
-    frag.applet.title = g.spec.applet.title;
+    frag.instrument.id = g.spec.instrument.id;
+    frag.instrument.title = g.spec.instrument.title;
     if (with_sources)
         for (const std::string& id : g.fragment_sources)
             if (const spec::Source* s = g.spec.find_source(id)) frag.sources.push_back(*s);

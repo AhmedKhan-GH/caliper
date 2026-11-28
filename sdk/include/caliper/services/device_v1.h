@@ -1,5 +1,5 @@
 #pragma once
-/* caliper.device.v1 — the host's negotiated compute device (docs/applets/services/caliper-device-v1.md).
+/* caliper.device.v1 — the host's negotiated compute device (docs/instruments/services/caliper-device-v1.md).
  * Immutable once published. */
 #include <stdint.h>
 
@@ -14,7 +14,7 @@ extern "C" {
  * The kind of a compute device.
  *
  * A kind names a memory and API domain, not a framework backend. `CALIPER_DEV_METAL` covers torch-MPS, MLX and
- * ggml-Metal alike. The host detects the device without linking any ML framework, and an applet maps the kind to
+ * ggml-Metal alike. The host detects the device without linking any ML framework, and an instrument maps the kind to
  * the device of its own framework.
  */
 typedef enum CaliperDeviceKind {

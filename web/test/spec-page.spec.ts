@@ -2,7 +2,7 @@
 // its layout, titles, info strings and colour key; every primitive drawn from
 // the forms panel.data sends; the states in place of data; tabs; the page's
 // requests, which carry the token and the viewer origin and send the version
-// they have; and the list of applets when the address names none. Headless
+// they have; and the list of instruments when the address names none. Headless
 // Chromium with Canvas 2D, in one project.
 
 import { test, expect, type Page } from '@playwright/test';
@@ -45,7 +45,7 @@ test('the dashboard lays out as the native runtime does, with its titles, info s
   ]);
   expect(s.panels.map((p) => p.rect)).toEqual([
     { x: 0, y: 0, w: 720, h: 552 }, { x: 721, y: 0, w: 719, h: 552 }, { x: 0, y: 553, w: 1440, h: 297 }]);
-  await expect(page.locator('#status')).toHaveText('connected  ·  applet run42-dashboard  ·  3 panels  ·  2 sources');
+  await expect(page.locator('#status')).toHaveText('connected  ·  instrument run42-dashboard  ·  3 panels  ·  2 sources');
   // The rules between the panels, the title strips on the plate, the plot field deep.
   expect(near(await pixel(page, 720, 300), hex('#4b4945'))).toBe(true);
   expect(near(await pixel(page, 300, 552), hex('#4b4945'))).toBe(true);
@@ -85,7 +85,7 @@ test('the page asks with the token and the viewer origin, and sends the version 
     expect(r.headers['authorization']).toBe(`Bearer ${TOKEN}`);
     expect(r.headers['x-caliper-origin']).toBe('viewer');
     expect(['spec.get', 'panel.data']).toContain(r.name);
-    expect(r.args.applet).toBe('run42-dashboard');
+    expect(r.args.instrument).toBe('run42-dashboard');
   }
   // A new version is drawn: the table's info follows it.
   const d = mock.data['run42-dashboard'];
@@ -96,8 +96,8 @@ test('the page asks with the token and the viewer origin, and sends the version 
 /** A spec of every primitive in two tabs, with data in the forms the app sends. */
 function everyPrimitive(): { spec: Json; data: Record<string, Json> } {
   const spec = {
-    caliper_spec: 0,
-    applet: { id: 'every', title: 'Every primitive' },
+    caliper_spec: 2,
+    instrument: { id: 'every', title: 'Every primitive' },
     source: [
       { id: 'acts', catalog: 'tensor:acts' }, { id: 'img', catalog: 'tensor:sample_png' },
       { id: 'cloud', catalog: 'tensor:embedding' }, { id: 'labels', catalog: 'tensor:embedding_labels' },
@@ -195,9 +195,9 @@ test('every primitive draws from the forms the app sends, with tabs', async ({ p
   expect(errors).toEqual([]);
 });
 
-test('states take the place of data: offline, mismatched, empty, a missing applet and panel', async ({ page }) => {
+test('states take the place of data: offline, mismatched, empty, a missing instrument and panel', async ({ page }) => {
   const spec = {
-    caliper_spec: 0, applet: { id: 'st' },
+    caliper_spec: 2, instrument: { id: 'st' },
     source: [{ id: 'live', catalog: 'live:run/attn' }, { id: 'q', sql: 'SELECT step FROM run42_metrics WHERE step > 9' },
       { id: 'w', catalog: 'tensor:attn_weights' }, { id: 'd', from: 'w' }],
     panel: [
@@ -222,24 +222,24 @@ test('states take the place of data: offline, mismatched, empty, a missing apple
   expect(s.panels.map((p) => [p.title, p.state])).toEqual([
     ['run/attn', 'Source offline'], ['step', 'No data'], ['d', 'Mismatched data'], ['run42_metrics', 'Query error']]);
   await openSpec(page, 'gone');
-  await expect.poll(async () => (await pageState(page)).state, { timeout: 15_000 }).toBe('Missing applet');
+  await expect.poll(async () => (await pageState(page)).state, { timeout: 15_000 }).toBe('Missing instrument');
   expect((await pageState(page)).panels).toEqual([]);
   await expect(page.locator('#status')).toHaveText('connected');
 });
 
-test('without an applet the page lists the saved spec applets as links', async ({ page }) => {
+test('without an instrument the page lists the saved instruments as links', async ({ page }) => {
   await mockApp(page, app({ 'run42-dashboard': DASHBOARD, every: everyPrimitive().spec }, {}));
   await page.goto(`${ORIGIN}/v0/spec?token=${TOKEN}`);
   const links = page.locator('#list a');
   await expect(links).toHaveCount(2, { timeout: 15_000 });
   await expect(links.nth(0)).toHaveText('Run 42');
-  expect(await links.nth(0).getAttribute('href')).toBe(`${ORIGIN}/v0/spec?token=${TOKEN}&applet=run42-dashboard`);
+  expect(await links.nth(0).getAttribute('href')).toBe(`${ORIGIN}/v0/spec?token=${TOKEN}&instrument=run42-dashboard`);
   await expect(page.locator('#canvas')).toBeHidden();
 });
 
-test('a refused token draws nothing of the applet', async ({ page }) => {
+test('a refused token draws nothing of the instrument', async ({ page }) => {
   await mockApp(page, app({ 'run42-dashboard': DASHBOARD }, { 'run42-dashboard': dashboardData() }));
-  await page.goto(`${ORIGIN}/v0/spec?token=nope&applet=run42-dashboard`);
+  await page.goto(`${ORIGIN}/v0/spec?token=nope&instrument=run42-dashboard`);
   await expect.poll(async () => (await pageState(page)).state, { timeout: 15_000 }).toBe('Access refused');
   expect((await pageState(page)).panels).toEqual([]);
 });
@@ -247,8 +247,8 @@ test('a refused token draws nothing of the applet', async ({ page }) => {
 test('non-closable panels and Lock Layout hide close controls and refuse close commands', async ({ page }) => {
   const errors = await noErrors(page);
   const spec = {
-    caliper_spec: 1,
-    applet: { id: 'locked-view', title: 'Locked View', layout_locked: false },
+    caliper_spec: 2,
+    instrument: { id: 'locked-view', title: 'Locked View', layout_locked: false },
     panel: [
       { id: 'fixed', primitive: 'text', title: 'Fixed', closable: false, options: { text: 'Cannot close' } },
       { id: 'temp', primitive: 'text', title: 'Temporary', options: { text: 'Can close' } },
@@ -314,8 +314,8 @@ test('non-closable panels and Lock Layout hide close controls and refuse close c
 test('a waiting panel renders its progress overlay, live status and error state', async ({ page }) => {
   const errors = await noErrors(page);
   const spec = {
-    caliper_spec: 1,
-    applet: { id: 'prog', title: 'Circuit Trace' },
+    caliper_spec: 2,
+    instrument: { id: 'prog', title: 'Circuit Trace' },
     panel: [
       { id: 'graph', primitive: 'text', title: 'Attribution Graph', options: { text: 'The trace is not available.' } },
     ],

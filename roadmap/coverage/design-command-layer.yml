@@ -29,7 +29,7 @@ entries:
   - SPC-06
   - AGT-05
 - heading: What is built and what is planned
-  item: 'Planned: handlers bound by the builder session, the app binding app.info, app.applets, app.launch,
+  item: 'Planned: handlers bound by the builder session, the app binding app.info, app.instruments, app.launch,
     capture.frame and panel.render, the live catalog providers and setting the command gateway on the
     API server.'
   ids:
@@ -70,7 +70,7 @@ entries:
   ids:
   - SPC-05
 - heading: app
-  item: app.info, app.applets and app.launch, bound by the running app.
+  item: app.info, app.instruments and app.launch, bound by the running app.
   ids:
   - SPC-05
   - AGT-01
@@ -108,8 +108,8 @@ entries:
   ids:
   - SPC-05
   - AGT-06
-- heading: applet, capture and history
-  item: applet.save, applet.open, applet.list, capture.frame, history.undo, history.redo and history.list.
+- heading: instrument, capture and history
+  item: instrument.save, instrument.open, instrument.list, capture.frame, history.undo, history.redo and history.list.
   ids:
   - SPC-05
   - SPC-08
@@ -141,7 +141,7 @@ entries:
   ids:
   - SPC-05
 - heading: Commands that cannot be undone
-  item: loader.run and applet.save record no step and are passed by, not barriers.
+  item: loader.run and instrument.save record no step and are passed by, not barriers.
   ids:
   - SPC-05
 - heading: When the workspace changed underneath
@@ -185,7 +185,7 @@ entries:
   - SPC-05
 - heading: Approval
   item: The approval policy allows, denies or asks; destructive commands from agent, mcp and api ask,
-    and the session adds rules for Python runs, applet overwrites, replacing an unsaved spec and review
+    and the session adds rules for Python runs, instrument overwrites, replacing an unsaved spec and review
     of spec edits, with approvals bound to content.
   ids:
   - SPC-05
@@ -293,7 +293,7 @@ entries:
   ids:
   - SPC-05
 - heading: Open items
-  item: Holding a launch of a workspace spec applet as one command under review, so it waits on a card
+  item: Holding a launch of a workspace spec-based instrument as one command under review, so it waits on a card
     like other held commands.
   ids:
   - AGT-06

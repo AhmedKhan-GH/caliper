@@ -48,9 +48,9 @@ class App:
 
     def __init__(self, url, data, ui):
         env = dict(os.environ, CALIPER_DATA_DIR=os.path.join(data, "data"),
-                   CALIPER_USER_APPLETS_DIR=os.path.join(data, "user"), CALIPER_TEST_UI=ui)
+                   CALIPER_USER_INSTRUMENTS_DIR=os.path.join(data, "user"), CALIPER_TEST_UI=ui)
         os.makedirs(env["CALIPER_DATA_DIR"])
-        os.makedirs(env["CALIPER_USER_APPLETS_DIR"])
+        os.makedirs(env["CALIPER_USER_INSTRUMENTS_DIR"])
         self.p = subprocess.Popen([EXE, "--hidden", "--url", url], env=env,
                                   stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
         self.lines: list[str] = []

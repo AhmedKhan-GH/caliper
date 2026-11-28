@@ -60,7 +60,7 @@ struct Rig {
     }
 };
 
-// A workspace with an empty spec of the fixture's applet, and the two files
+// A workspace with an empty spec of the fixture's instrument, and the two files
 // dropped on the pane and imported.
 Rig rig(const std::string& name) {
     Rig r;
@@ -83,7 +83,7 @@ Rig rig(const std::string& name) {
     const spec::Spec d = dashboard_fixture();
     cb::CommandInvocation inv;
     inv.name = "spec.new";
-    inv.args = {{"id", d.applet.id}, {"title", *d.applet.title}, {"description", *d.applet.description}};
+    inv.args = {{"id", d.instrument.id}, {"title", *d.instrument.title}, {"description", *d.instrument.description}};
     inv.origin = cb::CommandOrigin::builder;
     REQUIRE(r.s->invoke(inv).ok);
     auto port = std::make_unique<BusyPort>(*r.s);
@@ -506,14 +506,14 @@ TEST_CASE("builder pane: the dashboard by hand, one undo step per gesture, equal
     CHECK_FALSE(r.pane->redo());
     CHECK(r.pane->error().code == "history.nothing_to_redo");
 
-    // Saved as the spec applet, whose file is the fixture.
+    // Saved as an instrument, whose file is the fixture.
     REQUIRE(r.pane->save());
     REQUIRE(r.pane->open_spec()->path);
     auto saved = spec::parse_toml(read_text(r.ws + "/" + *r.pane->open_spec()->path));
     REQUIRE(saved.ok());
     CHECK(saved.spec == d);
     CHECK_FALSE(r.pane->open_spec()->dirty);
-    // A second save overwrites its own applet.
+    // A second save overwrites its own instrument.
     REQUIRE(r.pane->save());
 }
 
@@ -655,14 +655,14 @@ TEST_CASE("builder pane: the spec text follows the canvas, and the canvas the te
     // sent, the canvas keeps the last valid spec, and every other edit waits.
     const size_t sent = p.sent().size();
     std::string bad = draft2;
-    const size_t at_applet = bad.find("[applet]\n") + 9;
-    bad.insert(at_applet, "colour = 3\n");
+    const size_t at_instrument = bad.find("[instrument]\n") + 13;
+    bad.insert(at_instrument, "colour = 3\n");
     CHECK_FALSE(p.set_draft(bad));
     CHECK(p.draft_pending());
     REQUIRE_FALSE(p.diagnostics().empty());
     CHECK(p.diagnostics()[0].code == "spec.unknown_key");
     int line = 1;
-    for (size_t i = 0; i < at_applet; ++i)
+    for (size_t i = 0; i < at_instrument; ++i)
         if (bad[i] == '\n') ++line;
     CHECK(p.diagnostics()[0].line == line);
     CHECK(p.sent().size() == sent);
@@ -978,7 +978,7 @@ TEST_CASE("builder pane: renames reach every reference, and the spec's own title
     CHECK(p.focused_source() == "spec:m");
     p.clear_focus();
     gesture(r, "spec title", [&] { return p.set_spec_title("Run 42, again"); });
-    CHECK(*p.open_spec()->spec.applet.title == "Run 42, again");
+    CHECK(*p.open_spec()->spec.instrument.title == "Run 42, again");
 }
 
 TEST_CASE("builder pane: a busy session sends nothing") {
@@ -1099,7 +1099,7 @@ TEST_CASE("builder pane: a new spec's id from its title") {
     // The spec's own id, renamed through its text.
     Rig r = rig("pane-spec-id");
     REQUIRE(r.pane->set_spec_id("run42-board"));
-    CHECK(r.pane->open_spec()->spec.applet.id == "run42-board");
+    CHECK(r.pane->open_spec()->spec.instrument.id == "run42-board");
     CHECK(r.pane->sent().back().name == "spec.set_text");
     CHECK_FALSE(r.pane->set_spec_id("Run 42"));
     CHECK(r.pane->error().code == "spec.bad_id");

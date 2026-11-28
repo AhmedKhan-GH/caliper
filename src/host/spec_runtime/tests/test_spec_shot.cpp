@@ -1,6 +1,6 @@
 // caliper-spec-shot as a process: a workspace with a Parquet file and a
 // safetensors file, the dashboard of dashboard.spec.toml built through
-// commands and saved as a spec applet, then drawn by the harness into a PNG.
+// commands and saved as an instrument, then drawn by the harness into a PNG.
 #include <stb_image.h>
 
 #include "spec_runtime/spec_prepare.h"
@@ -43,15 +43,15 @@ TEST_CASE("caliper-spec-shot: the command line's refusals") {
     auto r = run_shot({});
     CHECK(r.status.exited);
     CHECK(r.status.code == 2);
-    CHECK(r.err.find("give either --applet") != std::string::npos);
-    r = run_shot({"--applet", "x"});
+    CHECK(r.err.find("give either --instrument") != std::string::npos);
+    r = run_shot({"--instrument", "x"});
     CHECK(r.status.code == 2);
     r = run_shot({"--spec", "x.toml", "--size", "10x10"});
     CHECK(r.status.code == 2);
     const std::string root = fresh_dir("shot-refusals");
-    r = run_shot({"--workspace", root, "--applet", "missing", "--out", root + "/x.png"});
+    r = run_shot({"--workspace", root, "--instrument", "missing", "--out", root + "/x.png"});
     CHECK(r.status.code == 1);
-    CHECK(r.err.find("no applet missing") != std::string::npos);
+    CHECK(r.err.find("no instrument missing") != std::string::npos);
     r = run_shot({"--spec", root + "/none.spec.toml", "--out", root + "/nowhere/x.png"});
     CHECK(r.status.code == 1);
 }
@@ -65,11 +65,11 @@ TEST_CASE("caliper-spec-shot: the dashboard over Parquet and safetensors, built 
     {
         auto s = dashboard_workspace(ws, root);
         CHECK(s->open_spec()->spec == dashboard_fixture());
-        ok(*s, "applet.save");
+        ok(*s, "instrument.save");
         s->close();
     }
     const std::string out = root + "/dashboard.png";
-    const auto r = run_shot({"--workspace", ws, "--applet", "run42-dashboard", "--size", "960x600", "--out", out});
+    const auto r = run_shot({"--workspace", ws, "--instrument", "run42-dashboard", "--size", "960x600", "--out", out});
     INFO(r.err);
     REQUIRE(r.status.success());
     CHECK(r.out.find("run42-dashboard at 960x600") != std::string::npos);

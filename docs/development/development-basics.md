@@ -1,23 +1,23 @@
 # Development Basics
 
-An applet is one shared library that the running host loads. This page shows the sources of each library, the files of an applet and the edit-build-run loop. Read it before [Your first applet](../applets/first-applet.md).
+A C++ instrument is one shared library that the running host loads. This page shows the sources of each library, the files of a C++ instrument and the edit-build-run loop. Read it before [First Instrument](../instruments/first-instrument.md).
 
 ```mermaid
 flowchart LR
     core[Core build] -->|installs| sdk[SDK package]
-    sdk -->|caliper new| project[Applet project]
+    sdk -->|caliper new| project[Instrument project]
     project -->|cmake build| lib[Library and manifest]
-    lib -->|caliper check| ok[Checked applet]
+    lib -->|caliper check| ok[Checked instrument]
     ok -->|caliper dev| run[Running host]
 ```
 
-The loop builds the host once, installs the SDK, then builds, checks and runs your applet against that SDK.
+The loop builds the host once, installs the SDK, then builds, checks and runs your instrument against that SDK.
 
 ## Mental Model
 
-The host owns the window, the renderer, the ImGui contexts and the frame loop, as [Architecture](../introduction/architecture.md) shows. It also owns the job system, the metrics, artifacts and data stores, and the docked desktop. Persistence and crash containment are host work too. An applet never creates a window, a GL or Metal context or an ImGui context.
+The host owns the window, the renderer, the ImGui contexts and the frame loop, as [Architecture](../introduction/architecture.md) shows. It also owns the job system, the metrics, artifacts and data stores, and the docked desktop. Persistence and crash containment are host work too. An instrument never creates a window, a GL or Metal context or an ImGui context.
 
-An applet gives three things to the host. Its UI is the ImGui, ImPlot and ImPlot3D calls in its frame function. Its compute is the work that it sends to `jobs.v1` on host worker threads. Its state is what it keeps from one frame to the next.
+A library instrument gives three things to the host. Its UI is the ImGui, ImPlot and ImPlot3D calls in its frame function. Its compute is the work that it sends to `jobs.v1` on host worker threads. Its state is what it keeps from one frame to the next.
 
 ## Library Sources
 
@@ -26,32 +26,32 @@ The CMake build wires the project dependencies together. Install the platform to
 | Library | Comes from | You link it via | Notes |
 |---|---|---|---|
 | SDK headers (ABI, services, sugar, adapters) | The installed `caliper-sdk` package (`include/caliper/`), from `sdk/include/` in this repository | `caliper::sdk` | Header-only INTERFACE target. Nothing compiles into the SDK itself. |
-| ImGui (docking), ImPlot, ImPlot3D, FileDialog | The pinned sources in the SDK package, the same ones the host uses | `caliper::ui_stack` | Compiled in your applet's build, with no window or graphics backend. **Never bring your own copy.** The pin is part of the ABI ([Compatibility and Epochs](compatibility-and-epochs.md)), and your applet and the host must agree on the ImGui memory layout. |
-| libtorch | The libtorch that the core build downloaded, which the SDK names | `caliper_add_applet(... TORCH)` | The applet links the host's libtorch and no other version, and the manifest records that version. The `caliper` executable and `libcaliper` do not link it ([Platform rules](../introduction/architecture.md#design-decisions)). |
+| ImGui (docking), ImPlot, ImPlot3D, FileDialog | The pinned sources in the SDK package, the same ones the host uses | `caliper::ui_stack` | Compiled in your instrument's build, with no window or graphics backend. **Never bring your own copy.** The pin is part of the ABI ([Compatibility and Epochs](compatibility-and-epochs.md)), and your instrument and the host must agree on the ImGui memory layout. |
+| libtorch | The libtorch that the core build downloaded, which the SDK names | `caliper_add_instrument(... TORCH)` | The instrument links the host's libtorch and no other version, and the manifest records that version. The `caliper` executable and `libcaliper` do not link it ([Design Decisions](../introduction/architecture.md#design-decisions)). |
 | curl, zlib | The macOS system SDK | `CURL::libcurl`, `ZLIB::ZLIB` | Only if you download or decompress data. The host has no downloader. |
 | DuckDB | Host-internal | Not possible | No DuckDB type crosses the ABI. Use `metrics.v1`, `artifacts.v1` and `data.v1` instead. |
 
-[SDK Package](../applets/sdk-package.md) describes what the installed SDK holds.
+[SDK Package](../instruments/sdk-package.md) describes what the installed SDK holds.
 
-## Applet Anatomy
+## Instrument Anatomy
 
-An applet is three files in one folder:
+A C++ instrument is three files in one folder:
 
 ```
 examples/hello_world/
 ├── hello_world.caliper.toml    the manifest, checked before your code loads
-├── hello_world.cpp             your applet class and the CALIPER_APPLET macro
-└── CMakeLists.txt              find_package(caliper-sdk) and caliper_add_applet()
+├── hello_world.cpp             your instrument class and the CALIPER_INSTRUMENT macro
+└── CMakeLists.txt              find_package(caliper-sdk) and caliper_add_instrument()
 ```
 
-- **Manifest**: It holds the reverse-DNS `id`, the name, the version, a summary and the lists of required and optional services. The `id` and `version` must be byte-identical to the descriptor in the `CALIPER_APPLET` call. If they differ, the loader refuses the applet and lists it with the reason. See [Manifest](../applets/manifest.md).
-- **Macro**: `CALIPER_APPLET(...)` at the bottom of the `.cpp` generates the epoch-3 C ABI glue. This is the descriptor and an exception wall on every entry point. You never write `extern "C"`.
+- **Manifest**: It holds the reverse-DNS `id`, the name, the version, a summary and the lists of required and optional services. The `id` and `version` must be byte-identical to the descriptor in the `CALIPER_INSTRUMENT` call. If they differ, the loader refuses the instrument and lists it with the reason. See [Manifest](../instruments/manifest.md).
+- **Macro**: `CALIPER_INSTRUMENT(...)` at the bottom of the `.cpp` generates the epoch-4 C ABI glue. This is the descriptor and an exception wall on every entry point. You never write `extern "C"`.
 - **Class**: It has three lifecycle methods. `on_init(Host&)` probes the services. Assert the required ones and let the optional ones degrade. `on_frame(const Frame&)` runs on the frame thread every frame. It submits ImGui windows and reads state that workers publish. `on_cleanup()` cancels jobs, waits for them with a bound, releases textures and returns.
-- **CMakeLists**: Copy the one from `examples/hello_world/` for a UI-only applet, and add `TORCH` to `caliper_add_applet()` for an ML applet. Edit only the project and target name, the source files and the manifest filename.
+- **CMakeLists**: Copy the one from `examples/hello_world/` for a UI-only instrument, and add `TORCH` to `caliper_add_instrument()` for an ML instrument. Edit only the project and target name, the source files and the manifest filename.
 
-### Smallest Complete Applet
+### Smallest Complete Instrument
 
-These listings are the files of `examples/hello_world/`, embedded verbatim. The folder builds alone against the installed SDK, and the core build uses it as the loader-test fixture. [First Applet](../applets/first-applet.md) walks through the file line by line.
+These listings are the files of `examples/hello_world/`, embedded verbatim. The folder builds alone against the installed SDK, and the core build uses it as the loader-test fixture. [First Instrument](../instruments/first-instrument.md) walks through the file line by line.
 
 ```cpp title="examples/hello_world/hello_world.cpp"
 --8<-- "examples/hello_world/hello_world.cpp"
@@ -65,7 +65,7 @@ These listings are the files of `examples/hello_world/`, embedded verbatim. The 
 --8<-- "examples/hello_world/CMakeLists.txt"
 ```
 
-The applet has no `main`, no window, no GL or Metal code, no ImGui context and no event loop. The macro and the host supply them. To add ML, add a `jobs.v1` training job and the tensor bridge, as `examples/mnist/applet/` and [Torch per Platform](../applets/torch-per-platform.md) show.
+The instrument has no `main`, no window, no GL or Metal code, no ImGui context and no event loop. The macro and the host supply them. To add ML, add a `jobs.v1` training job and the tensor bridge, as `examples/mnist/instrument/` and [Torch per Platform](../instruments/torch-per-platform.md) show.
 
 ## Development Loop
 
@@ -77,65 +77,65 @@ cmake --install cmake-build-release --prefix "$HOME/caliper-sdk" --component sdk
 CALIPER="$PWD/cmake-build-release/caliper"
 
 # 2. create: a project of your own, outside the checkout
-"$CALIPER" new my-applet "$HOME/caliper-applets/my-applet"
+"$CALIPER" new my-instrument "$HOME/caliper-instruments/my-instrument"
 
-# 3. build and test: the library and its stamped manifest land in build/applets/
-cd "$HOME/caliper-applets/my-applet"
+# 3. build and test: the library and its stamped manifest land in build/instruments/
+cd "$HOME/caliper-instruments/my-instrument"
 cmake -S . -B build -DCMAKE_PREFIX_PATH="$HOME/caliper-sdk" -DCMAKE_BUILD_TYPE=Release
 cmake --build build
 ctest --test-dir build
 
 # 4. check, then run with the build folder searched first
-"$CALIPER" check build/applets
-"$CALIPER" dev build/applets
+"$CALIPER" check build/instruments
+"$CALIPER" dev build/instruments
 ```
 
-`caliper new my-applet` writes a project for the applet `dev.example.my-applet` with the stem `my_applet`. The project holds the manifest, the `CMakeLists.txt`, a source file with one window, and a test that runs the applet on the fixture host. Pass a full id such as `com.example.my-applet` to choose the id. [Caliper CLI](../reference/applet-commands.md#caliper-new) describes the template.
+`caliper new my-instrument` writes a project for the instrument `dev.example.my-instrument` with the stem `my_instrument`. The project holds the manifest, the `CMakeLists.txt`, a source file with one window, and a test that runs the instrument on the fixture host. Pass a full id such as `com.example.my-instrument` to choose the id. [Instrument Commands](../reference/instrument-commands.md#caliper-new) describes the template.
 
-### Applet Loading
+### Instrument Loading
 
-`caliper check` runs the checks that the host makes before it opens a library. `caliper dev` starts Caliper with your folder searched before every other applet folder. The host reads its applet folders at start and keeps a library loaded until it quits. Thus after each rebuild, quit Caliper and run `caliper dev` again.
+`caliper check` runs the checks that the host makes before it opens a library. `caliper dev` starts Caliper with your folder searched before every other instrument folder. The host reads its instrument folders at start and keeps a library loaded until it quits. Thus after each rebuild, quit Caliper and run `caliper dev` again.
 
-`--applets <dir>` or `CALIPER_APPLET_PATH` adds development folders in the same way. `caliper install build/applets` copies the applet into the user applets folder to keep it installed. To skip the landing screen on every restart, set `CALIPER_AUTOLAUNCH`:
+`--instruments <dir>` or `CALIPER_INSTRUMENT_PATH` adds development folders in the same way. `caliper install build/instruments` copies the instrument into the user instruments folder to keep it installed. To skip the landing screen on every restart, set `CALIPER_AUTOLAUNCH`:
 
 ```bash
-CALIPER_AUTOLAUNCH=dev.example.my-applet "$CALIPER" dev build/applets
+CALIPER_AUTOLAUNCH=dev.example.my-instrument "$CALIPER" dev build/instruments
 ```
 
-`CALIPER_EXIT_AFTER=<sec>` makes a clean exit after that time, for CI. In CLion, open the applet's folder as a project of its own and add `-DCMAKE_PREFIX_PATH=<sdk prefix>` to its CMake options.
+`CALIPER_EXIT_AFTER=<sec>` makes a clean exit after that time, for CI. In CLion, open the instrument's folder as a project of its own and add `-DCMAKE_PREFIX_PATH=<sdk prefix>` to its CMake options.
 
-**Testing without a window:** The fixture host (`caliper::sdk_testing`, `<caliper/fixture_host.h>`) fakes `get_service` with tables that you inject. `tests/test_sugar_services.cpp` shows the pattern. Thus you can unit-test applet logic that reads services without a window.
+**Testing without a window:** The fixture host (`caliper::sdk_testing`, `<caliper/fixture_host.h>`) fakes `get_service` with tables that you inject. `tests/test_sugar_services.cpp` shows the pattern. Thus you can unit-test instrument logic that reads services without a window.
 
-**Your data folder:** The host creates `~/Library/Application Support/Caliper/data/<your-id>/` and hands it to you as `host.data_dir()`. Put downloads, caches and scratch files there and nowhere else. `CALIPER_DATA_DIR` moves the whole app-data folder, and your data folder with it. [Folders and Environment Variables](../reference/folders-and-environment.md) lists the folder on every platform.
+**Your data folder:** The host creates `~/Library/Application Support/Caliper/data/<your-id>/` and hands it to you as `host.data_dir()`. Put downloads, caches and scratch files there and nowhere else. `CALIPER_DATA_DIR` moves the whole app-data folder, and your data folder with it. [Folders and Environment](../reference/folders-and-environment.md) lists the folder on every platform.
 
 ## Landing Screen
 
-`./cmake-build-release/caliper` opens on the landing screen. It has a command bar, four docked panes and a status bar. The status bar shows the backend, the GPU, memory and the numbers of installed and unavailable applets.
+`./cmake-build-release/caliper` opens on the landing screen. It has a command bar, four docked panes and a status bar. The status bar shows the backend, the GPU, memory and the numbers of installed and unavailable instruments.
 
 | Pane | Shows |
 |---|---|
-| **Projects** | The dashboards of the open workspace, one row each, and the ways in: `F2 Open folder` (disabled), `F3 New dashboard` ([Builder Pane](../builder/builder-pane.md)) and `F4 Attach to process` (see [Training Script Attachment](#training-script-attachment)). |
-| **Instruments** | Every installed applet, with name, id, version, tag and status: `READY`, `ACTIVE`, `REFUSED`, `FAILED` or `QUARANTINED`. Only `READY` rows launch. Click a column header to sort. |
-| **Inspector** | The manifest of the selected applet and the `⏎ Launch` button. If the applet cannot launch, the button is disabled and the reason is beside it. |
+| **Projects** | The spec-based instruments of the open workspace, one row each, and the ways in: `F2 Open folder` (disabled), `F3 New dashboard` ([Builder Pane](../builder/builder-pane.md)) and `F4 Attach to process` (see [Training Script Attachment](#training-script-attachment)). |
+| **Instruments** | Every installed instrument, with name, id, version, tag and status: `READY`, `ACTIVE`, `REFUSED`, `FAILED` or `QUARANTINED`. Only `READY` rows launch. Click a column header to sort. |
+| **Inspector** | The manifest of the selected instrument and the `⏎ Launch` button. If the instrument cannot launch, the button is disabled and the reason is beside it. |
 | **Activity** | Running jobs, then the host log, newest first. |
 
-The command bar filters Instruments and the dashboards as you type. Every space-separated term must appear in the name, id or tag, in any case. If the filter hides the selected row, the selection moves to the top match, so Enter always launches the highlighted row.
+The command bar filters Instruments and Projects as you type. Every space-separated term must appear in the name, id or tag, in any case. If the filter hides the selected row, the selection moves to the top match, so Enter always launches the highlighted row.
 
 | Key | Action |
 |---|---|
 | ⌘K | Focus the command bar. |
-| ↑ / ↓ | Move the selection through the dashboards and then Instruments, as one list. |
+| ↑ / ↓ | Move the selection through Projects and then Instruments, as one list. |
 | Esc | Clear the filter and focus Instruments. |
-| Enter | Launch the selected applet. A double-click on a row does the same. |
+| Enter | Launch the selected instrument. A double-click on a row does the same. |
 | ⌘1–⌘4 | Focus Projects, Instruments, Inspector or Activity. |
-| ⌘R | Unload and relaunch the selected applet. Offered only for an applet that a C++ exception quarantined. After a signal, restart Caliper. |
+| ⌘R | Unload and relaunch the selected instrument. Offered only for a library instrument that a C++ exception quarantined. After a signal, restart Caliper. |
 | F4 | List the live sessions and streams. In the list, Enter attaches and Esc returns. |
 | F5 | Open the live page of the attached session. |
-| F6 | Open the spec page of the dashboard that the builder has open. |
+| F6 | Open the spec page of the instrument that the builder has open. |
 
 On Windows and Linux, use Ctrl in place of ⌘.
 
-A launch replaces the landing screen with the page of the applet. The `esc Home` button returns to the landing screen on the row of the applet. Esc does the same, but only when no text field or popup uses it.
+A launch replaces the landing screen with the page of the instrument. The `esc Home` button returns to the landing screen on the row of the instrument. Esc does the same, but only when no text field or popup uses it.
 
 ### Training Script Attachment
 
@@ -151,7 +151,7 @@ A Python script that calls `caliper.show` opens a live session. Caliper can atta
 
 Only `running`, `starting` and `stream` rows attach. A killed script leaves its session file behind, and the next listing removes it.
 
-Attach opens a live page with the layout of an applet page. The script never waits for Caliper. `⌘D Detach` detaches the session, and the script keeps training. When the script ends, the views keep their last frames and the bar shows `SESSION ENDED`. `CALIPER_AUTOATTACH=<pid>` attaches as soon as the session is listed, and `CALIPER_HOME_AFTER=<seconds>` goes Home once. Both serve screenshots and headless checks.
+Attach opens a live page with the layout of an instrument page. The script never waits for Caliper. `⌘D Detach` detaches the session, and the script keeps training. When the script ends, the views keep their last frames and the bar shows `SESSION ENDED`. `CALIPER_AUTOATTACH=<pid>` attaches as soon as the session is listed, and `CALIPER_HOME_AFTER=<seconds>` goes Home once. Both serve screenshots and headless checks.
 
 ### Jobs and Window Layout
 
@@ -190,13 +190,13 @@ When you add a device test, skip through `tests/gpu_skip.h`:
 
 A suite that uses them ends with `CALIPER_GPU_TEST_MAIN()` in place of `DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN`. A bare `MESSAGE` and `return` would report the suite as passed.
 
-## Applets in This Repository
+## Instruments in This Repository
 
-`caliper_add_applet()` is the same file in the core build and in the SDK package. The core build compiles no applets unless `CALIPER_BUILD_APPLETS=ON` or `BUILD_TESTS=ON`. With tests enabled, `examples/hello_world` builds as the loader fixture, and `examples/mnist/applet` builds when `CALIPER_WITH_TORCH=ON`.
+`caliper_add_instrument()` is the same file in the core build and in the SDK package. The core build compiles no instruments unless `CALIPER_BUILD_INSTRUMENTS=ON` or `BUILD_TESTS=ON`. With tests enabled, `examples/hello_world` builds as the loader fixture, and `examples/mnist/instrument` builds when `CALIPER_WITH_TORCH=ON`.
 
-Each example applet folder under `examples/` also builds alone against the installed SDK. `scripts/build_applets_against_sdk.sh <core build folder> <work folder> [applet folder...]` installs the SDK and builds them that way, as CI does.
+Each example instrument folder under `examples/` also builds alone against the installed SDK. `scripts/build_instruments_against_sdk.sh <core build folder> <work folder> [instrument folder...]` installs the SDK and builds them that way, as CI does.
 
-An older build folder can keep libraries from in-tree builds that predate `caliper_add_applet()`. Their manifests have no `[build]` table, so the host does not check them against the UI-stack hash. Delete the `applets/` folder of the build after you turn `CALIPER_BUILD_APPLETS` off, and when you reuse such a build folder.
+An older build folder can keep libraries from in-tree builds that predate `caliper_add_instrument()`. Their manifests have no `[build]` table, so the host does not check them against the UI-stack hash. Delete the `instruments/` folder of the build after you turn `CALIPER_BUILD_INSTRUMENTS` off, and when you reuse such a build folder.
 
 ## Test Hooks
 
@@ -220,7 +220,7 @@ The server builds the site again when a page, a docstring under `python/caliper/
 
 ## Rules
 
-- **No raw GL, Metal or Vulkan calls in applets** ([Platform rules](../introduction/architecture.md#design-decisions)). Draw through ImGui, ImPlot and ImPlot3D. Put tensors on screen through `tensor_bridge.v1`. Thus the applet runs the same on both backends.
+- **No raw GL, Metal or Vulkan calls in instruments** ([Design Decisions](../introduction/architecture.md#design-decisions)). Draw through ImGui, ImPlot and ImPlot3D. Put tensors on screen through `tensor_bridge.v1`. Thus the instrument runs the same on both backends.
 - **Bridge and `data.v1` calls: frame thread only.** Torch ops: worker thread only.
 - **Honor cancel within 100 ms** in every job loop. Check once for each batch and each download chunk.
 - **Do not catch errors across the ABI.** The exception walls of the sugar already stop every throw into the host. Inside your own code, handle errors normally.

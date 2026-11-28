@@ -1,5 +1,5 @@
 // ⌘K in the hidden app: `caliper --hidden --api` on a workspace that holds the
-// dashboard of dashboard.spec.toml saved as a spec applet, its spec page opened
+// dashboard of dashboard.spec.toml saved as an instrument, its spec page opened
 // by CALIPER_AUTOLAUNCH, the real caliper-agent sidecar playing a test script
 // (CALIPER_AGENT_TEST_SCRIPT, a fake key, CALIPER_AGENT_OFFLINE=1, no key
 // store), and the person's input played by CALIPER_TEST_SPEC_UI: a click on
@@ -46,7 +46,7 @@ TEST_CASE("widget app: ⌘K on the hidden app's spec page, through the sidecar, 
     const std::string ws = root + "/ws";
     {
         auto s = dashboard_workspace(ws, root + "/data-files");
-        ok(*s, "applet.save", {{"overwrite", true}});
+        ok(*s, "instrument.save", {{"overwrite", true}});
         s->close();
     }
     const std::string shots = root + "/shots", script = root + "/script.json", record = root + "/requests.jsonl";
@@ -70,7 +70,7 @@ TEST_CASE("widget app: ⌘K on the hidden app's spec page, through the sidecar, 
     caliper_builder::acp::SpawnOptions o;
     o.argv = {exe, "--hidden", "--api", "--api-port", "0", "--workspace", ws};
     o.env = {{"CALIPER_DATA_DIR", root + "/data"},
-             {"CALIPER_USER_APPLETS_DIR", root + "/apps"},
+             {"CALIPER_USER_INSTRUMENTS_DIR", root + "/apps"},
              {"CALIPER_WINDOW_SIZE", "960x600"},
              {"CALIPER_AUTOLAUNCH", "local.run42-dashboard"},
              {"CALIPER_AGENT_OFFLINE", "1"},
@@ -123,7 +123,7 @@ TEST_CASE("widget app: ⌘K on the hidden app's spec page, through the sidecar, 
 
 namespace {
 
-// One hidden app run of a ⌘K target: the dashboard saved as a spec applet,
+// One hidden app run of a ⌘K target: the dashboard saved as an instrument,
 // the sidecar on `steps`, the input `ui`. Returns false when it cannot run
 // here (no caliper executable, no Python, no Metal), after saying so.
 struct AppRun {
@@ -159,7 +159,7 @@ AppRun run_target(const std::string& name, const json& steps, const std::string&
     out.ws = out.root + "/ws";
     {
         auto s = dashboard_workspace(out.ws, out.root + "/data-files");
-        ok(*s, "applet.save", {{"overwrite", true}});
+        ok(*s, "instrument.save", {{"overwrite", true}});
         s->close();
     }
     out.shots = out.root + "/shots";
@@ -172,7 +172,7 @@ AppRun run_target(const std::string& name, const json& steps, const std::string&
     caliper_builder::acp::SpawnOptions o;
     o.argv = {exe, "--hidden", "--api", "--api-port", "0", "--workspace", out.ws};
     o.env = {{"CALIPER_DATA_DIR", out.root + "/data"},
-             {"CALIPER_USER_APPLETS_DIR", out.root + "/apps"},
+             {"CALIPER_USER_INSTRUMENTS_DIR", out.root + "/apps"},
              {"CALIPER_WINDOW_SIZE", "1280x800"},
              {"CALIPER_AUTOLAUNCH", "local.run42-dashboard"},
              {"CALIPER_AGENT_OFFLINE", "1"},
@@ -369,7 +369,7 @@ QuitRun quit_while_open(const std::string& name, const std::string& ui, const js
     const std::string ws = root + "/ws";
     {
         auto s = dashboard_workspace(ws, root + "/data-files");
-        ok(*s, "applet.save", {{"overwrite", true}});
+        ok(*s, "instrument.save", {{"overwrite", true}});
         s->close();
     }
     std::filesystem::create_directories(root + "/data");
@@ -379,7 +379,7 @@ QuitRun quit_while_open(const std::string& name, const std::string& ui, const js
     caliper_builder::acp::SpawnOptions o;
     o.argv = {exe, "--hidden", "--api", "--api-port", "0", "--workspace", ws};
     o.env = {{"CALIPER_DATA_DIR", root + "/data"},
-             {"CALIPER_USER_APPLETS_DIR", root + "/apps"},
+             {"CALIPER_USER_INSTRUMENTS_DIR", root + "/apps"},
              {"CALIPER_WINDOW_SIZE", "960x600"},
              {"CALIPER_AUTOLAUNCH", "local.run42-dashboard"},
              {"CALIPER_AGENT_OFFLINE", "1"},

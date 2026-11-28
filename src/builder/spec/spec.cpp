@@ -231,62 +231,20 @@ bool operator==(const LayoutNode& a, const LayoutNode& b) {
            a.shares == b.shares && a.min == b.min && a.children == b.children && a.title == b.title && a.x == b.x;
 }
 
-bool operator==(const Applet& a, const Applet& b) {
+bool operator==(const Instrument& a, const Instrument& b) {
     return a.id == b.id && a.title == b.title && a.description == b.description &&
            a.layout_locked == b.layout_locked && a.x == b.x;
 }
 
 bool operator==(const Spec& a, const Spec& b) {
-    return a.version == b.version && a.applet == b.applet && a.sources == b.sources && a.panels == b.panels &&
+    return a.version == b.version && a.instrument == b.instrument && a.sources == b.sources && a.panels == b.panels &&
            a.layout == b.layout && a.controls == b.controls && a.programs == b.programs && a.pieces == b.pieces &&
            a.states == b.states && a.provenance == b.provenance && a.x == b.x;
 }
 
-std::int64_t primitive_version(Primitive p) { return p == Primitive::scene ? kInstrumentVersion : 0; }
+std::int64_t primitive_version(Primitive /*p*/) { return kFormatVersion; }
 
-namespace {
-
-bool layout_needs_version_1(const LayoutNode& n) {
-    if (!n.shares.empty() || n.min) return true;
-    for (const LayoutNode& c : n.children)
-        if (layout_needs_version_1(c)) return true;
-    return false;
-}
-
-bool transform_needs_version_1(const Transform& t) {
-    return t.op == TransformOp::window || t.op == TransformOp::surface || t.op == TransformOp::path ||
-           !t.references.empty();
-}
-
-bool panel_needs_version_1(const Panel& p) {
-    if (primitive_version(p.primitive) > 0 || p.closable.has_value() || !p.entities.empty() || !p.annotations.empty())
-        return true;
-    for (const auto& slot : p.bind)
-        if (slot.second.reference) return true;
-    const Options& o = p.options;
-    if (!o.legend.is_null() || !o.box.is_null() || !o.views.empty() || o.select || o.bound_text || !o.references.empty())
-        return true;
-    // The scale bar belongs to version 0 only on a scene panel, which is
-    // version 1 itself, so that a set scale bar on another primitive is new.
-    return o.scene.scale_bar && p.primitive != Primitive::scene;
-}
-
-}  // namespace
-
-std::int64_t required_version(const Spec& spec) {
-    if (spec.applet.layout_locked.has_value() || !spec.controls.empty() || !spec.programs.empty() ||
-        !spec.provenance.empty() || !spec.states.empty() || !spec.pieces.empty())
-        return kInstrumentVersion;
-    for (const Source& s : spec.sources) {
-        if (s.history) return kInstrumentVersion;
-        for (const Transform& t : s.transforms)
-            if (transform_needs_version_1(t)) return kInstrumentVersion;
-    }
-    for (const Panel& p : spec.panels)
-        if (panel_needs_version_1(p)) return kInstrumentVersion;
-    if (spec.layout && layout_needs_version_1(*spec.layout)) return kInstrumentVersion;
-    return 0;
-}
+std::int64_t required_version(const Spec& /*spec*/) { return kFormatVersion; }
 
 Error Diagnostic::to_error() const {
     std::string where = path;

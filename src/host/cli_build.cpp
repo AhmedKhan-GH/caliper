@@ -176,7 +176,7 @@ int run_build(const CommandLine& cl, const CliContext& ctx, std::ostream& out, s
     }
     if (!fs::is_regular_file(folder / "CMakeLists.txt", ec)) {
         err << "caliper: " << folder.string()
-            << " has no CMakeLists.txt; build takes an applet's folder, such as one that caliper new made\n";
+            << " has no CMakeLists.txt; build takes an instrument's folder, such as one that caliper new made\n";
         return 1;
     }
 #ifdef _WIN32
@@ -253,7 +253,7 @@ int run_build(const CommandLine& cl, const CliContext& ctx, std::ostream& out, s
         return 1;
     }
 
-    // The checks of `caliper check`, on the build folder (its applets/).
+    // The checks of `caliper check`, on the build folder (its instruments/).
     CommandLine check = cl;
     check.command = CommandLine::Command::Check;
     check.operands = {build.string()};

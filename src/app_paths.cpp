@@ -207,15 +207,15 @@ std::string executable_dir() {
 #endif
 }
 
-std::string shipped_applets_dir() {
+std::string shipped_instruments_dir() {
     const std::string dir = executable_dir();
-    return dir.empty() ? std::string() : (fs::path(dir) / "applets").string();
+    return dir.empty() ? std::string() : (fs::path(dir) / "instruments").string();
 }
 
-std::string user_applets_dir() {
-    if (const char* dir = std::getenv("CALIPER_USER_APPLETS_DIR"); dir && *dir)
+std::string user_instruments_dir() {
+    if (const char* dir = std::getenv("CALIPER_USER_INSTRUMENTS_DIR"); dir && *dir)
         return dir;
-    return (fs::path(app_data_location()) / "applets").string();
+    return (fs::path(app_data_location()) / "instruments").string();
 }
 
 std::string default_workspace_dir() {

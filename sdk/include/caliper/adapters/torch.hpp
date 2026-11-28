@@ -1,13 +1,13 @@
 #pragma once
 /* caliper/adapters/torch.hpp — header-only bridge from a torch::Tensor to the
- * frozen CaliperTensor (docs/applets/tensor-and-arrow-headers.md#tensor-header). It compiles against the APPLET's
+ * frozen CaliperTensor (docs/instruments/tensor-and-arrow-headers.md#tensor-header). It compiles against the INSTRUMENT's
  * libtorch and is NEVER included by the host: torch stays out of the ABI.
  * The host links no torch; it consumes only the CaliperTensor this produces.
  *
  * Exemplar teaching points baked into the contract:
  *   - The adapter NEVER silently copies. A non-contiguous tensor is REJECTED
- *     (std::nullopt); the caller makes the copy visible in applet code with an
- *     explicit `.contiguous()` before calling again — the cost is in the applet,
+ *     (std::nullopt); the caller makes the copy visible in instrument code with an
+ *     explicit `.contiguous()` before calling again — the cost is in the instrument,
  *     not hidden in the bridge.
  *   - MPS tensors additionally REQUIRE storage_offset() == 0. The frozen
  *     CaliperTensor has no storage-offset channel, and the bridge casts
@@ -60,7 +60,7 @@ inline std::optional<CaliperDType> map_dtype(at::ScalarType st) {
 
 #if defined(__APPLE__)
 // [cb commandQueue] via the C ObjC runtime, so this header stays compilable
-// as plain C++ (applet TUs are .cpp, not .mm). The queue is torch's global
+// as plain C++ (instrument TUs are .cpp, not .mm). The queue is torch's global
 // MPS command queue — process-lifetime, safe to hand across the ABI.
 inline void* mtl_command_queue_of(void* command_buffer) {
     using Send = void* (*)(void*, SEL);
@@ -128,7 +128,7 @@ inline std::optional<CaliperTensor> to_tensor(const at::Tensor& t) {
     if (nd < 0 || nd > 8) return std::nullopt;   // frozen shape/strides are [8]
 
     // Contiguity is mandatory on every device: the bridge assumes row-major with
-    // no gaps. Reject rather than copy so the cost is visible in applet code.
+    // no gaps. Reject rather than copy so the cost is visible in instrument code.
     if (!t.is_contiguous()) return std::nullopt;
 
     CaliperTensor out{};
@@ -171,7 +171,7 @@ inline std::optional<CaliperTensor> to_tensor(const at::Tensor& t) {
 }
 
 // Same as to_tensor, but first drains the MPS device so the texture the host
-// uploads THIS frame reflects every kernel the applet has enqueued. This is the
+// uploads THIS frame reflects every kernel the instrument has enqueued. This is the
 // v1 correctness story for device textures (sync-then-update). Cost, honestly:
 // torch::mps::synchronize() is a full device barrier that blocks the CPU until
 // all MPS streams complete — the price of a stream-free v1 ABI. CPU tensors

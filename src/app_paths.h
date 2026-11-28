@@ -46,10 +46,10 @@ std::string app_data_path(const std::string& filename);
 // that only reads, such as the read-only subcommands of the command line.
 std::string app_data_location();
 
-// Override the app-data root (embed v1.1: CaliperCoreDesc.data_dir routing).
+// Override the app-data root (embed CaliperCoreDesc.data_dir routing).
 // While set, app_data_dir()/app_data_path() resolve UNDER `dir` (created if
 // missing) instead of the OS default, so an embedder's metrics/artifacts/
-// applet-data land under its own per-project root. Pass "" to restore the
+// instrument-data land under its own per-project root. Pass "" to restore the
 // default (CALIPER_DATA_DIR, else the OS folder). NOT used by the caliper exe
 // (it never overrides). Set once on the create thread before
 // the stores open; not intended for concurrent mutation.
@@ -66,13 +66,13 @@ std::string app_data_guard_reason();
 // The folder that holds the running executable, "" when the OS cannot say.
 std::string executable_dir();
 
-// The folder that holds the applets shipped with the app: applets/ beside
+// The folder that holds the instruments shipped with the app: instruments/ beside
 // the executable; "" when the executable's folder is unknown.
-std::string shipped_applets_dir();
+std::string shipped_instruments_dir();
 
-// The user applets folder: CALIPER_USER_APPLETS_DIR when it is set and not
-// empty, otherwise applets/ under the app-data folder. Creates nothing.
-std::string user_applets_dir();
+// The user instruments folder: CALIPER_USER_INSTRUMENTS_DIR when it is set and not
+// empty, otherwise instruments/ under the app-data folder. Creates nothing.
+std::string user_instruments_dir();
 
 // The builder's default workspace: workspace/ under the app-data folder, so
 // CALIPER_DATA_DIR moves it too. --workspace and CALIPER_WORKSPACE choose

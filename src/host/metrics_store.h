@@ -5,7 +5,7 @@
 // TensorBoard vocabulary: an experiment groups runs; each run carries tagged
 // series indexed by step (scalars, histograms, images) plus a hparams JSON blob.
 //
-// Threading: every method is callable from applet job threads. The store owns
+// Threading: every method is callable from instrument job threads. The store owns
 // one DuckDB connection guarded by one mutex — calls serialize internally
 // (the metrics.v1 header promises this). This is the sanctioned v1 model.
 //
@@ -118,7 +118,7 @@ public:
 
     // Run SQL against THIS store's live connection; on success fill *out with a
     // live Arrow C stream (caller drains and releases). Serialized on the same
-    // mutex as every write, so a host UI thread may query while an applet worker
+    // mutex as every write, so a host UI thread may query while an instrument worker
     // streams scalars in — reads are immediately consistent with those writes
     // (unlike a separate read-only DuckDB instance, which only sees checkpointed
     // state). READ-ONLY ENFORCED: the SQL is parsed (not executed) and refused

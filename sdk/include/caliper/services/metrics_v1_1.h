@@ -5,7 +5,7 @@
  * appends query(), which runs SQL on the live connection of the metrics store and streams the result as Arrow.
  * The frozen v1 writer prefix is byte-identical and unchanged.
  *
- * Callable from applet job threads and from a host UI thread that is not the caliper_core_frame() thread. The
+ * Callable from instrument job threads and from a host UI thread that is not the caliper_core_frame() thread. The
  * store serializes internally. Immutable once published: a future read entry is metrics.v1_2. */
 #include <stdint.h>
 #include <stdbool.h>
@@ -36,7 +36,7 @@ typedef struct CaliperMetricsV1_1 {
     /* --- v1-identical writer prefix (byte-for-byte CaliperMetricsV1). --- */
     /**
      * Open a run of `experiment` and return its id, or 0 on error. 0 is never a valid run. The run id scopes every
-     * scalar, histogram, image and hyperparameter that the applet logs afterward.
+     * scalar, histogram, image and hyperparameter that the instrument logs afterward.
      */
     uint64_t (*begin_run)(const char* experiment, const char* run_name);
     /**

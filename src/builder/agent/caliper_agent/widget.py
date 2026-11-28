@@ -74,7 +74,7 @@ HANDOFF_KINDS = ("build_from_scratch", "loader", "project_code", "explanation", 
 HANDOFF_TOOL = "handoff"
 MAX_HANDOFF_REASON = 500
 
-_ID = re.compile(r"^[a-z][a-z0-9_-]{0,63}$")              # spec ids: panels, sources, applets
+_ID = re.compile(r"^[a-z][a-z0-9_-]{0,63}$")              # spec ids: panels, sources, instruments
 _LOADER_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 _CATALOG_ID = re.compile(r"^(table|tensor|live|feed|metric|run):[^\x00-\x1f]{1,256}$")
 _PREVIEW_ID = re.compile(r"^[a-z][a-z0-9_-]{0,63}$")      # the command table's preview id

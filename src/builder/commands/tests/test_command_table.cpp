@@ -27,13 +27,13 @@ namespace cb = caliper_builder;
 namespace {
 
 const char* const kV0[] = {
-    "app.info",        "app.applets",     "app.launch",     "catalog.list",  "catalog.describe", "catalog.sample",
+    "app.info",        "app.instruments", "app.launch",     "catalog.list",  "catalog.describe", "catalog.sample",
     "data.query",      "data.import",     "loader.list",    "loader.describe", "loader.create",  "loader.update",
     "loader.run",      "loader.delete",   "spec.new",       "spec.open",     "spec.get",         "spec.set_text",
     "spec.validate",   "source.add",      "source.patch",   "source.remove", "panel.create",     "panel.patch",
     "panel.remove",    "panel.render",    "panel.data",     "layout.place",  "layout.set",       "layout.lock",
     "preview.begin",
-    "preview.diff",    "preview.commit",  "preview.discard", "applet.save",  "applet.open",      "applet.list",
+    "preview.diff",    "preview.commit",  "preview.discard", "instrument.save", "instrument.open", "instrument.list",
     "review.status",   "capture.frame",   "control.create", "control.patch", "control.remove",
     // The eighteen commands of design/instrument-interface.md, Commands.
     "state.create",    "state.patch",     "state.remove",   "state.set",     "state.get",        "control.set",
@@ -138,23 +138,23 @@ TEST_CASE("no command takes or returns a value named like a secret") {
 
 TEST_CASE("the flags follow the design page") {
     CHECK(names_where([](const CommandDescriptor& d) { return d.destructive; }) ==
-          std::set<std::string>{"loader.update", "loader.run", "loader.delete", "applet.save", "piece.remove"});
+          std::set<std::string>{"loader.update", "loader.run", "loader.delete", "instrument.save", "piece.remove"});
     CHECK(names_where([](const CommandDescriptor& d) { return d.mutates; }) ==
           std::set<std::string>{"data.import", "loader.create", "loader.update", "loader.run", "loader.delete",
                                 "spec.new", "spec.open", "spec.set_text", "source.add", "source.patch",
                                 "source.remove", "panel.create", "panel.patch", "panel.remove", "layout.place",
-                                "layout.set", "layout.lock", "preview.commit", "applet.save", "applet.open", "control.create",
+                                "layout.set", "layout.lock", "preview.commit", "instrument.save", "instrument.open", "control.create",
                                 "control.patch", "control.remove", "program.create",
                                 "program.patch", "program.remove", "history.undo", "history.redo", "state.create",
                                 "state.patch", "state.remove", "entity.set", "entity.remove", "annotation.set",
                                 "annotation.remove", "camera.save", "piece.save", "piece.copy", "piece.update",
                                 "piece.remove"});
     CHECK(names_where([](const CommandDescriptor& d) { return d.frame_thread; }) ==
-          std::set<std::string>{"app.applets", "app.launch", "spec.new", "spec.open", "spec.get", "spec.set_text",
+          std::set<std::string>{"app.instruments", "app.launch", "spec.new", "spec.open", "spec.get", "spec.set_text",
                                 "spec.validate", "source.add", "source.patch", "source.remove", "panel.create",
                                 "panel.patch", "panel.remove", "panel.render", "panel.data", "layout.place", "layout.set", "layout.lock",
                                 "preview.begin", "preview.diff", "preview.commit", "preview.discard",
-                                "applet.save", "applet.open", "capture.frame", "control.create", "control.patch",
+                                "instrument.save", "instrument.open", "capture.frame", "control.create", "control.patch",
                                 "control.remove", "state.create", "state.patch", "state.remove", "state.set",
                                 "state.get", "control.set", "selection.set", "selection.get", "entity.set",
                                 "entity.remove", "annotation.set", "annotation.remove", "cursor.get", "cursor.set",

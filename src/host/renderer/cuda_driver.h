@@ -137,12 +137,12 @@ const Api* api();
 
 // ---------------------------------------------------------------------------
 // OPTIONAL VMM surface (bridge v1.2 tests): the cuMem* virtual-memory APIs
-// (CUDA 10.2+) used to build applet-shaped exportable allocations. A SEPARATE
+// (CUDA 10.2+) used to build instrument-shaped exportable allocations. A SEPARATE
 // table so the core Api above keeps its all-or-nothing rule on older drivers:
 // vmm_api() returns nullptr when the driver lacks ANY of these nine symbols
 // (or api() itself failed), and callers skip — never an error.
 // Struct layouts mirror cuda.h's stable v1 ABI, field-for-field identical to
-// the applet-side transcriptions in sdk/.../adapters/exportable_pool.hpp
+// the instrument-side transcriptions in sdk/.../adapters/exportable_pool.hpp
 // (which the host must not include).
 // ---------------------------------------------------------------------------
 

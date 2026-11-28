@@ -1,7 +1,7 @@
 // caliper_embed_tests — the embed C ABI (caliper/embed.h) battery (R4 L2a).
 //
 // Drives the ABI the way an embedder would: create an OFFSCREEN core, load the
-// hello_world fixture applet, pump frames, read the composited pixels back, and shut
+// hello_world fixture instrument, pump frames, read the composited pixels back, and shut
 // down clean — plus the refusal gates (second live core, frame/event before a
 // canvas, double attach) that must fail HONESTLY, never crash.
 //
@@ -63,9 +63,9 @@
 namespace {
 
 // Capture C-level stderr for a scope, then restore fd 2. The caliper.log.v1
-// sink writes applet log lines ("hello_world.on_init" / "hello_world.on_cleanup") to stderr
+// sink writes instrument log lines ("hello_world.on_init" / "hello_world.on_cleanup") to stderr
 // via fprintf in v0 (embedding.md caveat), so this is how a host-side test
-// observes an applet's lifecycle hooks firing through the ABI. Keep the capture
+// observes an instrument's lifecycle hooks firing through the ABI. Keep the capture
 // window tight around the load calls so a failing CHECK's text still reaches the
 // real console.
 class StderrTap {
@@ -102,7 +102,7 @@ CaliperCoreDesc base_desc() {
     CaliperCoreDesc d{};
     d.struct_size = sizeof(CaliperCoreDesc);
     d.renderer = CALIPER_RENDERER_DEFAULT;
-    d.applets_dir = CALIPER_TEST_APPLETS_DIR;   // build/applets: hello_world lives here
+    d.instruments_dir = CALIPER_TEST_INSTRUMENTS_DIR;   // build/instruments: hello_world lives here
     return d;
 }
 
@@ -117,7 +117,7 @@ CaliperCanvasDesc offscreen_desc(int w, int h) {
 }
 
 // A frame is "drawn" if some pixel is markedly brighter than the ~(13,13,20)
-// clear — i.e. the applet's dark-theme window / white text / plot actually
+// clear — i.e. the instrument's dark-theme window / white text / plot actually
 // rasterized. The clear never exceeds ~20 in any channel.
 int bright_pixels(const std::vector<uint8_t>& px) {
     int n = 0;
@@ -208,9 +208,9 @@ TEST_CASE("embed/offscreen: load hello_world, pump, read non-blank pixels, clean
     // With a canvas attached, an unknown manifest id is an honest refusal
     // (this is where the unknown-id path is genuinely reached — before a canvas
     // the W1 gate below refuses first).
-    CHECK(caliper_core_load_applet(core, "dev.caliper.does-not-exist") == 0);
+    CHECK(caliper_core_load_instrument(core, "dev.caliper.does-not-exist") == 0);
 
-    REQUIRE(caliper_core_load_applet(core, "dev.caliper.hello-world") == 1);
+    REQUIRE(caliper_core_load_instrument(core, "dev.caliper.hello-world") == 1);
 
     // Pump a few frames: window position settles (FirstUseEver) and the font
     // atlas uploads on the first composite.
@@ -219,10 +219,10 @@ TEST_CASE("embed/offscreen: load hello_world, pump, read non-blank pixels, clean
     std::vector<uint8_t> px((size_t)W * H * 4, 0);
     REQUIRE(caliper_core_read_pixels(core, px.data(), W * 4) == 1);
 
-    // The applet actually rasterized onto the canvas (not just the clear).
+    // The instrument actually rasterized onto the canvas (not just the clear).
     CHECK(bright_pixels(px) > 50);
 
-    caliper_core_unload_applet(core);
+    caliper_core_unload_instrument(core);
     caliper_core_shutdown(core);
 }
 
@@ -231,11 +231,11 @@ TEST_CASE("embed/gate: load before a canvas refuses (W1); read_pixels needs a ca
     CaliperCore* core = caliper_core_create(&d);
     REQUIRE(core != nullptr);
 
-    // W1: loading an applet before a canvas is attached is an honest refusal
-    // (the applet's launch + first frame touch the renderer's ImGui backend,
+    // W1: loading an instrument before a canvas is attached is an honest refusal
+    // (the instrument's launch + first frame touch the renderer's ImGui backend,
     // which canvas_init wires). No canvas here — even the fixture id refuses,
     // and the reason names the canvas so the embedder knows the fix.
-    CHECK(caliper_core_load_applet(core, "dev.caliper.hello-world") == 0);
+    CHECK(caliper_core_load_instrument(core, "dev.caliper.hello-world") == 0);
     CHECK(std::string(caliper_core_last_error(core)).find("canvas") !=
           std::string::npos);
 
@@ -246,8 +246,8 @@ TEST_CASE("embed/gate: load before a canvas refuses (W1); read_pixels needs a ca
 }
 
 // ---------------------------------------------------------------------------
-// Reload / swap / failed-load semantics (final-review fix pass). load_applet is
-// teardown-first: any active applet is torn down (workers joined, THEN instance)
+// Reload / swap / failed-load semantics (final-review fix pass). load_instrument is
+// teardown-first: any active instrument is torn down (workers joined, THEN instance)
 // BEFORE the new launch. These three lock the documented consequences. All need
 // a live offscreen canvas, so they self-skip headless like the pixel case.
 // ---------------------------------------------------------------------------
@@ -274,7 +274,7 @@ TEST_CASE("embed/reload: same-id load is a clean restart (on_cleanup then on_ini
         return;
     }
 
-    REQUIRE(caliper_core_load_applet(core, "dev.caliper.hello-world") == 1);
+    REQUIRE(caliper_core_load_instrument(core, "dev.caliper.hello-world") == 1);
     caliper_core_frame(core);
 
     // Reload the SAME id: the running instance is torn down (on_cleanup) and a
@@ -283,7 +283,7 @@ TEST_CASE("embed/reload: same-id load is a clean restart (on_cleanup then on_ini
     std::string log;
     {
         StderrTap tap;
-        REQUIRE(caliper_core_load_applet(core, "dev.caliper.hello-world") == 1);
+        REQUIRE(caliper_core_load_instrument(core, "dev.caliper.hello-world") == 1);
         log = tap.drain();
     }
     auto cleanup_at = log.find("hello_world.on_cleanup");
@@ -292,13 +292,13 @@ TEST_CASE("embed/reload: same-id load is a clean restart (on_cleanup then on_ini
     CHECK(init_at    != std::string::npos);
     CHECK(cleanup_at < init_at);   // teardown-first: cleanup precedes reinit
 
-    caliper_core_frame(core);      // the restarted applet still renders
-    caliper_core_unload_applet(core);
+    caliper_core_frame(core);      // the restarted instrument still renders
+    caliper_core_unload_instrument(core);
     caliper_core_shutdown(core);
 }
 
-#ifndef CALIPER_TESTS_NO_TORCH_APPLETS
-TEST_CASE("embed/reload: load a different id after active swaps applets") {
+#ifndef CALIPER_TESTS_NO_TORCH_INSTRUMENTS
+TEST_CASE("embed/reload: load a different id after active swaps instruments") {
     CaliperCoreDesc d = base_desc();
     CaliperCore* core = caliper_core_create(&d);
     REQUIRE(core != nullptr);
@@ -312,16 +312,16 @@ TEST_CASE("embed/reload: load a different id after active swaps applets") {
         return;
     }
 
-    REQUIRE(caliper_core_load_applet(core, "dev.caliper.hello-world") == 1);
+    REQUIRE(caliper_core_load_instrument(core, "dev.caliper.hello-world") == 1);
     caliper_core_frame(core);
 
-    // Swap to a DIFFERENT applet: hello_world is torn down (on_cleanup) and
+    // Swap to a DIFFERENT instrument: hello_world is torn down (on_cleanup) and
     // mnist launched. Under teardown-first, old jobs are joined before the new
-    // applet initializes.
+    // instrument initializes.
     std::string log;
     {
         StderrTap tap;
-        REQUIRE(caliper_core_load_applet(core, "dev.caliper.mnist") == 1);
+        REQUIRE(caliper_core_load_instrument(core, "dev.caliper.mnist") == 1);
         log = tap.drain();
     }
     CHECK(log.find("hello_world.on_cleanup") != std::string::npos);   // old torn down
@@ -331,12 +331,12 @@ TEST_CASE("embed/reload: load a different id after active swaps applets") {
     REQUIRE(caliper_core_read_pixels(core, px.data(), 256 * 4) == 1);
     CHECK(bright_pixels(px) > 50);                                    // mnist rasterized
 
-    caliper_core_unload_applet(core);
+    caliper_core_unload_instrument(core);
     caliper_core_shutdown(core);
 }
 #endif
 
-TEST_CASE("embed/reload: a failed load after an active applet leaves NO applet") {
+TEST_CASE("embed/reload: a failed load after an active instrument leaves NO instrument") {
     g_fault_count = 0;
     g_last_fault_id.clear();
 
@@ -354,17 +354,17 @@ TEST_CASE("embed/reload: a failed load after an active applet leaves NO applet")
         return;
     }
 
-    REQUIRE(caliper_core_load_applet(core, "dev.caliper.hello-world") == 1);
+    REQUIRE(caliper_core_load_instrument(core, "dev.caliper.hello-world") == 1);
     caliper_core_frame(core);
 
     // Force the NEXT launch to fail cleanly (initialize() returns false). Per
     // teardown-first semantics the active hello_world is destroyed BEFORE that
-    // launch, so the refusal leaves NO applet — not the old one, not a phantom index.
+    // launch, so the refusal leaves NO instrument — not the old one, not a phantom index.
     setenv("CALIPER_HELLO_WORLD_INIT_FAIL", "1", 1);
-    CHECK(caliper_core_load_applet(core, "dev.caliper.hello-world") == 0);
+    CHECK(caliper_core_load_instrument(core, "dev.caliper.hello-world") == 0);
     unsetenv("CALIPER_HELLO_WORLD_INIT_FAIL");
 
-    // No applet loaded: a frame draws only the clear (no bright pixels) and
+    // No instrument loaded: a frame draws only the clear (no bright pixels) and
     // fires NO spurious fault callback (the previous order left a dangling
     // active index that frame() would have surfaced as a crash).
     caliper_core_frame(core);
@@ -373,18 +373,18 @@ TEST_CASE("embed/reload: a failed load after an active applet leaves NO applet")
     CHECK(bright_pixels(px) < 10);
     CHECK(g_fault_count == 0);
 
-#ifndef CALIPER_TESTS_NO_TORCH_APPLETS
-    // The core is still fully usable — a fresh load of a DIFFERENT applet
+#ifndef CALIPER_TESTS_NO_TORCH_INSTRUMENTS
+    // The core is still fully usable — a fresh load of a DIFFERENT instrument
     // succeeds and renders. (The init-failed hello_world entry is itself now marked
     // Failed by the loader and can't be relaunched — existing loader policy,
     // orthogonal to the embed teardown-order fix under test here.)
-    REQUIRE(caliper_core_load_applet(core, "dev.caliper.mnist") == 1);
+    REQUIRE(caliper_core_load_instrument(core, "dev.caliper.mnist") == 1);
     for (int i = 0; i < 8; ++i) caliper_core_frame(core);
     REQUIRE(caliper_core_read_pixels(core, px.data(), 128 * 4) == 1);
     CHECK(bright_pixels(px) > 50);
 #endif
 
-    caliper_core_unload_applet(core);
+    caliper_core_unload_instrument(core);
     caliper_core_shutdown(core);
 }
 
@@ -398,7 +398,7 @@ TEST_CASE("embed/reload: a failed load after an active applet leaves NO applet")
 // What IS the rendering seam §7 protects — and what both hosts genuinely share —
 // is the tensor->texture BRIDGE upload. Here we drive it through the renderer the
 // EMBED CORE created and wired (services_set_renderer at attach), via the SAME
-// public caliper.tensor_bridge.v1 service an applet uses, and byte-compare the
+// public caliper.tensor_bridge.v1 service an instrument uses, and byte-compare the
 // readback against caliper_host::expand_u8_to_rgba8 — the IDENTICAL CPU reference
 // the gfx rows (mat_u8_direct) assert against with their standalone renderer. If
 // both harnesses reduce to the same bytes vs the same reference, the seam is
@@ -423,7 +423,7 @@ TEST_CASE("embed/§7 host-axis: bridge upload under the embed core is byte-exact
     }
 
     // The embed core's renderer is now bound to the process bridge. Reach both
-    // through the same surfaces an applet (service) / the gfx harness (renderer)
+    // through the same surfaces an instrument (service) / the gfx harness (renderer)
     // would use.
     auto* bridge =
         (const CaliperTensorBridgeV1*)services_get(CALIPER_TENSOR_BRIDGE_V1);
@@ -477,9 +477,9 @@ TEST_CASE("embed/get_service: known ids vend the process table; unknown/null ref
     CHECK(metrics != nullptr);
     CHECK(jobs != nullptr);
 
-    // The SAME process-static table an applet gets via CaliperHost.get_service.
-    bool same_as_applet_table = (metrics == caliper_host::services_get(CALIPER_METRICS_V1));
-    CHECK(same_as_applet_table);
+    // The SAME process-static table an instrument gets via CaliperHost.get_service.
+    bool same_as_instrument_table = (metrics == caliper_host::services_get(CALIPER_METRICS_V1));
+    CHECK(same_as_instrument_table);
 
     // Unknown id and NULL id -> NULL, never UB.
     CHECK(caliper_core_get_service(core, "does.not.exist.v1") == nullptr);
@@ -598,10 +598,10 @@ TEST_CASE("embed/metrics.v1_1: a host reads runs+scalars via the ABI (Arrow) "
     REQUIRE(reader != nullptr);
     REQUIRE(jobs != nullptr);
 
-    // v1_1 vends the SAME process-static table an applet would get.
-    bool same_as_applet_table =
+    // v1_1 vends the SAME process-static table an instrument would get.
+    bool same_as_instrument_table =
         ((const void*)reader == caliper_host::services_get(CALIPER_METRICS_V1_1));
-    CHECK(same_as_applet_table);
+    CHECK(same_as_instrument_table);
 
     uint64_t run = metrics->begin_run("compass", "arrow-stream");
     if (run == 0) {   // metrics store failed to open on this box: nothing to read
@@ -721,8 +721,8 @@ TEST_CASE("embed/data_dir: a per-core data_dir roots the stores under it; "
 }
 
 // ===========================================================================
-// v1.1 — log.v1 routing (§3.3). An installed log_fn captures applet log lines
-// (tagged "[applet] ") that were stderr-only in v0; with NO log_fn the caliper
+// v1.1 — log.v1 routing (§3.3). An installed log_fn captures instrument log lines
+// (tagged "[instrument] ") that were stderr-only in v0; with NO log_fn the caliper
 // exe path stays stderr, unchanged.
 // ===========================================================================
 namespace {
@@ -754,7 +754,7 @@ TEST_CASE("embed/log: with log_fn installed, a log.v1 line reaches the sink "
     auto* log = (const CaliperLogV1*)caliper_core_get_service(core, CALIPER_LOG_V1);
     REQUIRE(log != nullptr);
 
-    // Drive log.v1 directly (GPU-free): the applet-facing service an applet uses.
+    // Drive log.v1 directly (GPU-free): the instrument-facing service an instrument uses.
     std::string err;
     {
         StderrTap tap;
@@ -763,10 +763,10 @@ TEST_CASE("embed/log: with log_fn installed, a log.v1 line reaches the sink "
     }
     std::string cap = drain_log_capture();
     bool reached_sink       = cap.find("compass-log-probe") != std::string::npos;
-    bool tagged_applet      = cap.find("[applet] compass-log-probe") != std::string::npos;
+    bool tagged_instrument  = cap.find("[instrument] compass-log-probe") != std::string::npos;
     bool absent_from_stderr = err.find("compass-log-probe") == std::string::npos;
     CHECK(reached_sink);
-    CHECK(tagged_applet);
+    CHECK(tagged_instrument);
     CHECK(absent_from_stderr);
 
     caliper_core_shutdown(core);
@@ -792,7 +792,7 @@ TEST_CASE("embed/log: without log_fn, log.v1 still writes stderr (exe path uncha
     caliper_core_shutdown(core);
 }
 
-TEST_CASE("embed/log: a live applet's log.v1 line routes to the embedder sink, "
+TEST_CASE("embed/log: a live instrument's log.v1 line routes to the embedder sink, "
           "not stderr") {
     reset_log_capture();
     CaliperCoreDesc d = base_desc();
@@ -803,7 +803,7 @@ TEST_CASE("embed/log: a live applet's log.v1 line routes to the embedder sink, "
     CaliperCanvasDesc c = offscreen_desc(128, 128);
     if (caliper_test::force_no_gpu() ||
         !caliper_core_attach_canvas(core, nullptr, &c)) {
-        CALIPER_NOTE_NO_GPU("no embeddable GPU (applet-log routing case): "
+        CALIPER_NOTE_NO_GPU("no embeddable GPU (instrument-log routing case): "
                 << caliper_core_last_error(core));
         caliper_core_shutdown(core);
         return;
@@ -813,18 +813,18 @@ TEST_CASE("embed/log: a live applet's log.v1 line routes to the embedder sink, "
     std::string err;
     {
         StderrTap tap;
-        int loaded = caliper_core_load_applet(core, "dev.caliper.hello-world");
+        int loaded = caliper_core_load_instrument(core, "dev.caliper.hello-world");
         REQUIRE(loaded == 1);
         caliper_core_frame(core);
         err = tap.drain();
     }
     std::string cap = drain_log_capture();
-    bool applet_line_at_sink = cap.find("hello_world.on_init") != std::string::npos;
-    bool applet_line_off_stderr = err.find("hello_world.on_init") == std::string::npos;
-    CHECK(applet_line_at_sink);       // reached the embedder's log pane
-    CHECK(applet_line_off_stderr);    // no longer leaks to raw stderr
+    bool instrument_line_at_sink = cap.find("hello_world.on_init") != std::string::npos;
+    bool instrument_line_off_stderr = err.find("hello_world.on_init") == std::string::npos;
+    CHECK(instrument_line_at_sink);       // reached the embedder's log pane
+    CHECK(instrument_line_off_stderr);    // no longer leaks to raw stderr
 
-    caliper_core_unload_applet(core);
+    caliper_core_unload_instrument(core);
     caliper_core_shutdown(core);
 }
 

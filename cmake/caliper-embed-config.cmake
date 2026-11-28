@@ -1,6 +1,6 @@
 # caliper-embed CMake package. find_package(caliper-embed CONFIG) provides:
 #
-#   caliper::embed  The embedding library: the core (applet loader, services,
+#   caliper::embed  The embedding library: the core (instrument loader, services,
 #                   renderer, tensor bridge) in one shared library that exports
 #                   only the C functions of caliper/embed.h, caliper/live.h and
 #                   caliper/live_views.h. Linking it adds the include root
@@ -9,7 +9,7 @@
 #                   caliper_core_get_service returns.
 #
 # caliper-embed_VERSION is the embed interface version (major.minor.patch, the
-# parts of CALIPER_EMBED_VERSION); a request for 1.x accepts any 1.y with y >= x.
+# parts of CALIPER_EMBED_VERSION); a request for 2.x accepts any 2.y with y >= x.
 #
 # On macOS the library's install name is @rpath/libcaliper_embed.dylib: a
 # program built in its build folder finds it through the build rpath, and an

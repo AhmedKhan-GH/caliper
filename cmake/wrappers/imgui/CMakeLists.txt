@@ -7,9 +7,9 @@ if(NOT DEFINED IMGUI_SRC_DIR)
     message(FATAL_ERROR "IMGUI_SRC_DIR must be defined (path to imgui submodule)")
 endif()
 
-# imgui: the core library, the part of the UI stack that applets also compile
+# imgui: the core library, the part of the UI stack that instruments also compile
 # (caliper::ui_stack). It carries the UI-stack definitions, which the SDK hands
-# to applets so both sides compile ImGui the same way.
+# to instruments so both sides compile ImGui the same way.
 add_library(imgui STATIC
     ${IMGUI_SRC_DIR}/imgui.cpp
     ${IMGUI_SRC_DIR}/imgui_demo.cpp
@@ -27,7 +27,7 @@ set_target_properties(imgui PROPERTIES
     POSITION_INDEPENDENT_CODE ON
 )
 
-# imgui_backends: the GLFW platform backend. Only the host links it; applets
+# imgui_backends: the GLFW platform backend. Only the host links it; instruments
 # never see a window or a graphics API. The renderer backends (imgui_impl_metal,
 # imgui_impl_vulkan) compile with the host's Metal and Vulkan backends.
 add_library(imgui_backends STATIC

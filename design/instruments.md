@@ -16,7 +16,7 @@ The migration from version 0 to version 1 changes only the number, because versi
 
 An edit that adds a scene panel or a control to a version 0 spec raises the version to 1 in the same command. The edit and the new number are one undo step. The fixtures of version 0 and their canonical text thus stay unchanged.
 
-The JSON Schema of version 1 is `src/builder/spec/schema/caliper-spec-v1.schema.json`, beside the schema of version 0. Its `$id` is `urn:caliper:schema:spec:v1`.
+The JSON Schema of version 1 is `src/builder/spec/schema/caliper-spec-v2.schema.json`, beside the schema of version 0. Its `$id` is `urn:caliper:schema:spec:v2`.
 
 ### Scene Primitive
 
@@ -237,7 +237,7 @@ Each event is one JSON object. Six keys are common to all kinds, and the kind ad
 | `select` | A selection in a scene, made or cleared | `entities` (each with `entity`, `primitive`, `indices`, `row_ids`), `truncated` |
 | `control` | The person finished an edit of a control of the spec | `control`, `bind`, `value` |
 | `run` | The attached script changed | `change`, then the keys of the change |
-| `spec` | A command changed the open spec | `command`, `event`, `applet` |
+| `spec` | A command changed the open spec | `command`, `event`, `instrument` |
 | `approval` | A card asked or was decided | `approval`, `command`, `state`, `target` |
 
 The keys of a pick and a selection are those of the scene view's events in `src/host/live/live_scene.h`. A pick in a scene panel has the panel id in `panel` and the scene name in `view`. A pick in a live view outside a spec has `panel` null.
@@ -262,7 +262,7 @@ Each kind has one producer, and each producer pushes through the `EventSink` int
 - The session pushes `spec` from its journal through `note_journal_event()`.
 - The session pushes `approval` from the approval observer of the command registry: when the registry parks a call, when the person decides and when the wait ends. This includes the `run` commands, which the journal does not record.
 
-The ring lives in the session, so that `events.wait` works the same way in the app and in a headless session. The spec runtime receives the ring and the run control through `SpecInstrumentHost` in `spec_instruments.h`.
+The ring lives in the session, so that `events.wait` works the same way in the app and in a headless session. The spec runtime receives the ring and the run control through `SpecLiveHost` in `spec_live_host.h`.
 
 ## Watch Hook
 

@@ -229,7 +229,7 @@ TEST_CASE("jobs: finished workers are reaped without clear_finished") {
 }
 
 // ---------------------------------------------------------------------------
-// Guarded jobs (submit_guarded = caliper.jobs.v1's path): applet code under
+// Guarded jobs (submit_guarded = caliper.jobs.v1's path): instrument code under
 // the crash guard. A fault or an exception fails the job with the guard's
 // reason; the host keeps running and later jobs still run. The fault is pinned
 // on the JobOwner in scope at submit time, for the loader to quarantine.
@@ -255,7 +255,7 @@ void mark_ran(void* user, const CaliperJobControl*) {
 }
 } // namespace
 
-TEST_CASE("jobs: an applet job that segfaults fails the job, not the host") {
+TEST_CASE("jobs: an instrument job that segfaults fails the job, not the host") {
     JobSystem js;
     uint64_t id = js.submit_guarded("segv", &null_write, nullptr);
     REQUIRE(id != 0);
@@ -277,11 +277,11 @@ TEST_CASE("jobs: an applet job that segfaults fails the job, not the host") {
     CHECK_FALSE(js.failed(h));
 }
 
-TEST_CASE("jobs: an applet job that throws fails with the exception named") {
+TEST_CASE("jobs: an instrument job that throws fails with the exception named") {
     JobSystem js;
     auto fn = [](void*, const CaliperJobControl* ctl) {
         ctl->progress(ctl, 0.5f, "about to throw");
-        throw std::runtime_error("applet boom");
+        throw std::runtime_error("instrument boom");
     };
     uint64_t id = js.submit_guarded("thrower", fn, nullptr);
     REQUIRE(wait_until([&] { return !js.is_running(id); }, milliseconds(2000)));
@@ -289,7 +289,7 @@ TEST_CASE("jobs: an applet job that throws fails with the exception named") {
     CHECK(js.progress_of(id) == doctest::Approx(0.5f));
     const std::string msg = message_of(js, id);
     CHECK(msg.find("exception") != std::string::npos);
-    CHECK(msg.find("applet boom") != std::string::npos);
+    CHECK(msg.find("instrument boom") != std::string::npos);
 }
 
 TEST_CASE("jobs: a guarded job's fault is recorded on the owner in scope at submit") {
@@ -331,7 +331,7 @@ TEST_CASE("jobs: a guarded job's fault is recorded on the owner in scope at subm
 }
 
 TEST_CASE("jobs: a bad progress message faults outside the message lock") {
-    // ctl->progress copies the applet's string before taking msg_mutex. Were
+    // ctl->progress copies the instrument's string before taking msg_mutex. Were
     // the copy made under the lock, the guard's siglongjmp would leave the
     // mutex held: the job's own failure report and every later views() (the
     // Jobs panel, each frame) would block on it forever.

@@ -235,7 +235,7 @@ TEST_CASE("a turn streams every kind of update") {
     REQUIRE(cmds);
     REQUIRE(cmds->commands.size() == 2);
     CHECK(cmds->commands[0].name == "spec");
-    CHECK(cmds->commands[0].hint == "applet id");
+    CHECK(cmds->commands[0].hint == "instrument id");
     const AcpEvent* mode = find(events, AcpEventKind::current_mode);
     REQUIRE(mode);
     CHECK(mode->mode_id == "plan");

@@ -1,7 +1,7 @@
 // caliper-builder-shot as a process, on an offscreen canvas: the three-panel
 // dashboard built by hand through the pane's own input over a workspace that
 // imports a Parquet table and a safetensors tensor by the pane's file drop.
-// The spec it ends with, and the applet it saves, equal dashboard.spec.toml,
+// The spec it ends with, and the instrument it saves, equal dashboard.spec.toml,
 // as for the other three ways of building it; every command came from the
 // builder origin, the dropped files' import from ui; two undos took two steps; and the captures have the size
 // asked for.
@@ -66,7 +66,7 @@ TEST_CASE("caliper-builder-shot: the dashboard built by hand equals the fixture"
     caliper_builder::acp::SpawnOptions o;
     o.argv = {CALIPER_BUILDER_SHOT_EXE,
               "--workspace", ws,
-              "--applet-from", std::string(CALIPER_SPEC_FIXTURES) + "/dashboard.spec.toml",
+              "--instrument-from", std::string(CALIPER_SPEC_FIXTURES) + "/dashboard.spec.toml",
               "--files", data + "/run42_metrics.parquet", data + "/attn.safetensors",
               "--out-dir", out, "--size", "1440x900", "--prefix", "t", "--suffix", "-small"};
     caliper_builder::acp::RunLimits lim;
@@ -83,7 +83,7 @@ TEST_CASE("caliper-builder-shot: the dashboard built by hand equals the fixture"
     const size_t nl = run.out.rfind('\n', run.out.size() - 2);
     const json summary = json::parse(nl == std::string::npos ? run.out : run.out.substr(nl + 1));
 
-    // The spec the pane ends with, and the applet it saved, are the fixture.
+    // The spec the pane ends with, and the instrument it saved, are the fixture.
     const spec::Spec d = dashboard_fixture();
     auto finished = spec::parse_toml(summary["finished_text"].get<std::string>());
     REQUIRE(finished.ok());
@@ -91,7 +91,7 @@ TEST_CASE("caliper-builder-shot: the dashboard built by hand equals the fixture"
     auto last = spec::parse_toml(summary["final_text"].get<std::string>());
     REQUIRE(last.ok());
     CHECK(last.spec == d);
-    REQUIRE(summary["final_path"] == "applets/run42-dashboard/run42-dashboard.spec.toml");
+    REQUIRE(summary["final_path"] == "instruments/run42-dashboard/run42-dashboard.spec.toml");
     auto saved = spec::parse_toml(read_text(ws + "/" + summary["final_path"].get<std::string>()));
     REQUIRE(saved.ok());
     CHECK(saved.spec == d);

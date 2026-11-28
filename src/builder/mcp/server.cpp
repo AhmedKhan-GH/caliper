@@ -58,10 +58,10 @@ const char* const kMetaServerInfo = "io.modelcontextprotocol/serverInfo";
 const char* const kMetaSubscriptionId = "io.modelcontextprotocol/subscriptionId";
 
 const char* const kInstructions =
-    "caliper-mcp drives the Caliper app that runs on this machine, through Caliper API. app_info and app_applets "
-    "describe the app and its applets, app_launch opens an applet's page, and capture_frame returns the frame the app "
+    "caliper-mcp drives the Caliper app that runs on this machine, through Caliper API. app_info and app_instruments "
+    "describe the app and its instruments, app_launch opens an instrument's page, and capture_frame returns the frame the app "
     "shows as a PNG. The other tools are the commands of Caliper's command layer: they read the data catalog, make "
-    "loaders and build spec applets. An app without a command layer answers them with the error "
+    "loaders and build instruments written as specs. An app without a command layer answers them with the error "
     "mcp.no_command_layer. A command that deletes or overwrites saved data waits until the person approves it in the "
     "app, for up to two minutes. The resources hold the Caliper documentation, the SDK headers, the JSON Schema of "
     "the spec format and the command table.";
@@ -387,7 +387,7 @@ struct Server::Impl {
                                 json{{"uri", shown}, {"reason", rc.error.message}});
         if (rc.error) return Reply::error(kInternalError, rc.error.message, json{{"uri", shown}});
         json c = {{"uri", u}, {"mimeType", rc.mime_type}, {"text", std::move(rc.text)}};
-        return Reply::ok({{"contents", json::array({std::move(c)})}}, u == kSpecSchemaUri || u == kSpecSchemaV1Uri ? kTtlStatic : kTtlFiles);
+        return Reply::ok({{"contents", json::array({std::move(c)})}}, u == kSpecSchemaUri ? kTtlStatic : kTtlFiles);
     }
 
     Reply templates_list(const json& params) {

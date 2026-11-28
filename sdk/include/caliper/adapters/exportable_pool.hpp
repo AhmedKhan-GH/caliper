@@ -2,7 +2,7 @@
 /* caliper/adapters/exportable_pool.hpp — a torch MemPool whose blocks are
  * cuMemCreate'd with a shareable handle type, so the bridge can IMPORT them
  * (tensor_bridge.v1_2) and update textures with zero copies of the data.
- * Applet-side only: the host links no ML framework. Every failure degrades to "not pool-backed": the
+ * Instrument-side only: the host links no ML framework. Every failure degrades to "not pool-backed": the
  * caller falls back to the v1/v1.1 path (stream_to_tensor + update_texture).
  *
  * The file has three clearly-marked sections:
@@ -43,7 +43,7 @@
 
 // Same guard discipline as adapters/torch.hpp:37 — mac libtorch ships the
 // c10/cuda headers but no CUDA toolkit, and Apple torch never has CUDA, so the
-// whole interior is compiled out here; the fallback class below keeps applet
+// whole interior is compiled out here; the fallback class below keeps instrument
 // code that mentions ExportablePool compiling on every platform.
 #if !defined(__APPLE__) && __has_include(<c10/cuda/CUDAStream.h>) && \
     __has_include(<c10/cuda/CUDACachingAllocator.h>) && __has_include(<cuda_runtime_api.h>)
@@ -446,7 +446,7 @@ private:
     // resources and closes the shareable handle. Queued, not called: torch may
     // invoke this callback from any thread, and the Bridge is frame-thread-only
     // by contract — the queue drains in to_bridge()/~ExportablePool, both
-    // applet frame-thread call sites.
+    // instrument frame-thread call sites.
     void free_block(void* ptr) {
         const uintptr_t base = reinterpret_cast<uintptr_t>(ptr);
         std::lock_guard<std::mutex> lock(mu_);
@@ -587,7 +587,7 @@ private:
 
 #else   // neither CUDA nor Apple
 // ===========================================================================
-// Fallback: the class exists everywhere so applet code compiles, but the pool
+// Fallback: the class exists everywhere so instrument code compiles, but the pool
 // is never backed — ok() == false, use() is a no-op, to_bridge always declines.
 // ===========================================================================
 class ExportablePool {

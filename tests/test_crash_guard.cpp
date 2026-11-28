@@ -1,6 +1,6 @@
 #include <doctest/doctest.h>
 #include "crash_guard.h"
-#include "applet_loader.h"
+#include "instrument_loader.h"
 #include "job_system.h"
 #include <caliper/fixture_host.h>
 #include <caliper/services/jobs_v1.h>
@@ -58,10 +58,10 @@ TEST_CASE("guard: handlers restore — ok call after a crash works") {
 }
 
 TEST_CASE("guard: C++ exception is contained and named") {
-    auto r = guarded_call([] { throw std::runtime_error("applet said no"); });
+    auto r = guarded_call([] { throw std::runtime_error("instrument said no"); });
     CHECK_FALSE(r.ok);
     CHECK(r.fault.find("exception") != std::string::npos);
-    CHECK(r.fault.find("applet said no") != std::string::npos);
+    CHECK(r.fault.find("instrument said no") != std::string::npos);
     CHECK(r.kind == FaultKind::Exception);
     // And the guard is re-armed: a fault right after is still contained.
     auto f = guarded_call([] { volatile int* p = nullptr; *p = 1; });
@@ -91,7 +91,7 @@ TEST_CASE("guard: fault_kind_of reads a reason's kind, erring toward signal") {
     // MSVC's report of a C++ throw it could not unwind is an SEH code: a
     // signal, so no in-process restart.
     CHECK(fault_kind_of("SEH exception 0xE06D7363") == FaultKind::Signal);
-    // An applet chooses its job labels and exception texts. A label that
+    // An instrument chooses its job labels and exception texts. A label that
     // reads like an exception cannot make a signal restartable, and an
     // exception whose text ends like a signal errs the safe way.
     CHECK(fault_kind_of("background job \"C++ exception: x\": SIGSEGV "
@@ -142,17 +142,17 @@ static bool names_exception(const std::string& text, const char* what) {
            text.find("SEH") != std::string::npos;
 }
 
-TEST_CASE("guard: exception thrown by an applet quarantines it, host survives") {
+TEST_CASE("guard: exception thrown by an instrument quarantines it, host survives") {
     // Same loader path as the fault-in-frame case in test_loader.cpp, with a
-    // C++ throw instead of the null write. The CALIPER_APPLET sugar (hello)
+    // C++ throw instead of the null write. The CALIPER_INSTRUMENT sugar (hello)
     // catches at the ABI boundary, as it should, so the fixture is a raw
     // descriptor that doesn't: the exception reaches the loader's
-    // guarded_call and the applet quarantines exactly as it would for a
+    // guarded_call and the instrument quarantines exactly as it would for a
     // signal, naming the exception.
     caliper::testing::FixtureHost fx;
     CaliperFrameInfo fi{}; fi.struct_size = sizeof fi;
-    const HostCaps caps{3, "0.6.0", {"caliper.ui.v1", "caliper.log.v1"}};
-    auto find_throwing = [](AppletLoader& L) {
+    const HostCaps caps{4, "0.6.0", {"caliper.ui.v1", "caliper.log.v1"}};
+    auto find_throwing = [](InstrumentLoader& L) {
         for (int k = 0; k < L.count(); k++)
             if (L.at(k).manifest.id == "dev.caliper.throwing") return k;
         return -1;
@@ -160,27 +160,27 @@ TEST_CASE("guard: exception thrown by an applet quarantines it, host survives") 
 
     SUBCASE("thrown from frame()") {
         unsetenv("CALIPER_THROWING_WHERE");            // fixture default
-        AppletLoader L(caps, CALIPER_TEST_DATA_ROOT);
+        InstrumentLoader L(caps, CALIPER_TEST_DATA_ROOT);
         L.scan(CALIPER_TEST_FIXTURES_DIR);
         int i = find_throwing(L);
         REQUIRE(i >= 0);
         REQUIRE(L.launch(i, *fx.host()));
         CHECK_FALSE(L.frame(i, fi));                   // throw -> quarantined
-        CHECK(L.at(i).status == AppletStatus::Quarantined);
+        CHECK(L.at(i).status == InstrumentStatus::Quarantined);
         CHECK(L.at(i).status_text.find("frame()") != std::string::npos);
-        CHECK(names_exception(L.at(i).status_text, "throwing_applet.frame"));
+        CHECK(names_exception(L.at(i).status_text, "throwing_instrument.frame"));
         CHECK_FALSE(L.frame(i, fi));                   // never called again
     }
     SUBCASE("thrown from initialize()") {
         setenv("CALIPER_THROWING_WHERE", "initialize", 1);
-        AppletLoader L(caps, CALIPER_TEST_DATA_ROOT);
+        InstrumentLoader L(caps, CALIPER_TEST_DATA_ROOT);
         L.scan(CALIPER_TEST_FIXTURES_DIR);
         int i = find_throwing(L);
         REQUIRE(i >= 0);
         CHECK_FALSE(L.launch(i, *fx.host()));
-        CHECK(L.at(i).status == AppletStatus::Quarantined);
+        CHECK(L.at(i).status == InstrumentStatus::Quarantined);
         CHECK(L.at(i).status_text.find("initialize()") != std::string::npos);
-        CHECK(names_exception(L.at(i).status_text, "throwing_applet.initialize"));
+        CHECK(names_exception(L.at(i).status_text, "throwing_instrument.initialize"));
         unsetenv("CALIPER_THROWING_WHERE");
     }
     // The host (this test process) is alive to assert all of the above.
@@ -216,19 +216,19 @@ const CaliperJobsV1 kTestJobs = {sizeof(CaliperJobsV1), &tj_submit, &tj_cancel,
                                  &tj_running, &tj_progress};
 } // namespace
 
-TEST_CASE("guard: a fault in an applet's background job quarantines the applet") {
+TEST_CASE("guard: a fault in an instrument's background job quarantines the instrument") {
     // The fixture submits a jobs.v1 job from its first frame(); the JOB fails
     // and frame() itself returns normally. The loader had its JobOwnerScope up
-    // around that frame(), so the fault is pinned on the applet, which is
+    // around that frame(), so the fault is pinned on the instrument, which is
     // quarantined before its next call — exactly like a fault in frame().
     JobSystem js;
     g_test_jobs = &js;
     caliper::testing::FixtureHost fx;
     fx.provide(CALIPER_JOBS_V1, &kTestJobs);
     CaliperFrameInfo fi{}; fi.struct_size = sizeof fi;
-    const HostCaps caps{3, "0.6.0",
+    const HostCaps caps{4, "0.6.0",
                         {"caliper.ui.v1", "caliper.log.v1", "caliper.jobs.v1"}};
-    auto launch_and_fail_a_job = [&](AppletLoader& L, const char* where) {
+    auto launch_and_fail_a_job = [&](InstrumentLoader& L, const char* where) {
         setenv("CALIPER_THROWING_WHERE", where, 1);
         L.scan(CALIPER_TEST_FIXTURES_DIR);
         int i = -1;
@@ -239,15 +239,15 @@ TEST_CASE("guard: a fault in an applet's background job quarantines the applet")
         CHECK(L.frame(i, fi));                       // submits; frame is fine
         REQUIRE(wait_for([&] { return all_finished(js); }, 2000));
         CHECK(js.views().front().failed);
-        CHECK(L.at(i).status == AppletStatus::Active);   // not yet: next call
+        CHECK(L.at(i).status == InstrumentStatus::Active);   // not yet: next call
         return i;
     };
 
     SUBCASE("memory fault in the job") {
-        AppletLoader L(caps, CALIPER_TEST_DATA_ROOT);
+        InstrumentLoader L(caps, CALIPER_TEST_DATA_ROOT);
         const int i = launch_and_fail_a_job(L, "job-fault");
         CHECK_FALSE(L.frame(i, fi));                 // quarantined, not called
-        CHECK(L.at(i).status == AppletStatus::Quarantined);
+        CHECK(L.at(i).status == InstrumentStatus::Quarantined);
         CHECK(L.at(i).status_text.find("crashed in background job") !=
               std::string::npos);
         CHECK(names_a_fault(L.at(i).status_text));
@@ -255,17 +255,17 @@ TEST_CASE("guard: a fault in an applet's background job quarantines the applet")
         CHECK_FALSE(L.frame(i, fi));                 // never called again
     }
     SUBCASE("exception thrown by the job") {
-        AppletLoader L(caps, CALIPER_TEST_DATA_ROOT);
+        InstrumentLoader L(caps, CALIPER_TEST_DATA_ROOT);
         const int i = launch_and_fail_a_job(L, "job");
         CHECK_FALSE(L.frame(i, fi));
-        CHECK(L.at(i).status == AppletStatus::Quarantined);
-        CHECK(names_exception(L.at(i).status_text, "throwing_applet.job"));
+        CHECK(L.at(i).status == InstrumentStatus::Quarantined);
+        CHECK(names_exception(L.at(i).status_text, "throwing_instrument.job"));
     }
     SUBCASE("going home after the job faulted abandons, not cleans up") {
-        AppletLoader L(caps, CALIPER_TEST_DATA_ROOT);
+        InstrumentLoader L(caps, CALIPER_TEST_DATA_ROOT);
         const int i = launch_and_fail_a_job(L, "job-fault");
         L.teardown(i);                               // the Home path
-        CHECK(L.at(i).status == AppletStatus::Quarantined);
+        CHECK(L.at(i).status == InstrumentStatus::Quarantined);
         CHECK(L.at(i).instance == nullptr);
     }
     unsetenv("CALIPER_THROWING_WHERE");
@@ -289,14 +289,14 @@ TEST_CASE("loader: restart is offered after a C++ exception, refused after a sig
     caliper::testing::FixtureHost fx;
     fx.provide(CALIPER_JOBS_V1, &kTestJobs);
     CaliperFrameInfo fi{}; fi.struct_size = sizeof fi;
-    const HostCaps caps{3, "0.6.0",
+    const HostCaps caps{4, "0.6.0",
                         {"caliper.ui.v1", "caliper.log.v1", "caliper.jobs.v1"}};
     auto count = [&](const char* line) {
         int n = 0;
         for (const auto& l : fx.log_lines()) n += l == line;
         return n;
     };
-    auto launch_in = [&](AppletLoader& L, const char* where) {
+    auto launch_in = [&](InstrumentLoader& L, const char* where) {
         setenv("CALIPER_THROWING_WHERE", where, 1);
         L.scan(CALIPER_TEST_FIXTURES_DIR);
         int i = -1;
@@ -306,23 +306,23 @@ TEST_CASE("loader: restart is offered after a C++ exception, refused after a sig
         return i;
     };
     // The fresh instance must not fail again: the fixture fails nowhere now.
-    auto restart_ok = [&](AppletLoader& L, int i) {
+    auto restart_ok = [&](InstrumentLoader& L, int i) {
         setenv("CALIPER_THROWING_WHERE", "none", 1);
         REQUIRE(L.restart(i, *fx.host()));
-        CHECK(L.at(i).status == AppletStatus::Active);
+        CHECK(L.at(i).status == InstrumentStatus::Active);
         CHECK(L.at(i).fault_kind == FaultKind::None);
         CHECK(L.at(i).stale_instance == nullptr);
         CHECK(L.at(i).status_text.empty());
         CHECK(L.frame(i, fi));                       // the new instance runs
         CHECK(L.frame(i, fi));
     };
-    auto refused = [&](AppletLoader& L, int i) {
+    auto refused = [&](InstrumentLoader& L, int i) {
         const std::string why = L.at(i).status_text;
         setenv("CALIPER_THROWING_WHERE", "none", 1);
         const int inits = count("throwing.initialize");
         CHECK_FALSE(L.restartable(i));
         CHECK_FALSE(L.restart(i, *fx.host()));
-        CHECK(L.at(i).status == AppletStatus::Quarantined);
+        CHECK(L.at(i).status == InstrumentStatus::Quarantined);
         CHECK(L.at(i).status_text == why);           // unchanged
         CHECK(L.at(i).stale_instance == nullptr);    // abandoned
         CHECK(count("throwing.initialize") == inits);   // nothing launched
@@ -330,7 +330,7 @@ TEST_CASE("loader: restart is offered after a C++ exception, refused after a sig
     };
 
     SUBCASE("exception in frame(): cleanup and destroy, then a fresh instance") {
-        AppletLoader L(caps, CALIPER_TEST_DATA_ROOT);
+        InstrumentLoader L(caps, CALIPER_TEST_DATA_ROOT);
         const int i = launch_in(L, "frame");
         REQUIRE(L.launch(i, *fx.host()));
         CHECK_FALSE(L.frame(i, fi));
@@ -339,7 +339,7 @@ TEST_CASE("loader: restart is offered after a C++ exception, refused after a sig
         CHECK(L.at(i).stale_instance != nullptr);    // ...but kept to release
         CHECK(L.restartable(i));
         L.teardown(i);                               // the Home path: no-op
-        CHECK(L.at(i).status == AppletStatus::Quarantined);
+        CHECK(L.at(i).status == InstrumentStatus::Quarantined);
         CHECK(count("throwing.cleanup") == 0);
         restart_ok(L, i);
         CHECK(count("throwing.cleanup") == 1);
@@ -347,10 +347,10 @@ TEST_CASE("loader: restart is offered after a C++ exception, refused after a sig
         CHECK(count("throwing.initialize") == 2);
     }
     SUBCASE("exception in initialize(): destroy only, then a fresh instance") {
-        AppletLoader L(caps, CALIPER_TEST_DATA_ROOT);
+        InstrumentLoader L(caps, CALIPER_TEST_DATA_ROOT);
         const int i = launch_in(L, "initialize");
         CHECK_FALSE(L.launch(i, *fx.host()));
-        CHECK(L.at(i).status == AppletStatus::Quarantined);
+        CHECK(L.at(i).status == InstrumentStatus::Quarantined);
         CHECK(L.at(i).fault_kind == FaultKind::Exception);
         CHECK(L.restartable(i));
         restart_ok(L, i);
@@ -358,7 +358,7 @@ TEST_CASE("loader: restart is offered after a C++ exception, refused after a sig
         CHECK(count("throwing.destroy") == 1);
     }
     SUBCASE("exception thrown by a background job") {
-        AppletLoader L(caps, CALIPER_TEST_DATA_ROOT);
+        InstrumentLoader L(caps, CALIPER_TEST_DATA_ROOT);
         const int i = launch_in(L, "job");
         REQUIRE(L.launch(i, *fx.host()));
         CHECK(L.frame(i, fi));                       // submits the job
@@ -372,11 +372,11 @@ TEST_CASE("loader: restart is offered after a C++ exception, refused after a sig
         CHECK(count("throwing.destroy") == 1);
     }
     SUBCASE("memory fault in frame(): refused") {
-        AppletLoader L(caps, CALIPER_TEST_DATA_ROOT);
+        InstrumentLoader L(caps, CALIPER_TEST_DATA_ROOT);
         const int i = launch_in(L, "frame-fault");
         REQUIRE(L.launch(i, *fx.host()));
         CHECK_FALSE(L.frame(i, fi));
-        CHECK(L.at(i).status == AppletStatus::Quarantined);
+        CHECK(L.at(i).status == InstrumentStatus::Quarantined);
         CHECK(L.at(i).fault_kind == FaultKind::Signal);
         CHECK(names_a_fault(L.at(i).status_text));
         refused(L, i);
@@ -384,7 +384,7 @@ TEST_CASE("loader: restart is offered after a C++ exception, refused after a sig
         CHECK(count("throwing.destroy") == 0);
     }
     SUBCASE("memory fault in a background job: refused") {
-        AppletLoader L(caps, CALIPER_TEST_DATA_ROOT);
+        InstrumentLoader L(caps, CALIPER_TEST_DATA_ROOT);
         const int i = launch_in(L, "job-fault");
         REQUIRE(L.launch(i, *fx.host()));
         CHECK(L.frame(i, fi));
@@ -394,13 +394,13 @@ TEST_CASE("loader: restart is offered after a C++ exception, refused after a sig
         refused(L, i);
     }
     SUBCASE("cleanup() throwing while restarting: quarantined again, destroy still owed") {
-        AppletLoader L(caps, CALIPER_TEST_DATA_ROOT);
+        InstrumentLoader L(caps, CALIPER_TEST_DATA_ROOT);
         const int i = launch_in(L, "frame");
         REQUIRE(L.launch(i, *fx.host()));
         CHECK_FALSE(L.frame(i, fi));
         setenv("CALIPER_THROWING_WHERE", "cleanup", 1);
         CHECK_FALSE(L.restart(i, *fx.host()));
-        CHECK(L.at(i).status == AppletStatus::Quarantined);
+        CHECK(L.at(i).status == InstrumentStatus::Quarantined);
         CHECK(L.at(i).status_text.find("crashed while restarting") !=
               std::string::npos);
         CHECK(L.at(i).fault_kind == FaultKind::Exception);
@@ -411,7 +411,7 @@ TEST_CASE("loader: restart is offered after a C++ exception, refused after a sig
         CHECK(count("throwing.destroy") == 1);
     }
     SUBCASE("a loader entry that is not quarantined is not restartable") {
-        AppletLoader L(caps, CALIPER_TEST_DATA_ROOT);
+        InstrumentLoader L(caps, CALIPER_TEST_DATA_ROOT);
         const int i = launch_in(L, "none");
         CHECK_FALSE(L.restartable(i));               // Ready
         CHECK_FALSE(L.restart(i, *fx.host()));

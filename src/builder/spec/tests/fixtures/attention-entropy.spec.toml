@@ -1,6 +1,6 @@
-caliper_spec = 0                       # the format version
+caliper_spec = 2                       # the format version
 
-[applet]
+[instrument]
 id = "attention-entropy"
 title = "Attention entropy"
 description = "Entropy of each attention head while the model trains."

@@ -34,7 +34,7 @@ TensorData filled(std::vector<std::int64_t> shape, float fill) {
     return r.tensor;
 }
 
-const char* kHead = "caliper_spec = 1\n[applet]\nid = \"h\"\n";
+const char* kHead = "caliper_spec = 2\n[instrument]\nid = \"h\"\n";
 
 }  // namespace
 

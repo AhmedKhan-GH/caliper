@@ -172,14 +172,14 @@ TEST_CASE("a control takes a merge patch like a panel") {
     CHECK(has(mismatch.diagnostics, "spec.control_mismatch", "control[1].bind"));
 }
 
-TEST_CASE("a patch that makes a panel a scene raises a version 0 spec to version 1") {
+TEST_CASE("a patch that makes a panel a scene keeps the spec at version 2") {
     cs::Spec s = example();
-    REQUIRE(s.version == 0);
+    REQUIRE(s.version == 2);
     REQUIRE_FALSE(s.panels.empty());
     const std::string id = s.panels[0].id;
     auto r = cs::patch_panel(s, id, json::parse(R"({"primitive": "scene", "bind": null, "options": null})"));
     CHECK(r.applied);
-    CHECK(r.spec.version == 1);
+    CHECK(r.spec.version == 2);
     CHECK(r.spec.panels[0].primitive == cs::Primitive::scene);
     CHECK(has(r.diagnostics, "spec.missing_slot", "panel[0].bind.scene"));
 }

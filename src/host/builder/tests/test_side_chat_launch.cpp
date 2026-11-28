@@ -241,7 +241,7 @@ TEST_CASE("side chat: a Caliper tool's call names its command, as each agent nam
     CHECK(caliper_command_of(call("caliper/layout_set")) == "layout.set");
     CHECK(caliper_command_of(call("caliper_review_status")) == "review.status");
     CHECK(caliper_command_of(call("panel_patch (caliper MCP Server)")) == "panel.patch");
-    CHECK(caliper_command_of(call("Tool: `mcp__caliper__applet_save`")) == "applet.save");
+    CHECK(caliper_command_of(call("Tool: `mcp__caliper__instrument_save`")) == "instrument.save");
     CHECK(caliper_command_of(call("MCP", {{"server", "caliper"}, {"tool", "spec_validate"}})) == "spec.validate");
     // Another server's tool, a tool the table does not have, or no prefix.
     CHECK(caliper_command_of(call("mcp__github__create_issue")).empty());

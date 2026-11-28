@@ -5,7 +5,7 @@
  * id to a backend handle. The service is frozen once published, and the host never links torch.
  *
  * A violation of the acceptance rules returns 0 or false and writes one caliper.log.v1 line, and it never
- * produces a misinterpreted texture. The acceptance rules are in docs/applets/services/caliper-tensor-bridge-v1.md. */
+ * produces a misinterpreted texture. The acceptance rules are in docs/instruments/services/caliper-tensor-bridge-v1.md. */
 #include <stdint.h>
 #include <stdbool.h>
 #include <caliper/tensor.h>
@@ -20,7 +20,7 @@ extern "C" {
 /**
  * The id of a host texture.
  *
- * The value 0 is invalid, and an id is compare-only. Applets never interpret or dereference an id, because its
+ * The value 0 is invalid, and an id is compare-only. Instruments never interpret or dereference an id, because its
  * representation is internal to the backend. The value casts directly to `ImTextureID` for `ImGui::Image`, because
  * the host hands out the ImGui-compatible handle of each backend.
  */
@@ -65,7 +65,7 @@ typedef struct CaliperTensorBridgeV1 {
                                                    float vmin, float vmax,
                                                    uint32_t flags);
     /**
-     * Allocate tensor memory that is the backing store of a texture. The applet wraps `out_tensor->data`, for
+     * Allocate tensor memory that is the backing store of a texture. The instrument wraps `out_tensor->data`, for
      * example with `torch::from_blob`, and writes into it. The texture sees the result after at most a layout
      * transition. In v1 the function returns a unified-memory CPU-device tensor, which is zero-copy for CPU
      * writers, and device writers stage through `update_texture`. It returns `false` on failure.

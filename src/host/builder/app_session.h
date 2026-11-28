@@ -5,7 +5,7 @@
 // `caliper shot`, own one AppSession for the workspace of the command line
 // (host_cli.h, workspace_choice). It holds a caliper_builder::Session, drains
 // its command queue on the frame thread between two frames, and implements the
-// session's SessionHost for app.info, app.applets, app.launch, capture.frame
+// session's SessionHost for app.info, app.instruments, app.launch, capture.frame
 // and panel.render.
 //
 // Opening. start() opens nothing. A workspace that the command line chose
@@ -210,9 +210,9 @@ std::vector<caliper_builder::Intervention> interventions_of(const nlohmann::json
 #endif
 
 // What the app's navigation answers a launch by manifest id, for POST
-// /v0/applets/{id}/launch and app.launch: status 200 with the body of
+// /v0/instruments/{id}/launch and app.launch: status 200 with the body of
 // launched_json(), or 404 or 409 with a message, and the command's error code
-// (app.applet_not_found, app.launch_refused, app.launch_failed).
+// (app.instrument_not_found, app.launch_refused, app.launch_failed).
 struct LaunchOutcome {
     int status = 200;
     std::string body;   // 200: the JSON body; otherwise the message
@@ -228,9 +228,9 @@ public:
         // Without it, fn runs on a thread of its own.
         std::function<void(const std::string& label, std::function<void()> fn)> run_job;
         std::function<std::string()> info_json;      // the body of GET /v0/info
-        std::function<std::string()> applets_json;   // the body of GET /v0/applets
+        std::function<std::string()> instruments_json;   // the body of GET /v0/instruments
         // `origin` is the command origin of whoever asked ("ui", "api",
-        // "mcp", "agent"), which a spec applet's applet.open is sent from.
+        // "mcp", "agent"), which an instrument's instrument.open is sent from.
         std::function<LaunchOutcome(const std::string& id, const std::string& origin)> launch;
         // "" when the app can read its frame back; otherwise why it cannot,
         // which capture.frame answers as capture.unavailable.
@@ -317,7 +317,7 @@ public:
     void set_run_link(caliper_live::RunLink* link);
     // The app's run control, which the session holds from its adoption until
     // close(): what the spec runtime's controls act through
-    // (SpecInstrumentHost::run). Null without the builder.
+    // (SpecLiveHost::run). Null without the builder.
     caliper_builder::RunControl* run_control();
     // The app's model runner (src/host/runner/model_runner.h,
     // design/hosted-runs.md), which the session holds from its adoption
@@ -342,18 +342,18 @@ public:
     // Every command the journal recorded: any of them may have changed the
     // open spec.
     uint64_t journaled() const;
-    // Every applet.open that succeeded, from any origin, and every spec.new
+    // Every instrument.open that succeeded, from any origin, and every spec.new
     // or spec.open of an agent (the origins agent and mcp) that succeeded:
     // the app shows the spec page for each, so that the person sees the spec
     // whose edits they review. The person's own spec.new shows the page by
     // its own path (SpecPage::take_new()), in build mode.
     uint64_t specs_opened() const;
     // Of those, the ones an agent sent (the origins agent and mcp): an
-    // applet.open, a spec.new or a spec.open.
+    // instrument.open, a spec.new or a spec.open.
     uint64_t agent_specs_opened() const;
-    // Every applet.save that succeeded: the app lists the workspace's
-    // applets again for each.
-    uint64_t applets_saved() const;
+    // Every instrument.save that succeeded: the app lists the workspace's
+    // instruments again for each.
+    uint64_t instruments_saved() const;
 
     // The commands that ran without a card because an agent's mode or a rule
     // allowed them (the journal's allowed_by), since the last call, the

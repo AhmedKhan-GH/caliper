@@ -1,4 +1,4 @@
-# The template of `caliper new`, built as an applet author builds it, run by
+# The template of `caliper new`, built as an instrument author builds it, run by
 # ctest as caliper_cli_new_builds:
 #   1. install the SDK component of this build to <WORK_DIR>/prefix;
 #   2. run `caliper new` into <WORK_DIR>/template-check;
@@ -33,8 +33,8 @@ file(MAKE_DIRECTORY "${WORK_DIR}")
 set(prefix "${WORK_DIR}/prefix")
 set(project "${WORK_DIR}/template-check")
 set(data "${WORK_DIR}/app-data")
-set(caliper "${CMAKE_COMMAND}" -E env --unset=CALIPER_APPLET_PATH
-    "CALIPER_DATA_DIR=${data}" "CALIPER_USER_APPLETS_DIR=${WORK_DIR}/user-applets" "${EXE}")
+set(caliper "${CMAKE_COMMAND}" -E env --unset=CALIPER_INSTRUMENT_PATH
+    "CALIPER_DATA_DIR=${data}" "CALIPER_USER_INSTRUMENTS_DIR=${WORK_DIR}/user-instruments" "${EXE}")
 
 run("Installing the SDK" "${CMAKE_COMMAND}" --install "${CALIPER_BUILD_DIR}"
     --prefix "${prefix}" --component sdk)
@@ -56,7 +56,7 @@ run("Building the template" "${CMAKE_COMMAND}" --build "${project}/build" --conf
 # On macOS the library carries the host's minimum macOS (MACOS_MIN, the core
 # build's CMAKE_OSX_DEPLOYMENT_TARGET), which the SDK package passes on.
 if(MACOS_MIN)
-    file(GLOB libs "${project}/build/applets/*.dylib")
+    file(GLOB libs "${project}/build/instruments/*.dylib")
     execute_process(COMMAND vtool -show-build ${libs} OUTPUT_VARIABLE shown ERROR_VARIABLE shown)
     string(REGEX MATCHALL "minos [0-9.]+" minos "${shown}")
     list(REMOVE_DUPLICATES minos)
@@ -68,7 +68,7 @@ run("Running the template's test" "${CMAKE_CTEST_COMMAND}" --test-dir "${project
     -C "${BUILD_TYPE}" --output-on-failure)
 
 run("caliper check" ${caliper} check "${project}/build")
-if(NOT run_output MATCHES "READY +com\\.example\\.template-check +0\\.1\\.0 .*1 of 1 applets pass the checks")
+if(NOT run_output MATCHES "READY +com\\.example\\.template-check +0\\.1\\.0 .*1 of 1 instruments pass the checks")
     message(FATAL_ERROR "caliper check did not pass the template:\n${run_output}")
 endif()
 if(EXISTS "${data}")

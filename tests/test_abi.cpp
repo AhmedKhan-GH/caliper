@@ -23,18 +23,18 @@
 // ABI hygiene (docs/development/compatibility-and-epochs.md): POD, struct_size-prefixed, C-safe.
 static_assert(std::is_standard_layout_v<CaliperHost>);
 static_assert(std::is_standard_layout_v<CaliperFrameInfo>);
-static_assert(std::is_standard_layout_v<CaliperAppletAPI>);
-static_assert(std::is_standard_layout_v<CaliperAppletDescriptor>);
+static_assert(std::is_standard_layout_v<CaliperInstrumentAPI>);
+static_assert(std::is_standard_layout_v<CaliperInstrumentDescriptor>);
 static_assert(std::is_standard_layout_v<CaliperUiV1>);
 static_assert(std::is_standard_layout_v<CaliperLogV1>);
 static_assert(offsetof(CaliperHost, struct_size) == 0);
 static_assert(offsetof(CaliperFrameInfo, struct_size) == 0);
-static_assert(offsetof(CaliperAppletAPI, struct_size) == 0);
-static_assert(offsetof(CaliperAppletDescriptor, struct_size) == 0);
-static_assert(CALIPER_ABI_EPOCH == 3);
+static_assert(offsetof(CaliperInstrumentAPI, struct_size) == 0);
+static_assert(offsetof(CaliperInstrumentDescriptor, struct_size) == 0);
+static_assert(CALIPER_ABI_EPOCH == 4);
 
 TEST_CASE("abi: descriptor symbol name is fixed") {
-    CHECK(std::string(CALIPER_DESCRIPTOR_SYMBOL) == "caliper_applet_descriptor");
+    CHECK(std::string(CALIPER_DESCRIPTOR_SYMBOL) == "caliper_instrument_descriptor");
 }
 
 static_assert(std::is_standard_layout_v<CaliperJobControl>);
@@ -123,7 +123,7 @@ TEST_CASE("tensor_bridge v1_2 is prefix-identical to v1_1 (additive, D24 pattern
     CHECK(CALIPER_BRIDGE_CAP_IMPORT_ALLOC == (1u << 1));
     CHECK(std::string(CALIPER_TENSOR_BRIDGE_V1_2) == "caliper.tensor_bridge.v1_2");
     // Additive v1.2 handle kind: an in-process id<MTLBuffer> (Apple). Value is
-    // frozen — 1=win32, 2=fd, 3=mtlbuffer; renumbering breaks shipped applets.
+    // frozen — 1=win32, 2=fd, 3=mtlbuffer; renumbering breaks shipped instruments.
     static_assert(CALIPER_ALLOC_HANDLE_MTLBUFFER == 3u, "frozen handle kind");
 }
 

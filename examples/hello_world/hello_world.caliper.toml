@@ -1,12 +1,12 @@
-[applet]
+[instrument]
 id      = "dev.caliper.hello-world"
 name    = "Hello World"
 version = "0.1.0"
-summary = "Smallest torch-free applet: sugar demo and loader-test substrate."
+summary = "Smallest torch-free instrument: sugar demo and loader-test substrate."
 tag     = "Demo"
 
 [compat]
-abi_epoch = 3
+abi_epoch = 4
 min_host  = "0.6.0"
 
 [services]

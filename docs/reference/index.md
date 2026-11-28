@@ -13,13 +13,13 @@ flowchart TB
 
 ## Command Line
 
-The `caliper` executable starts the app and also takes subcommands. Every subcommand except `dev` runs without a window, and thus is safe in scripts and CI. The [CLI](cli.md) page gives the usage, the startup rules and the search order for applets. The subcommands that list, check, install, create and build applets are in [Applet Commands](applet-commands.md). The commands `caliper shot` and `caliper serve` are in [Shot and Serve Commands](shot-and-serve-commands.md). A shot writes a PNG of an applet page, and serve runs the hub.
+The `caliper` executable starts the app and also takes subcommands. Every subcommand except `dev` runs without a window, and thus is safe in scripts and CI. The [CLI](cli.md) page gives the usage, the startup rules and the search order for instruments. The subcommands that list, check, install, create and build instruments are in [Instrument Commands](instrument-commands.md). The commands `caliper shot` and `caliper serve` are in [Shot and Serve Commands](shot-and-serve-commands.md). A shot writes a PNG of an instrument page, and serve runs the hub.
 
 ## Files and Settings
 
 Caliper keeps its files in one app-data folder, and the `CALIPER_DATA_DIR` variable moves it. A test or hidden run never uses the folder of the OS. [Folders and Environment](folders-and-environment.md) lists the folder for each operating system, every environment variable and the startup log lines.
 
-When the host loads an applet, it first runs a negotiation check on the manifest. If a check fails, the host shows one message and runs no applet code. [Refusal Messages](refusal-messages.md) lists each message, the check that causes it and the action to take.
+When the host loads an instrument, it first runs a negotiation check on the manifest. If a check fails, the host shows one message and runs no instrument code. [Refusal Messages](refusal-messages.md) lists each message, the check that causes it and the action to take.
 
 ## Wire Protocol
 
@@ -31,4 +31,4 @@ Caliper ships a desktop application, a Python package, a browser module, `calipe
 
 ## Terms
 
-The documentation uses each term with one meaning. The [Glossary](glossary.md) defines terms such as ABI epoch, Applet, Caliper Embed and Caliper LIB. Check it when a word is unclear.
+The documentation uses each term with one meaning. The [Glossary](glossary.md) defines terms such as ABI epoch, Instrument, Caliper Embed and Caliper LIB. Check it when a word is unclear.

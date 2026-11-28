@@ -1,6 +1,6 @@
 # Controls
 
-A control is a widget in the spec that acts on one target. [Spec Version 1](spec-version-1.md#controls) lists the keys of the `control` table and the forms of `bind`. This page lists the nine kinds, the segmented group and the keyboard shortcuts.
+A control is a widget in the spec that acts on one target. [Spec Format](spec-format.md#controls) lists the keys of the `control` table and the forms of `bind`. This page lists the nine kinds, the segmented group and the keyboard shortcuts.
 
 ## Control Kinds
 
@@ -16,7 +16,7 @@ A control is a widget in the spec that acts on one target. [Spec Version 1](spec
 | `readout` | None | `format`, `fields` | None |
 | `transport` | `cursor` | `speed`, `keys` | The cursor |
 
-A choice is a value, or a table `{ value, label, key }`. The option `choices_from` of a picker is not built, and the validator refuses it with `spec.not_built`. A text control applies its value when the person presses Return or leaves the field. A control bound to a state shows the value of the state, thus `state.set` moves it too. Each `[[control]]` table accepts `closable = false` to prevent close commands (`control.not_closable`). When `[applet]` sets `layout_locked = true`, every control stays non-closable until the layout unlocks (`layout.locked`).
+A choice is a value, or a table `{ value, label, key }`. The option `choices_from` of a picker is not built, and the validator refuses it with `spec.not_built`. A text control applies its value when the person presses Return or leaves the field. A control bound to a state shows the value of the state, thus `state.set` moves it too. Each `[[control]]` table accepts `closable = false` to prevent close commands (`control.not_closable`). When `[instrument]` sets `layout_locked = true`, every control stays non-closable until the layout unlocks (`layout.locked`).
 
 The `min` and `max` of a slider or a range may be [references](state-and-references.md#reference-places). The control `window` in the example below reads the first and the newest step of the cursor:
 

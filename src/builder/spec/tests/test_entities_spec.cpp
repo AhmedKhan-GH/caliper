@@ -44,7 +44,7 @@ std::string entity_errors(const std::vector<cs::Diagnostic>& ds) {
     return s;
 }
 
-const std::string kHead = "caliper_spec = 1\n[applet]\nid = \"a\"\n"
+const std::string kHead = "caliper_spec = 2\n[instrument]\nid = \"a\"\n"
                           "[[source]]\nid = \"grid\"\nsql = \"SELECT 1\"\n"
                           "[[source]]\nid = \"loss\"\nsql = \"SELECT 1\"\n"
                           "[[source]]\nid = \"cloud\"\nsql = \"SELECT 1\"\n";

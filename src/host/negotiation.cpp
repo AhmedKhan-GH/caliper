@@ -46,13 +46,13 @@ std::string short_hash(const std::string& h) {
 }
 } // namespace
 
-Negotiation negotiate(const AppletManifest& m, const HostCaps& caps,
+Negotiation negotiate(const InstrumentManifest& m, const HostCaps& caps,
                       uint32_t stored_data_schema) {
     Negotiation n;
     if (m.abi_epoch != caps.abi_epoch) {
         n.reason = "Built for ABI epoch " + std::to_string(m.abi_epoch) +
                    "; this host speaks " + std::to_string(caps.abi_epoch) +
-                   " — check for an applet update.";
+                   " — check for an instrument update.";
         return n;
     }
     if (!m.min_host.empty() && semver_cmp(caps.version, m.min_host) < 0) {
@@ -64,7 +64,7 @@ Negotiation negotiate(const AppletManifest& m, const HostCaps& caps,
         m.ui_stack != caps.ui_stack_hash) {
         n.reason = "Built against UI stack " + short_hash(m.ui_stack) +
                    "; this host uses " + short_hash(caps.ui_stack_hash) +
-                   " — rebuild the applet against this host's SDK.";
+                   " — rebuild the instrument against this host's SDK.";
         return n;
     }
     if (!m.torch.empty() && m.torch != caps.torch_version) {
@@ -92,9 +92,9 @@ std::string missing_service_reason(const std::string& svc) {
     return "Requires a capability this host doesn't have: " + svc + ".";
 }
 
-std::string data_schema_reason(uint32_t stored, uint32_t applet) {
+std::string data_schema_reason(uint32_t stored, uint32_t instrument) {
     return "Stored data is schema " + std::to_string(stored) +
-           "; this applet reads schema " + std::to_string(applet) + ".";
+           "; this instrument reads schema " + std::to_string(instrument) + ".";
 }
 
 const std::set<std::string>& host_service_ids() {

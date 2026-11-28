@@ -1,5 +1,5 @@
 #pragma once
-// TensorBridge — host-side core of caliper.tensor_bridge.v1 (docs/applets/services/caliper-tensor-bridge-v1.md).
+// TensorBridge — host-side core of caliper.tensor_bridge.v1 (docs/instruments/services/caliper-tensor-bridge-v1.md).
 // Pure logic over the HostRenderer texture seam: it validates a CaliperTensor
 // against the frozen v1 acceptance rules, colormaps/expands it into RGBA8 on the
 // CPU staging path, or forwards a device tensor to the backend's device path —
@@ -56,11 +56,11 @@ public:
 
     // Bridge-v1.1 capability bits. Bit 0 = the active renderer honors
     // stream-ordered handoff, so adapters may skip the device drain. Bit 1
-    // (v1.2) = the renderer can import an applet-exported device allocation.
+    // (v1.2) = the renderer can import an instrument-exported device allocation.
     uint32_t caps() const;
 
     // caliper.tensor_bridge.v1.2 ops (imported external allocations). The host
-    // dups the applet's OS shareable handle into a renderer-internal id and
+    // dups the instrument's OS shareable handle into a renderer-internal id and
     // runs device texture updates FROM the imported bytes — zero copies. All
     // return 0/false/no-op when the renderer can't import or on a rule breach
     // (reason logged), and update_texture_from_alloc reuses the SAME frozen

@@ -496,7 +496,7 @@ public:
         d.struct_size = sizeof d;
         d.renderer = CALIPER_RENDERER_DEFAULT;
         d.data_dir = data_dir ? data_dir_.c_str() : nullptr;
-        d.applets_dir = nullptr;
+        d.instruments_dir = nullptr;
         d.log_fn = &log_trampoline;
         d.crash_fn = nullptr;
         d.userdata = &log_;

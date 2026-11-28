@@ -37,10 +37,10 @@ def test_a_turn_through_the_cpp_client(tmp_path):
         message(text("Adding the panel and saving."),
                 tool_use("toolu_panel", "panel_create", {"id": "loss", "primitive": "series",
                                                          "bind": {"y": "metrics.loss"}}),
-                tool_use("toolu_save", "applet_save", {"id": "demo"}), stop="tool_use",
+                tool_use("toolu_save", "instrument_save", {"id": "demo"}), stop="tool_use",
                 usage={"input_tokens": 20, "output_tokens": 15, "cache_read_input_tokens": 9000}),
         message(tool_use("toolu_capture", "capture_frame", {}), stop="tool_use"),
-        message(text("The loss panel is in the spec and the applet is saved.")),
+        message(text("The loss panel is in the spec and the instrument is saved.")),
     ]
     # The anthropic route: the real Anthropic model behind the stubbed transport.
     script, record = write_script(tmp_path, steps, route="anthropic")
@@ -53,7 +53,7 @@ def test_a_turn_through_the_cpp_client(tmp_path):
         proc = subprocess.run(
             [HARNESS, "--agent", agent, "--cwd", str(workspace),
              "--env", f"ANTHROPIC_API_KEY={FAKE_KEY}", "--env", f"CALIPER_AGENT_TEST_SCRIPT={script}",
-             "--env", "PYTHONPATH", "--env", "CALIPER_AGENT_OFFLINE", "--prompt", "Plot the loss and save the applet.",
+             "--env", "PYTHONPATH", "--env", "CALIPER_AGENT_OFFLINE", "--prompt", "Plot the loss and save the instrument.",
              "--permission", "allow", "--timeout", "90"],
             capture_output=True, text=True, env=env, timeout=120)
     finally:
@@ -75,7 +75,7 @@ def test_a_turn_through_the_cpp_client(tmp_path):
     assert any(t["text"] == "Start with the catalog." for t in by_type["agent_thought_chunk"])
     said = "".join(m["text"] for m in by_type["agent_message_chunk"])
     assert said.startswith("I will look at the catalog first.")
-    assert said.endswith("The loss panel is in the spec and the applet is saved.")
+    assert said.endswith("The loss panel is in the spec and the instrument is saved.")
 
     started = [t["tool_call"]["id"] for t in by_type["tool_call"]]
     assert started == ["toolu_list", "toolu_panel", "toolu_save", "toolu_capture"]
@@ -88,7 +88,7 @@ def test_a_turn_through_the_cpp_client(tmp_path):
         "toolu_list": "completed", "toolu_panel": "completed", "toolu_save": "completed",
         "toolu_capture": "completed"}
     panel_diff = [c for c in final["toolu_panel"]["content"] if c["type"] == "diff"]
-    assert panel_diff and panel_diff[0]["path"] == str(workspace / "applets/demo/demo.spec.toml")
+    assert panel_diff and panel_diff[0]["path"] == str(workspace / "instruments/demo/demo.spec.toml")
     assert 'id = "loss"' in panel_diff[0]["new_text"]
     assert any(c.get("content_type") == "image" for c in final["toolu_capture"]["content"])
 
@@ -106,7 +106,7 @@ def test_a_turn_through_the_cpp_client(tmp_path):
                 if c["path"].startswith("/v0/commands/")
                 and c["path"] not in ("/v0/commands/spec.get", "/v0/commands/review.status")]
     assert commands == [("/v0/commands/catalog.list", "agent", False), ("/v0/commands/panel.create", "agent", True),
-                        ("/v0/commands/panel.create", "agent", False), ("/v0/commands/applet.save", "agent", False)]
+                        ("/v0/commands/panel.create", "agent", False), ("/v0/commands/instrument.save", "agent", False)]
     assert fake.calls[-1]["path"] == "/v0/capture.png"
 
     requests = read_requests(record)

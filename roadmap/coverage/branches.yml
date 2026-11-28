@@ -275,7 +275,7 @@ entries:
 - branch: sprint3-int-runtime
   state: on-main
   commits: 0 commits that main lacks (123 ahead of the merge base)
-  item: Work on the spec runtime and spec applets, which reached main through a pull request (patch ids
+  item: Work on the spec runtime and spec-based instruments, which reached main through a pull request (patch ids
     and subjects match).
   ids:
   - SPC-08
@@ -378,7 +378,7 @@ entries:
   wip: false
   commits: 35 commits that main lacks by patch and subject (30 also on origin/inspector, 5 only on inspector),
     62 ahead of main in all
-  item: Overview of the branch. It holds the inspector applet with its tensor view, 3-D model view, requests
+  item: Overview of the branch. It holds the inspector instrument with its tensor view, 3-D model view, requests
     to a script, a language model run from the app, and the J-space Trace pane with interventions. Its
     host side is an MLX example script. 30 commits are on origin/inspector; five are only local (the uv
     lock, the data script for a landing page figure, GrokScope, two research examples, a path change).
@@ -552,7 +552,7 @@ entries:
   state: unique
   wip: false
   commits: 1 commit, 72275e31 (only on the local inspector, not on origin/inspector)
-  item: GrokScope, an applet in which a one-hidden-layer network learns (a + b) mod 113, memorises first
+  item: GrokScope, an instrument in which a one-hidden-layer network learns (a + b) mod 113, memorises first
     and generalises thousands of steps later, drawing a tower of Fourier-plane rings of its token embedding.
   ids:
   - INT-30
@@ -654,8 +654,8 @@ entries:
   state: on-main
   wip: false
   commits: 0 commits that main lacks (54 ahead of its merge base)
-  item: An older line of applet work from May 2026 (activation flow views, sampling settings and a demo
-    applet with saliency), all matched on main by patch id.
+  item: An older line of instrument work from May 2026 (activation flow views, sampling settings and a demo
+    instrument with saliency), all matched on main by patch id.
   reason: on-main
 - branch: sprint4
   state: unique
@@ -1435,6 +1435,6 @@ entries:
   state: unique
   commits: bae8c25b, 79f62254, 4ca5f9e6, 57c61634, ad09cceb, adc6721e
   item: 'Sprint 4 plan pages: renderer core, scenes, recordings, protocol 3.2 draft, web geometry and
-    demos, with the trim (Dawn fallback to Windows parity, outside applet port deferred, text log, bar
+    demos, with the trim (Dawn fallback to Windows parity, outside instrument port deferred, text log, bar
     chart drawing, demos 1 to 3, hub recordings and scene fallbacks to sprint 5).'
   reason: docs

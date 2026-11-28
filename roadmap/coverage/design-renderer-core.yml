@@ -270,7 +270,7 @@ entries:
   - REN-25
   - PLT-11
 - heading: Remaining Steps
-  item: Step 16, one applet outside the repository ported onto the scene service, moved out of the sprint;
+  item: Step 16, one instrument outside the repository ported onto the scene service, moved out of the sprint;
     3 days.
   ids:
   - REN-35
@@ -280,7 +280,7 @@ entries:
   - REN-53
 - heading: Order of the Remaining Steps
   item: 'Order of steps: cut first, OpenGL next, colormap before clients, points before textures, additions
-    before the service, particle applets first.'
+    before the service, particle instruments first.'
   ids:
   - REN-09
 - heading: One Version of Each Graphics Service
@@ -288,9 +288,9 @@ entries:
     planned under plain v1 ids.
   ids:
   - COR-25
-- heading: Applets on the Scene Service
-  item: Remaining 3-D applets (embed_scope, gpt_scope) move onto the scene service; the six geometry demo
-    applets are deleted.
+- heading: Instruments on the Scene Service
+  item: Remaining 3-D instruments (embed_scope, gpt_scope) move onto the scene service; the six geometry demo
+    instruments are deleted.
   ids:
   - REN-16
 - heading: Renderer Seam at Its Final Shape
@@ -321,8 +321,8 @@ entries:
   - EMB-03
   - EMB-16
 - heading: Risks
-  item: 'Risks: slower fast path, moved pixels, no switch back, weaker contract for applets, costlier
-    particle clouds, frozen scene model, outside applets, Windows gap, no fallback renderer, large steps.'
+  item: 'Risks: slower fast path, moved pixels, no switch back, weaker contract for instruments, costlier
+    particle clouds, frozen scene model, outside instruments, Windows gap, no fallback renderer, large steps.'
   ids:
   - REN-09
   - REN-16
@@ -347,8 +347,8 @@ entries:
   - COR-25
   - EMB-16
 - heading: Decisions
-  item: Decisions on zero-copy as a hard requirement, the scene service, applets adapting to the API,
-    and the particle applets first.
+  item: Decisions on zero-copy as a hard requirement, the scene service, instruments adapting to the API,
+    and the particle instruments first.
   ids:
   - REN-08
   - REN-35
@@ -368,7 +368,7 @@ entries:
   - REN-10
   - REN-14
 - heading: Decisions
-  item: One applet outside the repository ported as the last step, later moved out of sprint 4.
+  item: One instrument outside the repository ported as the last step, later moved out of sprint 4.
   ids:
   - REN-35
 - heading: Open Decisions
@@ -377,7 +377,7 @@ entries:
   ids:
   - COR-25
 - heading: Open Decisions
-  item: 'Open decision: applets and embedding hosts outside the repository, updated at step 13 or left
+  item: 'Open decision: instruments and embedding hosts outside the repository, updated at step 13 or left
     until next worked on.'
   ids:
   - REN-35

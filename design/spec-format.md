@@ -1,21 +1,21 @@
 # Spec format
 
-A spec is a text file that describes an applet built from data: the sources it reads, the panels that draw them and the layout of those panels. This page defines version 0 of the format, its canonical TOML and JSON forms, the rules that check a spec and the manifest of a saved spec applet. It elaborates section 6 of the sprint 3 contracts, and the parts of sections 3 and 4 that a spec uses: the catalog ids that sources name and the tensor transforms that sources carry.
+A spec is a text file that describes an instrument built from data: the sources it reads, the panels that draw them and the layout of those panels. This page defines version 0 of the format, its canonical TOML and JSON forms, the rules that check a spec and the manifest of a saved spec-based instrument. It elaborates section 6 of the sprint 3 contracts, and the parts of sections 3 and 4 that a spec uses: the catalog ids that sources name and the tensor transforms that sources carry.
 
 ## What is built and what is planned
 
 Built:
 
 - the library `caliper_builder_spec` in `src/builder/spec/`, with its headers in `src/builder/include/caliper_builder/spec/`, which parses a spec, validates it, writes it back in canonical TOML and JSON, and applies a JSON merge patch to one panel or source;
-- the JSON Schema of the canonical JSON form, `src/builder/spec/schema/caliper-spec-v0.schema.json`;
+- the JSON Schema of the canonical JSON form, `src/builder/spec/schema/caliper-spec-v2.schema.json`;
 - the tests in `src/builder/spec/tests/`;
 - the command handlers that edit a spec (`spec.*`, `source.*`, `panel.*`, `layout.*`), in the builder session ([Builder session](builder-session.md));
 - the first slice of the spec runtime in `src/host/spec_runtime/`, which draws a spec's panels natively from the data the session resolves, with its development harness `caliper-spec-shot` and the renderer behind `panel.render`, described in [The spec runtime](#the-spec-runtime);
-- the first slice of the browser viewer: a saved spec applet opens in a browser tab from the running app, laid out and drawn as the app draws it from the data the app resolves, described in [What is built of the browser viewer](#what-is-built-of-the-browser-viewer).
+- the first slice of the browser viewer: a saved spec-based instrument opens in a browser tab from the running app, laid out and drawn as the app draws it from the data the app resolves, described in [What is built of the browser viewer](#what-is-built-of-the-browser-viewer).
 
-The loader knows the spec applet's manifest (item 5 of the integration order in [Builder overview](builder-overview.md)): the manifest parser reads `kind = "spec"` without the builder, the loader lists spec applets from the search folders, their subfolders and the open workspace's `applets/` folder, and with the builder it validates a spec applet's spec through this library ([The manifest of a spec applet](#the-manifest-of-a-spec-applet)). The command handlers that edit a spec are built in the session ([Builder session](builder-session.md)).
+The loader knows the spec-based instrument's manifest (item 5 of the integration order in [Builder overview](builder-overview.md)): the manifest parser reads `kind = "spec"` without the builder, the loader lists spec-based instruments from the search folders, their subfolders and the open workspace's `instruments/` folder, and with the builder it validates a spec-based instrument's spec through this library ([The manifest of a spec-based instrument](#the-manifest-of-a-spec-based-instrument)). The command handlers that edit a spec are built in the session ([Builder session](builder-session.md)).
 
-Planned: the page of the app that shows a spec applet, which calls the runtime; the data of `live:`, `feed:` and `metric:` sources in the runtime; and the rest of the browser viewer: its data from a hub or a page that `caliper.serve()` serves, the live sources over the stream, and the tensor transforms in the page.
+Planned: the page of the app that shows a spec-based instrument, which calls the runtime; the data of `live:`, `feed:` and `metric:` sources in the runtime; and the rest of the browser viewer: its data from a hub or a page that `caliper.serve()` serves, the live sources over the stream, and the tensor transforms in the page.
 
 ## Two examples
 
@@ -38,7 +38,7 @@ A spec is one TOML table. Its keys, at the top level:
 | Key | Type | Required | Default | Meaning |
 |---|---|---|---|---|
 | `caliper_spec` | integer | Yes | | The format version. This page defines version `0`. |
-| `applet` | table | Yes | | The applet's identity, in [The applet](#the-applet). |
+| `instrument` | table | Yes | | The instrument's identity, in [The instrument](#the-instrument). |
 | `source` | array of tables | No | none | The sources, in [Sources](#sources). |
 | `panel` | array of tables | No | none | The panels, in [Panels](#panels). |
 | `layout` | layout node | No | a vertical split of every panel | The arrangement of the panels, in [Layout](#layout). |
@@ -48,16 +48,16 @@ A spec with no panels is valid: `spec.new` creates one, and panels are added to 
 
 Every key that this page does not name is an error, `spec.unknown_key`, so that a misspelt key never passes silently. The only exception is a table named `x`, which the format reserves for extensions.
 
-### The applet
+### The instrument
 
 | Key | Type | Required | Default | Meaning |
 |---|---|---|---|---|
-| `id` | id | Yes | | The applet's id in the workspace. It names the folder `applets/<id>/` and the files in it. |
-| `title` | text, at most 256 characters, not empty | No | the `id` | The name shown for the applet. |
-| `description` | long text, at most 4,096 characters | No | none | Prose about the applet. Comments are not kept by the canonical writer, so this is the place for notes. |
+| `id` | id | Yes | | The instrument's id in the workspace. It names the folder `instruments/<id>/` and the files in it. |
+| `title` | text, at most 256 characters, not empty | No | the `id` | The name shown for the instrument. |
+| `description` | long text, at most 4,096 characters | No | none | Prose about the instrument. Comments are not kept by the canonical writer, so this is the place for notes. |
 | `x` | table | No | none | Extensions. |
 
-An id matches `[a-z][a-z0-9_-]{0,63}`: a lower-case letter, then at most 63 lower-case letters, digits, `_` or `-`. The applet, every source and every panel have ids of this form. Sources and panels have separate sets of ids, so a source and a panel may share one, as `loss` does in the example; two sources, or two panels, may not.
+An id matches `[a-z][a-z0-9_-]{0,63}`: a lower-case letter, then at most 63 lower-case letters, digits, `_` or `-`. The instrument, every source and every panel have ids of this form. Sources and panels have separate sets of ids, so a source and a panel may share one, as `loss` does in the example; two sources, or two panels, may not.
 
 "Text" is a string with no control characters (U+0000 to U+001F and U+007F). "Long text" may also hold tabs, line feeds and carriage returns. Lengths count Unicode code points, as JSON Schema's `maxLength` does.
 
@@ -268,11 +268,11 @@ The layout is a tree of nodes. A node is one of three things:
 
 The root is the `layout` key, so it is usually a `[layout]` table, but `layout = "<panel>"` is also a valid root. A table with both `split` and `tabs`, or neither, a split with fewer than two children, tabs with none and a `ratio` on a split of more than two children are `spec.bad_layout`. A panel id that is not a panel of the spec is `spec.unknown_panel`, and a panel placed twice is `spec.duplicate_placement`. A panel that the layout does not place is not drawn, and the validator warns with `spec.unplaced_panel`. A path from the root to a panel passes through at most 8 nodes, the root and the panel included (`spec.too_deep`), and the tree has at most 256 nodes (`spec.too_many`).
 
-A spec with no `layout` places its panels in declaration order: one panel fills the applet, and several are stacked as one vertical split with equal shares.
+A spec with no `layout` places its panels in declaration order: one panel fills the instrument, and several are stacked as one vertical split with equal shares.
 
 ### Extensions
 
-A table named `x` may appear in the document's root, in `applet`, in each source, transform and panel, in `options` and in each layout table. Validation ignores its content, the canonical writers keep it, and the spec runtime never reads it. It is the place for a tool's own data, such as an editor's state. Its content follows the rules of [Values](#values) and counts toward the limits of the whole document. An empty `x` is dropped.
+A table named `x` may appear in the document's root, in `instrument`, in each source, transform and panel, in `options` and in each layout table. Validation ignores its content, the canonical writers keep it, and the spec runtime never reads it. It is the place for a tool's own data, such as an editor's state. Its content follows the rules of [Values](#values) and counts toward the limits of the whole document. An empty `x` is dropped.
 
 ### Reserved names
 
@@ -304,8 +304,8 @@ A spec has one canonical TOML text and one canonical JSON form. Both are a deter
 
 The canonical TOML writer:
 
-- writes `caliper_spec`, then, when they are present, a root `layout` that is a panel id and the root `x`, then the tables `[applet]`, each `[[source]]` followed directly by its `[[source.transform]]` tables indented by two spaces, each `[[panel]]` and `[layout]`, with a blank line before each table except the transforms;
-- writes the keys of each table in a fixed order: `id`, `title`, `description`, `x` in `[applet]`; `id`, `catalog`, `sql`, `from`, `x` in a source; `op`, `axis`, `index`, `start`, `stop`, `step`, `fn`, `keepdims`, `mode`, `x` in a transform; `id`, `primitive`, `title`, `bind`, `options`, `x` in a panel; and `split` or `tabs`, `ratio`, `title`, `children`, `x` in a layout node;
+- writes `caliper_spec`, then, when they are present, a root `layout` that is a panel id and the root `x`, then the tables `[instrument]`, each `[[source]]` followed directly by its `[[source.transform]]` tables indented by two spaces, each `[[panel]]` and `[layout]`, with a blank line before each table except the transforms;
+- writes the keys of each table in a fixed order: `id`, `title`, `description`, `x` in `[instrument]`; `id`, `catalog`, `sql`, `from`, `x` in a source; `op`, `axis`, `index`, `start`, `stop`, `step`, `fn`, `keepdims`, `mode`, `x` in a transform; `id`, `primitive`, `title`, `bind`, `options`, `x` in a panel; and `split` or `tabs`, `ratio`, `title`, `children`, `x` in a layout node;
 - writes `bind`, `options`, `x` and nested layout nodes as inline tables on one line, with the keys of `bind`, `options` and `x` in byte order;
 - writes a key only when the `Spec` value holds it, so an explicit default such as `keepdims = false` stays as written;
 - writes strings as basic strings with escapes, or as multi-line basic strings when they hold a line feed; integers in decimal; and floating-point numbers in a form that reads back to the same value and always has a `.` or an exponent, so a range written `[0, 255]` is written back as `[0.0, 255.0]`;
@@ -315,14 +315,14 @@ The writer does not keep comments, blank lines or the author's key order. That i
 
 ### Canonical JSON
 
-The canonical JSON form is the document's tables as JSON objects, under the same keys, so the arrays of tables are the arrays `"source"`, `"panel"` and `"transform"`. Keys are sorted in byte order, the text is compact UTF-8, and the empty arrays and tables that the TOML writer leaves out are left out. The JSON Schema `src/builder/spec/schema/caliper-spec-v0.schema.json` (draft 2020-12) describes this form. The web viewer reads it, so it holds nothing that is specific to TOML.
+The canonical JSON form is the document's tables as JSON objects, under the same keys, so the arrays of tables are the arrays `"source"`, `"panel"` and `"transform"`. Keys are sorted in byte order, the text is compact UTF-8, and the empty arrays and tables that the TOML writer leaves out are left out. The JSON Schema `src/builder/spec/schema/caliper-spec-v2.schema.json` (draft 2020-12) describes this form. The web viewer reads it, so it holds nothing that is specific to TOML.
 
 The schema checks the structure, the types, the keys of each table, the enumerations, the ranges, the slots and options of each primitive and the three source forms. It does not check what needs the whole document or the catalog: references, cycles, layout placement, shapes and columns. A document that the schema accepts may still fail validation; a document that validates always passes the schema.
 
 The schema, embedded from its file so that this page cannot drift from it:
 
 ```json
---8<-- "src/builder/spec/schema/caliper-spec-v0.schema.json"
+--8<-- "src/builder/spec/schema/caliper-spec-v2.schema.json"
 ```
 
 ## Versioning
@@ -333,7 +333,7 @@ A reader refuses a version it does not know with `spec.unsupported_version`, who
 
 A later reader keeps reading version 0. It migrates an older document in its JSON form, one version at a time, before decoding it, and the canonical writer then writes the newest version, so a saved spec moves forward only when it is saved. Version 0 has no migrations.
 
-Version 1 adds the primitive `scene` and the array `control`, and [Instruments](instruments.md) defines both. The library reads the versions 0 and 1. Version 1 is a strict superset of version 0, so the migration changes only the number, and the canonical writers write the version that the spec holds. A version 0 document that uses a key of version 1 gets the errors of version 0, `spec.unknown_primitive` or `spec.unknown_key`. An edit that adds a scene panel or a control to a version 0 spec raises its version to 1 in the same step (`required_version()` in `spec.h`). The schema of version 1 is `src/builder/spec/schema/caliper-spec-v1.schema.json`, and `caliper-mcp` serves it as a second resource.
+Version 1 adds the primitive `scene` and the array `control`, and [Instruments](instruments.md) defines both. The library reads the versions 0 and 1. Version 1 is a strict superset of version 0, so the migration changes only the number, and the canonical writers write the version that the spec holds. A version 0 document that uses a key of version 1 gets the errors of version 0, `spec.unknown_primitive` or `spec.unknown_key`. An edit that adds a scene panel or a control to a version 0 spec raises its version to 1 in the same step (`required_version()` in `spec.h`). The schema of version 1 is `src/builder/spec/schema/caliper-spec-v2.schema.json`, and `caliper-mcp` serves it as a second resource.
 
 ### Programs and Provenance
 
@@ -420,23 +420,23 @@ The web viewer reads the canonical JSON and draws a spec with the same primitive
 
 ### What is built of the browser viewer
 
-The first slice opens a saved spec applet in a browser tab from the running app. Caliper API (`docs/agents/http-api.md`, GET /v0/spec) and Caliper CLI (`docs/reference/cli.md`, The spec page) are its reference.
+The first slice opens a saved spec-based instrument in a browser tab from the running app. Caliper API (`docs/agents/http-api.md`, GET /v0/spec) and Caliper CLI (`docs/reference/cli.md`, The spec page) are its reference.
 
 - **The app resolves, the browser draws.** The page computes no transform: it asks the app for each panel's data through the read-only command `panel.data`, which resolves the panel as the native runtime does (`Session::resolve()` over the store and the served sources, transforms included, so a `sql` source runs where the data lives, the first route above) and sends it compact and bounded with the native runtime's own bounds (`src/builder/include/caliper_builder/session/panel_data.h`): a line of more than 8,192 points as the min/max envelope of 2,048 buckets, a grid or image sampled at a stride to at most 2,048 on a side, at most 100,000 points, a histogram's bin counts with the runtime's range and bin rule rather than its values, at most 1,000 rows of a table with a text cell cut at 256 characters, and a text panel's one value. One implementation of the transforms and of the bounds is kept, and a browser never receives more than a panel shows.
 - **The encoding.** JSON for tables, cells and counts; arrays of numbers as `{"dtype": "f32" | "f64", "shape", "base64"}`, the little-endian bytes in base64 (f64 for a series' points, f32 for grids, images and clouds, as the runtime keeps them). A binary body would be smaller, but every command answers one JSON envelope; the bounds keep a heatmap's answer under 23 MB, and the largest answer is a full RGBA image of 2,048 by 2,048, about 89 MB, for which bytes rather than f32 values are the next step.
-- **Refresh.** Each answer carries a `version`, a short hash of the spec's canonical JSON, the panel's id, the catalog's revision and the panel's generation. The page sends the version it has as `known`, and the app then answers `unchanged` from the cheap probe of the generation without resolving anything. The page asks once a second for the spec (`spec.get` with `applet`, which reads a saved applet's files without opening it) and for every panel it shows; a live panel's data therefore follows its view at most once a second, through these polls rather than the stream, and costs the app one probe a second while nothing changed and one resolve per new snapshot.
-- **The page** is a new entry of the web package beside the viewer page, `web/src/spec/`, built by `web/build.mjs` into `spec.html`, one file with its script and its faces inside it, whose checked-in copy `python/caliper/_web/spec.html` the executable embeds (`cmake/embed_spec_page.cmake`), so the app serves it without Node and without reading a file. It reads the token and the applet's workspace id from its address, and without an applet it lists the workspace's saved spec applets.
+- **Refresh.** Each answer carries a `version`, a short hash of the spec's canonical JSON, the panel's id, the catalog's revision and the panel's generation. The page sends the version it has as `known`, and the app then answers `unchanged` from the cheap probe of the generation without resolving anything. The page asks once a second for the spec (`spec.get` with `instrument`, which reads a saved instrument's files without opening it) and for every panel it shows; a live panel's data therefore follows its view at most once a second, through these polls rather than the stream, and costs the app one probe a second while nothing changed and one resolve per new snapshot.
+- **The page** is a new entry of the web package beside the viewer page, `web/src/spec/`, built by `web/build.mjs` into `spec.html`, one file with its script and its faces inside it, whose checked-in copy `python/caliper/_web/spec.html` the executable embeds (`cmake/embed_spec_page.cmake`), so the app serves it without Node and without reading a file. It reads the token and the instrument's workspace id from its address, and without an instrument it lists the workspace's saved spec-based instruments.
 - **The layout** is a port of `compute_spec_layout()` to TypeScript (`web/src/spec/layout.ts`), with the titles and binding names of `spec_layout.cpp`; `web/test/spec-layout.spec.ts` runs the cases of the native tests against it, and they agree to the pixel.
 - **The look** is the native runtime's, drawn on a canvas: the app's colours, the two faces at the app's sizes, the title strip with the live views' info string, the plots laid out by ImPlot's rules (its padding, tick locator, minor ticks and grid, log ticks of 1, 2 and 5, and the legend in the north-east corner), heatmaps and images over index axes with a heatmap's colorbar, the colormaps of the web package (the live views' own tables, plus greys), points as squares of the live views' sizes with their colormap's scale or, under the class-label rule of [points](#points), the categorical palette and a legend, the house table with whole rows, and the one colour key of the spec. The states are the runtime's noun phrases with the source's catalog id under them. The web package's live views are not reused as views: they draw wire snapshots with their own toggles, gestures and selections, so the page reuses their parts, the colormap tables, the palette and the number formats.
-- **Opening it.** With `--api` the app prints the page's link, `http://127.0.0.1:<port>/v0/spec?token=<viewer token>&applet=<id>`, and writes it without the applet to the API file as `spec_url`.
-- **Security.** The link carries a viewer token, a second random token of the run, which opens only the page and the three commands it reads with, `spec.get`, `applet.list` and `panel.data`, always from a new origin, `viewer`, from which the command layer runs only commands that change nothing (`command.not_allowed` otherwise). The loopback, `Host` and `Origin` checks hold as for every request; the page answers with a content security policy that lets it reach only its own origin, and without a referrer.
-- **Tests.** `builder_session` (`test_panel_data.cpp`) checks the data of the dashboard's three panels from a saved applet, the version and `known`, every primitive's bounds, the states and the viewer origin; `builder_commands` the table; `caliper_api_commands` and `caliper_tests` the viewer token over HTTP and the routes; and the web package's Playwright tests check the layout port, every primitive, state, tab and request against a mock of the app, and the page end to end against `caliper --hidden --api` after a command script imported a Parquet and a safetensors file and saved the dashboard (`web/test/spec-e2e.spec.ts`, which needs `CALIPER_BIN`).
+- **Opening it.** With `--api` the app prints the page's link, `http://127.0.0.1:<port>/v0/spec?token=<viewer token>&instrument=<id>`, and writes it without the instrument to the API file as `spec_url`.
+- **Security.** The link carries a viewer token, a second random token of the run, which opens only the page and the three commands it reads with, `spec.get`, `instrument.list` and `panel.data`, always from a new origin, `viewer`, from which the command layer runs only commands that change nothing (`command.not_allowed` otherwise). The loopback, `Host` and `Origin` checks hold as for every request; the page answers with a content security policy that lets it reach only its own origin, and without a referrer.
+- **Tests.** `builder_session` (`test_panel_data.cpp`) checks the data of the dashboard's three panels from a saved instrument, the version and `known`, every primitive's bounds, the states and the viewer origin; `builder_commands` the table; `caliper_api_commands` and `caliper_tests` the viewer token over HTTP and the routes; and the web package's Playwright tests check the layout port, every primitive, state, tab and request against a mock of the app, and the page end to end against `caliper --hidden --api` after a command script imported a Parquet and a safetensors file and saved the dashboard (`web/test/spec-e2e.spec.ts`, which needs `CALIPER_BIN`).
 
-Recorded limits of this slice: the page polls rather than following the stream; it draws no tooltips, no selection and no zoom; a 3-D cloud is drawn in its turned box with its far walls but without the walls' grid and tick labels; a series' log ticks and a colormap's scale use the web faces, so text widths can differ by a pixel from ImGui's; the class-label rule runs on the points the app sends, which past 100,000 points are a sample of them, so a cloud of more than 100,000 points can show as classes in the browser where its full data has more than 16 labels; and the page reads the saved files of an applet, so the edits of the open spec show in the browser once it is saved.
+Recorded limits of this slice: the page polls rather than following the stream; it draws no tooltips, no selection and no zoom; a 3-D cloud is drawn in its turned box with its far walls but without the walls' grid and tick labels; a series' log ticks and a colormap's scale use the web faces, so text widths can differ by a pixel from ImGui's; the class-label rule runs on the points the app sends, which past 100,000 points are a sample of them, so a cloud of more than 100,000 points can show as classes in the browser where its full data has more than 16 labels; and the page reads the saved files of an instrument, so the edits of the open spec show in the browser once it is saved.
 
 ## The spec runtime
 
-The spec runtime draws the panels of a spec in the app's own look. It is built in `src/host/spec_runtime/` as the library `caliper_spec_runtime`, only with the CMake option `CALIPER_WITH_BUILDER`, and the page that shows a spec applet will be a thin caller of it.
+The spec runtime draws the panels of a spec in the app's own look. It is built in `src/host/spec_runtime/` as the library `caliper_spec_runtime`, only with the CMake option `CALIPER_WITH_BUILDER`, and the page that shows a spec-based instrument will be a thin caller of it.
 
 - **Layout.** `compute_spec_layout()` lays the layout tree out as whole-pixel rectangles, without ImGui: a split gives its first child `ratio` of its length (or equal shares to more children), tabs show one child under a strip of labels, and a 1 px rule separates the children of a split. Each panel has a minimum of 12 by 8 lines of the UI face, which grows with the text scale; a split keeps every child at its minimum while the space allows and otherwise shares the space in proportion to the minimums, so no rectangle leaves the area. The tab shown in each tabs node is the runtime's state, by the node's path of child indices.
 - **Data.** A `SpecPanelSource` gives a panel's resolved data; `SessionPanelSource` asks `Session::resolve()` for the open spec and `resolve_panel()` over the session's store for any other spec. The runtime resolves a panel when its fragment, the spec's sources or the source's revision (the catalog's) change, never once a frame, and only while it is shown: a panel in a hidden tab is resolved when its tab is chosen. `prepare_panel()` then turns the slots into arrays to draw, within bounds that are recorded on the panel: a series line of more than 8,192 values becomes a min/max envelope of 2,048 buckets, as a live series does; a heatmap or image wider or taller than 2,048 is sampled at a stride; a cloud of more than 100,000 points is sampled at a stride; a table shows at most 1,000 rows; a cell or value is cut at 256 characters.
@@ -447,17 +447,17 @@ The spec runtime draws the panels of a spec in the app's own look. It is built i
 - **Textures** of heatmaps and images are ImGui user textures in RGBA8, which the renderer's ImGui backend creates and destroys with the font atlas, so the runtime needs no renderer of its own and the colours are byte for byte those of `map_f32_to_rgba8`, the CPU reference of the live views' colormaps.
 - **Seams for the pages.** `draw()` takes any area of a window on the frame thread; `set_preview()` swaps one panel's fragment and data for a preview's until `clear_preview()`; `set_overlay()` is called after each panel's content with the panel's rectangles, for the widget agent's prompt row and diff card.
 - **Offscreen.** `SpecOffscreen` draws into the renderer's offscreen canvas, as `caliper shot` does, with ImGui, ImPlot and ImPlot3D contexts of its own in the house style; it shares the font atlas of the context that is current when it is made, and puts the caller's contexts back after each call. It needs nothing of the app's page machinery: the seam is the renderer's canvas. `OffscreenPanelRenderer` draws one panel over a canvas and encodes it as PNG, and `panel_render_output()` makes the result of `panel.render` from it, so the app's `SessionHost::render_panel()` is two calls.
-- **`caliper-spec-shot`**, a development tool that is not installed, draws a saved spec applet of a workspace (`--workspace <dir> --applet <id>`) or a spec file (`--spec <file>`) at `--size WxH` into `--out <file.png>`, with `--tab <path>=<index>` to show another tab. It reads the applet through its manifest and runs no command, so the workspace is not changed.
+- **`caliper-spec-shot`**, a development tool that is not installed, draws a saved spec-based instrument of a workspace (`--workspace <dir> --instrument <id>`) or a spec file (`--spec <file>`) at `--size WxH` into `--out <file.png>`, with `--tab <path>=<index>` to show another tab. It reads the instrument through its manifest and runs no command, so the workspace is not changed.
 - **Tests.** The ctest entry `caliper_spec_runtime` checks the layout of the fixtures at two sizes and two text scales, tabs, the shares of a split and the titles, and the prepared data of every primitive, its options, states and bounds, headless. `caliper_spec_runtime_gpu` draws each primitive into an offscreen canvas and checks image properties that do not depend on exact pixels (a line's key colour rising to the right, a heatmap's corner cells in the colormap's end colours, an image's rows in order, the number of a table's lines of text, a state with no plot), the runtime over the dashboard with its rules, preview and overlay, the textures' lifetimes, `panel.render` through a fake `SessionHost` bound to a session over a real workspace, and `caliper-spec-shot` as a process over a workspace whose Parquet and safetensors files were imported, and whose dashboard was built through commands and saved.
 
 Recorded limits of this slice: the runtime resolves on the frame thread, so a slow query holds a frame once when the data changes; a series' x column of a time type is not read; class labels written as floats are drawn as values; and without a current ImGui context only one offscreen canvas may exist at a time, because the house faces it loads are global.
 
-## The manifest of a spec applet
+## The manifest of a spec-based instrument
 
-A saved spec applet is a folder in the workspace, `applets/<id>/`, with two files: the manifest `<id>.caliper.toml` and the spec `<id>.spec.toml`. It has no library. The manifest follows Manifest (`docs/applets/manifest.md`) with these differences:
+A saved spec-based instrument is a folder in the workspace, `instruments/<id>/`, with two files: the manifest `<id>.caliper.toml` and the spec `<id>.spec.toml`. It has no library. The manifest follows Manifest (`docs/instruments/manifest.md`) with these differences:
 
 ```toml
-[applet]
+[instrument]
 id = "local.attention-entropy"        # the manifest's own grammar, lower-case reverse DNS
 name = "Attention entropy"
 version = "0.1.0"
@@ -468,25 +468,25 @@ spec = "attention-entropy.spec.toml"
 
 | Key | Type | Required | Meaning |
 |---|---|---|---|
-| `applet.kind` | string | No | `"library"` (the default, today's compiled applets) or `"spec"`. Any other value is a manifest error. |
-| `applet.spec` | string | Yes, for `kind = "spec"` | The spec's file name, `<id>.spec.toml`, in the same folder. It is a plain file name: not empty, not `.` or `..`, at most 255 bytes, with no `/`, `\`, `:` or control character. |
+| `instrument.kind` | string | No | `"library"` (the default, today's library instruments) or `"spec"`. Any other value is a manifest error. |
+| `instrument.spec` | string | Yes, for `kind = "spec"` | The spec's file name, `<id>.spec.toml`, in the same folder. It is a plain file name: not empty, not `.` or `..`, at most 255 bytes, with no `/`, `\`, `:` or control character. |
 
-- `[compat].abi_epoch` is not required for a spec applet and is not written, because there is no binary to check. The loader refuses it as a manifest error, and likewise `[compat].torch`, `[build]`, `[services]` and `[data]`, so that a library's manifest with `kind = "spec"` added by mistake is never taken for a spec applet. `[compat].min_host` still applies. `[data].schema` has no meaning for a spec applet, which keeps no data of its own: the host gives it no data folder.
-- The manifest's `applet.id` keeps the manifest's grammar (`[a-z0-9.-]`, dot-separated), which has no `_`. `applet.save` writes `local.<id>`, with each `_` of the workspace id replaced by `-`, unless the caller names another id; it refuses an id that another applet of the workspace already has. The loader never compares the folder's name with the manifest id.
-- `applet.save` writes `name` from the spec's `applet.title` (or its id), `summary` from `applet.description` when that is one line of at most 200 characters, and `version = "0.1.0"` for a new applet.
-- The spec names the format version it needs with `caliper_spec`. When it lists the applet, the loader reads that line without parsing the TOML and refuses a version it does not read.
+- `[compat].abi_epoch` is not required for a spec-based instrument and is not written, because there is no binary to check. The loader refuses it as a manifest error, and likewise `[compat].torch`, `[build]`, `[services]` and `[data]`, so that a library's manifest with `kind = "spec"` added by mistake is never taken for a spec-based instrument. `[compat].min_host` still applies. `[data].schema` has no meaning for a spec-based instrument, which keeps no data of its own: the host gives it no data folder.
+- The manifest's `instrument.id` keeps the manifest's grammar (`[a-z0-9.-]`, dot-separated), which has no `_`. `instrument.save` writes `local.<id>`, with each `_` of the workspace id replaced by `-`, unless the caller names another id; it refuses an id that another instrument of the workspace already has. The loader never compares the folder's name with the manifest id.
+- `instrument.save` writes `name` from the spec's `instrument.title` (or its id), `summary` from `instrument.description` when that is one line of at most 200 characters, and `version = "0.1.0"` for a new instrument.
+- The spec names the format version it needs with `caliper_spec`. When it lists the instrument, the loader reads that line without parsing the TOML and refuses a version it does not read.
 
-### The spec applet in the loader
+### The spec-based instrument in the loader
 
-Built in `src/host/applet_manifest.*`, `src/host/applet_loader.*` and `src/host/applet_spec.*`, with Manifest, Refusal messages and Caliper CLI (`docs/applets/manifest.md`, `docs/reference/refusal-messages.md`, `docs/reference/cli.md`) as the reference:
+Built in `src/host/instrument_manifest.*`, `src/host/instrument_loader.*` and `src/host/instrument_spec.*`, with Manifest, Refusal messages and Caliper CLI (`docs/instruments/manifest.md`, `docs/reference/refusal-messages.md`, `docs/reference/cli.md`) as the reference:
 
-- The manifest parser reads `kind` and builds without the builder. The loader lists a spec applet with the statuses of a compiled one and chooses one copy per manifest id by the same rule, whatever the kind. It never maps or calls anything for it, and gives it no data folder.
-- A spec applet is found in the folders of the search order, as a manifest directly in a searched folder or one folder down (`<folder>/<name>/<stem>.caliper.toml`, as a workspace keeps them), and in the open workspace's `applets/` folder, which the loader is told with `AppletLoader::set_workspace` and which `applet_search_dirs` places after the development folders and before the user applets folder. The workspace's folder holds spec applets only: a compiled applet's manifest there is refused and its library never opened.
+- The manifest parser reads `kind` and builds without the builder. The loader lists a spec-based instrument with the statuses of a compiled one and chooses one copy per manifest id by the same rule, whatever the kind. It never maps or calls anything for it, and gives it no data folder.
+- A spec-based instrument is found in the folders of the search order, as a manifest directly in a searched folder or one folder down (`<folder>/<name>/<stem>.caliper.toml`, as a workspace keeps them), and in the open workspace's `instruments/` folder, which the loader is told with `InstrumentLoader::set_workspace` and which `instrument_search_dirs` places after the development folders and before the user instruments folder. The workspace's folder holds spec-based instruments only: a library instrument's manifest there is refused and its library never opened.
 - Listing is cheap: the manifest (at most 64 KiB and no dotted key of more than 32 parts, one folder down or in the workspace), the spec file (a regular file in the manifest's folder, not a symbolic link, at most 512 KiB), its `caliper_spec` line, `min_host`, the spec runtime and the format version.
-- With the builder (`CALIPER_WITH_BUILDER`), `caliper_host_lib` links `caliper_builder_spec`, and `AppletLoader::check_spec` reads the spec again, parses it with `parse_toml`, validates it with `validate` and locates every diagnostic; the first error becomes the applet's reason. `read_spec_file` in `applet_spec.h` returns the parsed spec for the app. Without the builder every spec applet is refused with the reason that the build has no spec runtime.
-- `launch()` on a spec applet validates it and returns false, leaving a valid one `READY` with a recognisable reason until the app opens its page instead.
-- `caliper list` and `caliper check` print each applet's kind, `caliper check` validates a spec applet fully and prints the validator's diagnostics with their lines and columns, `caliper install` refuses a spec applet, and `GET /v0/applets` has a `kind` field.
-- A test saves an applet through a `Session` and lists it through the loader, which accepts what `applet.save` writes unchanged.
+- With the builder (`CALIPER_WITH_BUILDER`), `caliper_host_lib` links `caliper_builder_spec`, and `InstrumentLoader::check_spec` reads the spec again, parses it with `parse_toml`, validates it with `validate` and locates every diagnostic; the first error becomes the instrument's reason. `read_spec_file` in `instrument_spec.h` returns the parsed spec for the app. Without the builder every spec-based instrument is refused with the reason that the build has no spec runtime.
+- `launch()` on a spec-based instrument validates it and returns false, leaving a valid one `READY` with a recognisable reason until the app opens its page instead.
+- `caliper list` and `caliper check` print each instrument's kind, `caliper check` validates a spec-based instrument fully and prints the validator's diagnostics with their lines and columns, `caliper install` refuses a spec-based instrument, and `GET /v0/instruments` has a `kind` field.
+- A test saves an instrument through a `Session` and lists it through the loader, which accepts what `instrument.save` writes unchanged.
 
 ## Limits
 
@@ -508,7 +508,7 @@ Every size is bounded, and each limit has its error code:
 | Children of one split or tabs node | 64 | `spec.too_many` |
 | An id | 64 characters, by its grammar | `spec.bad_id` |
 | A title, a label or a layout title | 256 characters | `spec.string_too_long` |
-| `applet.description` | 4,096 characters | `spec.string_too_long` |
+| `instrument.description` | 4,096 characters | `spec.string_too_long` |
 | A catalog id | 256 characters | `spec.string_too_long` |
 | A column name, in a binding or in `columns` | 255 characters | `spec.string_too_long` |
 | A binding | 320 characters | `spec.string_too_long` |
@@ -537,7 +537,7 @@ The parser checks the text size and the length of dotted TOML keys before it par
 
 `caliper_builder_spec` follows the rules of the builder libraries: C++17, the namespace `caliper_builder::spec`, and no exceptions across its headers. Its headers are in `caliper_builder/spec/`:
 
-- `spec.h` holds the value types (`Spec`, `Applet`, `Source`, `Transform`, `Panel`, `Options`, `LayoutNode`), the limits as constants, `Diagnostic` and its JSON form for command results.
+- `spec.h` holds the value types (`Spec`, `Instrument`, `Source`, `Transform`, `Panel`, `Options`, `LayoutNode`), the limits as constants, `Diagnostic` and its JSON form for command results.
 - `format.h` holds `parse_toml`, `from_json`, `from_json_text`, `to_toml`, `to_json`, `to_json_text`, the per-item conversions that `panel.create`, `source.add` and `layout.set` need (`panel_from_json` and the like), and `locate`, which maps diagnostics to lines and columns.
 - `validate.h` holds `SourceResolver`, `ResolvedSource`, `validate`, which also returns a `SourceInfo` for each source, and `check_toml`, which parses and validates in one call.
 - `patch.h` holds `patch_panel` and `patch_source`, which apply an RFC 7386 JSON merge patch to one panel or source and revalidate the spec. A patch that would change the item's id, or that does not decode, is refused and leaves the spec unchanged; otherwise the result holds the patched spec and the full validation, and the command layer decides whether errors elsewhere refuse the change.
@@ -576,20 +576,20 @@ The schema test reads the schema through a test-only checker, `tests/schema_chec
 - **A text limit of 512 KiB,** so that a spec fits one Caliper API request with room for its envelope.
 - **The resolver describes catalog ids only,** which keeps the spec module free of the catalog and of DuckDB; the columns of a `sql` result are left to the command layer.
 - **A patch cannot change an id,** because bindings and the layout name it; a rename is a separate command, not in v0.
-- **The spec applet's manifest omits `abi_epoch`,** because a spec has no binary, and its id keeps the manifest's grammar, which has no `_`.
-- **The keys of a library are errors in a spec applet's manifest,** not ignored, so that a mistaken `kind` never makes a library's manifest a spec applet.
-- **The loader reads the version line, not the TOML, when it lists a spec applet,** so listing never parses a spec; the full parse and validation run at launch and in `caliper check`.
+- **The spec-based instrument's manifest omits `abi_epoch`,** because a spec has no binary, and its id keeps the manifest's grammar, which has no `_`.
+- **The keys of a library are errors in a spec-based instrument's manifest,** not ignored, so that a mistaken `kind` never makes a library's manifest a spec-based instrument.
+- **The loader reads the version line, not the TOML, when it lists a spec-based instrument,** so listing never parses a spec; the full parse and validation run at launch and in `caliper check`.
 - **No symbolic link for a spec,** wherever it points: a plain file name keeps the spec in its folder, and refusing every link is simpler than resolving one.
-- **A workspace holds spec applets only,** because a workspace is data that anyone may hand to a person; compiled applets run only from folders a person installs into or names.
+- **A workspace holds spec-based instruments only,** because a workspace is data that anyone may hand to a person; library instruments run only from folders a person installs into or names.
 - **The validator keeps the sandbox's codes for programs,** because one declaration check then holds the spec library, the editor and the hosts to the same limits.
 - **The text limit of a spec stays at 512 KiB with programs,** because a request of Caliper API carries the whole text; a spec with several large programs reaches it before 16 programs.
 - **`spec.set_text` keeps the provenance table,** because a mark that an agent can clear protects nothing.
-- **The workspace's folder comes after the development folders and before the user applets folder,** so a development build named on the command line wins a tie, and the open workspace's copy wins a tie with an installed one.
+- **The workspace's folder comes after the development folders and before the user instruments folder,** so a development build named on the command line wins a tie, and the open workspace's copy wins a tie with an installed one.
 
 ## Defects in the contracts
 
 - Section 6 allows a table named `x` "at any level", but `x` is also a slot of `series` and `points`. The fix: `bind` has no extension table.
 - Section 6 lets a split hold several children with one `ratio`, without saying what the ratio means for more than two. The fix: `ratio` is allowed only with exactly two children.
-- Section 2 gives workspace applet ids an `_`, which a manifest id may not hold. The fix: `applet.save` maps `_` to `-` and refuses a clash.
-- The manifest's `[compat].abi_epoch` was required, which a spec applet cannot meet. The fix, built: the loader does not require it for `kind = "spec"`, and refuses it there.
+- Section 2 gives workspace instrument ids an `_`, which a manifest id may not hold. The fix: `instrument.save` maps `_` to `-` and refuses a clash.
+- The manifest's `[compat].abi_epoch` was required, which a spec-based instrument cannot meet. The fix, built: the loader does not require it for `kind = "spec"`, and refuses it there.
 - A `sql` source runs in the browser by one of two routes: the query runs where the data lives and the result is streamed, which is the default of version 0, or it runs in the page with DuckDB-WASM, which is the later path. The first is built for the app's spec page, through `panel.data`; neither is built for a hub or a page that `caliper.serve()` serves.

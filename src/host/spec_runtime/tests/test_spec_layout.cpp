@@ -354,8 +354,8 @@ namespace {
 // over a row of controls, with shares and a minimum on the world. The row of
 // controls takes its own height, so the share of 1 goes unused.
 spec::Spec shares_spec() {
-    const std::string text = R"toml(caliper_spec = 1
-[applet]
+    const std::string text = R"toml(caliper_spec = 2
+[instrument]
 id = "shares"
 [[source]]
 id = "w"

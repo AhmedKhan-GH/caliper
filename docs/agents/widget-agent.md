@@ -24,7 +24,7 @@ The commands that a widget session may use come from one rule. Both the agent an
 
 The agent applies the rule to the command table, not to a fixed list. A read must not change anything. An edit must take
 a boolean `dry_run` and must not delete or overwrite saved data. The commands `spec.set_text`, `spec.new`, `spec.open`,
-`applet.open`, `layout.set`, `data.import` and the `history`, `applet` and `preview` commands are never in a scope. The
+`instrument.open`, `layout.set`, `data.import` and the `history`, `instrument` and `preview` commands are never in a scope. The
 command `panel.render` leaves the scope when the model cannot read images. The agent answers a call to any other command
 as a call to an unknown tool, and the call never reaches Caliper.
 

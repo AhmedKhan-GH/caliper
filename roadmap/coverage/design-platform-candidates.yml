@@ -22,7 +22,7 @@ entries:
   ids:
   - SPC-17
 - heading: Candidates
-  item: 'Tour overlay: steps through regions from a data file; a host tour service where applets register
+  item: 'Tour overlay: steps through regions from a data file; a host tour service where instruments register
     regions and ship a tour file.'
   ids:
   - SPC-18

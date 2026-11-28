@@ -1,7 +1,7 @@
 // Tests of Session's handlers through the command registry: the catalog and
 // data commands, the loader commands with their undo and the path rules for
 // each origin, the open spec with dry runs, diffs, undo and merging, the
-// applet files and the approval policy, the SessionHost binding, and the
+// instrument files and the approval policy, the SessionHost binding, and the
 // failure paths of each.
 #include <caliper_builder/session/session.h>
 
@@ -52,16 +52,16 @@ public:
     int renders = 0;
     PanelData last;
     CommandOutput app_info() override {
-        return CommandOutput::ok({{"abi_epoch", 3},
+        return CommandOutput::ok({{"abi_epoch", 4},
                                   {"host", "0.0.0-test"},
                                   {"libtorch", nullptr},
                                   {"sdk", nullptr},
                                   {"services", json::array()},
                                   {"ui_stack", nullptr}});
     }
-    CommandOutput app_applets() override { return CommandOutput::ok({{"applets", json::array()}}); }
+    CommandOutput app_instruments() override { return CommandOutput::ok({{"instruments", json::array()}}); }
     CommandOutput app_launch(const std::string& id) override {
-        if (id != "com.example.viewer") return CommandOutput::fail(Error("app.applet_not_found", "No such applet."));
+        if (id != "com.example.viewer") return CommandOutput::fail(Error("app.instrument_not_found", "No such instrument."));
         return CommandOutput::ok({{"already_open", false}, {"id", id}, {"status", "ACTIVE"}, {"version", "0.1.0"}});
     }
     CommandOutput render_panel(const spec::Spec&, const PanelData& data, int width, int height) override {
@@ -78,7 +78,7 @@ public:
 
 TEST_CASE("opening a workspace makes its folders, binds every windowless command and leaves the app's unbound") {
     Fixture f("open");
-    for (const char* dir : {"loaders", "applets", "journal", "tensors"}) CHECK(fs::is_directory(f.ws + "/" + dir));
+    for (const char* dir : {"loaders", "instruments", "journal", "tensors"}) CHECK(fs::is_directory(f.ws + "/" + dir));
     CHECK(fs::exists(f.ws + "/workspace.duckdb"));
     CHECK(f.s->registry().descriptors().size() == command_table().size());
     for (const auto& d : command_table()) {
@@ -91,7 +91,7 @@ TEST_CASE("opening a workspace makes its folders, binds every windowless command
     // A first look with no spec open is a plain read, not a failure.
     CHECK(ok(*f.s, "spec.get") == json({{"open", false}}));
     CHECK(err(*f.s, "source.add", {{"id", "a"}, {"sql", "SELECT 1"}}) == "spec.no_open_spec");
-    CHECK(err(*f.s, "applet.save") == "spec.no_open_spec");
+    CHECK(err(*f.s, "instrument.save") == "spec.no_open_spec");
     CHECK(!f.s->open_spec());
 }
 
@@ -269,11 +269,11 @@ TEST_CASE("the open spec is edited with dry runs, diffs, warnings and exact undo
     ok(*f.s, "data.import", {{"paths", {"data/metrics.csv", "data/heat.safetensors"}}});
     CHECK(err(*f.s, "spec.new", {{"id", "Bad id"}}) == "command.invalid_args");
     const json made = ok(*f.s, "spec.new", {{"id", "s1"}, {"title", "One"}});
-    CHECK(made["text"] == "caliper_spec = 0\n\n[applet]\nid = \"s1\"\ntitle = \"One\"\n");
+    CHECK(made["text"] == "caliper_spec = 2\n\n[instrument]\nid = \"s1\"\ntitle = \"One\"\n");
     json got = ok(*f.s, "spec.get");
     CHECK(got["path"].is_null());
     CHECK(got["dirty"] == true);
-    CHECK(got["json"]["applet"]["id"] == "s1");
+    CHECK(got["json"]["instrument"]["id"] == "s1");
 
     // A dry run says what would change and changes nothing.
     const json dry = ok(*f.s, "source.add", {{"id", "m"}, {"catalog", "table:metrics"}, {"dry_run", true}});
@@ -338,13 +338,13 @@ TEST_CASE("the open spec is edited with dry runs, diffs, warnings and exact undo
     CHECK(f.s->open_spec()->spec.find_panel("q")->options.colormap == std::nullopt);
 
     // spec.set_text replaces the whole spec and refuses an invalid one.
-    CHECK(err(*f.s, "spec.set_text", {{"text", "caliper_spec = 2\n[applet]\nid = \"x\"\n"}}) == "spec.unsupported_version");
+    CHECK(err(*f.s, "spec.set_text", {{"text", "caliper_spec = 3\n[instrument]\nid = \"x\"\n"}}) == "spec.unsupported_version");
     const json replaced = ok(*f.s, "spec.set_text", {{"text", read_text(fixture_path("minimal.spec.toml"))}});
     CHECK(replaced["id"] == "empty");
     ok(*f.s, "history.undo");
-    CHECK(f.s->open_spec()->spec.applet.id == "s1");
+    CHECK(f.s->open_spec()->spec.instrument.id == "s1");
 
-    const json v = ok(*f.s, "spec.validate", {{"text", "caliper_spec = 0\n[applet]\nid = \"x\"\n[[panel]]\nid = \"p\"\nprimitive = \"series\"\n"}});
+    const json v = ok(*f.s, "spec.validate", {{"text", "caliper_spec = 2\n[instrument]\nid = \"x\"\n[[panel]]\nid = \"p\"\nprimitive = \"series\"\n"}});
     CHECK(v["valid"] == false);
     CHECK(v["errors"][0]["code"] == "spec.missing_slot");
     CHECK(ok(*f.s, "spec.validate")["valid"] == true);
@@ -352,80 +352,80 @@ TEST_CASE("the open spec is edited with dry runs, diffs, warnings and exact undo
     // Opening another spec, then undoing, returns to this one with its changes.
     const std::string mine = f.s->open_spec()->text;
     ok(*f.s, "spec.new", {{"id", "s2"}});
-    CHECK(f.s->open_spec()->spec.applet.id == "s2");
+    CHECK(f.s->open_spec()->spec.instrument.id == "s2");
     ok(*f.s, "history.undo");
     CHECK(f.s->open_spec()->text == mine);
     ok(*f.s, "history.redo");
-    CHECK(f.s->open_spec()->spec.applet.id == "s2");
+    CHECK(f.s->open_spec()->spec.instrument.id == "s2");
     ok(*f.s, "history.undo");
 }
 
-TEST_CASE("applets are saved atomically, listed, opened, and overwritten only with approval for an agent") {
-    Fixture f("applets");
+TEST_CASE("instruments are saved atomically, listed, opened, and overwritten only with approval for an agent") {
+    Fixture f("instruments");
     ok(*f.s, "data.import", {{"paths", {"data/metrics.csv"}}});
     ok(*f.s, "spec.new", {{"id", "my_view"}, {"title", "My view"}, {"description", "Loss over steps."}});
     ok(*f.s, "source.add", {{"id", "m"}, {"catalog", "table:metrics"}});
     ok(*f.s, "panel.create", {{"id", "p"}, {"primitive", "series"}, {"bind", {{"y", "m.loss"}}}});
 
-    // A new applet from an agent needs no approval: nothing is overwritten.
-    const json saved = ok(*f.s, "applet.save", json::object(), kMcp);
+    // A new instrument from an agent needs no approval: nothing is overwritten.
+    const json saved = ok(*f.s, "instrument.save", json::object(), kMcp);
     CHECK(saved == json{{"id", "my_view"},
-                        {"manifest", "applets/my_view/my_view.caliper.toml"},
-                        {"spec", "applets/my_view/my_view.spec.toml"}});
-    CHECK(read_text(f.ws + "/applets/my_view/my_view.caliper.toml") ==
-          "[applet]\nid = \"local.my-view\"\nname = \"My view\"\nversion = \"0.1.0\"\nsummary = \"Loss over "
+                        {"manifest", "instruments/my_view/my_view.caliper.toml"},
+                        {"spec", "instruments/my_view/my_view.spec.toml"}});
+    CHECK(read_text(f.ws + "/instruments/my_view/my_view.caliper.toml") ==
+          "[instrument]\nid = \"local.my-view\"\nname = \"My view\"\nversion = \"0.1.0\"\nsummary = \"Loss over "
           "steps.\"\nkind = \"spec\"\nspec = \"my_view.spec.toml\"\n");
-    CHECK(read_text(f.ws + "/applets/my_view/my_view.spec.toml") == f.s->open_spec()->text);
+    CHECK(read_text(f.ws + "/instruments/my_view/my_view.spec.toml") == f.s->open_spec()->text);
     auto state = f.s->open_spec();
     CHECK(state->dirty == false);
-    CHECK(state->path == std::optional<std::string>("applets/my_view/my_view.spec.toml"));
-    for (const auto& entry : fs::directory_iterator(f.ws + "/applets/my_view"))
+    CHECK(state->path == std::optional<std::string>("instruments/my_view/my_view.spec.toml"));
+    for (const auto& entry : fs::directory_iterator(f.ws + "/instruments/my_view"))
         CHECK(entry.path().filename().string().find(".tmp") == std::string::npos);
 
-    CHECK(err(*f.s, "applet.save", json::object(), kMcp) == "applet.exists");
+    CHECK(err(*f.s, "instrument.save", json::object(), kMcp) == "instrument.exists");
     ok(*f.s, "panel.patch", {{"id", "p"}, {"patch", {{"title", "Loss"}}}});
     CHECK(f.s->open_spec()->dirty == true);
-    const auto asked = invoke(*f.s, "applet.save", {{"overwrite", true}}, kMcp);
+    const auto asked = invoke(*f.s, "instrument.save", {{"overwrite", true}}, kMcp);
     CHECK(asked.error.code == "command.needs_approval");
     CHECK(f.s->registry().approve(asked.approval).ok);
     CHECK(f.s->open_spec()->dirty == false);
-    ok(*f.s, "applet.save", {{"overwrite", true}}, kUi);
+    ok(*f.s, "instrument.save", {{"overwrite", true}}, kUi);
 
     // Saving under another id writes a copy and leaves the open spec's home.
-    ok(*f.s, "applet.save", {{"id", "copy"}}, kUi);
-    CHECK(f.s->open_spec()->path == std::optional<std::string>("applets/my_view/my_view.spec.toml"));
-    CHECK(read_text(f.ws + "/applets/copy/copy.spec.toml").find("id = \"copy\"") != std::string::npos);
+    ok(*f.s, "instrument.save", {{"id", "copy"}}, kUi);
+    CHECK(f.s->open_spec()->path == std::optional<std::string>("instruments/my_view/my_view.spec.toml"));
+    CHECK(read_text(f.ws + "/instruments/copy/copy.spec.toml").find("id = \"copy\"") != std::string::npos);
     // An id that maps to a taken manifest id is refused.
     ok(*f.s, "spec.new", {{"id", "my-view"}});
-    CHECK(err(*f.s, "applet.save") == "applet.exists");
+    CHECK(err(*f.s, "instrument.save") == "instrument.exists");
 
-    const json listed = ok(*f.s, "applet.list");
-    REQUIRE(listed["applets"].size() == 2);
-    CHECK(listed["applets"][0]["id"] == "copy");
-    CHECK(listed["applets"][1]["title"] == "My view");
-    CHECK(listed["applets"][1]["updated_at"].is_string());
+    const json listed = ok(*f.s, "instrument.list");
+    REQUIRE(listed["instruments"].size() == 2);
+    CHECK(listed["instruments"][0]["id"] == "copy");
+    CHECK(listed["instruments"][1]["title"] == "My view");
+    CHECK(listed["instruments"][1]["updated_at"].is_string());
 
-    const json opened = ok(*f.s, "applet.open", {{"id", "my_view"}});
+    const json opened = ok(*f.s, "instrument.open", {{"id", "my_view"}});
     CHECK(opened["title"] == "My view");
     CHECK(f.s->open_spec()->spec.find_panel("p")->title == std::optional<std::string>("Loss"));
-    CHECK(err(*f.s, "applet.open", {{"id", "none"}}) == "applet.not_found");
-    write_text(f.ws + "/applets/lib/lib.caliper.toml", "[applet]\nid = \"local.lib\"\nname = \"Lib\"\nversion = \"1.0.0\"\n");
-    CHECK(err(*f.s, "applet.open", {{"id", "lib"}}) == "applet.not_spec");
-    write_text(f.ws + "/applets/bad/bad.caliper.toml", "[applet]\nkind = \"spec\"\nspec = \"../../x.spec.toml\"\n");
-    CHECK(err(*f.s, "applet.open", {{"id", "bad"}}) == "applet.not_spec");
-    write_text(f.ws + "/applets/broken/broken.caliper.toml", "[applet]\nkind = \"spec\"\nspec = \"broken.spec.toml\"\n");
-    write_text(f.ws + "/applets/broken/broken.spec.toml", "caliper_spec = 0\n[applet]\nid = \"broken\"\nnope = 1\n");
-    CHECK(err(*f.s, "applet.open", {{"id", "broken"}}) == "spec.unknown_key");
-    CHECK(ok(*f.s, "applet.list")["applets"].size() == 3);  // the broken one still lists; lib is not a spec
+    CHECK(err(*f.s, "instrument.open", {{"id", "none"}}) == "instrument.not_found");
+    write_text(f.ws + "/instruments/lib/lib.caliper.toml", "[instrument]\nid = \"local.lib\"\nname = \"Lib\"\nversion = \"1.0.0\"\n");
+    CHECK(err(*f.s, "instrument.open", {{"id", "lib"}}) == "instrument.not_spec");
+    write_text(f.ws + "/instruments/bad/bad.caliper.toml", "[instrument]\nkind = \"spec\"\nspec = \"../../x.spec.toml\"\n");
+    CHECK(err(*f.s, "instrument.open", {{"id", "bad"}}) == "instrument.not_spec");
+    write_text(f.ws + "/instruments/broken/broken.caliper.toml", "[instrument]\nkind = \"spec\"\nspec = \"broken.spec.toml\"\n");
+    write_text(f.ws + "/instruments/broken/broken.spec.toml", "caliper_spec = 2\n[instrument]\nid = \"broken\"\nnope = 1\n");
+    CHECK(err(*f.s, "instrument.open", {{"id", "broken"}}) == "spec.unknown_key");
+    CHECK(ok(*f.s, "instrument.list")["instruments"].size() == 3);  // the broken one still lists; lib is not a spec
 
-    CHECK(ok(*f.s, "spec.open", {{"path", "applets/copy/copy.spec.toml"}})["id"] == "copy");
+    CHECK(ok(*f.s, "spec.open", {{"path", "instruments/copy/copy.spec.toml"}})["id"] == "copy");
     CHECK(err(*f.s, "spec.open", {{"path", "../outside/x.spec.toml"}}) == "spec.path_refused");
-    CHECK(err(*f.s, "spec.open", {{"path", f.ws + "/applets/copy/copy.spec.toml"}}) == "spec.path_refused");
-    CHECK(err(*f.s, "spec.open", {{"path", "applets/none.spec.toml"}}) == "spec.not_found");
-    CHECK(err(*f.s, "spec.open", {{"path", "applets/copy/copy.caliper.toml"}}) == "command.invalid_args");
+    CHECK(err(*f.s, "spec.open", {{"path", f.ws + "/instruments/copy/copy.spec.toml"}}) == "spec.path_refused");
+    CHECK(err(*f.s, "spec.open", {{"path", "instruments/none.spec.toml"}}) == "spec.not_found");
+    CHECK(err(*f.s, "spec.open", {{"path", "instruments/copy/copy.caliper.toml"}}) == "command.invalid_args");
 #ifndef _WIN32
     fs::create_symlink(f.outside, f.ws + "/link");
-    write_text(f.outside + "/evil.spec.toml", "caliper_spec = 0\n[applet]\nid = \"evil\"\n");
+    write_text(f.outside + "/evil.spec.toml", "caliper_spec = 2\n[instrument]\nid = \"evil\"\n");
     CHECK(err(*f.s, "spec.open", {{"path", "link/evil.spec.toml"}}) == "spec.path_refused");
 #endif
     write_text(f.ws + "/big.spec.toml", std::string(600 * 1024, '#'));
@@ -438,9 +438,9 @@ TEST_CASE("a SessionHost serves the app's commands, and panel.render draws resol
     f.s->set_host(host);
     for (const auto& name : session_host_commands()) CHECK(f.s->registry().is_bound(name));
     CHECK(ok(*f.s, "app.info")["host"] == "0.0.0-test");
-    CHECK(ok(*f.s, "app.applets")["applets"].empty());
+    CHECK(ok(*f.s, "app.instruments")["instruments"].empty());
     CHECK(ok(*f.s, "app.launch", {{"id", "com.example.viewer"}})["status"] == "ACTIVE");
-    CHECK(err(*f.s, "app.launch", {{"id", "com.example.other"}}) == "app.applet_not_found");
+    CHECK(err(*f.s, "app.launch", {{"id", "com.example.other"}}) == "app.instrument_not_found");
     CHECK(err(*f.s, "capture.frame") == "capture.unavailable");
     CHECK(err(*f.s, "panel.render", {{"id", "p"}}) == "spec.no_open_spec");
 

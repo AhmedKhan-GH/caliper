@@ -5,7 +5,7 @@
 //
 // STATUS: RUN-PROVEN on Windows hardware (2026-07-11, RTX 500 Ada / driver
 // 596.47, branch feat/embed-vulkan-windows). It compiles only on _WIN32 (CMake
-// gates it); it drew the Vulkan WINDOW canvas live with an applet. This
+// gates it); it drew the Vulkan WINDOW canvas live with an instrument. This
 // mirrors the macOS half (main.mm) structure so the two hosts stay in step.
 //
 // Run:  embed_host.exe [manifest-id]      (default: dev.caliper.hello-world;
@@ -32,7 +32,7 @@ static void embed_log(void*, int level, const char* msg) {
                  kTag[(level >= 0 && level <= 3) ? level : 1], msg);
 }
 static void embed_crash(void*, const char* id, const char* fault) {
-    std::fprintf(stderr, "[embed-host] applet '%s' faulted and was quarantined "
+    std::fprintf(stderr, "[embed-host] instrument '%s' faulted and was quarantined "
                          "(the host lives on): %s\n", id, fault);
 }
 static void send(CaliperInputEvent ev) { ev.struct_size = sizeof ev; caliper_core_event(g_core, &ev); }
@@ -86,12 +86,12 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 int main(int argc, char** argv) {
     // Loads dev.caliper.hello-world by default, or dev.caliper.mnist when passed
     // on the command line in a torch build.
-    const char* applet_id = (argc > 1) ? argv[1] : "dev.caliper.hello-world";
+    const char* instrument_id = (argc > 1) ? argv[1] : "dev.caliper.hello-world";
     if (!embed_version_ok()) return 1;
     // CALIPER_EMBED_OFFSCREEN=1: an offscreen canvas and no window class or
     // window at all (embed_host.h).
     if (embed_offscreen_requested())
-        return embed_run_offscreen(applet_id, &embed_log, &embed_crash);
+        return embed_run_offscreen(instrument_id, &embed_log, &embed_crash);
     SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
 
     WNDCLASSA wc{}; wc.lpfnWndProc = WndProc; wc.hInstance = GetModuleHandle(nullptr);
@@ -108,7 +108,7 @@ int main(int argc, char** argv) {
     // STEP 1: create the core (renderer DEFAULT -> Vulkan on Windows).
     CaliperCoreDesc desc{}; desc.struct_size = sizeof desc;
     desc.renderer = CALIPER_RENDERER_DEFAULT;
-    desc.applets_dir = std::getenv("CALIPER_EMBED_APPLETS");
+    desc.instruments_dir = std::getenv("CALIPER_EMBED_INSTRUMENTS");
     desc.log_fn = &embed_log; desc.crash_fn = &embed_crash;
     g_core = caliper_core_create(&desc);
     if (!g_core) { std::fprintf(stderr, "[embed-host] core create failed\n"); return 1; }
@@ -124,10 +124,10 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    // STEP 3: load one applet by manifest id.
-    if (!caliper_core_load_applet(g_core, applet_id)) {
-        std::fprintf(stderr, "[embed-host] load_applet '%s' failed: %s\n",
-                     applet_id, caliper_core_last_error(g_core));
+    // STEP 3: load one instrument by manifest id.
+    if (!caliper_core_load_instrument(g_core, instrument_id)) {
+        std::fprintf(stderr, "[embed-host] load_instrument '%s' failed: %s\n",
+                     instrument_id, caliper_core_last_error(g_core));
         return 1;
     }
 

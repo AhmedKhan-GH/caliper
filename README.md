@@ -22,7 +22,7 @@
   <a href="https://ahmedkhan-gh.github.io/caliper/"><b>Website</b></a> ·
   <a href="https://ahmedkhan-gh.github.io/caliper/docs/">Documentation</a> ·
   <a href="design/roadmap.md">Roadmap</a> ·
-  <a href="docs/applets/index.md">Applets</a>
+  <a href="docs/instruments/index.md">Instruments</a>
 </p>
 
 <br>
@@ -62,7 +62,7 @@ cmake --build --preset release
 
 Run `./init-submodules.sh`, not `git submodule update`, because some submodule pins need the script fallbacks. On Windows without Git Bash, run `init-submodules.bat` in Command Prompt. Run either script once on a fresh clone, because both scripts delete `third_party/` and local build folders (`cmake-build-*`, `build/`) before they initialize submodules.
 
-The core build compiles no applets. Applets build against the installed SDK (`cmake --install cmake-build-release --prefix <prefix> --component sdk`), each in its own folder. [First Applet](docs/applets/first-applet.md) describes the build steps, and [SDK Package](docs/applets/sdk-package.md) describes the package.
+The core build compiles no instruments. Instruments build against the installed SDK (`cmake --install cmake-build-release --prefix <prefix> --component sdk`), each in its own folder. [First Instrument](docs/instruments/first-instrument.md) describes the build steps, and [SDK Package](docs/instruments/sdk-package.md) describes the package.
 
 The `release-notorch` preset builds the host without LibTorch in `cmake-build-notorch/`. The presets need CMake 3.25 or later.
 
@@ -71,7 +71,7 @@ The `release-notorch` preset builds the host without LibTorch in `cmake-build-no
 ### All Platforms
 - **Git** (for submodule management)
 - **CMake 3.25 or later** and **Ninja** (the presets use the Ninja generator; configuring without a preset needs CMake 3.20)
-- **A C++20 compiler** for the host and the applets
+- **A C++20 compiler** for the host and the instruments
 - **Rust (`cargo`) and Python 3** (optional). The configure presets set `CALIPER_WGSL_FROM_SOURCE=ON` to build the runtime WGSL compiler. Pass `-DCALIPER_WGSL_FROM_SOURCE=OFF` to build without Rust.
 
 ### Windows
@@ -91,13 +91,13 @@ The `release-notorch` preset builds the host without LibTorch in `cmake-build-no
 | `USE_CUDA` | ON | Build the CUDA support. It turns itself OFF when no CUDA toolkit is found, and the `release-notorch` preset sets it OFF. |
 | `USE_MPS` | ON on macOS when the Metal compiler is found, otherwise OFF | Build the Metal Performance Shaders support |
 | `BUILD_TESTS` | OFF | Build the test suites. The `release`, `debug` and `release-notorch` presets set it ON. |
-| `CALIPER_WITH_TORCH` | ON | Download LibTorch for the adapter tests and for the SDK, which names it for the applets that link it |
-| `CALIPER_BUILD_APPLETS` | OFF | Also build the example applets (`examples/hello_world` and, with LibTorch, `examples/mnist/applet`) inside the core build |
+| `CALIPER_WITH_TORCH` | ON | Download LibTorch for the adapter tests and for the SDK, which names it for the instruments that link it |
+| `CALIPER_BUILD_INSTRUMENTS` | OFF | Also build the example instruments (`examples/hello_world` and, with LibTorch, `examples/mnist/instrument`) inside the core build |
 | `CALIPER_BUILD_PYTHON` | OFF | Build the `caliper` Python extension (nanobind) |
 | `CALIPER_WITH_SLANG` | OFF | Configure the vendored slang library |
 | `CALIPER_WGSL_FROM_SOURCE` | OFF | Build the runtime WGSL compiler from source with cargo. The `release`, `debug`, and `release-notorch` presets set it ON unless `CALIPER_WGSL_LIBRARY` is set. |
 | `CALIPER_BUILD_VIEWER` | ON | Build `caliper_viewer`, the live viewer process (macOS) |
-| `CALIPER_BUILD_EXAMPLES` | ON | Build the embedding example, `examples/embed_host`. The example applets build with the tests instead. |
+| `CALIPER_BUILD_EXAMPLES` | ON | Build the embedding example, `examples/embed_host`. The example instruments build with the tests instead. |
 | `CALIPER_WITH_BUILDER` | ON, but OFF on Windows | Build the builder under `src/builder/` (its libraries, `caliper-mcp`, `caliper-acp-harness`, `caliper-builder-host` and their tests) and link DuckDB's json extension into the host's DuckDB. The Python wheel sets it OFF. |
 | `CALIPER_STATIC_CRT` | OFF | Use the static MSVC runtime (`/MT`) instead of the dynamic one |
 
@@ -110,7 +110,7 @@ cmake --preset release -DCALIPER_WGSL_FROM_SOURCE=OFF
 
 ## LibTorch Configuration
 
-Caliper's applets use **LibTorch 2.5.1**. The host executable and `libcaliper` do not link it. The build downloads the archive at configure time into `third_party/` and does nothing else to it. There is no option that names a variant; the platform and the CUDA toolkit that CMake finds decide it (`cmake/Dependencies.cmake`).
+Caliper's instruments use **LibTorch 2.5.1**. The host executable and `libcaliper` do not link it. The build downloads the archive at configure time into `third_party/` and does nothing else to it. There is no option that names a variant; the platform and the CUDA toolkit that CMake finds decide it (`cmake/Dependencies.cmake`).
 
 | Platform | Archive | Folder |
 |---|---|---|
@@ -136,13 +136,13 @@ rm -rf third_party/libtorch-release       # or third_party/libtorch on macOS and
 cmake --preset release -DUSE_CUDA=OFF
 ```
 
-To build without LibTorch, use the `release-notorch` preset or set `CALIPER_WITH_TORCH=OFF`. That skips the download and the torch tests, and the SDK installed from such a build cannot build applets that link LibTorch.
+To build without LibTorch, use the `release-notorch` preset or set `CALIPER_WITH_TORCH=OFF`. That skips the download and the torch tests, and the SDK installed from such a build cannot build instruments that link LibTorch.
 
 At run time LibTorch chooses the device. The same archive runs on the CPU when no GPU backend is available, and a CUDA archive on a machine without a usable GPU or driver falls back to the CPU.
 
 ## Python Package
 
-Caliper LIB, the `python/caliper` package, opens a live Caliper session from a training script, so that `caliper.show` and the other view calls draw into the viewer. See [`docs/python/caliper-lib-api.md`](docs/python/caliper-lib-api.md). It is built with `CALIPER_BUILD_PYTHON=ON` or as a wheel through `pyproject.toml`.
+Caliper LIB, the `python/caliper` package, opens a live Caliper session from a training script, so that `caliper.show` and the other view calls draw into the viewer. See [`docs/python/caliper-lib-api.md`](docs/python/caliper-lib-api.md). It is built with `CALIPER_BUILD_PYTHON=ON` or as a wheel through `pyproject.toml`. To run the MNIST Python examples (`examples/mnist/train.py` and `examples/mnist/train.ipynb`), install the `examples` extra (`pip install -e ".[examples]"`), which adds `torch` and `torchvision`.
 
 ## Project Structure
 
@@ -154,7 +154,7 @@ caliper/
 │   ├── Dependencies.cmake      # Dependency management and LibTorch selection
 │   └── wrappers/               # ImGui/ImPlot CMake wrappers
 ├── src/                        # The caliper executable (main.cpp) and the host (src/host/)
-├── sdk/                        # The applet SDK: headers, CMake package, test fixtures
+├── sdk/                        # The instrument SDK: headers, CMake package, test fixtures
 ├── include/caliper/            # The embedding and live-session C headers
 ├── examples/                   # hello_world, embed_host and the MNIST examples
 ├── python/                     # The caliper Python package and its extension
@@ -245,7 +245,7 @@ model.to(device);
 
 ## License
 
-Caliper is licensed under the [Apache License 2.0](LICENSE), the host and the SDK alike. Copyright 2026 Ahmed Khan; `NOTICE` holds the copyright line. Applet authors need a permissive licence, and Apache 2.0 is as permissive as the MIT licence of ImGui and ImPlot, adds an explicit patent grant and gives no rights to the Caliper name.
+Caliper is licensed under the [Apache License 2.0](LICENSE), the host and the SDK alike. Copyright 2026 Ahmed Khan; `NOTICE` holds the copyright line. Instrument authors need a permissive licence, and Apache 2.0 is as permissive as the MIT licence of ImGui and ImPlot, adds an explicit patent grant and gives no rights to the Caliper name.
 
 ## Third-Party Licenses
 

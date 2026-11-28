@@ -274,7 +274,7 @@ TEST_CASE("draw: a text panel shows its text and its value") {
 
 TEST_CASE("draw: an unavailable and an empty panel show their state and no plot") {
     if (!canvas()) return;
-    const spec::Spec s = parse("caliper_spec = 0\n[applet]\nid = \"t\"\n[[source]]\nid = \"f\"\ncatalog = \"feed:gpu\"\n"
+    const spec::Spec s = parse("caliper_spec = 2\n[instrument]\nid = \"t\"\n[[source]]\nid = \"f\"\ncatalog = \"feed:gpu\"\n"
                                "[[panel]]\nid = \"p\"\nprimitive = \"series\"\nbind = { y = \"f.value\" }\n");
     for (const PanelData& pd : {failed("resolve.unavailable", "f"), data({column("y", "f.value", json::array())}, spec::Primitive::series)}) {
         const Drawn d = draw_one(s, pd);
@@ -387,8 +387,8 @@ TEST_CASE("draw: the runtime lays a spec out, draws every panel, tabs, previews 
 
 TEST_CASE("draw: a panel in a hidden tab is resolved when its tab is chosen") {
     if (!canvas()) return;
-    const spec::Spec s = parse(R"(caliper_spec = 0
-[applet]
+    const spec::Spec s = parse(R"(caliper_spec = 2
+[instrument]
 id = "t"
 [[source]]
 id = "m"

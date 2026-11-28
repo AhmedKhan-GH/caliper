@@ -217,8 +217,8 @@ The rule:
 
 1. **Reads and previewable edits only.** A command that mutates must take a boolean `dry_run`, read from its arguments
    schema in the way `tools.py` already finds previewable commands. A destructive command never qualifies.
-2. **Nothing that replaces or leaves the open spec.** `spec.set_text`, `spec.new`, `spec.open`, `applet.open` and
-   `layout.set` replace the whole document or the whole layout, and the `history`, `applet`, `loader` and `data.import`
+2. **Nothing that replaces or leaves the open spec.** `spec.set_text`, `spec.new`, `spec.open`, `instrument.open` and
+   `layout.set` replace the whole document or the whole layout, and the `history`, `instrument`, `loader` and `data.import`
    commands act outside one target, so none is in any scope.
 3. **Then by the kind of target**, as the table gives.
 
@@ -235,8 +235,8 @@ outside the session's scope as well (`agent.out_of_scope`), whatever the model n
 
 **Built: the rule as data.** The rule's lists are one file, `src/builder/commands/widget_scopes.json`, beside the
 command table: for each kind of target its reads and its edits, the commands that are never in a scope (`spec.set_text`,
-`spec.new`, `spec.open`, `applet.open`, `layout.set`, `data.import`) and the groups that are never in one (`history`,
-`applet`, `preview`), and `panel.render` as the one command that needs vision. Both the sidecar
+`spec.new`, `spec.open`, `instrument.open`, `layout.set`, `data.import`) and the groups that are never in one (`history`,
+`instrument`, `preview`), and `panel.render` as the one command that needs vision. Both the sidecar
 (`caliper_agent/widget.py`, which reads it at start) and the app's context bundle (which embeds it at build time) apply
 the same rule to the command table, so the two agree from one definition, and the rule reads each command's flags and
 arguments schema rather than a list of schemas: a listed read that mutates, or a listed edit that loses its boolean
@@ -791,7 +791,7 @@ For a local server:
 - One target for each prompt, 6 model requests and 8 tool calls for each prompt, and 8,000 output tokens per request.
 - The bundle's bounds above, 64 recorded invocations per preview, 16 sessions per sidecar, and 30 minutes before an
   unused preview ends.
-- The widget agent cannot create or run loaders, save applets, undo, or replace the spec or its layout; those belong to
+- The widget agent cannot create or run loaders, save instruments, undo, or replace the spec or its layout; those belong to
   the side chat and to the app.
 - How well a small local model does this work varies widely; the conformance suite says which models pass.
 

@@ -6,7 +6,7 @@
 
 #include <caliper_builder/operators/operators.h>
 #include <caliper_builder/programs/operator_kernels.h>
-#include <caliper_builder/spec/instrument.h>
+#include <caliper_builder/spec/control.h>
 
 #include <cmath>
 #include <cstring>

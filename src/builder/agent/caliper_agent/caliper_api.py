@@ -2,9 +2,9 @@
 
 A tool runs by calling Caliper API (contracts sections 8 and 15):
 
-- `app.info`, `app.applets`, `app.launch` and `capture.frame` use the API v0
-  endpoints that exist today (`GET /v0/info`, `GET /v0/applets`,
-  `POST /v0/applets/{id}/launch`, `GET /v0/capture.png`);
+- `app.info`, `app.instruments`, `app.launch` and `capture.frame` use the API v0
+  endpoints that exist today (`GET /v0/info`, `GET /v0/instruments`,
+  `POST /v0/instruments/{id}/launch`, `GET /v0/capture.png`);
 - every other command is `POST /v0/commands/{name}` with the arguments as the
   JSON body, `X-Caliper-Origin: agent` and `X-Caliper-Group: <the turn's group>`,
   so that the edits of one prompt undo as one step, and in a widget session
@@ -56,7 +56,7 @@ CALL_TIMEOUT_S = 130.0
 CONNECT_TIMEOUT_S = 5.0
 
 _TOKEN = re.compile(r"^[A-Za-z0-9_\-]{16,256}$")
-_APPLET_ID = re.compile(r"^[A-Za-z0-9._\-]{1,128}$")
+_INSTRUMENT_ID = re.compile(r"^[A-Za-z0-9._\-]{1,128}$")
 _LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1", "[::1]"})
 _PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
 
@@ -356,14 +356,14 @@ class CaliperApi:
                                                  "reviews.", "origin")
         if command == "app.info":
             return self._plain(await self._send("GET", "/v0/info"))
-        if command == "app.applets":
-            return self._plain(await self._send("GET", "/v0/applets"))
+        if command == "app.instruments":
+            return self._plain(await self._send("GET", "/v0/instruments"))
         if command == "app.launch":
-            applet = args.get("id")
-            if not isinstance(applet, str) or not _APPLET_ID.match(applet):
+            instrument = args.get("id")
+            if not isinstance(instrument, str) or not _INSTRUMENT_ID.match(instrument):
                 return _error("command.invalid_args", "id must be 1 to 128 characters of A-Z a-z 0-9 . _ -.", "args.id")
-            response = await self._send("POST", f"/v0/applets/{quote(applet, safe='')}/launch")
-            return self._plain(response, {404: "app.applet_not_found", 409: "app.launch_refused",
+            response = await self._send("POST", f"/v0/instruments/{quote(instrument, safe='')}/launch")
+            return self._plain(response, {404: "app.instrument_not_found", 409: "app.launch_refused",
                                           400: "command.invalid_args"})
         if command == "capture.frame":
             response = await self._send("GET", "/v0/capture.png")
@@ -384,7 +384,7 @@ class CaliperApi:
         if response.status_code == 404:
             return _error("caliper.no_command_layer",
                           "This Caliper app has no command layer yet (Caliper API answered 404), "
-                          "so only app_info, app_applets, app_launch and capture_frame work.")
+                          "so only app_info, app_instruments, app_launch and capture_frame work.")
         if response.status_code != 200:
             return self._status_error(response)
         try:
@@ -427,5 +427,5 @@ class CaliperApi:
         path = out.result.get("path")
         spec_id = out.result.get("id")
         if not isinstance(path, str) or not path:
-            path = f"applets/{spec_id}/{spec_id}.spec.toml" if isinstance(spec_id, str) and spec_id else "open.spec.toml"
+            path = f"instruments/{spec_id}/{spec_id}.spec.toml" if isinstance(spec_id, str) and spec_id else "open.spec.toml"
         return text, path

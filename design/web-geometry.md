@@ -2,13 +2,13 @@
 
 This page plans what remains of drawing scenes in a browser: pipelines created without blocking, encoded frames decoded by the browser, the scene budgets with the refusal line and the rebuild after a lost device, the parity tests not yet written, and what a browser without WebGPU shows instead of a scene, a text log and a bar chart.
 
-The rest is built, and the docs describe it. The web viewer's WebAssembly views draw every scene primitive through the WebGPU backend of the graphics layer, from the one shader source, with the scene core's picking, hover and lasso. Rendering (`docs/applets/rendering.md`), WebGPU Backend, and Graphics Layer (`docs/applets/graphics-layer.md`) describe the backend, Shader Authoring (`docs/applets/shader-authoring.md`) the shader sources, Scene Rendering (`docs/applets/scene-rendering.md`) the scene draws, Testing (`docs/development/testing.md`) the scene rows in headless Chromium, and Browser Elements (`docs/web/browser-elements.md`), Renderer Selection, the notice that a browser without WebGPU shows today in place of a scene.
+The rest is built, and the docs describe it. The web viewer's WebAssembly views draw every scene primitive through the WebGPU backend of the graphics layer, from the one shader source, with the scene core's picking, hover and lasso. Rendering (`docs/instruments/rendering.md`), WebGPU Backend, and Graphics Layer (`docs/instruments/graphics-layer.md`) describe the backend, Shader Authoring (`docs/instruments/shader-authoring.md`) the shader sources, Scene Rendering (`docs/instruments/scene-rendering.md`) the scene draws, Testing (`docs/development/testing.md`) the scene rows in headless Chromium, and Browser Elements (`docs/web/browser-elements.md`), Renderer Selection, the notice that a browser without WebGPU shows today in place of a scene.
 
 The zero-copy backends are the product path, Metal on macOS, Vulkan with CUDA on Windows and Linux, and WebGPU in the browser, so the WebGPU backend serves only the browser and no native fallback through Dawn is planned.
 
 ## Design
 
-The scene draws, bind groups, colour, depth, entity transforms, picking and uploads of the original design are built as Scene Rendering (`docs/applets/scene-rendering.md`) describes them; these parts remain.
+The scene draws, bind groups, colour, depth, entity transforms, picking and uploads of the original design are built as Scene Rendering (`docs/instruments/scene-rendering.md`) describes them; these parts remain.
 
 ### Pipelines and Their Cache
 
@@ -20,7 +20,7 @@ An encoded frame, JPEG or PNG, is decoded by the browser with `createImageBitmap
 
 ### Uploads and Reuse
 
-The buffers of a batch, their reuse and the spare pool are built (Rendering (`docs/applets/rendering.md`), WebGPU Backend), and the heap copy serves hover values today, while the rebuild after a lost device and the fallback are planned. The heap keeps the latest bytes of every batch, for hover values, for rebuilding the GPU state after a lost device and for the Canvas 2D fallback, so a scene's bytes are held twice, once in the heap and once on the GPU.
+The buffers of a batch, their reuse and the spare pool are built (Rendering (`docs/instruments/rendering.md`), WebGPU Backend), and the heap copy serves hover values today, while the rebuild after a lost device and the fallback are planned. The heap keeps the latest bytes of every batch, for hover values, for rebuilding the GPU state after a lost device and for the Canvas 2D fallback, so a scene's bytes are held twice, once in the heap and once on the GPU.
 
 ### Budgets and Level of Detail
 
@@ -69,7 +69,7 @@ When the points were sampled, a second sentence follows: "It draws 100,000 of it
 
 The two other new kinds are simpler in the fallback. The text log is plain DOM: a scrolling list of lines with their stamps, inside an element with the `log` role, that follows the newest line unless the user scrolls back, keeps its newest 10,000 lines and lets text be selected, searched and read by a screen reader. The bar chart is Canvas 2D, drawn with the axes of the existing plot code as the histogram view draws its bins.
 
-The fallback also draws on its canvas the scale bar that Scene Rendering (`docs/applets/scene-rendering.md`) describes, by the same rule and from the same shared table of tests as the view layer: measured at the orbit target in 3-D, exact in 2-D, hidden with the same display option. With WebGPU the bar is not a draw of this backend; the view layer draws it with ImGui over the picture, as natively. Its capture rows run in headless Chromium on both paths.
+The fallback also draws on its canvas the scale bar that Scene Rendering (`docs/instruments/scene-rendering.md`) describes, by the same rule and from the same shared table of tests as the view layer: measured at the orbit target in 3-D, exact in 2-D, hidden with the same display option. With WebGPU the bar is not a draw of this backend; the view layer draws it with ImGui over the picture, as natively. Its capture rows run in headless Chromium on both paths.
 
 ## Work Items
 
@@ -88,7 +88,7 @@ The three whole items come to 7 builder days, and the three remainders finish it
 
 - **No zero-copy in a browser.** Every array is copied twice in a browser, from the network into the heap and from the heap into the GPU process.
 - **Memory.** A scene is held in the heap and on the GPU, within 256 MiB, under a heap that cannot pass 4 GiB.
-- **Applets.** An applet's scene reaches a browser only through the hub, copied, and only where it is wire-capable ([Scenes](scenes.md#wire-capable-scenes)).
+- **Instruments.** An instrument's scene reaches a browser only through the hub, copied, and only where it is wire-capable ([Scenes](scenes.md#wire-capable-scenes)).
 - **Performance.** No frame time in this page was measured; the frame-time test sets the target.
 
 ## Decisions

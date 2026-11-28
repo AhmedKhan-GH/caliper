@@ -4,11 +4,11 @@
 // one of the person's own actions replaces or closes an open spec that has
 // unsaved changes: F3 New dashboard (and "new <title>" on the command line),
 // opening another dashboard from the landing screen, and closing the window.
-// Save sends applet.save of the open spec from the `ui` origin, over its own
+// Save sends instrument.save of the open spec from the `ui` origin, over its own
 // file when it was opened from one (as ⌘S Save does), and goes on once it has
 // succeeded; Don't Save goes on; Cancel leaves everything as it
 // was. ⌘Z still restores a spec replaced by spec.new, spec.open or
-// applet.open, as before.
+// instrument.open, as before.
 //
 // Only the person's own actions ask: the app calls ask() from the landing
 // screen's ways in and from the window's close request, never from the
@@ -30,7 +30,7 @@
 //
 // Header-only; frame thread. ask() and answer() may be called inside or
 // outside the ImGui frame; frame() runs between two frames, so `go` (a
-// spec.new, an applet.open, the window's close) never runs inside one.
+// spec.new, an instrument.open, the window's close) never runs inside one.
 // ============================================================================
 #include "builder/app_session.h"
 #include "ui/sternbild_fonts.h"
@@ -61,7 +61,7 @@ public:
 
     // Whether the session's open spec has changes that are not saved: `no`
     // (nothing open, or saved; also without the builder and before the
-    // session opens), `yes`, with its applet id and its name (its title, else
+    // session opens), `yes`, with its instrument id and its name (its title, else
     // its id), or `unknown` while the session's worker runs a command and
     // the open spec cannot be read. A new spec that was never saved has
     // unsaved changes. `unknown` is never "nothing to save".
@@ -73,8 +73,8 @@ public:
         if (app.worker_busy()) return Unsaved::unknown;
         const std::optional<caliper_builder::OpenSpec> open = s->open_spec();
         if (!open || !open->dirty) return Unsaved::no;
-        if (id) *id = open->spec.applet.id;
-        if (name) *name = open->spec.applet.title.value_or(open->spec.applet.id);
+        if (id) *id = open->spec.instrument.id;
+        if (name) *name = open->spec.instrument.title.value_or(open->spec.instrument.id);
         return Unsaved::yes;
 #else
         (void)app, (void)id, (void)name;
@@ -87,7 +87,7 @@ public:
     // changes, or after Save or Don't Save; Cancel drops it. While the
     // session's worker runs a command the check waits for it, and after a
     // few frames the question says so, with Cancel. When the open spec
-    // turns out to have unsaved changes and its applet id is `keep_id`,
+    // turns out to have unsaved changes and its instrument id is `keep_id`,
     // `keep` runs instead of the question (opening the open spec's own
     // dashboard shows it, changes and all). False, and `go` dropped, while
     // another question is open.
@@ -279,9 +279,9 @@ private:
         caliper_builder::Session* s = app.session();
         if (!s) return false;
         caliper_builder::CommandInvocation inv;
-        inv.name = "applet.save";
+        inv.name = "instrument.save";
         inv.args = nlohmann::json::object();
-        // The open spec's own applet is saved over; a new one is written new
+        // The open spec's own instrument is saved over; a new one is written new
         // (BuilderPane::save's rule).
         const std::optional<caliper_builder::OpenSpec> open = s->open_spec();
         if (open && open->path) inv.args["overwrite"] = true;

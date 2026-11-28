@@ -324,14 +324,14 @@ struct FakeApp {
                 if (frames_on.load()) {
                     for (const caliper_api::Call& c : server->take()) {
                         using K = caliper_api::Call::Kind;
-                        if (c.kind == K::Applets) {
-                            server->reply(c.ticket, 200, "{\"applets\":[]}");
+                        if (c.kind == K::Instruments) {
+                            server->reply(c.ticket, 200, "{\"instruments\":[]}");
                         } else if (c.kind == K::Launch) {
                             ++launches;
-                            if (c.applet_id == "dev.caliper.hello-world")
+                            if (c.instrument_id == "dev.caliper.hello-world")
                                 server->reply(c.ticket, 200, "{\"id\":\"dev.caliper.hello-world\"}");
                             else
-                                server->reply(c.ticket, 404, caliper_api::error_json("no applet " + c.applet_id));
+                                server->reply(c.ticket, 404, caliper_api::error_json("no instrument " + c.instrument_id));
                         } else {
                             server->reply_capture(c.ticket, 2, 2, std::vector<uint8_t>(16, 7));
                         }
@@ -368,38 +368,38 @@ struct TempDir {
 
 TEST_CASE("api: the routes of v0 and the method each takes") {
     CHECK(caliper_api::route("GET", "/v0/info").route == Route::Info);
-    CHECK(caliper_api::route("GET", "/v0/applets").route == Route::Applets);
+    CHECK(caliper_api::route("GET", "/v0/instruments").route == Route::Instruments);
     CHECK(caliper_api::route("GET", "/v0/capture.png").route == Route::Capture);
     CHECK(caliper_api::route("GET", "/v3/stream").route == Route::Stream);
     CHECK(caliper_api::route("GET", "/v0/stream").route == Route::Stream);
-    auto launch = caliper_api::route("POST", "/v0/applets/dev.caliper.hello-world/launch");
+    auto launch = caliper_api::route("POST", "/v0/instruments/dev.caliper.hello-world/launch");
     CHECK(launch.route == Route::Launch);
     CHECK(launch.method_ok);
-    CHECK(launch.applet_id == "dev.caliper.hello-world");
-    auto wrong = caliper_api::route("GET", "/v0/applets/x/launch");
+    CHECK(launch.instrument_id == "dev.caliper.hello-world");
+    auto wrong = caliper_api::route("GET", "/v0/instruments/x/launch");
     CHECK(wrong.route == Route::Launch);
     CHECK_FALSE(wrong.method_ok);
     CHECK(std::string(wrong.allow) == "POST");
     CHECK_FALSE(caliper_api::route("POST", "/v0/info").method_ok);
     CHECK_FALSE(caliper_api::route("HEAD", "/v0/capture.png").method_ok);
-    for (const char* none : {"/", "/v0", "/v0/", "/v0/info/", "/v1/info", "/v3/stream/", "/v3/", "/v0/applets/",
-                             "/v0/applets//launch", "/v0/applets/a/b/launch", "/v0/applets/x/launch/",
-                             "/v0/applets/x", "/V0/info", "/v0/capture", "/index.html"}) {
+    for (const char* none : {"/", "/v0", "/v0/", "/v0/info/", "/v1/info", "/v3/stream/", "/v3/", "/v0/instruments/",
+                             "/v0/instruments//launch", "/v0/instruments/a/b/launch", "/v0/instruments/x/launch/",
+                             "/v0/instruments/x", "/V0/info", "/v0/capture", "/index.html"}) {
         CAPTURE(none);
         CHECK(caliper_api::route("GET", none).route == Route::None);
         CHECK(caliper_api::route("POST", none).route == Route::None);
     }
 }
 
-TEST_CASE("api: an applet id in the path is 1 to 128 characters of [A-Za-z0-9._-]") {
-    CHECK(caliper_api::plausible_applet_id("dev.caliper.hello-world"));
-    CHECK(caliper_api::plausible_applet_id("com.example.my-viewer_2"));
-    CHECK(caliper_api::plausible_applet_id(std::string(128, 'a')));
+TEST_CASE("api: an instrument id in the path is 1 to 128 characters of [A-Za-z0-9._-]") {
+    CHECK(caliper_api::plausible_instrument_id("dev.caliper.hello-world"));
+    CHECK(caliper_api::plausible_instrument_id("com.example.my-viewer_2"));
+    CHECK(caliper_api::plausible_instrument_id(std::string(128, 'a')));
     for (const std::string bad : {std::string(), std::string(129, 'a'), std::string("a%2Fb"),
                                   std::string("a b"), std::string("a\\b"), std::string("a:b"),
                                   std::string("caf\xc3\xa9")}) {
         CAPTURE(bad);
-        CHECK_FALSE(caliper_api::plausible_applet_id(bad));
+        CHECK_FALSE(caliper_api::plausible_instrument_id(bad));
     }
 }
 
@@ -431,14 +431,14 @@ TEST_CASE("api: a plain request is checked for Origin, route, method, token, bod
     CHECK(check(req("GET", "/nope"), kToken).status == 404);
     CHECK(check(req("POST", "/v0/info"), kToken).status == 405);
     CHECK(check(req("GET", "/v0/info"), kToken).status == 401);
-    CHECK(check(req("POST", "/v0/applets/x/launch?token=" + kToken), kToken).status == 401);
-    CHECK(check(req("POST", "/v0/applets/x/launch", {auth, {"content-length", "4"}}), kToken).status == 413);
-    CHECK(check(req("POST", "/v0/applets/x/launch", {auth, {"transfer-encoding", "chunked"}}), kToken).status == 413);
-    CHECK(check(req("POST", "/v0/applets/x/launch", {auth, {"content-length", "0"}}), kToken).status == 0);
-    CHECK(check(req("POST", "/v0/applets/a%2Fb/launch", {auth}), kToken).status == 400);
-    const caliper_api::Verdict ok = check(req("POST", "/v0/applets/x.y/launch", {auth}), kToken);
+    CHECK(check(req("POST", "/v0/instruments/x/launch?token=" + kToken), kToken).status == 401);
+    CHECK(check(req("POST", "/v0/instruments/x/launch", {auth, {"content-length", "4"}}), kToken).status == 413);
+    CHECK(check(req("POST", "/v0/instruments/x/launch", {auth, {"transfer-encoding", "chunked"}}), kToken).status == 413);
+    CHECK(check(req("POST", "/v0/instruments/x/launch", {auth, {"content-length", "0"}}), kToken).status == 0);
+    CHECK(check(req("POST", "/v0/instruments/a%2Fb/launch", {auth}), kToken).status == 400);
+    const caliper_api::Verdict ok = check(req("POST", "/v0/instruments/x.y/launch", {auth}), kToken);
     CHECK(ok.status == 0);
-    CHECK(ok.routed.applet_id == "x.y");
+    CHECK(ok.routed.instrument_id == "x.y");
 }
 
 // ---- the server in this process ----------------------------------------------------------------
@@ -458,14 +458,14 @@ TEST_CASE("api: the server answers every endpoint, through the frame thread wher
     CHECK(info.headers["x-content-type-options"] == "nosniff");
     CHECK(http(port, "GET", "/v0/info?token=" + kToken).status == 200);
 
-    Response applets = http(port, "GET", "/v0/applets", bearer());
-    CHECK(applets.status == 200);
-    CHECK(applets.body == "{\"applets\":[]}");
+    Response instruments = http(port, "GET", "/v0/instruments", bearer());
+    CHECK(instruments.status == 200);
+    CHECK(instruments.body == "{\"instruments\":[]}");
 
-    Response launch = http(port, "POST", "/v0/applets/dev.caliper.hello-world/launch", bearer());
+    Response launch = http(port, "POST", "/v0/instruments/dev.caliper.hello-world/launch", bearer());
     CHECK(launch.status == 200);
     CHECK(launch.body == "{\"id\":\"dev.caliper.hello-world\"}");
-    CHECK(http(port, "POST", "/v0/applets/no.such/launch", bearer()).status == 404);
+    CHECK(http(port, "POST", "/v0/instruments/no.such/launch", bearer()).status == 404);
     CHECK(app.launches.load() == 2);
 
     Response capture = http(port, "GET", "/v0/capture.png?token=" + kToken);
@@ -478,15 +478,15 @@ TEST_CASE("api: the server answers every endpoint, through the frame thread wher
     CHECK(anon.status == 401);
     CHECK(anon.headers["www-authenticate"].rfind("Bearer", 0) == 0);
     CHECK(http(port, "GET", "/v0/info", bearer("api_test_token-0123456789abcdeX")).status == 401);
-    Response post_query = http(port, "POST", "/v0/applets/dev.caliper.hello-world/launch?token=" + kToken);
+    Response post_query = http(port, "POST", "/v0/instruments/dev.caliper.hello-world/launch?token=" + kToken);
     CHECK(post_query.status == 401);
-    Response method = http(port, "DELETE", "/v0/applets", bearer());
+    Response method = http(port, "DELETE", "/v0/instruments", bearer());
     CHECK(method.status == 405);
     CHECK(method.headers["allow"] == "GET");
     CHECK(http(port, "GET", "/", bearer()).status == 404);
     CHECK(http(port, "GET", "/index.html", bearer()).status == 404);
     CHECK(http(port, "GET", "/v3/info?token=" + kToken).status == 404);
-    CHECK(http(port, "POST", "/v0/applets/dev.caliper.hello-world/launch", bearer() + "Content-Length: 2\r\n").status == 413);
+    CHECK(http(port, "POST", "/v0/instruments/dev.caliper.hello-world/launch", bearer() + "Content-Length: 2\r\n").status == 413);
     CHECK(app.launches.load() == 2);   // refused requests never reached the app
 
     const caliper_api::Stats st = app.server->stats();
@@ -497,7 +497,7 @@ TEST_CASE("api: the server answers every endpoint, through the frame thread wher
 TEST_CASE("api: Host and Origin are refused on every path, the stream included") {
     FakeApp app;
     const uint16_t port = app.port();
-    for (const char* target : {"/v0/info", "/v0/applets", "/v0/capture.png", "/v3/stream?token=api_test_token-0123456789abcdef",
+    for (const char* target : {"/v0/info", "/v0/instruments", "/v0/capture.png", "/v3/stream?token=api_test_token-0123456789abcdef",
                                "/v0/stream?token=api_test_token-0123456789abcdef"}) {
         CAPTURE(target);
         CHECK(http(port, "GET", target, bearer(), "evil.example:" + std::to_string(port)).status == 403);
@@ -534,14 +534,14 @@ TEST_CASE("api: a call the frame thread does not answer times out, and waiting c
     const uint16_t port = app.port();
     // Two calls wait; the third is refused at once.
     const api_sock a = open_socket(port), b = open_socket(port);
-    const std::string get = "GET /v0/applets HTTP/1.1\r\nHost: 127.0.0.1:" + std::to_string(port) + "\r\n" + bearer() + "\r\n";
+    const std::string get = "GET /v0/instruments HTTP/1.1\r\nHost: 127.0.0.1:" + std::to_string(port) + "\r\n" + bearer() + "\r\n";
     ::send(a, get.data(), (int)get.size(), 0);
     ::send(b, get.data(), (int)get.size(), 0);
     const auto t0 = std::chrono::steady_clock::now();
     while (app.server->stats().pending < 2 && std::chrono::steady_clock::now() - t0 < std::chrono::seconds(10))
         std::this_thread::sleep_for(std::chrono::milliseconds(5));
     REQUIRE(app.server->stats().pending == 2);
-    Response busy = http(port, "GET", "/v0/applets", bearer());
+    Response busy = http(port, "GET", "/v0/instruments", bearer());
     CHECK(busy.status == 503);
     CHECK(busy.headers["retry-after"] == "1");
     CHECK(http(port, "GET", "/v0/info", bearer()).status == 200);   // info needs no frame
@@ -554,7 +554,7 @@ TEST_CASE("api: a call the frame thread does not answer times out, and waiting c
     CHECK(waited < 3.0);
     // A late answer is dropped, and the next call is served.
     app.frames_on.store(true);
-    CHECK(http(port, "GET", "/v0/applets", bearer()).status == 200);
+    CHECK(http(port, "GET", "/v0/instruments", bearer()).status == 200);
     const caliper_api::Stats st = app.server->stats();
     CHECK(st.timeouts == 2);
     CHECK(st.busy == 1);
@@ -810,7 +810,7 @@ TEST_CASE("api: the viewer token passes only the spec page and the page's reads,
     }
     CHECK(caliper_api::viewer_command("panel.data"));
     CHECK(caliper_api::viewer_command("spec.get"));
-    CHECK(caliper_api::viewer_command("applet.list"));
+    CHECK(caliper_api::viewer_command("instrument.list"));
     CHECK_FALSE(caliper_api::viewer_command("panel.remove"));
     CHECK_FALSE(caliper_api::viewer_command("data.query"));
 
@@ -832,11 +832,11 @@ TEST_CASE("api: the viewer token passes only the spec page and the page's reads,
     CHECK(check(req("POST", "/v0/commands/panel.data", {as_viewer, json, len, {"x-caliper-origin", "mcp"}}), kToken,
                 true, vt).status == 400);
     CHECK(check(req("POST", "/v0/commands/panel.data?token=" + vt, {json, len}), kToken, true, vt).status == 401);
-    for (const char* path : {"/v0/commands/panel.remove", "/v0/commands/data.query", "/v0/applets/x/launch"}) {
+    for (const char* path : {"/v0/commands/panel.remove", "/v0/commands/data.query", "/v0/instruments/x/launch"}) {
         CAPTURE(path);
         CHECK(check(req("POST", path, {as_viewer, json, len}), kToken, true, vt).status == 403);
     }
-    for (const char* path : {"/v0/info", "/v0/applets", "/v0/capture.png", "/v0/commands", "/v0/approvals/ap-1"}) {
+    for (const char* path : {"/v0/info", "/v0/instruments", "/v0/capture.png", "/v0/commands", "/v0/approvals/ap-1"}) {
         CAPTURE(path);
         CHECK(check(req("GET", path, {as_viewer}), kToken, true, vt).status == 403);
     }
@@ -995,7 +995,7 @@ TEST_CASE("api: the command endpoints hand requests to the gateway on the frame 
     REQUIRE(gw->submitted() == 6);
     CHECK(gw->requests[5].args == mib);
     // Other endpoints still refuse a body.
-    CHECK(http(port, "POST", "/v0/applets/dev.caliper.hello-world/launch", bearer() + "Content-Length: 2\r\n", {}, body)
+    CHECK(http(port, "POST", "/v0/instruments/dev.caliper.hello-world/launch", bearer() + "Content-Length: 2\r\n", {}, body)
               .status == 413);
 
     // Clearing the gateway makes the endpoints 404 again.
@@ -1018,7 +1018,7 @@ TEST_CASE("api: a held command blocks neither the stream nor API v0, and held co
     REQUIRE(wait_for([&] { return app.server->stats().commands_held == 2; }));
     // Everything else is served meanwhile.
     CHECK(http(port, "GET", "/v0/info", bearer()).status == 200);
-    CHECK(http(port, "GET", "/v0/applets", bearer()).status == 200);
+    CHECK(http(port, "GET", "/v0/instruments", bearer()).status == 200);
     CHECK(http(port, "GET", "/v0/commands", bearer()).status == 200);
     CHECK(http(port, "GET", "/v0/approvals/ap-1", bearer()).status == 200);
     std::string role, why;
@@ -1162,16 +1162,16 @@ TEST_CASE("api: a capture in the window waits for the read-back of a presented f
 
 // ---- caliper shot --api as a process ------------------------------------------------------
 // Runs the caliper executable named by CALIPER_TEST_CALIPER_EXE (the ctest
-// entry caliper_cli_api sets it, and CALIPER_TEST_APPLETS to the build's
-// applets folder) as `caliper shot --api`: no window, the page drawn into the
+// entry caliper_cli_api sets it, and CALIPER_TEST_INSTRUMENTS to the build's
+// instruments folder) as `caliper shot --api`: no window, the page drawn into the
 // offscreen canvas. Without a GPU, shot cannot draw and the run is reported
 // as skipped, as the shot tests do. POSIX only (it sends a signal).
 #ifndef _WIN32
 TEST_CASE("api: caliper shot --api serves every endpoint as a process and stops on SIGTERM") {
     const char* exe = std::getenv("CALIPER_TEST_CALIPER_EXE");
-    const char* applets = std::getenv("CALIPER_TEST_APPLETS");
-    if (!exe || !*exe || !applets || !*applets) {
-        MESSAGE("CALIPER_TEST_CALIPER_EXE or CALIPER_TEST_APPLETS is not set: run the ctest entry caliper_cli_api");
+    const char* instruments = std::getenv("CALIPER_TEST_INSTRUMENTS");
+    if (!exe || !*exe || !instruments || !*instruments) {
+        MESSAGE("CALIPER_TEST_CALIPER_EXE or CALIPER_TEST_INSTRUMENTS is not set: run the ctest entry caliper_cli_api");
         return;
     }
     TempDir t("process");
@@ -1179,7 +1179,7 @@ TEST_CASE("api: caliper shot --api serves every endpoint as a process and stops 
     const std::string out_png = t.str("shot.png");
     Proc p;
     REQUIRE(p.start(exe,
-                    {"shot", "--applets", applets, "--launch", "dev.caliper.hello-world", "--size", "640x400",
+                    {"shot", "--instruments", instruments, "--launch", "dev.caliper.hello-world", "--size", "640x400",
                      "--frames", "36000", "--out", out_png, "--api", "--api-port", "0"},
                     {"CALIPER_DATA_DIR=" + data}));
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(60);
@@ -1234,17 +1234,17 @@ TEST_CASE("api: caliper shot --api serves every endpoint as a process and stops 
     CHECK(ij.find("services")->size() > 0);
     CHECK(ij.has("sdk"));
 
-    // applets: the shot's applet is ACTIVE, the other one READY.
+    // instruments: the shot's instrument is ACTIVE, the other one READY.
     auto status_of = [&](const std::string& id) {
-        Response r = http(port, "GET", "/v0/applets", bearer(token));
+        Response r = http(port, "GET", "/v0/instruments", bearer(token));
         REQUIRE(r.status == 200);
         const Json j = parse_json(r.body);
-        for (const Json& e : j.find("applets")->items())
+        for (const Json& e : j.find("instruments")->items())
             if (e.find("id")->as_string() == id) return e.find("status")->as_string();
         return std::string("absent");
     };
     CHECK(status_of("dev.caliper.hello-world") == "ACTIVE");
-#ifndef CALIPER_TESTS_NO_TORCH_APPLETS
+#ifndef CALIPER_TESTS_NO_TORCH_INSTRUMENTS
     CHECK(status_of("dev.caliper.mnist") == "READY");
 #endif
 
@@ -1269,26 +1269,26 @@ TEST_CASE("api: caliper shot --api serves every endpoint as a process and stops 
     };
     capture();
 
-    // launch: another applet, the same one again, an unknown one.
-#ifndef CALIPER_TESTS_NO_TORCH_APPLETS
-    Response launched = http(port, "POST", "/v0/applets/dev.caliper.mnist/launch", bearer(token));
+    // launch: another instrument, the same one again, an unknown one.
+#ifndef CALIPER_TESTS_NO_TORCH_INSTRUMENTS
+    Response launched = http(port, "POST", "/v0/instruments/dev.caliper.mnist/launch", bearer(token));
     REQUIRE_MESSAGE(launched.status == 200, launched.body);
     const Json lj = parse_json(launched.body);
     CHECK(lj.find("id")->as_string() == "dev.caliper.mnist");
     CHECK_FALSE(lj.find("already_open")->as_bool());
     CHECK(status_of("dev.caliper.mnist") == "ACTIVE");
     CHECK(status_of("dev.caliper.hello-world") == "READY");
-    Response again = http(port, "POST", "/v0/applets/dev.caliper.mnist/launch", bearer(token));
+    Response again = http(port, "POST", "/v0/instruments/dev.caliper.mnist/launch", bearer(token));
     CHECK(again.status == 200);
     CHECK(parse_json(again.body).find("already_open")->as_bool());
 #else
-    Response again = http(port, "POST", "/v0/applets/dev.caliper.hello-world/launch", bearer(token));
+    Response again = http(port, "POST", "/v0/instruments/dev.caliper.hello-world/launch", bearer(token));
     CHECK(again.status == 200);
     CHECK(parse_json(again.body).find("already_open")->as_bool());
 #endif
-    CHECK(http(port, "POST", "/v0/applets/dev.example.nowhere/launch", bearer(token)).status == 404);
-    CHECK(http(port, "POST", "/v0/applets/dev.caliper.hello-world/launch?token=" + token).status == 401);
-    CHECK(http(port, "GET", "/v0/applets/dev.caliper.hello-world/launch", bearer(token)).status == 405);
+    CHECK(http(port, "POST", "/v0/instruments/dev.example.nowhere/launch", bearer(token)).status == 404);
+    CHECK(http(port, "POST", "/v0/instruments/dev.caliper.hello-world/launch?token=" + token).status == 401);
+    CHECK(http(port, "GET", "/v0/instruments/dev.caliper.hello-world/launch", bearer(token)).status == 405);
     capture();
 
     // The stream's handshake on both paths: the app answers as the hub, to
@@ -1351,12 +1351,12 @@ TEST_CASE("api: caliper shot --api serves every endpoint as a process and stops 
     CHECK(http(port, "GET", "/v0/info", bearer(token) + "Origin: https://evil.example\r\n").status == 403);
     CHECK(http(port, "GET", "/", bearer(token)).status == 404);
 
-    // SIGTERM ends the frames; the shot writes its image of the applet it
+    // SIGTERM ends the frames; the shot writes its image of the instrument it
     // shows and leaves neither the API file nor a listening socket.
     REQUIRE(p.pid > 0);
     ::kill(p.pid, SIGTERM);
     CHECK(p.wait(15000) == 0);
-#ifndef CALIPER_TESTS_NO_TORCH_APPLETS
+#ifndef CALIPER_TESTS_NO_TORCH_INSTRUMENTS
     const std::string expected_shot_id = "dev.caliper.mnist";
 #else
     const std::string expected_shot_id = "dev.caliper.hello-world";
@@ -1372,7 +1372,7 @@ TEST_CASE("api: caliper shot --api serves every endpoint as a process and stops 
 // ---- the app itself, hidden (--hidden), as a process -------------------------------------
 // Runs the caliper executable as the app with its window never shown
 // (--hidden: no Dock icon, no menu bar, no focus) and Caliper API on, with
-// its data folder, user applets folder and window size set for the test. A
+// its data folder, user instruments folder and window size set for the test. A
 // client reads the token from the API file and uses every endpoint; the
 // capture is the frame the hidden window presents, read back on Metal. SIGTERM
 // closes the app normally. Without a Metal device the app falls back to GL,
@@ -1390,17 +1390,17 @@ bool decode_png(const std::string& body, int* w, int* h, std::vector<uint8_t>* p
 
 TEST_CASE("api: the hidden app serves every endpoint through its window and stops on SIGTERM") {
     const char* exe = std::getenv("CALIPER_TEST_CALIPER_EXE");
-    const char* applets = std::getenv("CALIPER_TEST_APPLETS");
-    if (!exe || !*exe || !applets || !*applets) {
-        MESSAGE("CALIPER_TEST_CALIPER_EXE or CALIPER_TEST_APPLETS is not set: run the ctest entry caliper_cli_app_hidden");
+    const char* instruments = std::getenv("CALIPER_TEST_INSTRUMENTS");
+    if (!exe || !*exe || !instruments || !*instruments) {
+        MESSAGE("CALIPER_TEST_CALIPER_EXE or CALIPER_TEST_INSTRUMENTS is not set: run the ctest entry caliper_cli_app_hidden");
         return;
     }
     TempDir t("app-hidden");
     const std::string data = t.str("data");
-    fs::create_directories(t.str("user-applets"));
+    fs::create_directories(t.str("user-instruments"));
     Proc p;
-    REQUIRE(p.start(exe, {"--hidden", "--applets", applets, "--api", "--api-port", "0"},
-                    {"CALIPER_DATA_DIR=" + data, "CALIPER_USER_APPLETS_DIR=" + t.str("user-applets"),
+    REQUIRE(p.start(exe, {"--hidden", "--instruments", instruments, "--api", "--api-port", "0"},
+                    {"CALIPER_DATA_DIR=" + data, "CALIPER_USER_INSTRUMENTS_DIR=" + t.str("user-instruments"),
                      "CALIPER_WINDOW_SIZE=640x400"}));
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(60);
     while (p.text.find("[api] Caliper API on ") == std::string::npos && std::chrono::steady_clock::now() < deadline &&
@@ -1436,10 +1436,10 @@ TEST_CASE("api: the hidden app serves every endpoint through its window and stop
     REQUIRE(info.status == 200);
     CHECK(parse_json(info.body).find("services")->size() > 0);
     auto status_of = [&](const std::string& id) {
-        Response r = http(port, "GET", "/v0/applets", bearer(token));
+        Response r = http(port, "GET", "/v0/instruments", bearer(token));
         REQUIRE(r.status == 200);
         const Json j = parse_json(r.body);
-        for (const Json& e : j.find("applets")->items())
+        for (const Json& e : j.find("instruments")->items())
             if (e.find("id")->as_string() == id) return e.find("status")->as_string();
         return std::string("absent");
     };
@@ -1466,7 +1466,7 @@ TEST_CASE("api: the hidden app serves every endpoint through its window and stop
     capture(&landing);
 
     // Launch the hello_world fixture: the window then shows its page.
-    Response launched = http(port, "POST", "/v0/applets/dev.caliper.hello-world/launch", bearer(token));
+    Response launched = http(port, "POST", "/v0/instruments/dev.caliper.hello-world/launch", bearer(token));
     REQUIRE_MESSAGE(launched.status == 200, launched.body);
     CHECK(parse_json(launched.body).find("id")->as_string() == "dev.caliper.hello-world");
     CHECK(status_of("dev.caliper.hello-world") == "ACTIVE");

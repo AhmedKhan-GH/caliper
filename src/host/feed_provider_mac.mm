@@ -29,7 +29,7 @@ constexpr uint32_t kRingCapacity = 4096;
 constexpr int      kPeriodMs     = 100;    // 10 Hz (spec §4)
 
 // Host steady clock in ns (mach_absolute-derived), the same epoch across
-// channels so applets can align series (spec §2). 128-bit intermediate so the
+// channels so instruments can align series (spec §2). 128-bit intermediate so the
 // numer multiply cannot overflow before the denom divide.
 int64_t now_ns() {
     static mach_timebase_info_data_t tb = {0, 0};

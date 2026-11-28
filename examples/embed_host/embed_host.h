@@ -7,8 +7,8 @@
 // it creates any application object or window, so nothing appears on screen:
 // no window, no Dock icon, no taskbar button. It pumps frames for
 // CALIPER_EMBED_EXIT_AFTER seconds (default 1), reads the last frame back,
-// prints what it did and returns the exit code: 0 when the applet drew, 1 on
-// any refusal or a blank frame.
+// prints what it did and returns the exit code: 0 when the instrument drew, 1
+// on any refusal or a blank frame.
 // ===========================================================================
 #pragma once
 
@@ -41,7 +41,7 @@ inline bool embed_offscreen_requested() {
     return v && *v && std::strcmp(v, "0") != 0;
 }
 
-inline int embed_run_offscreen(const char* applet_id, CaliperLogFn log_fn,
+inline int embed_run_offscreen(const char* instrument_id, CaliperLogFn log_fn,
                                CaliperCrashFn crash_fn) {
     const int W = 1280, H = 800;
     const uint32_t lib = caliper_embed_api_version();
@@ -51,11 +51,11 @@ inline int embed_run_offscreen(const char* applet_id, CaliperLogFn log_fn,
 
     // STEP 1: create the core, as the window mode does.
     CaliperCoreDesc desc{};
-    desc.struct_size = sizeof desc;
-    desc.renderer    = CALIPER_RENDERER_DEFAULT;
-    desc.applets_dir = std::getenv("CALIPER_EMBED_APPLETS");  // may be NULL
-    desc.log_fn      = log_fn;
-    desc.crash_fn    = crash_fn;
+    desc.struct_size     = sizeof desc;
+    desc.renderer        = CALIPER_RENDERER_DEFAULT;
+    desc.instruments_dir = std::getenv("CALIPER_EMBED_INSTRUMENTS");  // may be NULL
+    desc.log_fn          = log_fn;
+    desc.crash_fn        = crash_fn;
     CaliperCore* core = caliper_core_create(&desc);
     if (!core) { std::fprintf(stderr, "[embed-host] core create failed\n"); return 1; }
 
@@ -73,10 +73,10 @@ inline int embed_run_offscreen(const char* applet_id, CaliperLogFn log_fn,
         return 1;
     }
 
-    // STEP 3: load the applet.
-    if (!caliper_core_load_applet(core, applet_id)) {
-        std::fprintf(stderr, "[embed-host] load_applet '%s' failed: %s\n",
-                     applet_id, caliper_core_last_error(core));
+    // STEP 3: load the instrument.
+    if (!caliper_core_load_instrument(core, instrument_id)) {
+        std::fprintf(stderr, "[embed-host] load_instrument '%s' failed: %s\n",
+                     instrument_id, caliper_core_last_error(core));
         caliper_core_shutdown(core);
         return 1;
     }
@@ -95,7 +95,7 @@ inline int embed_run_offscreen(const char* applet_id, CaliperLogFn log_fn,
         elapsed = std::chrono::duration<double>(clock::now() - t0).count();
     } while (elapsed < seconds);
 
-    // Read the last frame back and count the pixels the applet drew: any
+    // Read the last frame back and count the pixels the instrument drew: any
     // channel above 80 is well clear of the dark background.
     std::vector<uint8_t> px((size_t)W * H * 4, 0);
     int drawn = 0;
@@ -105,7 +105,7 @@ inline int embed_run_offscreen(const char* applet_id, CaliperLogFn log_fn,
     }
     std::printf("[embed-host] offscreen: %d frames of %s at %dx%d in %.2f s, "
                 "%d drawn pixels in the last frame\n",
-                frames, applet_id, W, H, elapsed, drawn);
+                frames, instrument_id, W, H, elapsed, drawn);
 
     // STEP 5: tear down.
     caliper_core_shutdown(core);

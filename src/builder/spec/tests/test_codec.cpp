@@ -15,9 +15,9 @@ using nlohmann::json;
 
 namespace {
 
-const char* kCanonicalExample = R"(caliper_spec = 0
+const char* kCanonicalExample = R"(caliper_spec = 2
 
-[applet]
+[instrument]
 id = "attention-entropy"
 title = "Attention entropy"
 description = "Entropy of each attention head while the model trains."
@@ -62,7 +62,7 @@ children = ["heat", "loss"]
 
 cs::ParseResult parse(const std::string& text) { return cs::parse_toml(text); }
 
-std::string with_applet(const std::string& body) { return "caliper_spec = 0\n[applet]\nid = \"a\"\n" + body; }
+std::string with_instrument(const std::string& body) { return "caliper_spec = 2\n[instrument]\nid = \"a\"\n" + body; }
 
 }  // namespace
 
@@ -70,9 +70,9 @@ TEST_CASE("the contracts' example parses into the expected spec") {
     auto r = parse(fixture("attention-entropy.spec.toml"));
     REQUIRE_MESSAGE(r.ok(), dump(r.diagnostics));
     const cs::Spec& s = r.spec;
-    CHECK(s.version == 0);
-    CHECK(s.applet.id == "attention-entropy");
-    CHECK(s.applet.title == std::optional<std::string>("Attention entropy"));
+    CHECK(s.version == 2);
+    CHECK(s.instrument.id == "attention-entropy");
+    CHECK(s.instrument.title == std::optional<std::string>("Attention entropy"));
     REQUIRE(s.sources.size() == 3);
     CHECK(s.sources[0].catalog == std::optional<std::string>("live:attn.weights"));
     CHECK(s.sources[1].from == std::optional<std::string>("attn"));
@@ -136,7 +136,7 @@ TEST_CASE("every valid fixture round trips through canonical JSON") {
 TEST_CASE("the canonical JSON text is compact, with keys in byte order") {
     auto r = parse(fixture("minimal.spec.toml"));
     REQUIRE(r.ok());
-    CHECK(cs::to_json_text(r.spec) == R"({"applet":{"id":"empty"},"caliper_spec":0})");
+    CHECK(cs::to_json_text(r.spec) == R"({"caliper_spec":2,"instrument":{"id":"empty"}})");
 
     auto e = parse(fixture("attention-entropy.spec.toml"));
     REQUIRE(e.ok());
@@ -148,9 +148,9 @@ TEST_CASE("the canonical JSON text is compact, with keys in byte order") {
 
 TEST_CASE("strings with line breaks, quotes and control characters survive both writers") {
     cs::Spec s;
-    s.applet.id = "texts";
-    s.applet.description = std::string("first line\nsecond \"quoted\" line\twith a tab\\ and \x01 a control\r\n");
-    s.applet.title = "Unicode \xC3\xA9t\xC3\xA9 \xE2\x9C\x93";
+    s.instrument.id = "texts";
+    s.instrument.description = std::string("first line\nsecond \"quoted\" line\twith a tab\\ and \x01 a control\r\n");
+    s.instrument.title = "Unicode \xC3\xA9t\xC3\xA9 \xE2\x9C\x93";
     cs::Panel p;
     p.id = "note";
     p.primitive = cs::Primitive::text;
@@ -172,13 +172,13 @@ TEST_CASE("an extension table is kept as written, and an empty one is dropped") 
     CHECK(r.spec.panels[4].x == json::parse(R"({"pinned": true})"));
     CHECK(r.spec.layout->x == json::parse(R"({"active": 0})"));
 
-    auto e = parse(with_applet("x = {}\n"));
+    auto e = parse(with_instrument("x = {}\n"));
     REQUIRE(e.ok());
-    CHECK(e.spec.applet.x.is_null());
+    CHECK(e.spec.instrument.x.is_null());
 }
 
 TEST_CASE("an integer key takes a number with no fractional part, as a browser cannot tell them apart") {
-    auto r = parse(with_applet(R"(
+    auto r = parse(with_instrument(R"(
 [[source]]
 id = "t"
 catalog = "tensor:t"
@@ -191,7 +191,7 @@ catalog = "tensor:t"
     CHECK(r.spec.sources[0].transforms[0].axis == std::vector<std::int64_t>{1});
     CHECK(r.spec.sources[0].transforms[0].index == std::optional<std::int64_t>(-2));
 
-    auto bad = parse(with_applet(R"(
+    auto bad = parse(with_instrument(R"(
 [[source]]
 id = "t"
 catalog = "tensor:t"
@@ -203,7 +203,7 @@ catalog = "tensor:t"
 }
 
 TEST_CASE("parse errors carry the line and column of the value") {
-    auto r = parse("caliper_spec = 0\n[applet]\nid = \"a\"\n\n[[panel]]\nid = \"p\"\nprimitive = \"heatmap\"\n"
+    auto r = parse("caliper_spec = 2\n[instrument]\nid = \"a\"\n\n[[panel]]\nid = \"p\"\nprimitive = \"heatmap\"\n"
                    "options = { colourmap = \"viridis\" }\n");
     REQUIRE_FALSE(r.ok());
     const cs::Diagnostic* d = find(r.diagnostics, "spec.unknown_option");
@@ -214,7 +214,7 @@ TEST_CASE("parse errors carry the line and column of the value") {
     CHECK(d->to_error().where == "panel[0].options.colourmap");
 
     // A missing key points at the table that lacks it.
-    auto m = parse("caliper_spec = 0\n[applet]\nid = \"a\"\n\n[[panel]]\nprimitive = \"text\"\n");
+    auto m = parse("caliper_spec = 2\n[instrument]\nid = \"a\"\n\n[[panel]]\nprimitive = \"text\"\n");
     const cs::Diagnostic* md = find(m.diagnostics, "spec.missing_key");
     REQUIRE(md);
     CHECK(md->path == "panel[0].id");
@@ -222,18 +222,18 @@ TEST_CASE("parse errors carry the line and column of the value") {
 }
 
 TEST_CASE("syntax errors carry a line and a column") {
-    auto t = parse("caliper_spec = 0\n[applet]\nid = \"a\"\ntitle = = 3\n");
+    auto t = parse("caliper_spec = 2\n[instrument]\nid = \"a\"\ntitle = = 3\n");
     REQUIRE(t.diagnostics.size() == 1);
     CHECK(t.diagnostics[0].code == "spec.syntax");
     CHECK(t.diagnostics[0].line == 4);
     CHECK(t.diagnostics[0].to_error().where == "4:" + std::to_string(t.diagnostics[0].column));
 
-    auto j = cs::from_json_text("{\n  \"caliper_spec\": 0,\n  \"applet\": {\"id\": \"a\",}\n}");
+    auto j = cs::from_json_text("{\n  \"caliper_spec\": 2,\n  \"instrument\": {\"id\": \"a\",}\n}");
     REQUIRE(j.diagnostics.size() == 1);
     CHECK(j.diagnostics[0].code == "spec.syntax");
     CHECK(j.diagnostics[0].line == 3);
 
-    auto dup = cs::from_json_text(R"({"caliper_spec": 0, "applet": {"id": "a", "id": "b"}})");
+    auto dup = cs::from_json_text(R"({"caliper_spec": 2, "instrument": {"id": "a", "id": "b"}})");
     REQUIRE(dup.diagnostics.size() == 1);
     CHECK(dup.diagnostics[0].code == "spec.syntax");
     CHECK(dup.diagnostics[0].message.find("\"id\"") != std::string::npos);
@@ -241,41 +241,45 @@ TEST_CASE("syntax errors carry a line and a column") {
 
 TEST_CASE("values that the JSON form cannot carry are refused") {
     SUBCASE("a date") {
-        auto r = parse(with_applet("x = { when = 2026-11-15T12:00:00Z }\n"));
-        CHECK(has(r.diagnostics, "spec.wrong_type", "applet.x.when"));
+        auto r = parse(with_instrument("x = { when = 2026-11-15T12:00:00Z }\n"));
+        CHECK(has(r.diagnostics, "spec.wrong_type", "instrument.x.when"));
         CHECK(r.diagnostics[0].line == 4);
     }
     SUBCASE("a local date and a time") {
-        CHECK(has(parse(with_applet("title = 2026-11-15\n")).diagnostics, "spec.wrong_type", "applet.title"));
-        CHECK(has(parse(with_applet("title = 12:00:00\n")).diagnostics, "spec.wrong_type", "applet.title"));
+        CHECK(has(parse(with_instrument("title = 2026-11-15\n")).diagnostics, "spec.wrong_type", "instrument.title"));
+        CHECK(has(parse(with_instrument("title = 12:00:00\n")).diagnostics, "spec.wrong_type", "instrument.title"));
     }
     SUBCASE("infinity and NaN") {
-        CHECK(has(parse(with_applet("x = { a = inf }\n")).diagnostics, "spec.out_of_range", "applet.x.a"));
-        CHECK(has(parse(with_applet("x = { a = nan }\n")).diagnostics, "spec.out_of_range", "applet.x.a"));
+        CHECK(has(parse(with_instrument("x = { a = inf }\n")).diagnostics, "spec.out_of_range", "instrument.x.a"));
+        CHECK(has(parse(with_instrument("x = { a = nan }\n")).diagnostics, "spec.out_of_range", "instrument.x.a"));
     }
     SUBCASE("an integer that JavaScript cannot read exactly") {
-        CHECK(has(parse(with_applet("x = { a = 9007199254740992 }\n")).diagnostics, "spec.out_of_range"));
-        CHECK(parse(with_applet("x = { a = 9007199254740991 }\n")).ok());
-        CHECK(has(cs::from_json(json::parse(R"({"caliper_spec":0,"applet":{"id":"a","x":{"n":18446744073709551615}}})"))
+        CHECK(has(parse(with_instrument("x = { a = 9007199254740992 }\n")).diagnostics, "spec.out_of_range"));
+        CHECK(parse(with_instrument("x = { a = 9007199254740991 }\n")).ok());
+        CHECK(has(cs::from_json(json::parse(R"({"caliper_spec":2,"instrument":{"id":"a","x":{"n":18446744073709551615}}})"))
                       .diagnostics,
                   "spec.out_of_range"));
     }
     SUBCASE("null") {
-        auto r = cs::from_json(json::parse(R"({"caliper_spec":0,"applet":{"id":"a","title":null}})"));
-        CHECK(has(r.diagnostics, "spec.wrong_type", "applet.title"));
+        auto r = cs::from_json(json::parse(R"({"caliper_spec":2,"instrument":{"id":"a","title":null}})"));
+        CHECK(has(r.diagnostics, "spec.wrong_type", "instrument.title"));
     }
     SUBCASE("text that is not UTF-8") {
-        json doc = {{"caliper_spec", 0}, {"applet", {{"id", "a"}, {"title", std::string("bad \xFF byte")}}}};
-        CHECK(has(cs::from_json(doc).diagnostics, "spec.bad_value", "applet.title"));
+        json doc = {{"caliper_spec", 2}, {"instrument", {{"id", "a"}, {"title", std::string("bad \xFF byte")}}}};
+        CHECK(has(cs::from_json(doc).diagnostics, "spec.bad_value", "instrument.title"));
     }
 }
 
 TEST_CASE("strict parsing refuses unknown keys outside x") {
-    auto r = parse(with_applet("titel = \"typo\"\n[[panel]]\nid = \"p\"\nprimitive = \"text\"\noptions = { text = \"t\" }\n"
-                               "colour = \"red\"\n"));
-    CHECK(has(r.diagnostics, "spec.unknown_key", "applet.titel"));
+    auto r = parse(with_instrument("titel = \"typo\"\n[[panel]]\nid = \"p\"\nprimitive = \"text\"\noptions = { text = \"t\" }\n"
+                                   "colour = \"red\"\n"));
+    CHECK(has(r.diagnostics, "spec.unknown_key", "instrument.titel"));
     CHECK(has(r.diagnostics, "spec.unknown_key", "panel[0].colour"));
     CHECK(r.spec == cs::Spec{});  // a failed parse returns an empty spec
+
+    auto legacy = parse("caliper_spec = 2\n[applet]\nid = \"a\"\n");
+    CHECK(has(legacy.diagnostics, "spec.unknown_key", "applet"));
+    CHECK(has(legacy.diagnostics, "spec.missing_key", "instrument"));
 }
 
 TEST_CASE("the item decoders that the command layer uses") {
@@ -306,7 +310,7 @@ TEST_CASE("the item decoders that the command layer uses") {
 
 TEST_CASE("hostile input is refused within bounded work") {
     SUBCASE("a text over the size limit") {
-        std::string big = with_applet("title = \"") + std::string(1024 * 1024, 'a') + "\"\n";
+        std::string big = with_instrument("title = \"") + std::string(1024 * 1024, 'a') + "\"\n";
         auto r = parse(big);
         REQUIRE(r.diagnostics.size() == 1);
         CHECK(r.diagnostics[0].code == "spec.too_large");
@@ -314,83 +318,91 @@ TEST_CASE("hostile input is refused within bounded work") {
               "spec.too_large");
     }
     SUBCASE("a 1 MiB string in a JSON value") {
-        json doc = {{"caliper_spec", 0}, {"applet", {{"id", "a"}, {"title", std::string(1024 * 1024, 'a')}}}};
+        json doc = {{"caliper_spec", 2}, {"instrument", {{"id", "a"}, {"title", std::string(1024 * 1024, 'a')}}}};
         auto r = cs::from_json(doc);
-        CHECK(has(r.diagnostics, "spec.string_too_long", "applet.title"));
+        CHECK(has(r.diagnostics, "spec.string_too_long", "instrument.title"));
         // The same string in a Spec built in code is caught by validation.
         cs::Spec s;
-        s.applet.id = "a";
-        s.applet.description = std::string(1024 * 1024, 'd');
-        CHECK(has(cs::validate(s).diagnostics, "spec.string_too_long", "applet.description"));
+        s.instrument.id = "a";
+        s.instrument.description = std::string(1024 * 1024, 'd');
+        CHECK(has(cs::validate(s).diagnostics, "spec.string_too_long", "instrument.description"));
     }
     SUBCASE("deeply nested inline arrays") {
         std::string open(40, '['), close(40, ']');
-        auto r = parse(with_applet("x = { a = " + open + "1" + close + " }\n"));
+        auto r = parse(with_instrument("x = { a = " + open + "1" + close + " }\n"));
         CHECK(has(r.diagnostics, "spec.too_deep"));
         std::string open2(400, '['), close2(400, ']');
-        auto r2 = parse(with_applet("x = { a = " + open2 + "1" + close2 + " }\n"));
+        auto r2 = parse(with_instrument("x = { a = " + open2 + "1" + close2 + " }\n"));
         CHECK(r2.diagnostics.size() == 1);
         CHECK((r2.diagnostics[0].code == "spec.syntax" || r2.diagnostics[0].code == "spec.too_deep"));
     }
     SUBCASE("a dotted key of 100,000 parts") {
         std::string key = "a";
         for (int i = 0; i < 100000; ++i) key += ".a";
-        auto r = parse("caliper_spec = 0\n[x." + key + "]\n");
+        auto r = parse("caliper_spec = 2\n[x." + key + "]\n");
         REQUIRE(r.diagnostics.size() == 1);
         CHECK(r.diagnostics[0].code == "spec.too_deep");
         CHECK(r.diagnostics[0].line == 2);
         // Quoted parts count too.
         std::string quoted = "\"a\"";
         for (int i = 0; i < 100; ++i) quoted += ".\"a\"";
-        CHECK(parse("caliper_spec = 0\nx." + quoted + " = 1\n").diagnostics[0].code == "spec.too_deep");
+        CHECK(parse("caliper_spec = 2\nx." + quoted + " = 1\n").diagnostics[0].code == "spec.too_deep");
         // Floats and dates do not count as dotted keys.
-        CHECK(parse(with_applet("x = { a = [1.5, 2.5, 3.5, 4.5, 5.5, 6.5, 7.5, 8.5, 9.5, 1.5, 2.5, 3.5, 4.5, 5.5, 6.5, "
-                                "7.5, 8.5, 9.5, 1.5, 2.5, 3.5, 4.5, 5.5, 6.5, 7.5, 8.5, 9.5, 1.5, 2.5, 3.5, 4.5, 5.5, "
-                                "6.5, 7.5] }\n"))
+        CHECK(parse(with_instrument("x = { a = [1.5, 2.5, 3.5, 4.5, 5.5, 6.5, 7.5, 8.5, 9.5, 1.5, 2.5, 3.5, 4.5, 5.5, 6.5, "
+                                    "7.5, 8.5, 9.5, 1.5, 2.5, 3.5, 4.5, 5.5, 6.5, 7.5, 8.5, 9.5, 1.5, 2.5, 3.5, 4.5, 5.5, "
+                                    "6.5, 7.5] }\n"))
                   .ok());
     }
     SUBCASE("deep nesting in JSON") {
         std::string open(100000, '['), close(100000, ']');
-        auto r = cs::from_json_text("{\"caliper_spec\":0,\"applet\":{\"id\":\"a\",\"x\":{\"a\":" + open + close +
+        auto r = cs::from_json_text("{\"caliper_spec\":2,\"instrument\":{\"id\":\"a\",\"x\":{\"a\":" + open + close +
                                     "}}}");
         REQUIRE(r.diagnostics.size() == 1);
         CHECK(r.diagnostics[0].code == "spec.too_deep");
         json deep = json::array();
         for (int i = 0; i < 40; ++i) deep = json::array({deep});
-        json doc = {{"caliper_spec", 0}, {"applet", {{"id", "a"}, {"x", {{"a", deep}}}}}};
+        json doc = {{"caliper_spec", 2}, {"instrument", {{"id", "a"}, {"x", {{"a", deep}}}}}};
         CHECK(has(cs::from_json(doc).diagnostics, "spec.too_deep"));
     }
     SUBCASE("a huge count of values") {
         std::string many = "x = { a = [";
         for (int i = 0; i < 70000; ++i) many += "1,";
         many += "] }\n";
-        auto r = parse(with_applet(many));
+        auto r = parse(with_instrument(many));
         REQUIRE(r.diagnostics.size() == 1);
         CHECK(r.diagnostics[0].code == "spec.too_many");
     }
     SUBCASE("many errors produce a bounded report") {
         std::string many;
         for (int i = 0; i < 2000; ++i) many += "k" + std::to_string(i) + " = 1\n";
-        auto r = parse("caliper_spec = 0\n" + many + "[applet]\nid = \"a\"\n");
+        auto r = parse("caliper_spec = 2\n" + many + "[instrument]\nid = \"a\"\n");
         CHECK(r.diagnostics.size() == cs::limits::kDiagnostics);
     }
 }
 
-TEST_CASE("a later or invalid version is refused with one error") {
-    auto later = parse("caliper_spec = 2\n[applet]\nid = \"a\"\nfuture_key = 1\n[[gadget]]\n");
+TEST_CASE("a retired, later or invalid version is refused with one error") {
+    auto later = parse("caliper_spec = 3\n[instrument]\nid = \"a\"\nfuture_key = 1\n[[gadget]]\n");
     REQUIRE(later.diagnostics.size() == 1);
     CHECK(later.diagnostics[0].code == "spec.unsupported_version");
     CHECK(later.diagnostics[0].message.find("newer Caliper") != std::string::npos);
     CHECK(later.diagnostics[0].line == 1);
 
-    CHECK(has(parse("caliper_spec = \"0\"\n[applet]\nid = \"a\"\n").diagnostics, "spec.wrong_type", "caliper_spec"));
-    CHECK(has(parse("[applet]\nid = \"a\"\n").diagnostics, "spec.missing_key", "caliper_spec"));
+    for (int old_version : {0, 1}) {
+        CAPTURE(old_version);
+        auto old = parse("caliper_spec = " + std::to_string(old_version) + "\n[instrument]\nid = \"a\"\n");
+        REQUIRE(old.diagnostics.size() == 1);
+        CHECK(old.diagnostics[0].code == "spec.unsupported_version");
+        CHECK(old.diagnostics[0].message.find("newer Caliper") == std::string::npos);
+    }
+
+    CHECK(has(parse("caliper_spec = \"2\"\n[instrument]\nid = \"a\"\n").diagnostics, "spec.wrong_type", "caliper_spec"));
+    CHECK(has(parse("[instrument]\nid = \"a\"\n").diagnostics, "spec.missing_key", "caliper_spec"));
 }
 
 TEST_CASE("a spec built in code round trips through both forms") {
     cs::Spec s;
-    s.applet.id = "built";
-    s.applet.description = std::string("ends with three quotes \"\"\" and a backslash \\");
+    s.instrument.id = "built";
+    s.instrument.description = std::string("ends with three quotes \"\"\" and a backslash \\");
     s.x = json::parse(R"({"k": [1, 2.5, "s", true, {"n": {}}], "weird key": {"é": -0.0}})");
     cs::Source src;
     src.id = "t";
@@ -424,7 +436,7 @@ TEST_CASE("a spec built in code round trips through both forms") {
     s.layout = cs::LayoutNode::of_panel("p");
 
     const std::string toml = cs::to_toml(s);
-    CHECK(toml.rfind("caliper_spec = 0\nlayout = \"p\"\nx = ", 0) == 0);
+    CHECK(toml.rfind("caliper_spec = 2\nlayout = \"p\"\nx = ", 0) == 0);
     CHECK(toml.find("axis = [2]") != std::string::npos);
     auto back = parse(toml);
     REQUIRE_MESSAGE(back.ok(), (dump(back.diagnostics) + toml));
@@ -436,13 +448,13 @@ TEST_CASE("a spec built in code round trips through both forms") {
     CHECK(cs::validate(s).ok());
 }
 
-// ---- spec version 1 (design/instruments.md) ---------------------------------
+// ---- scene panels and controls (design/instruments.md) ----------------------
 
-TEST_CASE("a version 1 spec with a scene panel and controls parses into the expected spec") {
+TEST_CASE("a version 2 spec with a scene panel and controls parses into the expected spec") {
     auto r = parse(fixture("instruments.spec.toml"));
     REQUIRE_MESSAGE(r.ok(), dump(r.diagnostics));
     const cs::Spec& s = r.spec;
-    CHECK(s.version == 1);
+    CHECK(s.version == 2);
     REQUIRE(s.panels.size() == 1);
     const cs::Panel& world = s.panels[0];
     CHECK(world.primitive == cs::Primitive::scene);
@@ -463,14 +475,14 @@ TEST_CASE("a version 1 spec with a scene panel and controls parses into the expe
     CHECK(s.controls[1].kind == cs::ControlKind::button);
     CHECK(s.controls[1].bind == "run:pause");
     CHECK(s.controls[1].options.empty());
-    CHECK(cs::required_version(s) == 1);
+    CHECK(cs::required_version(s) == 2);
 }
 
-TEST_CASE("a version 1 spec round trips through canonical TOML and canonical JSON") {
+TEST_CASE("a version 2 spec with controls round trips through canonical TOML and canonical JSON") {
     auto first = parse(fixture("instruments.spec.toml"));
     REQUIRE(first.ok());
     const std::string toml = cs::to_toml(first.spec);
-    CHECK(toml.find("caliper_spec = 1\n") == 0);
+    CHECK(toml.find("caliper_spec = 2\n") == 0);
     CHECK(toml.find("\n[[control]]\nid = \"lr\"\n") != std::string::npos);
     CHECK(toml.find("[[control]]") < toml.find("[layout]"));
     auto second = parse(toml);
@@ -488,39 +500,20 @@ TEST_CASE("a version 1 spec round trips through canonical TOML and canonical JSO
     CHECK(j.at("control")[1] == json::parse(R"({"id": "pause", "kind": "button", "bind": "run:pause"})"));
 }
 
-TEST_CASE("the version 0 fixtures read and write as version 0") {
+TEST_CASE("the fixtures read and write as version 2") {
     for (const std::string& name : valid_fixtures()) {
         CAPTURE(name);
         auto r = parse(fixture(name));
         REQUIRE(r.ok());
-        CHECK(r.spec.version == 0);
+        CHECK(r.spec.version == 2);
         CHECK(r.spec.controls.empty());
-        CHECK(cs::required_version(r.spec) == 0);
-        CHECK(cs::to_toml(r.spec).find("caliper_spec = 0\n") == 0);
-        // The migration changes only the number.
-        cs::Spec raised = r.spec;
-        raised.version = 1;
-        auto again = parse(cs::to_toml(raised));
-        REQUIRE_MESSAGE(again.ok(), dump(again.diagnostics));
-        CHECK(again.spec == raised);
+        CHECK(cs::required_version(r.spec) == 2);
+        CHECK(cs::to_toml(r.spec).find("caliper_spec = 2\n") == 0);
     }
 }
 
-TEST_CASE("a version 0 document that uses a key of version 1 gets the errors of version 0") {
-    const std::string head = "caliper_spec = 0\n[applet]\nid = \"a\"\n";
-    auto control = parse(head + "[[control]]\nid = \"lr\"\nkind = \"slider\"\nbind = \"param:lr\"\n");
-    CHECK(has(control.diagnostics, "spec.unknown_key", "control"));
-    auto scene = parse(head + "[[panel]]\nid = \"w\"\nprimitive = \"scene\"\nbind = { scene = \"live:model\" }\n");
-    CHECK(has(scene.diagnostics, "spec.unknown_primitive", "panel[0].primitive"));
-    CHECK(find(scene.diagnostics, "spec.unknown_primitive")->message.find("scene") != std::string::npos);
-    // The same document as version 1 parses.
-    CHECK(parse("caliper_spec = 1\n[applet]\nid = \"a\"\n[[panel]]\nid = \"w\"\nprimitive = \"scene\"\n"
-                "bind = { scene = \"live:model\" }\n")
-              .ok());
-}
-
 TEST_CASE("the parser checks the types and keys of controls and scene options") {
-    const std::string head = "caliper_spec = 1\n[applet]\nid = \"a\"\n";
+    const std::string head = "caliper_spec = 2\n[instrument]\nid = \"a\"\n";
     auto control = [&](const std::string& body) { return parse(head + "[[control]]\n" + body).diagnostics; };
     CHECK(has(control("id = \"k\"\nkind = \"knob\"\nbind = \"value\"\n"), "spec.unknown_control_kind",
               "control[0].kind"));
@@ -533,7 +526,7 @@ TEST_CASE("the parser checks the types and keys of controls and scene options") 
               "spec.unknown_option", "control[0].options.colormap"));
     CHECK(has(control("id = \"k\"\nkind = \"slider\"\nbind = \"value\"\noptions = { min = \"0\" }\n"),
               "spec.wrong_type", "control[0].options.min"));
-    CHECK(has(parse("caliper_spec = 1\ncontrol = 3\n[applet]\nid = \"a\"\n").diagnostics, "spec.wrong_type", "control"));
+    CHECK(has(parse("caliper_spec = 2\ncontrol = 3\n[instrument]\nid = \"a\"\n").diagnostics, "spec.wrong_type", "control"));
 
     auto scene = [&](const std::string& options) {
         return parse(head + "[[panel]]\nid = \"w\"\nprimitive = \"scene\"\nbind = { scene = \"live:model\" }\n"
@@ -555,7 +548,7 @@ TEST_CASE("the parser checks the types and keys of controls and scene options") 
               .ok());
 }
 
-TEST_CASE("the item decoders take the keys of version 1") {
+TEST_CASE("the item decoders take controls and scene panels") {
     auto c = cs::control_from_json(json::parse(R"({"id": "lr", "kind": "slider", "bind": "param:lr",
                                                    "options": {"min": 0.001, "max": 1, "log": true}})"),
                                    "control[0]");

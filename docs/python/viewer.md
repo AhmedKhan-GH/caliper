@@ -18,7 +18,7 @@ The Caliper app and `caliper-viewer` attach to a live session or a stream and sh
 | `--data-dir <root>` | Session-file root, `$CALIPER_DATA_DIR` by default, then the app-data folder |
 | `--exit-after <s>` | Close the window after `s` seconds |
 | `--size <w>x<h>` | Window size in points, 1280x800 by default |
-| `--stats` | Print a stats line to stderr each 2 s: fps, updates, step-to-screen median, p95 and maximum, skipped and client-dropped counts, renderer path and copies of each view, RSS and footprint, and the copies per frame, frame times and GPU times of the renderer ([Copy Counters and Frame Statistics](../applets/rendering.md#copy-counters-and-frame-statistics)) |
+| `--stats` | Print a stats line to stderr each 2 s: fps, updates, step-to-screen median, p95 and maximum, skipped and client-dropped counts, renderer path and copies of each view, RSS and footprint, and the copies per frame, frame times and GPU times of the renderer ([Copy Counters and Frame Statistics](../instruments/rendering.md#copy-counters-and-frame-statistics)) |
 | `--latency-log <file>` | Write each latency sample as `t_ns lat_ms` on one line, and imply `--stats` |
 | `--headless` | Use an offscreen canvas and no window, for CI and tests. It needs `--session` or `--url`, and prints one `received` line for each view when it exits |
 | `--dump-dir <dir>` | With `--headless`, write the pixels or values of each view to `<dir>` when its sequence number changes |

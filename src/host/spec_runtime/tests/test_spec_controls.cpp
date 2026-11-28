@@ -1,4 +1,4 @@
-// Tests of the control widgets of the spec runtime (spec_instruments.h,
+// Tests of the control widgets of the spec runtime (spec_live_host.h,
 // design/instruments.md, Control Table): a headless ImGui context with the
 // mouse driven through its input queue, a fake run control and a recorder of
 // events. A slider bound to param:lr sends the value the person drags to and
@@ -12,7 +12,7 @@
 // applies on Return, a picker sets a choice from its menu, a toggle bound to a
 // state holds a boolean, a pick writes its state, and the app's single keys
 // are reserved shortcuts. The suite "gpu" draws one row of each new kind.
-#include "spec_runtime/spec_instruments.h"
+#include "spec_runtime/spec_live_host.h"
 #include "spec_runtime/spec_annotations.h"
 #include "spec_runtime/spec_offscreen.h"
 #include "spec_runtime/spec_shortcuts.h"
@@ -39,7 +39,7 @@
 
 namespace cb = caliper_builder;
 namespace spec = caliper_builder::spec;
-using caliper_host::SpecInstrumentHost;
+using caliper_host::SpecLiveHost;
 using caliper_host::SpecLook;
 using nlohmann::json;
 
@@ -211,7 +211,7 @@ TEST_CASE("spec controls: a slider bound to param:lr sends the dragged value and
     FakeRun run;
     run.run = training();
     Recorder rec;
-    SpecInstrumentHost host{&rec, &run};
+    SpecLiveHost host{&rec, &run};
     const SpecLook look;
     spec::Control lr = make("lr", spec::ControlKind::slider, "param:lr");
     lr.title = "Learning rate";
@@ -252,7 +252,7 @@ TEST_CASE("spec controls: a slider clamps the script's own range and value to fi
     p.max = 1e300;
     p.log = false;
     p.value = 5;
-    SpecInstrumentHost host{nullptr, &run};
+    SpecLiveHost host{nullptr, &run};
     const SpecLook look;
     spec::Control lr = make("huge", spec::ControlKind::slider, "param:lr");
     auto draw = [&] { return caliper_host::draw_spec_control(lr, kRow, look, host); };
@@ -281,9 +281,9 @@ TEST_CASE("spec controls: a slider without a script, without control or without 
     Recorder rec;
     const SpecLook look;
     spec::Control lr = make("lr", spec::ControlKind::slider, "param:lr");
-    SpecInstrumentHost none{&rec, nullptr};
+    SpecLiveHost none{&rec, nullptr};
     ui.click(390, 15, [&] { return caliper_host::draw_spec_control(lr, kRow, look, none); });
-    SpecInstrumentHost host{&rec, &run};
+    SpecLiveHost host{&rec, &run};
     ui.click(390, 15, [&] { return caliper_host::draw_spec_control(lr, kRow, look, host); });   // not attached
     run.run = training();
     run.run.control = false;
@@ -298,7 +298,7 @@ TEST_CASE("spec controls: a slider without a script, without control or without 
 TEST_CASE("spec controls: a slider bound to value holds its value and pushes it") {
     Ui ui;
     Recorder rec;
-    SpecInstrumentHost host{&rec, nullptr};
+    SpecLiveHost host{&rec, nullptr};
     const SpecLook look;
     spec::Control w = make("weight", spec::ControlKind::slider, "value");
     w.options.min = 0.0;
@@ -318,7 +318,7 @@ TEST_CASE("spec controls: a button queues its action, and run:pause pauses a run
     FakeRun run;
     run.run = training();
     Recorder rec;
-    SpecInstrumentHost host{&rec, &run};
+    SpecLiveHost host{&rec, &run};
     const SpecLook look;
     spec::Control save = make("save", spec::ControlKind::button, "action:save");
     save.title = "Save Snapshot";
@@ -376,7 +376,7 @@ TEST_CASE("spec controls: drawn button text excludes binding identifiers") {
     FakeRun run;
     run.run = training();
     run.run.actions[0].name = "apply_clamp";
-    SpecInstrumentHost host{nullptr, &run};
+    SpecLiveHost host{nullptr, &run};
     const SpecLook look;
     spec::Control clamp = make("clamp", spec::ControlKind::button, "action:apply_clamp");
     clamp.title = "Apply Clamp";
@@ -422,7 +422,7 @@ TEST_CASE("spec controls: readouts use current unplaced script parameters") {
     spec::BoundText text;
     text.format = "{status:s}";
     text.fields["status"] = ref;
-    SpecInstrumentHost host;
+    SpecLiveHost host;
     host.run = &run;
     host.spec = &instrument;
     const auto shown = [&] { return caliper_host::spec_bound_text_string(text, host); };
@@ -447,7 +447,7 @@ TEST_CASE("spec controls: readouts use current unplaced script parameters") {
 TEST_CASE("spec controls: a readout and a title wider than their part of the row end in an ellipsis and show whole on a hover") {
     Ui ui;
     Recorder rec;
-    SpecInstrumentHost host{&rec, nullptr};
+    SpecLiveHost host{&rec, nullptr};
     const SpecLook look;
     spec::Control now = make("now", spec::ControlKind::readout, "");
     now.title = "Now";
@@ -487,7 +487,7 @@ TEST_CASE("spec controls: a slider row and a button row in the house look") {
     FakeRun run;
     run.run = training();
     Recorder rec;
-    SpecInstrumentHost host{&rec, &run};
+    SpecLiveHost host{&rec, &run};
     spec::Control lr = make("lr", spec::ControlKind::slider, "param:lr");
     lr.title = "Learning rate";
     spec::Control save = make("save", spec::ControlKind::button, "action:save");
@@ -524,7 +524,7 @@ TEST_CASE("spec controls: a toggle bound to intervene:<point> ablates the point 
     attn.point = attn.module = "blocks.0.attn";
     run.pts = {attn};
     Recorder rec;
-    SpecInstrumentHost host{&rec, &run};
+    SpecLiveHost host{&rec, &run};
     const SpecLook look;
     spec::Control t = make("ablate", spec::ControlKind::toggle, "intervene:blocks.0.attn");
     auto draw = [&] { return caliper_host::draw_spec_control(t, kRow, look, host); };
@@ -569,7 +569,7 @@ TEST_CASE("spec controls: a toggle bound to a boolean parameter sets it") {
     aug.value = false;
     run.run.params.push_back(aug);
     Recorder rec;
-    SpecInstrumentHost host{&rec, &run};
+    SpecLiveHost host{&rec, &run};
     const SpecLook look;
     spec::Control t = make("aug", spec::ControlKind::toggle, "param:augment");
     CHECK(ui.click(390, 15, [&] { return caliper_host::draw_spec_control(t, kRow, look, host); }) == 1);
@@ -589,8 +589,8 @@ namespace {
 // and the given controls, as the session's values read it.
 spec::Spec instrument_spec(std::vector<spec::Control> controls) {
     spec::Spec s;
-    s.version = 1;
-    s.applet.id = "bench";
+    s.version = spec::kFormatVersion;
+    s.instrument.id = "bench";
     spec::StateVar measure;
     measure.id = "measure";
     measure.type = spec::StateType::text;
@@ -669,7 +669,7 @@ TEST_CASE("spec controls: a range drags its nearer grab, keeps the session's val
     const spec::Spec sp = instrument_spec({win, span});
     cb::ValueStore values;
     values.reset(sp);
-    SpecInstrumentHost host{&rec, nullptr, &values, nullptr, &sp};
+    SpecLiveHost host{&rec, nullptr, &values, nullptr, &sp};
     const SpecLook look;
     // The high grab is nearer the right end of the track; a drag there takes it to the top.
     drag(ui, 380, 399, 15, [&] { return caliper_host::draw_spec_control(win, kRow, look, host); });
@@ -701,7 +701,7 @@ TEST_CASE("spec controls: a segmented group chooses on a click, and on its key w
     const spec::Spec sp = instrument_spec({group, note});
     cb::ValueStore values;
     values.reset(sp);
-    SpecInstrumentHost host{&rec, nullptr, &values, nullptr, &sp};
+    SpecLiveHost host{&rec, nullptr, &values, nullptr, &sp};
     const SpecLook look;
     const ImRect second(0, 40, 400, 70);
     auto draw = [&] {
@@ -737,7 +737,7 @@ TEST_CASE("spec controls: a group with multiple turns each choice on and off") {
     const spec::Spec sp = instrument_spec({layers});
     cb::ValueStore values;
     values.reset(sp);
-    SpecInstrumentHost host{&rec, nullptr, &values, nullptr, &sp};
+    SpecLiveHost host{&rec, nullptr, &values, nullptr, &sp};
     const SpecLook look;
     auto draw = [&] { return caliper_host::draw_spec_control(layers, kRow, look, host); };
     CHECK(values.control_value("layers") == json::array());
@@ -762,7 +762,7 @@ TEST_CASE("spec controls: a text field applies its text on Return, cut at max_le
     const spec::Spec sp = instrument_spec({note});
     cb::ValueStore values;
     values.reset(sp);
-    SpecInstrumentHost host{&rec, nullptr, &values, nullptr, &sp};
+    SpecLiveHost host{&rec, nullptr, &values, nullptr, &sp};
     const SpecLook look;
     auto draw = [&] { return caliper_host::draw_spec_control(note, kRow, look, host); };
     ui.click(300, 15, draw);
@@ -784,7 +784,7 @@ TEST_CASE("spec controls: a picker sets a choice from its menu, and a toggle bou
     const spec::Spec sp = instrument_spec({pick, flag});
     cb::ValueStore values;
     values.reset(sp);
-    SpecInstrumentHost host{&rec, nullptr, &values, nullptr, &sp};
+    SpecLiveHost host{&rec, nullptr, &values, nullptr, &sp};
     const SpecLook look;
     auto draw = [&] { return caliper_host::draw_spec_control(pick, kRow, look, host); };
     ui.click(300, 15, draw);   // opens the menu below the row
@@ -808,7 +808,7 @@ TEST_CASE("spec controls: a pick records its fields in the session and writes th
     cb::ValueStore values;
     values.reset(sp);
     Recorder rec;
-    SpecInstrumentHost host{&rec, nullptr, &values, nullptr, &sp};
+    SpecLiveHost host{&rec, nullptr, &values, nullptr, &sp};
     cb::Event pick;
     pick.kind = cb::EventKind::pick;
     pick.panel = "world";
@@ -831,7 +831,7 @@ TEST_CASE("spec controls: the single keys of the app's views are reserved shortc
     // The live views use F (fit the camera) and U (turn the up axis) without a
     // modifier (src/host/live/live_views_draw.cpp); the transport takes Space,
     // the arrows, Home and End, which the grammar of a shortcut never reaches.
-    const std::string head = "caliper_spec = 1\n[applet]\nid = \"a\"\n[[state]]\nid = \"m\"\ntype = \"text\"\n"
+    const std::string head = "caliper_spec = 2\n[instrument]\nid = \"a\"\n[[state]]\nid = \"m\"\ntype = \"text\"\n"
                              "choices = [\"x\", \"y\"]\n[[control]]\nid = \"g\"\nkind = \"segmented\"\n"
                              "bind = \"state:m\"\noptions = { choices = [{ value = \"x\", key = \"";
     for (const char* key : {"f", "u", "shift+f", "shift+u"}) {
@@ -878,7 +878,7 @@ TEST_CASE("spec controls: a range, a picker, a text field, a segmented group and
     const spec::Spec sp = instrument_spec({win, cmap, note, measure, now});
     cb::ValueStore values;
     values.reset(sp);
-    SpecInstrumentHost host{&rec, nullptr, &values, nullptr, &sp};
+    SpecLiveHost host{&rec, nullptr, &values, nullptr, &sp};
     const SpecLook look = c->look();
     const float row = caliper_host::spec_control_height(win, look);
     const std::vector<const spec::Control*> rows = {&win, &cmap, &note, &measure, &now};
@@ -930,7 +930,7 @@ TEST_CASE("spec controls: texts wider than a narrow row end in an ellipsis in th
     const spec::Spec sp = instrument_spec({now, measure, win});
     cb::ValueStore values;
     values.reset(sp);
-    SpecInstrumentHost host{&rec, nullptr, &values, nullptr, &sp};
+    SpecLiveHost host{&rec, nullptr, &values, nullptr, &sp};
     const SpecLook look = c->look();
     const float row = caliper_host::spec_control_height(now, look);
     const std::vector<const spec::Control*> rows = {&now, &measure, &win};
@@ -966,7 +966,7 @@ TEST_CASE("spec controls: a text parameter sends UTF-8 on Return") {
     const auto sp = instrument_spec({control});
     cb::ValueStore values;
     values.reset(sp);
-    SpecInstrumentHost host{&rec, &run, &values, nullptr, &sp};
+    SpecLiveHost host{&rec, &run, &values, nullptr, &sp};
     const SpecLook look;
     auto draw = [&] { return caliper_host::draw_spec_control(control, kRow, look, host); };
     ui.click(300, 15, draw);
@@ -1000,7 +1000,7 @@ TEST_CASE("spec controls: a text parameter preserves a long current value") {
     const auto sp = instrument_spec({control});
     cb::ValueStore values;
     values.reset(sp);
-    SpecInstrumentHost host{&rec, &run, &values, nullptr, &sp};
+    SpecLiveHost host{&rec, &run, &values, nullptr, &sp};
     const SpecLook look;
     auto draw = [&] { return caliper_host::draw_spec_control(control, kRow, look, host); };
     ui.click(300, 15, draw);
@@ -1026,7 +1026,7 @@ TEST_CASE("spec controls: an oversized parameter edit is refused without a trunc
     const auto sp = instrument_spec({control});
     cb::ValueStore values;
     values.reset(sp);
-    SpecInstrumentHost host{&rec, &run, &values, nullptr, &sp};
+    SpecLiveHost host{&rec, &run, &values, nullptr, &sp};
     const SpecLook look;
     auto draw = [&] { return caliper_host::draw_spec_control(control, kRow, look, host); };
     ui.click(300, 15, draw);
@@ -1058,7 +1058,7 @@ TEST_CASE("spec controls: text drafts survive refusals and wait for producer con
     prompt.name = "prompt"; prompt.type = "text"; prompt.value = "";
     run.run.params.push_back(prompt);
     auto control = make("refused_prompt", spec::ControlKind::text, "param:prompt");
-    SpecInstrumentHost host{&rec, &run};
+    SpecLiveHost host{&rec, &run};
     const SpecLook look;
     auto draw = [&] { return caliper_host::draw_spec_control(control, kRow, look, host); };
     bool asynchronous = false;
@@ -1122,7 +1122,7 @@ TEST_CASE("spec controls: session teardown discards an active text draft") {
     prompt.name = "prompt"; prompt.type = "text"; prompt.value = "";
     run.run.params.push_back(prompt);
     auto control = make("session_prompt", spec::ControlKind::text, "param:prompt");
-    SpecInstrumentHost host{nullptr, &run};
+    SpecLiveHost host{nullptr, &run};
     const SpecLook look;
     auto draw = [&] { return caliper_host::draw_spec_control(control, kRow, look, host); };
     ui.click(180, 15, draw);
@@ -1159,7 +1159,7 @@ TEST_CASE("spec controls: a text context survives until process exit") {
     run.run.params.push_back(prompt);
     auto control = make("exit_prompt", spec::ControlKind::text, "param:prompt");
     control.options.max_length = 4;
-    SpecInstrumentHost host{nullptr, &run};
+    SpecLiveHost host{nullptr, &run};
     const SpecLook look;
     auto draw = [&] { return caliper_host::draw_spec_control(control, kRow, look, host); };
     exit_ui->click(180, 15, draw);
@@ -1184,7 +1184,7 @@ TEST_CASE("spec controls: context destruction releases isolated text drafts") {
     run.run.params.push_back(prompt);
     auto control = make("context_prompt", spec::ControlKind::text, "param:prompt");
     control.options.max_length = 4;
-    SpecInstrumentHost host{nullptr, &run};
+    SpecLiveHost host{nullptr, &run};
     const SpecLook look;
     auto draw = [&] { return caliper_host::draw_spec_control(control, kRow, look, host); };
     auto draft = [&](Ui& ui, const char* text) {

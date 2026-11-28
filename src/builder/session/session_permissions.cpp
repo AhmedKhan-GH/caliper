@@ -22,7 +22,7 @@ using namespace session_internal;
 // ---- approvals bound to content --------------------------------------------
 
 bool Session::Impl::replaces_document(const std::string& name) {
-    return name == "spec.new" || name == "spec.open" || name == "applet.open";
+    return name == "spec.new" || name == "spec.open" || name == "instrument.open";
 }
 
 Session::Impl::Content Session::Impl::content_of(const CommandInvocation& inv) {
@@ -34,16 +34,16 @@ Session::Impl::Content Session::Impl::content_of(const CommandInvocation& inv) {
     std::string before_label;
     std::string after_label;
     std::vector<spec::Diagnostic> diagnostics;
-    if (inv.name == "applet.save") {
+    if (inv.name == "instrument.save") {
         // The saved file against the open spec it would be overwritten with.
-        const std::string id = str_arg(inv.args, "id", doc->spec.applet.id);
+        const std::string id = str_arg(inv.args, "id", doc->spec.instrument.id);
         if (!valid_id(id)) return out;
         spec::Spec saved = doc->spec;
-        saved.applet.id = id;
+        saved.instrument.id = id;
         after = spec::to_toml(saved);
-        const fs::path file = ws() / "applets" / fs::u8path(id) / fs::u8path(id + ".spec.toml");
+        const fs::path file = ws() / "instruments" / fs::u8path(id) / fs::u8path(id + ".spec.toml");
         if (read_file_bounded(file.u8string(), spec::limits::kTextBytes, &before, "spec.too_large")) before.clear();
-        before_label = after_label = "applets/" + id + "/" + id + ".spec.toml";
+        before_label = after_label = "instruments/" + id + "/" + id + ".spec.toml";
         diagnostics = spec::validate(saved, resolver()).diagnostics;
     } else if (replaces_document(inv.name)) {
         // The open spec with unsaved changes against the one that would replace it.
@@ -55,7 +55,7 @@ Session::Impl::Content Session::Impl::content_of(const CommandInvocation& inv) {
             if (first_spec_error(diagnostics)) return out;
         } else {
             LoadedSpec loaded = inv.name == "spec.open" ? load_spec_file(str_arg(inv.args, "path"), resolver())
-                                                        : load_applet(str_arg(inv.args, "id"), resolver());
+                                                        : load_instrument(str_arg(inv.args, "id"), resolver());
             if (loaded.error) return out;
             next = std::move(loaded.spec);
             diagnostics = std::move(loaded.diagnostics);
@@ -63,7 +63,7 @@ Session::Impl::Content Session::Impl::content_of(const CommandInvocation& inv) {
         before = spec::to_toml(doc->spec);
         after = spec::to_toml(next);
         before_label = spec_label();
-        after_label = next.applet.id + ".spec.toml";
+        after_label = next.instrument.id + ".spec.toml";
     } else {
         return out;
     }
@@ -346,15 +346,15 @@ ApprovalDecision Session::Impl::base_policy(const CommandDescriptor& d, const Co
         while (python_asked.size() > 256) python_asked.pop_front();
         return ApprovalDecision::ask;
     }
-    if (inv.name == "applet.save" && !user_origin(inv.origin)) {
-        // Writing a new applet destroys nothing; overwriting one asks.
+    if (inv.name == "instrument.save" && !user_origin(inv.origin)) {
+        // Writing a new instrument destroys nothing; overwriting one asks.
         if (!bool_arg(inv.args, "overwrite", false)) return ApprovalDecision::allow;
         std::string id = str_arg(inv.args, "id");
         if (id.empty()) {
             std::lock_guard<std::mutex> lock(doc_mutex);
-            if (doc) id = doc->spec.applet.id;
+            if (doc) id = doc->spec.instrument.id;
         }
-        if (!applet_saved(id)) return ApprovalDecision::allow;
+        if (!instrument_saved(id)) return ApprovalDecision::allow;
         bind_content(inv);  // the card shows the file as it would be written
         return ApprovalDecision::ask;
     }

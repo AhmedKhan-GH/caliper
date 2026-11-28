@@ -2,15 +2,15 @@
 // embed_core.cpp — implementation of the embed C ABI (caliper/embed.h) inside
 // libcaliper (Compass R4, L2a). This is the seam that makes "embeddable" true:
 // it COMPOSES the existing pieces the L1 extraction proved out — core_lifecycle
-// (renderer selection + applet-canvas ImGui context), the service registry
-// (services_init/set_renderer/shutdown), the applet loader, and a frame arc
+// (renderer selection + instrument-canvas ImGui context), the service registry
+// (services_init/set_renderer/shutdown), the instrument loader, and a frame arc
 // carved from main.cpp::run() — behind a toolkit-free C surface. No new
 // rendering, no new service; just the ordered wiring, GLFW-free.
 //
 // ORDERING IS LOAD-BEARING (l1-survey §6, main.cpp:76-114 / 417-439). Every
 // step below cites the exe path it mirrors; the documented crashes behind each
 // reordering (MTLTexture UAF, DuckDB static-dtor malloc abort, worker-touching-
-// freed-applet 139) bind here identically. Do not reorder.
+// freed-instrument 139) bind here identically. Do not reorder.
 //
 // This TU is plain C++: all Metal lives behind the HostRenderer canvas_* seam
 // (metal_renderer.mm), so ObjC stays scoped to the backend .mm files.
@@ -30,7 +30,7 @@
 #include <imgui.h>
 
 #include "app_paths.h"
-#include "applet_loader.h"
+#include "instrument_loader.h"
 #include "core_lifecycle.h"
 #include "host_services.h"
 #include "job_system.h"   // complete JobSystem (host_job_system().cancel_all_and_join)
@@ -40,7 +40,7 @@
 #include "tensor_bridge.h"   // TensorBridge (views), colormap_lut, bridge_last_reject
 
 #include <caliper/abi.h>
-#include <caliper/services/log_v1.h>   // CaliperLogLevel (applet log routing)
+#include <caliper/services/log_v1.h>   // CaliperLogLevel (instrument log routing)
 
 #include <cstdlib>
 #include <filesystem>
@@ -82,18 +82,18 @@ double now_sec() {
 
 }  // namespace
 
-// Applet log.v1 sink (embed v1.1, §3.3): route each applet log line to the
-// embedder's log_fn, TAGGED "[applet] " so a host can tell applet lines apart
+// Instrument log.v1 sink: route each instrument log line to the
+// embedder's log_fn, TAGGED "[instrument] " so a host can tell instrument lines apart
 // from core diagnostics (core->log delivers those UNtagged). Installed at create
 // only when the embedder provided a log_fn; the caliper exe installs nothing and
 // keeps stderr. `ud` is the CaliperCore*; it is only dereferenced while the sink
 // is installed, which is strictly between create (this core alive) and shutdown's
 // post-join clear — no worker can call it after log_fn is gone.
-static void embed_applet_log_sink(void* ud, CaliperLogLevel level,
-                                  const char* msg) {
+static void embed_instrument_log_sink(void* ud, CaliperLogLevel level,
+                                      const char* msg) {
     CaliperCore* core = static_cast<CaliperCore*>(ud);
     if (!core->log_fn) return;
-    std::string tagged = "[applet] ";
+    std::string tagged = "[instrument] ";
     tagged += (msg ? msg : "");
     core->log_fn(core->userdata, static_cast<int>(level), tagged.c_str());
 }
@@ -129,7 +129,7 @@ CaliperCore* caliper_core_create(const CaliperCoreDesc* desc) {
 
     // Release the one-core slot if we bail before publishing — by an early
     // return OR by an exception unwinding out of this function. The CAS
-    // above pinned kCoreReserved; if services_init() or the AppletLoader ctor
+    // above pinned kCoreReserved; if services_init() or the InstrumentLoader ctor
     // (or any step between here and the publish below) throws, this guard puts
     // the slot back to nullptr — otherwise it stays pinned forever and every
     // future caliper_core_create() refuses. Disarmed only once the real pointer
@@ -147,9 +147,9 @@ CaliperCore* caliper_core_create(const CaliperCoreDesc* desc) {
         }
     } slot_guard;
 
-    // v1.1 (§3.3): route CaliperCoreDesc.data_dir into the app-data root BEFORE
+    // Route CaliperCoreDesc.data_dir into the app-data root BEFORE
     // the stores open (services_init) and the loader scans, so metrics/artifacts/
-    // applet-data land under the embedder's directory. NULL/empty => the OS
+    // instrument-data land under the embedder's directory. NULL/empty => the OS
     // default is used, byte-for-byte as before (the caliper exe passes NULL).
     if (desc->data_dir && desc->data_dir[0])
         caliper::set_app_data_dir_override(desc->data_dir);
@@ -159,7 +159,7 @@ CaliperCore* caliper_core_create(const CaliperCoreDesc* desc) {
     core->crash_fn = desc->crash_fn;
     core->userdata = desc->userdata;
 
-    // STEP 1 (mirrors main.cpp:67): applet-canvas ImGui/ImPlot/ImPlot3D contexts
+    // STEP 1 (mirrors main.cpp:67): instrument-canvas ImGui/ImPlot/ImPlot3D contexts
     // FIRST — they must exist before the renderer wires its ImGui backend.
     core_create_ui_context();
 
@@ -203,7 +203,7 @@ CaliperCore* caliper_core_create(const CaliperCoreDesc* desc) {
             break;
     }
     if (core->renderer) {
-        // Core-owned diagnostic through log_fn (NOT the applet log service): the
+        // Core-owned diagnostic through log_fn (NOT the instrument log service): the
         // resolved backend. The exe prints its own "[renderer] metal"; the embed
         // core routes the equivalent through the embedder's sink.
         core->log(1, std::string("renderer: ") + core->renderer->name());
@@ -223,34 +223,34 @@ CaliperCore* caliper_core_create(const CaliperCoreDesc* desc) {
     // STEP 3 (mirrors main.cpp:90 / :94): open the service registry, then bind
     // the live renderer to the bridge. The bridge is lazy (constructed on first
     // thunk), so binding before the renderer's device exists (canvas_init) is
-    // safe — the first bridge call happens during an applet frame, post-attach.
+    // safe — the first bridge call happens during an instrument frame, post-attach.
     services_init();
     services_set_renderer(core->renderer.get());
 
     // STEP 4 (mirrors main.cpp:113-135): manifest-first discovery. The loader
     // never dlopens here — scan() only reads manifests. host_caps() is built from
     // static values, valid independent of services_init.
-    core->loader = {new AppletLoader(host_caps(), caliper::app_data_path("data")),
-                    [](AppletLoader* l) { delete l; }};
+    core->loader = {new InstrumentLoader(host_caps(), caliper::app_data_path("data")),
+                    [](InstrumentLoader* l) { delete l; }};
     // The search order of the caliper executable, with the embedder's
-    // applets_dir in the place of its --applets folders: first, so it wins
+    // instruments_dir in the place of its --instruments folders: first, so it wins
     // a tie between equal versions.
     {
         std::vector<std::string> dev_dirs;
-        if (desc->applets_dir && desc->applets_dir[0])
-            dev_dirs.push_back(desc->applets_dir);
-        core->loader->scan(applet_search_dirs(dev_dirs,
-                                              std::getenv("CALIPER_APPLET_PATH"),
-                                              caliper::user_applets_dir(),
-                                              caliper::shipped_applets_dir()));
+        if (desc->instruments_dir && desc->instruments_dir[0])
+            dev_dirs.push_back(desc->instruments_dir);
+        core->loader->scan(instrument_search_dirs(dev_dirs,
+                                                  std::getenv("CALIPER_INSTRUMENT_PATH"),
+                                                  caliper::user_instruments_dir(),
+                                                  caliper::shipped_instruments_dir()));
     }
 
-    // Route applet log.v1 lines to the embedder's log_fn (§3.3). Installed here,
+    // Route instrument log.v1 lines to the embedder's log_fn. Installed here,
     // AFTER every fallible create step, so no failure path can leave a sink
     // pointing at a half-built core; cleared in shutdown after workers join. No
     // log_fn -> no sink -> stderr, exactly as the caliper exe runs.
     if (core->log_fn)
-        set_applet_log_sink(&embed_applet_log_sink, core.get());
+        set_instrument_log_sink(&embed_instrument_log_sink, core.get());
 
     // Publish the real pointer, replacing the sentinel reservation. Disarm the
     // guard first: from here on the slot legitimately holds a live core.
@@ -268,18 +268,18 @@ void caliper_core_shutdown(CaliperCore* core) {
         return;
     }
     // Teardown reverses create (main.cpp:397-417). Workers FIRST: a job may hold
-    // a pointer into applet state, so join before close_all destroys it.
+    // a pointer into instrument state, so join before close_all destroys it.
     host_job_system().cancel_all_and_join();
     if (core->loader) core->loader->close_all();
     // Live-streaming attach (src/host/live): release its GPU resources first,
     // with the bridge still bound (same discipline as the views below).
     caliper_live_shutdown(core);
     caliper_live_views_shutdown(core);
-    // v1.2 views: release their bridge textures and MTLBuffer imports while the
-    // bridge still has its renderer — the same discipline as the applet
+    // Built-in views: release their bridge textures and MTLBuffer imports while the
+    // bridge still has its renderer — the same discipline as the instrument
     // teardown above (no GPU resource may outlive the renderer that owns it).
     views_destroy_all(core);
-    // Applets are down; drop the renderer from the bridge BEFORE renderer
+    // Instruments are down; drop the renderer from the bridge BEFORE renderer
     // teardown so no bridge thunk touches a destroyed renderer.
     services_set_renderer(nullptr);
     // Close DuckDB stores now — leaving them to static dtors races DuckDB's
@@ -298,12 +298,12 @@ void caliper_core_shutdown(CaliperCore* core) {
     }
     core_destroy_ui_context();
 
-    // Detach the applet log sink LAST, once no applet code can run again: workers
-    // were joined above, and the loader's close_all() ran on_cleanup on THIS
-    // (shutdown) thread with core->log_fn still valid — so the applet's cleanup
+    // Detach the instrument log sink LAST, once no instrument code can run again:
+    // workers were joined above, and the loader's close_all() ran on_cleanup on THIS
+    // (shutdown) thread with core->log_fn still valid — so the instrument's cleanup
     // log lines still reached the embedder. Clear it before the core is freed
     // (the sink trampoline holds this core pointer). No log_fn -> never installed.
-    set_applet_log_sink(nullptr, nullptr);
+    set_instrument_log_sink(nullptr, nullptr);
 
     // Restore the default app-data root: the stores are closed, and the next
     // core (NULL data_dir) must resolve the OS default again — the override is
@@ -358,7 +358,7 @@ int caliper_core_attach_canvas(CaliperCore* core, void* native_view,
 }
 
 // ---------------------------------------------------------------------------
-// frame — the carved core arc of main.cpp::run() (new_frame -> guarded applet
+// frame — the carved core arc of main.cpp::run() (new_frame -> guarded instrument
 // draw -> render -> deferred teardown), minus every chrome item.
 // ---------------------------------------------------------------------------
 void caliper_core_frame(CaliperCore* core) {
@@ -388,7 +388,7 @@ void caliper_core_frame(CaliperCore* core) {
     core->renderer->canvas_new_frame();
 
     bool alive = true;
-    if (core->active_applet >= 0) {
+    if (core->active_instrument >= 0) {
         CaliperFrameInfo fi{};
         fi.struct_size = sizeof fi;
         fi.fb_width = core->canvas_w;    // physical px
@@ -397,13 +397,13 @@ void caliper_core_frame(CaliperCore* core) {
         fi.time_sec = now;
         fi.delta_sec = dt;   // same clock as io.DeltaTime
         double t0 = now_sec();
-        alive = core->loader->frame(core->active_applet, fi);  // crash-guarded inside
+        alive = core->loader->frame(core->active_instrument, fi);  // crash-guarded inside
         core->watchdog.feed((now_sec() - t0) * 1000.0);
     }
 
-    // v1.2 built-in tensor views draw AFTER the applet (so they work with no
-    // applet loaded and float alongside one). Skipped on a fault frame: the
-    // quarantined applet may have left the ImGui window stack mid-Begin.
+    // Built-in tensor views draw AFTER the instrument (so they work with no
+    // instrument loaded and float alongside one). Skipped on a fault frame: the
+    // quarantined instrument may have left the ImGui window stack mid-Begin.
     if (alive) {
         caliper_live_views::layout_views(core);
         views_draw(core);
@@ -411,26 +411,26 @@ void caliper_core_frame(CaliperCore* core) {
         caliper_live_frame(core);         // live session status (src/host/live)
     }
 
-    // Render BEFORE any teardown: the applet's draw list this frame may still
+    // Render BEFORE any teardown: the instrument's draw list this frame may still
     // reference bridge textures; releasing them before the pass consumes the
     // draw list is a use-after-free (main.cpp:370). Deferred teardown follows.
     core->renderer->canvas_render();
     caliper_stats::end_frame(core);   // copies per frame (embed/render_stats.h)
 
     if (!alive) {
-        // Applet faulted mid-frame and was quarantined by the loader's crash
+        // Instrument faulted mid-frame and was quarantined by the loader's crash
         // guard (existing machinery — we route it, we don't rebuild it). Tear
         // it down AFTER render, then surface it to the embedder.
-        int crashed = core->active_applet;
+        int crashed = core->active_instrument;
         std::string id = core->loader->at(crashed).manifest.id;
         std::string fault = core->loader->at(crashed).status_text;
         host_job_system().cancel_all_and_join();
         core->loader->teardown(crashed);
-        core->active_applet = -1;
+        core->active_instrument = -1;
         if (core->crash_fn)
             core->crash_fn(core->userdata, id.c_str(), fault.c_str());
         else
-            core->log(2, "applet " + id + " faulted: " + fault);
+            core->log(2, "instrument " + id + " faulted: " + fault);
     }
 }
 
@@ -480,79 +480,77 @@ void caliper_core_event(CaliperCore* core, const CaliperInputEvent* ev) {
 }
 
 // ---------------------------------------------------------------------------
-// applet control (reuses the loader's manifest discovery)
+// instrument control (reuses the loader's manifest discovery)
 // ---------------------------------------------------------------------------
-int caliper_core_load_applet(CaliperCore* core, const char* manifest_id) {
+int caliper_core_load_instrument(CaliperCore* core, const char* manifest_id) {
     if (!core || !manifest_id) return 0;
-    if (!core->loader) { core->fail("load_applet: no loader"); return 0; }
-    // W1: an applet's launch + first frame touch the renderer's ImGui backend
+    if (!core->loader) { core->fail("load_instrument: no loader"); return 0; }
+    // W1: an instrument's launch + first frame touch the renderer's ImGui backend
     // (canvas_init wired it). Loading before a canvas is attached is an honest
     // refusal — the header contract says attach first — not a deferred crash.
     if (!core->canvas_ready) {
-        core->fail("load_applet: attach a canvas before loading applets");
+        core->fail("load_instrument: attach a canvas before loading instruments");
         return 0;
     }
     const int idx = core->loader->find(manifest_id);
     if (idx < 0) {
-        // An unknown id refuses WITHOUT disturbing a running applet — a typo
+        // An unknown id refuses WITHOUT disturbing a running instrument — a typo
         // must not kill the live session. Only a resolvable target proceeds to
         // the teardown-then-launch arc below.
-        core->fail(std::string("load_applet: no applet with id ") + manifest_id);
+        core->fail(std::string("load_instrument: no instrument with id ") + manifest_id);
         return 0;
     }
 
-    // Tear down the currently-active applet FIRST — same id (a clean restart) or
+    // Tear down the currently-active instrument FIRST — same id (a clean restart) or
     // different id (a swap) — via the exact ordered arc the exe uses
-    // (main.cpp:377 / :403): hard-join every worker (a job may hold a pointer
-    // into applet state — the worker-touching-freed-applet 139 crash class),
-    // THEN destroy the instance. Doing this BEFORE launch fixes two faults the
-    // final review flagged:
-    //   (1) AppletLoader::launch would teardown a same-id Active entry with NO
-    //       cancel_all_and_join first (applet_loader.cpp:133) — the documented
-    //       worker-touching-freed-applet crash;
-    //   (2) the previous order ran cancel_all_and_join AFTER launch, cancelling
-    //       the NEW applet's freshly-scheduled init jobs.
-    // ACCEPTED CONSEQUENCE (documented in embed.h load_applet): if the launch
-    // below fails, the old applet is already gone — a failed load leaves NO
-    // applet, not the previous one. load_applet is called between frames (no
-    // live draw list), so this teardown is immediate, mirroring unload_applet.
-    if (core->active_applet >= 0) {
+    // (main.cpp): hard-join every worker (a job may hold a pointer
+    // into instrument state — the worker-touching-freed-instrument 139 crash class),
+    // THEN destroy the instance. Doing this BEFORE launch fixes two faults:
+    //   (1) InstrumentLoader::launch would teardown a same-id Active entry with NO
+    //       cancel_all_and_join first — the documented worker-touching-freed-instrument crash;
+    //   (2) running cancel_all_and_join AFTER launch would cancel the NEW
+    //       instrument's freshly-scheduled init jobs.
+    // ACCEPTED CONSEQUENCE (documented in embed.h load_instrument): if the launch
+    // below fails, the old instrument is already gone — a failed load leaves NO
+    // instrument, not the previous one. load_instrument is called between frames (no
+    // live draw list), so this teardown is immediate, mirroring unload_instrument.
+    if (core->active_instrument >= 0) {
         host_job_system().cancel_all_and_join();
-        core->loader->teardown(core->active_applet);
-        core->active_applet = -1;
+        core->loader->teardown(core->active_instrument);
+        core->active_instrument = -1;
     }
 
-    // Build the CaliperHost prototype exactly as main.cpp::launch_applet does;
-    // the loader fills applet_data_dir per entry before initialize().
+    // Build the CaliperHost prototype exactly as main.cpp::launch_instrument does;
+    // the loader fills instrument_data_dir per entry before initialize().
     CaliperHost proto{};
     proto.struct_size  = sizeof(CaliperHost);
     proto.abi_epoch    = CALIPER_ABI_EPOCH;
     proto.host_version = kHostVersionU32;
-    proto.applet_data_dir = nullptr;
+    proto.instrument_data_dir = nullptr;
     proto.get_service = [](const CaliperHost*, const char* id) {
         return services_get(id);
     };
     if (!core->loader->launch(idx, proto)) {
-        core->fail(std::string("load_applet: launch refused/failed: ") +
+        core->fail(std::string("load_instrument: launch refused/failed: ") +
                    core->loader->at(idx).status_text);
-        return 0;   // active_applet stays -1: a failed load leaves NO applet.
+        return 0;   // active_instrument stays -1: a failed load leaves NO instrument.
     }
 
-    core->active_applet = idx;
+    core->active_instrument = idx;
     core->watchdog.reset();
     core->last_frame_time = now_sec();
     core->last_error.clear();
-    core->log(1, std::string("applet loaded: ") + manifest_id);
+    core->log(1, std::string("instrument loaded: ") + manifest_id);
     return 1;
 }
 
-void caliper_core_unload_applet(CaliperCore* core) {
-    if (!core || core->active_applet < 0) return;
+void caliper_core_unload_instrument(CaliperCore* core) {
+    if (!core || core->active_instrument < 0) return;
     // Called between frames (no live draw list), so teardown immediately.
-    // Workers first (they may reference applet state), then the instance.
+    // Workers first (they may reference instrument state), then the instance.
     host_job_system().cancel_all_and_join();
-    core->loader->teardown(core->active_applet);
-    core->active_applet = -1;
+    core->loader->teardown(core->active_instrument);
+    core->active_instrument = -1;
 }
 
 int caliper_core_read_pixels(CaliperCore* core, void* buf, int stride) {
@@ -566,9 +564,9 @@ int caliper_core_read_pixels(CaliperCore* core, void* buf, int stride) {
 
 
 // ---------------------------------------------------------------------------
-// service consumption (v1.1) — vend from the SAME process registry an applet
+// service consumption — vend from the SAME process registry an instrument
 // gets. embed_core already builds the CaliperHost proto's get_service as a
-// thunk over services_get() (load_applet above); this is that same registry,
+// thunk over services_get() (load_instrument above); this is that same registry,
 // exposed to the host directly. No new state, no per-core table: the service
 // registry is process-global (host note: one core per process in v0), and the
 // tables are process-static, so the returned pointer is valid until shutdown.

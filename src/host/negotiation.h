@@ -1,5 +1,5 @@
 #pragma once
-#include "applet_manifest.h"
+#include "instrument_manifest.h"
 #include <set>
 #include <string>
 
@@ -21,17 +21,17 @@ struct Negotiation {
 // The checks made before dlopen (docs/development/compatibility-and-epochs.md), in this
 // order: ABI epoch, min_host, UI-stack hash, libtorch version, required
 // services, data schema. `stored_data_schema` is the schema recorded in the
-// applet's data folder (read_data_schema_stamp in applet_loader.h), 0 when
+// instrument's data folder (read_data_schema_stamp in instrument_loader.h), 0 when
 // none is recorded; it is compared only when the manifest declares a schema.
-Negotiation negotiate(const AppletManifest& m, const HostCaps& caps,
+Negotiation negotiate(const InstrumentManifest& m, const HostCaps& caps,
                       uint32_t stored_data_schema = 0);
 
 // Card text for a required service this host can't vend. One string, two
 // callers: negotiate() for the manifest's list (pre-dlopen) and the loader for
 // the descriptor's list (post-dlopen, the binary's own declaration).
 std::string missing_service_reason(const std::string& svc);
-// Card text for an applet whose data schema is older than the stored data's.
-std::string data_schema_reason(uint32_t stored, uint32_t applet);
+// Card text for an instrument whose data schema is older than the stored data's.
+std::string data_schema_reason(uint32_t stored, uint32_t instrument);
 
 int semver_cmp(const std::string& a, const std::string& b); // <0, 0, >0
 

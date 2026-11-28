@@ -92,7 +92,7 @@ caliper.session(auto_launch=True)
 
 In the Caliper app, `⌘D Detach` drops the views, releases the claims on the shared slots and clears the heartbeat. For a stream, it closes the connection. Then the app returns to the landing screen, the `live:` sources of the spec go away, and its live panels show the offline state. The viewer does the same when you close its window. The script stops its snapshots at once and continues to train, and you can attach again from the list.
 
-`esc Home` does not detach. The session stays attached on the landing screen, the spec page and the page of an applet, and `F5 Live page` returns to the live page. Then the landing command bar shows the live diamond, the script name and `F5 Live page`. Attaching a different session or stream detaches the first one, and the end of the app detaches too.
+`esc Home` does not detach. The session stays attached on the landing screen, the spec page and the page of an instrument, and `F5 Live page` returns to the live page. Then the landing command bar shows the live diamond, the script name and `F5 Live page`. Attaching a different session or stream detaches the first one, and the end of the app detaches too.
 
 A series keeps its values in the session while no viewer is attached. After the next attach, the curve of the loss shows the values from before the detach and then the new values. The values that the script offers while no viewer is attached are not recorded.
 

@@ -10,19 +10,19 @@
 #      -DCMAKE_PREFIX_PATH=<WORK_DIR>/prefix, and check that the build names
 #      nothing in the source tree;
 #   4. run the copy in its offscreen mode, which creates no window, on a copy
-#      of the hello_world fixture from APPLETS_DIR, and check that hello_world loaded and
+#      of the hello_world fixture from INSTRUMENTS_DIR, and check that hello_world loaded and
 #      drew. When the canvas cannot attach (no GPU) the run is reported as
 #      skipped, unless CALIPER_REQUIRE_GPU=1 makes that a failure.
 #
 #   cmake -DCALIPER_BUILD_DIR=<build> -DCALIPER_SOURCE_DIR=<source> -DWORK_DIR=<dir>
-#         -DEXPECT_VERSION=<major.minor.patch> -DAPPLETS_DIR=<dir with hello_world>
+#         -DEXPECT_VERSION=<major.minor.patch> -DINSTRUMENTS_DIR=<dir with hello_world>
 #         [-DGENERATOR=<generator>] [-DMAKE_PROGRAM=<path>] [-DCXX_COMPILER=<path>]
 #         [-DOBJCXX_COMPILER=<path>] [-DBUILD_TYPE=<type>] [-DNM=<nm>]
 #         [-DCORE_LIBRARY=<libcaliper.a>] [-DLIB_PREFIX=lib] [-DLIB_SUFFIX=.dylib]
 #         [-DEXE_SUFFIX=.exe] -P run.cmake
 cmake_minimum_required(VERSION 3.18)
 
-foreach(var CALIPER_BUILD_DIR CALIPER_SOURCE_DIR WORK_DIR EXPECT_VERSION APPLETS_DIR)
+foreach(var CALIPER_BUILD_DIR CALIPER_SOURCE_DIR WORK_DIR EXPECT_VERSION INSTRUMENTS_DIR)
     if(NOT ${var})
         message(FATAL_ERROR "run.cmake needs -D${var}=...")
     endif()
@@ -140,7 +140,7 @@ foreach(file CMakeCache.txt build.ninja)
     endif()
     file(READ "${host_build}/${file}" text)
     foreach(root "${CALIPER_SOURCE_DIR}" "${src_real}")
-        foreach(sub sdk src include examples third_party applets cmake)
+        foreach(sub sdk src include examples third_party instruments cmake)
             string(FIND "${text}" "${root}/${sub}/" at)
             if(NOT at EQUAL -1)
                 message(FATAL_ERROR "embed_host: ${file} refers to the source tree (${root}/${sub}/)")
@@ -154,22 +154,22 @@ if(NOT EXISTS "${host_exe}")
 endif()
 
 # ---- 4. The offscreen run ----
-# HOME and CALIPER_USER_APPLETS_DIR keep the core's data folder and user
-# applets inside the work folder (macOS), so the run reads and writes nothing
+# HOME and CALIPER_USER_INSTRUMENTS_DIR keep the core's data folder and user
+# instruments inside the work folder (macOS), so the run reads and writes nothing
 # of the user's own Caliper data and finds only the hello_world copy.
-set(applets "${WORK_DIR}/applets")
-file(MAKE_DIRECTORY "${applets}")
+set(instruments "${WORK_DIR}/instruments")
+file(MAKE_DIRECTORY "${instruments}")
 foreach(name "${LIB_PREFIX}hello_world${LIB_SUFFIX}" hello_world.caliper.toml)
-    if(NOT EXISTS "${APPLETS_DIR}/${name}")
-        message(FATAL_ERROR "the hello_world fixture is not built: ${APPLETS_DIR}/${name}")
+    if(NOT EXISTS "${INSTRUMENTS_DIR}/${name}")
+        message(FATAL_ERROR "the hello_world fixture is not built: ${INSTRUMENTS_DIR}/${name}")
     endif()
-    file(COPY "${APPLETS_DIR}/${name}" DESTINATION "${applets}")
+    file(COPY "${INSTRUMENTS_DIR}/${name}" DESTINATION "${instruments}")
 endforeach()
 execute_process(
-    COMMAND "${CMAKE_COMMAND}" -E env --unset=CALIPER_APPLET_PATH
+    COMMAND "${CMAKE_COMMAND}" -E env --unset=CALIPER_INSTRUMENT_PATH
         CALIPER_EMBED_OFFSCREEN=1 CALIPER_EMBED_EXIT_AFTER=1
-        "CALIPER_EMBED_APPLETS=${applets}"
-        "CALIPER_USER_APPLETS_DIR=${WORK_DIR}/user-applets"
+        "CALIPER_EMBED_INSTRUMENTS=${instruments}"
+        "CALIPER_USER_INSTRUMENTS_DIR=${WORK_DIR}/user-instruments"
         "HOME=${WORK_DIR}/home"
         "${host_exe}" dev.caliper.hello-world
     RESULT_VARIABLE rc OUTPUT_VARIABLE out ERROR_VARIABLE out TIMEOUT 120)
@@ -177,8 +177,8 @@ message(STATUS "embed_host output:\n${out}")
 if(rc EQUAL 0)
     foreach(expect
             "offscreen mode, embed ${EXPECT_VERSION}"
-            "[applet] hello_world.on_init"
-            "[applet] hello_world.on_cleanup")
+            "[instrument] hello_world.on_init"
+            "[instrument] hello_world.on_cleanup")
         string(FIND "${out}" "${expect}" at)
         if(at EQUAL -1)
             message(FATAL_ERROR "embed_host: the output lacks \"${expect}\"")

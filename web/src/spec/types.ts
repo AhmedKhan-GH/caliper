@@ -7,8 +7,8 @@ import type { SpecColormapName } from '../render/colormaps.gen.js';
 export type Primitive = 'series' | 'heatmap' | 'points' | 'histogram' | 'table' | 'image' | 'text' | 'scene';
 
 /**
- * A layout node: a panel or control id, a leaf table { panel, min } (spec
- * version 1, min in characters and lines of the UI face), a split or tabs.
+ * A layout node: a panel or control id, a leaf table { panel, min } (min in
+ * characters and lines of the UI face), a split or tabs.
  */
 export type LayoutNode = string | LeafNode | SplitNode | TabsNode;
 export interface LeafNode { panel: string; min?: [number, number] }
@@ -48,7 +48,7 @@ export interface SpecPanel {
 
 export interface Spec {
   caliper_spec: number;
-  applet: { id: string; title?: string; description?: string; layout_locked?: boolean };
+  instrument: { id: string; title?: string; description?: string; layout_locked?: boolean };
   source?: SpecSource[];
   panel?: SpecPanel[];
   control?: SpecControl[];

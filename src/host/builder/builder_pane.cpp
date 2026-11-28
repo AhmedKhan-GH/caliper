@@ -300,11 +300,11 @@ void BuilderPane::reread() {
     std::optional<cb::OpenSpec> next = port_->open_spec();
     const bool changed = !next != !open_ || (next && open_ && next->text != open_->text);
     const std::string before = open_ ? open_->text : std::string();
-    const std::string id_before = open_ ? open_->spec.applet.id : std::string();
+    const std::string id_before = open_ ? open_->spec.instrument.id : std::string();
     open_ = std::move(next);
     if (!changed) return;
     // The strip follows a change of the same spec to its last changed line.
-    text_follow_ = open_ && !before.empty() && open_->spec.applet.id == id_before
+    text_follow_ = open_ && !before.empty() && open_->spec.instrument.id == id_before
                        ? pane_text_follow_line(before, open_->text)
                        : -1;
     invalidate_caches();
@@ -901,7 +901,7 @@ bool BuilderPane::set_closable(bool closable) {
 }
 
 bool BuilderPane::layout_locked() const {
-    return open_ && open_->spec.applet.layout_locked.value_or(false);
+    return open_ && open_->spec.instrument.layout_locked.value_or(false);
 }
 
 bool BuilderPane::set_layout_locked(bool locked) {
@@ -1284,25 +1284,25 @@ bool BuilderPane::remove_transform(size_t index) {
 
 bool BuilderPane::set_spec_id(const std::string& id) {
     if (blocked()) return false;
-    if (id == open_->spec.applet.id) return true;
+    if (id == open_->spec.instrument.id) return true;
     spec::Spec s = open_->spec;
-    s.applet.id = id;
+    s.instrument.id = id;
     return run_plan(plan_spec_text(s));
 }
 
 bool BuilderPane::set_spec_title(const std::string& title) {
     if (blocked()) return false;
     spec::Spec s = open_->spec;
-    if (title.empty()) s.applet.title.reset();
-    else s.applet.title = title;
+    if (title.empty()) s.instrument.title.reset();
+    else s.instrument.title = title;
     return run_plan(plan_spec_text(s), "spec.title");
 }
 
 bool BuilderPane::set_spec_description(const std::string& description) {
     if (blocked()) return false;
     spec::Spec s = open_->spec;
-    if (description.empty()) s.applet.description.reset();
-    else s.applet.description = description;
+    if (description.empty()) s.instrument.description.reset();
+    else s.instrument.description = description;
     return run_plan(plan_spec_text(s), "spec.description");
 }
 
@@ -1445,9 +1445,9 @@ bool BuilderPane::can_redo() const { return port_->ready() && port_->can_redo();
 bool BuilderPane::save() {
     if (blocked()) return false;
     json args = json::object();
-    // The open spec's own applet is saved over; a new one is written new.
+    // The open spec's own instrument is saved over; a new one is written new.
     if (open_->path) args["overwrite"] = true;
-    const CommandResult r = send(invocation("applet.save", args), {}, {});
+    const CommandResult r = send(invocation("instrument.save", args), {}, {});
     if (!r.ok) return refuse(r.error);
     error_ = {};
     reread();

@@ -1,13 +1,13 @@
 #pragma once
 // ============================================================================
-// UI stack recovery after an applet fault (crash_guard.h, docs/applets/trust-model.md).
-// An applet that throws or faults partway through frame() leaves open
+// UI stack recovery after an instrument fault (crash_guard.h, docs/instruments/trust-model.md).
+// An instrument that throws or faults partway through frame() leaves open
 // whatever it had begun on the shared ImGui / ImPlot / ImPlot3D contexts
 // (caliper.ui.v1): windows, child windows, tables, tab bars, tree nodes,
 // groups, IDs, disabled blocks, style, colour, font and item-flag pushes; a
 // 2-D plot, subplot grid or aligned group, a 3-D plot, and their style and
 // colormap pushes. Left alone, the host's next window would nest inside the
-// applet's, and the next BeginPlot would find the old one still open.
+// instrument's, and the next BeginPlot would find the old one still open.
 //
 //   const UiCheckpoint cp = UiCheckpoint::store();   // before the guarded call
 //   if (!loader.frame(i, info)) cp.recover();        // after a call that failed
@@ -18,7 +18,7 @@
 // to the checkpoint with ImGui's ErrorRecoveryTryToRecoverState, then resets
 // the plot libraries' current-plot state for the frame. Both run on the frame
 // thread inside one ImGui frame, store() outside any window the call might
-// end and outside any plot (the host draws none around an applet call).
+// end and outside any plot (the host draws none around an instrument call).
 //
 // Recovery is best effort, as ImGui says of its own: a fault inside an ImGui
 // call can leave that call's state half-written. It never aborts the host:
@@ -45,7 +45,7 @@ namespace caliper_host {
 
 class UiCheckpoint {
 public:
-    // The current stack sizes. Outside an ImGui frame (an applet launched
+    // The current stack sizes. Outside an ImGui frame (an instrument launched
     // before the first frame) there is nothing to unwind and the checkpoint
     // is empty: recover() then does nothing.
     static UiCheckpoint store() {
@@ -108,7 +108,7 @@ public:
         io.ConfigErrorRecoveryEnableDebugLog = log_on;
         io.ConfigErrorRecoveryEnableTooltip = tooltip_on;
 
-        // State no stack records. A SetNextWindow*/SetNextItem* the applet
+        // State no stack records. A SetNextWindow*/SetNextItem* the instrument
         // made just before it failed would otherwise apply to the host's next
         // window or item; a combo or drag-and-drop block left open would
         // misname the next combo or refuse the next drop target.
@@ -126,7 +126,7 @@ public:
         }
 
         if (report.total > 0)
-            std::fprintf(stderr, "[ui] unwound after an applet fault: %s\n",
+            std::fprintf(stderr, "[ui] unwound after an instrument fault: %s\n",
                          report.text().c_str());
         return report.total;
     }
@@ -165,7 +165,7 @@ private:
 
     // ImPlot keeps its open plot, subplot grid and aligned group as context
     // pointers. Ending a half-built plot properly (EndPlot) would render and
-    // handle input for it from wherever the applet stopped, so the plot is
+    // handle input for it from wherever the instrument stopped, so the plot is
     // dropped for this frame instead, through ImPlot's own resets; the style
     // and colormap pushes are popped through ImPlot, which restores each
     // value it saved.
@@ -194,7 +194,7 @@ private:
     // ImPlot3D buffers a plot's triangles in the plot's own draw list until
     // EndPlot sorts them into the window's, so an abandoned plot's buffer is
     // emptied too: otherwise the next plot with that ID (a restarted
-    // applet's) would draw the stale triangles once.
+    // instrument's) would draw the stale triangles once.
     void recover_implot3d(Report& report) const {
         ImPlot3DContext* p = ImPlot3D::GetCurrentContext();
         if (!p) return;

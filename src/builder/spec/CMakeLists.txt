@@ -1,13 +1,12 @@
-# caliper_builder_spec: the spec format, versions 0 and 1
-# (design/spec-format.md). It parses a spec from TOML or its canonical JSON
-# form, validates it, writes it back and applies merge patches to one panel,
-# source or control.
+# caliper_builder_spec: the spec format, version 2 (design/spec-format.md).
+# It parses a spec from TOML or its canonical JSON form, validates it, writes
+# it back and applies merge patches to one panel, source or control.
 add_library(caliper_builder_spec STATIC
     annotation.cpp
     colormaps.cpp
     common.cpp
+    control.cpp
     entity.cpp
-    instrument.cpp
     json_form.cpp
     patch.cpp
     reference.cpp
@@ -40,7 +39,7 @@ endif()
 caliper_builder_add_tests(spec
     SOURCES
         tests/test_codec.cpp
-        tests/test_codec_instrument.cpp
+        tests/test_codec_interactive.cpp
         tests/test_entities_spec.cpp
         tests/test_operators_spec.cpp
         tests/test_references_spec.cpp
@@ -54,9 +53,9 @@ caliper_builder_add_tests(spec
 if(TARGET caliper_builder_spec_tests)
     # The tests read their fixtures from tests/fixtures and the schema from a
     # copy in the build folder.
-    configure_file(schema/caliper-spec-v0.schema.json
-        "${CMAKE_CURRENT_BINARY_DIR}/caliper-spec-v0.schema.json" COPYONLY)
+    configure_file(schema/caliper-spec-v2.schema.json
+        "${CMAKE_CURRENT_BINARY_DIR}/caliper-spec-v2.schema.json" COPYONLY)
     target_compile_definitions(caliper_builder_spec_tests PRIVATE
         CALIPER_SPEC_FIXTURES="${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures"
-        CALIPER_SPEC_SCHEMA="${CMAKE_CURRENT_BINARY_DIR}/caliper-spec-v0.schema.json")
+        CALIPER_SPEC_SCHEMA="${CMAKE_CURRENT_BINARY_DIR}/caliper-spec-v2.schema.json")
 endif()

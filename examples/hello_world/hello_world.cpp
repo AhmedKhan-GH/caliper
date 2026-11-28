@@ -1,11 +1,11 @@
-// Smallest torch-free applet (docs/applets/first-applet.md): sugar demo and
-// loader-test substrate. Kept deliberately tiny.
+// Smallest torch-free instrument (docs/instruments/first-instrument.md): sugar
+// demo and loader-test substrate. Kept deliberately tiny.
 #include <caliper/caliper.hpp>
 #include <cmath>
 #include <cstdlib>
 #include <vector>
 
-class HelloWorldApplet final : public caliper::Applet {
+class HelloWorldInstrument final : public caliper::Instrument {
 public:
     bool on_init(caliper::Host& host) override {
         host_ = &host;
@@ -28,7 +28,7 @@ public:
         ImGui::SetNextWindowSize({520, 360}, ImGuiCond_FirstUseEver);
         caliper::ui::dock_hint(host_, "Hello World", CALIPER_DOCK_CENTRAL);
         ImGui::Begin("Hello World");
-        ImGui::Text("ABI epoch %d applet via CALIPER_APPLET macro", CALIPER_ABI_EPOCH);
+        ImGui::Text("ABI epoch %d instrument via CALIPER_INSTRUMENT macro", CALIPER_ABI_EPOCH);
         ImGui::Text("framebuffer: %d x %d px   dpi_scale: %.1f",
                     f.fb_width, f.fb_height, f.dpi_scale);
 
@@ -36,13 +36,13 @@ public:
         // expression over the state it controls, so it reads "Pause" while
         // running and "Play" while stopped; the click flips that state. A
         // button returns true only on the frame it is clicked, and the state
-        // it toggles lives in the applet — not ImGui.
+        // it toggles lives in the instrument — not ImGui.
         if (ImGui::Button(playing_ ? "Pause" : "Play")) playing_ = !playing_;
 
-        // The animation runs on phase the applet accumulates itself, advanced
-        // only while playing. f.time_sec (monotonic wall-clock) can't be
-        // paused — it keeps ticking whatever the applet does — so owning the
-        // phase is what makes Pause possible at all.
+        // The animation runs on phase the instrument accumulates itself,
+        // advanced only while playing. f.time_sec (monotonic wall-clock) can't
+        // be paused — it keeps ticking whatever the instrument does — so
+        // owning the phase is what makes Pause possible at all.
         if (playing_) phase_ += (float)f.delta_sec;
 
         if (ImPlot::BeginPlot("sine", {-1, 220})) {
@@ -64,14 +64,14 @@ public:
 private:
     caliper::Host* host_ = nullptr;
     bool crash_on_frame_ = false;
-    float phase_ = 0.0f;      // animation phase the applet owns (so Pause works)
+    float phase_ = 0.0f;      // animation phase the instrument owns (so Pause works)
     bool  playing_ = true;    // Play/Pause state — starts running
 };
 
-CALIPER_APPLET(HelloWorldApplet,
+CALIPER_INSTRUMENT(HelloWorldInstrument,
     .id       = "dev.caliper.hello-world",
     .version  = "0.1.0",
     .name     = "Hello World",
-    .summary  = "Smallest torch-free applet: sugar demo and loader-test substrate.",
+    .summary  = "Smallest torch-free instrument: sugar demo and loader-test substrate.",
     .tag      = "Demo",
     .services = {CALIPER_UI_V1, CALIPER_LOG_V1})

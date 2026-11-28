@@ -46,7 +46,7 @@ Name, colormap and range arguments are checked on every call. Checks on the tens
 
 ## Inspection and Test Helpers
 
-These calls read the in-process core. They raise `RuntimeError` without a `window()` or `offscreen()`, except where noted. Arrays are numpy. `view_info(name)` also returns the copy counters `copies`, `copy_bytes`, `last_copies` and `last_copy_bytes` ([Copy Counters and Frame Statistics](../applets/rendering.md#copy-counters-and-frame-statistics)). `live_view_info(name)` returns the same counters.
+These calls read the in-process core. They raise `RuntimeError` without a `window()` or `offscreen()`, except where noted. Arrays are numpy. `view_info(name)` also returns the copy counters `copies`, `copy_bytes`, `last_copies` and `last_copy_bytes` ([Copy Counters and Frame Statistics](../instruments/rendering.md#copy-counters-and-frame-statistics)). `live_view_info(name)` returns the same counters.
 
 ::: caliper.stats
 

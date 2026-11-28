@@ -2,7 +2,7 @@
 // and 17. When the CMake variable CALIPER_BUILDER_TEST_APP names a caliper
 // executable, the test starts it with --hidden --api --api-port 0 and a
 // CALIPER_DATA_DIR of its own, runs caliper-mcp against the API file the app
-// writes, calls app_info, app_applets, capture_frame and one command tool,
+// writes, calls app_info, app_instruments, capture_frame and one command tool,
 // which the app's builder session answers, and stops the app with SIGTERM. The app is never started without --hidden.
 // Without the variable the test reports itself skipped. POSIX only.
 #include "../codec.h"
@@ -140,8 +140,8 @@ TEST_CASE("caliper-mcp drives the real app end to end") {
     // The app, hidden, with the API on a free port and its own app-data folder.
     SpawnOptions app_opts;
     app_opts.argv = {kApp, "--hidden", "--api", "--api-port", "0"};
-    app_opts.env_remove = {"CALIPER_API", "CALIPER_AUTOLAUNCH", "CALIPER_EXIT_AFTER", "CALIPER_USER_APPLETS_DIR",
-                           "CALIPER_APPLET_PATH"};
+    app_opts.env_remove = {"CALIPER_API", "CALIPER_AUTOLAUNCH", "CALIPER_EXIT_AFTER", "CALIPER_USER_INSTRUMENTS_DIR",
+                           "CALIPER_INSTRUMENT_PATH"};
     // The app passes its environment on to any caliper-agent it starts: the
     // switch keeps that agent off every model server off loopback.
     app_opts.env = {{"CALIPER_DATA_DIR", data.string()}, {"CALIPER_HIDDEN", "1"}, {"CALIPER_AGENT_OFFLINE", "1"}};
@@ -185,10 +185,10 @@ TEST_CASE("caliper-mcp drives the real app end to end") {
     CHECK(info["result"]["structuredContent"]["services"].is_array());
     MESSAGE("app_info: " << info["result"]["structuredContent"].dump());
 
-    const json applets = request(*server, &out_log, &buf, 2, "tools/call", {{"name", "app_applets"}, {"arguments", json::object()}});
-    REQUIRE_MESSAGE(applets["result"]["isError"] == false, applets.dump());
-    CHECK(applets["result"]["structuredContent"]["applets"].is_array());
-    MESSAGE("app_applets lists " << applets["result"]["structuredContent"]["applets"].size() << " applets");
+    const json instruments = request(*server, &out_log, &buf, 2, "tools/call", {{"name", "app_instruments"}, {"arguments", json::object()}});
+    REQUIRE_MESSAGE(instruments["result"]["isError"] == false, instruments.dump());
+    CHECK(instruments["result"]["structuredContent"]["instruments"].is_array());
+    MESSAGE("app_instruments lists " << instruments["result"]["structuredContent"]["instruments"].size() << " instruments");
 
     const json frame = request(*server, &out_log, &buf, 3, "tools/call", {{"name", "capture_frame"}, {"arguments", json::object()}});
     if (frame["result"]["isError"] == true) {
@@ -231,7 +231,7 @@ TEST_CASE("caliper-mcp drives the real app end to end") {
     CHECK(fs::exists(data / "workspace" / "journal"));
     MESSAGE(command->name << ": " << cmd["result"]["structuredContent"].dump().substr(0, 200));
 
-    const json page = request(*server, &out_log, &buf, 5, "resources/read", {{"uri", "caliper://docs/applets/manifest.md"}});
+    const json page = request(*server, &out_log, &buf, 5, "resources/read", {{"uri", "caliper://docs/instruments/manifest.md"}});
     CHECK(page["result"]["contents"][0]["text"].get<std::string>().rfind("# Manifest", 0) == 0);
 
     // caliper-mcp stops when its input ends, and never showed the token.
@@ -266,8 +266,8 @@ TEST_CASE("caliper-mcp's app_launch over unsaved work says that the open waits f
     const std::string api_file = (data / "api.json").string();
     SpawnOptions app_opts;
     app_opts.argv = {kApp, "--hidden", "--api", "--api-port", "0"};
-    app_opts.env_remove = {"CALIPER_API", "CALIPER_AUTOLAUNCH", "CALIPER_EXIT_AFTER", "CALIPER_USER_APPLETS_DIR",
-                           "CALIPER_APPLET_PATH"};
+    app_opts.env_remove = {"CALIPER_API", "CALIPER_AUTOLAUNCH", "CALIPER_EXIT_AFTER", "CALIPER_USER_INSTRUMENTS_DIR",
+                           "CALIPER_INSTRUMENT_PATH"};
     app_opts.env = {{"CALIPER_DATA_DIR", data.string()}, {"CALIPER_HIDDEN", "1"}, {"CALIPER_AGENT_OFFLINE", "1"}};
     Error err;
     std::unique_ptr<Process> app = Process::spawn(app_opts, &err);
@@ -305,13 +305,13 @@ TEST_CASE("caliper-mcp's app_launch over unsaved work says that the open waits f
     CHECK(none["isError"] == false);
     CHECK(none["structuredContent"] == json({{"open", false}}));
     CHECK(call("spec_new", {{"id", "one"}, {"title", "One"}})["isError"] == false);
-    CHECK(call("applet_save", json::object())["isError"] == false);
+    CHECK(call("instrument_save", json::object())["isError"] == false);
     CHECK(call("spec_new", {{"id", "draft"}, {"title", "Draft"}})["isError"] == false);
-    // The app lists One once it has read its workspace's applets again.
+    // The app lists One once it has read its workspace's instruments again.
     bool listed = false;
     for (const auto end = Clock::now() + std::chrono::seconds(30); !listed && Clock::now() < end;) {
-        const json applets = call("app_applets", json::object());
-        listed = applets["structuredContent"]["applets"].dump().find("\"local.one\"") != std::string::npos;
+        const json instruments = call("app_instruments", json::object());
+        listed = instruments["structuredContent"]["instruments"].dump().find("\"local.one\"") != std::string::npos;
         if (!listed) std::this_thread::sleep_for(std::chrono::milliseconds(200));
     }
     REQUIRE(listed);
@@ -324,11 +324,11 @@ TEST_CASE("caliper-mcp's app_launch over unsaved work says that the open waits f
     CHECK(text.find("PENDING_APPROVAL") != std::string::npos);
     CHECK(text.find("waits for the person's approval") != std::string::npos);
     MESSAGE("app_launch: " << text);
-    // Its applet.open has been sent and waits on a card; nothing has changed
+    // Its instrument.open has been sent and waits on a card; nothing has changed
     // meanwhile: Draft is still the open spec.
     bool carded = false;
     for (const auto end = Clock::now() + std::chrono::seconds(30); !carded && Clock::now() < end;) {
-        carded = app_out.text().find("applet.open (mcp) waiting") != std::string::npos;
+        carded = app_out.text().find("instrument.open (mcp) waiting") != std::string::npos;
         if (!carded) std::this_thread::sleep_for(std::chrono::milliseconds(50));
     }
     REQUIRE_MESSAGE(carded, app_out.text());

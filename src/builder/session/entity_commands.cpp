@@ -4,7 +4,7 @@
 // entity.not_scene_panel, entity.not_found or the codec's diagnostic of a
 // malformed entity), and hands the result to the validator, whose first error
 // refuses the edit and whose warnings are kept.
-#include <caliper_builder/session/instrument_commands.h>
+#include <caliper_builder/session/interactive_commands.h>
 
 #include <caliper_builder/spec/format.h>
 
@@ -72,7 +72,7 @@ SpecEdit entity_set(const spec::Spec& s, const json& args, const spec::SourceRes
     if (!decoded.ok()) return refuse_with(first_spec_error(decoded.diagnostics));
 
     spec::Spec next = s;
-    if (next.version < spec::kInstrumentVersion) next.version = spec::kInstrumentVersion;
+    next.version = std::max(next.version, spec::kFormatVersion);
     spec::Panel& panel = next.panels[panel_index(next, id)];
     bool replaced = false;
     for (spec::Entity& e : panel.entities)

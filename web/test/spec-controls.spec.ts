@@ -16,7 +16,7 @@ test('spec buttons draw plain labels and retain the viewer restriction', async (
   })]));
   const app: MockApp = {
     specs: { buttons: {
-      caliper_spec: 1, applet: { id: 'buttons', title: 'Button Controls' },
+      caliper_spec: 2, instrument: { id: 'buttons', title: 'Button Controls' },
       control: controls, layout: { split: 'vertical', children: controls.map((c) => c.id) },
     } },
     data: { buttons: data }, requests: [],

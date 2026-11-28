@@ -8,8 +8,8 @@
 //     stream of caliper_attention_producer, and not after the stream is
 //     detached (⌘D Detach on the live page; esc Home keeps it attached).
 // It needs the caliper executable (CALIPER_TEST_CALIPER_EXE), and the second
-// case the producer (CALIPER_TEST_PRODUCER_EXE) and the built applets
-// (CALIPER_TEST_APPLETS), as the side chat's live case; without Metal both
+// case the producer (CALIPER_TEST_PRODUCER_EXE) and the built instruments
+// (CALIPER_TEST_INSTRUMENTS), as the side chat's live case; without Metal both
 // say they are skipped. No case reaches a model or uses a key.
 #include "builder/agent_settings.h"
 #include "builder/tests/fake_model_server.h"
@@ -50,7 +50,7 @@ TEST_CASE("agent settings app: Setup in ⌘K's no-provider state opens the setti
     const std::string ws = root + "/ws";
     {
         auto s = dashboard_workspace(ws, root + "/data-files");
-        ok(*s, "applet.save", {{"overwrite", true}});
+        ok(*s, "instrument.save", {{"overwrite", true}});
         s->close();
     }
     std::filesystem::create_directories(root + "/data");
@@ -59,7 +59,7 @@ TEST_CASE("agent settings app: Setup in ⌘K's no-provider state opens the setti
     acp::SpawnOptions o;
     o.argv = {exe, "--hidden", "--api", "--api-port", "0", "--workspace", ws};
     o.env = {{"CALIPER_DATA_DIR", root + "/data"},
-             {"CALIPER_USER_APPLETS_DIR", root + "/apps"},
+             {"CALIPER_USER_INSTRUMENTS_DIR", root + "/apps"},
              {"CALIPER_WINDOW_SIZE", "960x600"},
              {"CALIPER_AUTOLAUNCH", "local.run42-dashboard"},
              {"CALIPER_AGENT_OFFLINE", "1"},
@@ -111,7 +111,7 @@ TEST_CASE("agent settings app: a changed setting ends the widget agent at once, 
     const std::string ws = root + "/ws";
     {
         auto s = dashboard_workspace(ws, root + "/data-files");
-        ok(*s, "applet.save", {{"overwrite", true}});
+        ok(*s, "instrument.save", {{"overwrite", true}});
         s->close();
     }
     const std::string data = root + "/data";
@@ -126,7 +126,7 @@ TEST_CASE("agent settings app: a changed setting ends the widget agent at once, 
     acp::SpawnOptions o;
     o.argv = {exe, "--hidden", "--api", "--api-port", "0", "--workspace", ws};
     o.env = {{"CALIPER_DATA_DIR", data},
-             {"CALIPER_USER_APPLETS_DIR", root + "/apps"},
+             {"CALIPER_USER_INSTRUMENTS_DIR", root + "/apps"},
              {"CALIPER_WINDOW_SIZE", "960x600"},
              {"CALIPER_AUTOLAUNCH", "local.run42-dashboard"},
              {"CALIPER_AGENT_OFFLINE", "1"},
@@ -186,7 +186,7 @@ TEST_CASE("agent settings app: List and Probe from the input driver, and a wait 
     const std::string ws = root + "/ws";
     {
         auto s = dashboard_workspace(ws, root + "/data-files");
-        ok(*s, "applet.save", {{"overwrite", true}});
+        ok(*s, "instrument.save", {{"overwrite", true}});
         s->close();
     }
     std::filesystem::create_directories(root + "/data");
@@ -201,7 +201,7 @@ TEST_CASE("agent settings app: List and Probe from the input driver, and a wait 
     acp::SpawnOptions o;
     o.argv = {exe, "--hidden", "--workspace", ws};
     o.env = {{"CALIPER_DATA_DIR", root + "/data"},
-             {"CALIPER_USER_APPLETS_DIR", root + "/apps"},
+             {"CALIPER_USER_INSTRUMENTS_DIR", root + "/apps"},
              {"CALIPER_WINDOW_SIZE", "960x600"},
              {"CALIPER_AUTOLAUNCH", "local.run42-dashboard"},
              {"CALIPER_AGENT_OFFLINE", "1"},
@@ -242,11 +242,11 @@ TEST_CASE("agent settings app: List and Probe from the input driver, and a wait 
 TEST_CASE("agent settings app: the Shared GPU note while a live run is attached" * doctest::test_suite("app")) {
     const char* exe = std::getenv("CALIPER_TEST_CALIPER_EXE");
     const char* producer_exe = std::getenv("CALIPER_TEST_PRODUCER_EXE");
-    const char* applets = std::getenv("CALIPER_TEST_APPLETS");
-    if (!exe || !*exe || !producer_exe || !*producer_exe || !applets || !*applets) {
+    const char* instruments = std::getenv("CALIPER_TEST_INSTRUMENTS");
+    if (!exe || !*exe || !producer_exe || !*producer_exe || !instruments || !*instruments) {
         // Not a skip of the whole entry: the first case still counts.
         std::printf("caliper_agent_settings_app: the live case is not run: it needs CALIPER_TEST_PRODUCER_EXE and "
-                    "CALIPER_TEST_APPLETS (macOS)\n");
+                    "CALIPER_TEST_INSTRUMENTS (macOS)\n");
         return;
     }
     const std::string root = fresh_dir("agent-settings-live");
@@ -281,9 +281,9 @@ TEST_CASE("agent settings app: the Shared GPU note while a live run is attached"
     REQUIRE_MESSAGE(!link.empty(), out);
 
     acp::SpawnOptions o;
-    o.argv = {exe, "--hidden", "--applets", applets, "--url", link, "--workspace", root + "/ws"};
+    o.argv = {exe, "--hidden", "--instruments", instruments, "--url", link, "--workspace", root + "/ws"};
     o.env = {{"CALIPER_DATA_DIR", root + "/data"},
-             {"CALIPER_USER_APPLETS_DIR", root + "/apps"},
+             {"CALIPER_USER_INSTRUMENTS_DIR", root + "/apps"},
              {"CALIPER_WINDOW_SIZE", "960x600"},
              {"CALIPER_AGENT_OFFLINE", "1"},
              {"CALIPER_TEST_SPEC_UI",

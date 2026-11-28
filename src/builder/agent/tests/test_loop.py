@@ -565,21 +565,21 @@ def test_cancel_while_a_tool_runs_gives_every_call_a_result(run_agent, caliper):
 
 
 def test_a_cancelled_permission_request_cancels_the_turn(run_agent, caliper):
-    steps = [message(tool_use("t_save", "applet_save", {"id": "demo"}), stop="tool_use"), message(text("Ok."))]
+    steps = [message(tool_use("t_save", "instrument_save", {"id": "demo"}), stop="tool_use"), message(text("Ok."))]
     agent, record = run_agent(steps)
     sid = agent.start_session()
     response, _ = agent.prompt(sid, "Save", on_permission=lambda p: {"outcome": {"outcome": "cancelled"}})
     assert response["result"]["stopReason"] == "cancelled"
-    assert caliper.commands("applet.save") == []
+    assert caliper.commands("instrument.save") == []
     agent.prompt(sid, "Next")
     assert tool_results(read_requests(record)[1]["messages"])["t_save"]["outcome"] == "failed"
 
 
 def test_destructive_command_asks_and_acts_on_the_answer(run_agent, caliper):
     save = {"id": "demo", "overwrite": True}
-    steps = [message(text("Saving."), tool_use("toolu_save", "applet_save", save), stop="tool_use"),
+    steps = [message(text("Saving."), tool_use("toolu_save", "instrument_save", save), stop="tool_use"),
              message(text("Saved.")),
-             message(text("Saving again."), tool_use("toolu_save2", "applet_save", save), stop="tool_use"),
+             message(text("Saving again."), tool_use("toolu_save2", "instrument_save", save), stop="tool_use"),
              message(text("I did not save it."))]
     agent, record = run_agent(steps)
     sid = agent.start_session()
@@ -589,17 +589,17 @@ def test_destructive_command_asks_and_acts_on_the_answer(run_agent, caliper):
         asked.append(params)
         return allow(params)
 
-    response, _ = agent.prompt(sid, "Save the applet", on_permission=answer_allow)
+    response, _ = agent.prompt(sid, "Save the instrument", on_permission=answer_allow)
     assert response["result"]["stopReason"] == "end_turn"
     [params] = asked
     assert params["sessionId"] == sid and params["toolCall"]["toolCallId"] == "toolu_save"
     assert params["toolCall"]["rawInput"] == save
     assert {o["kind"] for o in params["options"]} == {"allow_once", "reject_once"}
-    assert len(caliper.commands("applet.save")) == 1
+    assert len(caliper.commands("instrument.save")) == 1
 
     response, updates = agent.prompt(sid, "Save it again", on_permission=deny)
     assert response["result"]["stopReason"] == "end_turn"
-    assert len(caliper.commands("applet.save")) == 1  # the denied call never reached Caliper
+    assert len(caliper.commands("instrument.save")) == 1  # the denied call never reached Caliper
     denied = tool_results(read_requests(record)[3]["messages"])["toolu_save2"]
     assert denied["outcome"] == "failed" and "denied" in denied["content"]
 
@@ -631,7 +631,7 @@ def test_spec_edits_are_previewed_and_shown_as_diffs_before_they_run(run_agent, 
         assert len(caliper.commands(name, dry=True)) == 1 and len(caliper.commands(name)) == 1
         assert caliper.commands(name, dry=True)[0]["group"] == caliper.commands(name)[0]["group"]
     panel_diff = asked[0]["toolCall"]["content"][0]
-    assert panel_diff["type"] == "diff" and panel_diff["path"] == "/tmp/ws/applets/demo/demo.spec.toml"
+    assert panel_diff["type"] == "diff" and panel_diff["path"] == "/tmp/ws/instruments/demo/demo.spec.toml"
     assert panel_diff["oldText"] == before_text and 'id = "heat"' in panel_diff["newText"]
     text_diff = asked[1]["toolCall"]["content"][0]
     assert text_diff["oldText"] == panel_diff["newText"] and text_diff["newText"] == new_text

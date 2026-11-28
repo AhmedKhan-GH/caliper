@@ -16,7 +16,7 @@ namespace {
 
 spec::Spec base() {
     spec::Spec s;
-    s.applet.id = "t";
+    s.instrument.id = "t";
     return s;
 }
 
@@ -185,7 +185,7 @@ TEST_CASE("panel.patch and panel.remove keep the layout whole") {
 TEST_CASE("non-closable panels and locked layouts refuse close and layout mutations") {
     spec::Spec s = two_sources();
     s = must(edit(s, "panel.create", {{"id", "a"}, {"primitive", "series"}, {"closable", false}, {"bind", {{"y", "m.loss"}}}}));
-    CHECK(s.version == spec::kInstrumentVersion);
+    CHECK(s.version == spec::kFormatVersion);
     REQUIRE(s.panels.size() == 1);
     CHECK(s.panels[0].closable == std::optional<bool>(false));
     s = must(edit(s, "panel.create", {{"id", "b"}, {"primitive", "heatmap"}, {"bind", {{"values", "h"}}}}));
@@ -205,7 +205,7 @@ TEST_CASE("non-closable panels and locked layouts refuse close and layout mutati
     const SpecEdit locked_edit = edit(s, "layout.lock", {{"locked", true}});
     REQUIRE(locked_edit.error.ok());
     CHECK(locked_edit.result == json{{"locked", true}});
-    CHECK(locked_edit.spec.applet.layout_locked == std::optional<bool>(true));
+    CHECK(locked_edit.spec.instrument.layout_locked == std::optional<bool>(true));
     CHECK(edit(locked_edit.spec, "panel.remove", {{"id", "b"}}).error.code == "layout.locked");
     CHECK(edit(locked_edit.spec, "panel.remove", {{"id", "a"}}).error.code == "layout.locked");
     CHECK(edit(locked_edit.spec, "panel.create", {{"id", "c"}, {"primitive", "text"}, {"options", {{"text", "x"}}}})
@@ -221,7 +221,7 @@ TEST_CASE("non-closable panels and locked layouts refuse close and layout mutati
     const SpecEdit unlocked = edit(locked_edit.spec, "layout.lock", {{"locked", false}});
     REQUIRE(unlocked.error.ok());
     CHECK(unlocked.result == json{{"locked", false}});
-    CHECK_FALSE(unlocked.spec.applet.layout_locked.has_value());
+    CHECK_FALSE(unlocked.spec.instrument.layout_locked.has_value());
     CHECK(edit(unlocked.spec, "panel.remove", {{"id", "b"}}).error.ok());
     CHECK(edit(unlocked.spec, "panel.remove", {{"id", "a"}}).error.code == "panel.not_closable");
 }
@@ -283,7 +283,7 @@ TEST_CASE("the flat layout refuses hostile forms") {
 }
 
 TEST_CASE("spec.set_text checks the text and locates its errors") {
-    const SpecEdit bad = edit(base(), "spec.set_text", {{"text", "caliper_spec = 0\n[applet]\nid = \"x\"\n[[panel]]\nid = \"p\"\nprimitive = \"pie\"\n"}});
+    const SpecEdit bad = edit(base(), "spec.set_text", {{"text", "caliper_spec = 2\n[instrument]\nid = \"x\"\n[[panel]]\nid = \"p\"\nprimitive = \"pie\"\n"}});
     CHECK(bad.error.code == "spec.unknown_primitive");
     const SpecEdit syntax = edit(base(), "spec.set_text", {{"text", "caliper_spec = \n"}});
     CHECK(syntax.error.code == "spec.syntax");
@@ -321,12 +321,12 @@ spec::Control slider(const std::string& id) {
 
 }  // namespace
 
-TEST_CASE("panel.create of a scene panel raises a version 0 spec to version 1 in the same edit") {
+TEST_CASE("panel.create of a scene panel keeps the spec at format version 2") {
     const spec::Spec s = base();
-    REQUIRE(s.version == 0);
+    REQUIRE(s.version == spec::kFormatVersion);
     SpecEdit e = edit(s, "panel.create", scene_args("world"));
     spec::Spec next = must(e);
-    CHECK(next.version == 1);
+    CHECK(next.version == spec::kFormatVersion);
     REQUIRE(next.panels.size() == 1);
     CHECK(next.panels[0].primitive == spec::Primitive::scene);
     CHECK(next.panels[0].bind.at("scene").bindings == std::vector<std::string>{"live:model"});
@@ -337,10 +337,10 @@ TEST_CASE("panel.create of a scene panel raises a version 0 spec to version 1 in
     REQUIRE(offline.error.ok());
     REQUIRE(offline.warnings.size() == 1);
     CHECK(offline.warnings[0].code == "spec.unresolved_source");
-    // A panel of version 0 leaves the version as it is.
+    // A series panel leaves the version at 2 as well.
     CHECK(must(edit(two_sources(), "panel.create", {{"id", "p"}, {"primitive", "series"}, {"bind", {{"y", "m.loss"}}}},
                     resolver))
-              .version == 0);
+              .version == spec::kFormatVersion);
     // The scene slot holds live:<scene name>.
     SpecEdit bad = edit(s, "panel.create", {{"id", "w"}, {"primitive", "scene"}, {"bind", {{"scene", "model"}}}});
     CHECK(bad.error.code == "spec.bad_binding");
@@ -353,7 +353,7 @@ TEST_CASE("panel.create of a scene panel raises a version 0 spec to version 1 in
 
 TEST_CASE("the default layout puts a row of controls under the panels") {
     spec::Spec s = base();
-    s.version = 1;
+    s.version = spec::kFormatVersion;
     s.controls.push_back(slider("lr"));
     REQUIRE(effective_layout(s));
     CHECK(*effective_layout(s) == LayoutNode::of_panel("lr"));
@@ -363,7 +363,7 @@ TEST_CASE("the default layout puts a row of controls under the panels") {
     REQUIRE(s.layout);
     CHECK(layout_text(s) == layout_text([] {
               spec::Spec t;
-              t.applet.id = "t";
+              t.instrument.id = "t";
               LayoutNode row;
               row.kind = LayoutNode::Kind::split;
               row.split = spec::SplitDirection::horizontal;
@@ -381,9 +381,9 @@ TEST_CASE("the default layout puts a row of controls under the panels") {
     CHECK(s.layout->children[0].kind == LayoutNode::Kind::split);
     CHECK(s.layout->children[0].split == spec::SplitDirection::horizontal);
     CHECK(s.layout->children[1].children.size() == 2);
-    // Without a layout of its own, the spec places panels as version 0 and the controls under them.
+    // Without a layout of its own, the spec places panels horizontally and the controls under them.
     spec::Spec d = base();
-    d.version = 1;
+    d.version = spec::kFormatVersion;
     d.panels = s.panels;
     d.controls = s.controls;
     const auto root = effective_layout(d);

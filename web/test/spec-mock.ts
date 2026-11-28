@@ -1,6 +1,6 @@
 // A mock of the app for the spec page's tests: Playwright's routing answers
 // GET /v0/spec with the built page (dist/spec.html) and POST
-// /v0/commands/{spec.get, applet.list, panel.data} with the forms the app's
+// /v0/commands/{spec.get, instrument.list, panel.data} with the forms the app's
 // command layer gives (src/builder/session/panel_data.cpp), from specs and
 // data that the tests make here. It records every command request.
 
@@ -30,10 +30,10 @@ export function ready(panel: string, primitive: string, data: Json, version = 'v
 }
 
 export interface MockApp {
-  specs: Record<string, Json>;                         // applet id -> canonical JSON
-  data: Record<string, Record<string, Json>>;          // applet id -> panel id -> panel.data result
+  specs: Record<string, Json>;                         // instrument id -> canonical JSON
+  data: Record<string, Record<string, Json>>;          // instrument id -> panel id -> panel.data result
   requests: { name: string; args: Json; headers: Record<string, string> }[];
-  /** spec.get's open_in_app for an applet: whether the app has it open; absent when not set. */
+  /** spec.get's open_in_app for an instrument: whether the app has it open; absent when not set. */
   openInApp?: Record<string, boolean>;
 }
 
@@ -48,8 +48,8 @@ export function rng(seed: number): () => number {
 
 /** The dashboard fixture's spec (src/builder/spec/tests/fixtures/dashboard.spec.toml) in its JSON form. */
 export const DASHBOARD: Json = {
-  caliper_spec: 0,
-  applet: { id: 'run42-dashboard', title: 'Run 42', description: 'Loss and accuracy of run 42.' },
+  caliper_spec: 2,
+  instrument: { id: 'run42-dashboard', title: 'Run 42', description: 'Loss and accuracy of run 42.' },
   source: [
     { id: 'metrics', catalog: 'table:run42_metrics' },
     { id: 'attn', catalog: 'tensor:attn_weights', transform: [
@@ -140,15 +140,15 @@ export async function mockApp(page: Page, app: MockApp, assets?: string): Promis
       await route.fulfill({ status: 401, contentType: 'application/json', body: '{"error":"the session token is missing or wrong"}' });
       return;
     }
-    if (name === 'applet.list') {
-      await ok({ applets: Object.entries(app.specs).map(([id, s]) => ({ id, title: s.applet.title ?? id, path: `applets/${id}`, updated_at: null })) });
+    if (name === 'instrument.list') {
+      await ok({ instruments: Object.entries(app.specs).map(([id, s]) => ({ id, title: s.instrument.title ?? id, path: `instruments/${id}`, updated_at: null })) });
     } else if (name === 'spec.get') {
-      const s = app.specs[args.applet];
-      if (!s) await fail('applet.not_found');
-      else await ok({ id: s.applet.id, path: `applets/${args.applet}/${args.applet}.spec.toml`, dirty: false, text: JSON.stringify(s), json: s,
-        ...(app.openInApp && args.applet in app.openInApp ? { open_in_app: app.openInApp[args.applet] } : {}) });
+      const s = app.specs[args.instrument];
+      if (!s) await fail('instrument.not_found');
+      else await ok({ id: s.instrument.id, path: `instruments/${args.instrument}/${args.instrument}.spec.toml`, dirty: false, text: JSON.stringify(s), json: s,
+        ...(app.openInApp && args.instrument in app.openInApp ? { open_in_app: app.openInApp[args.instrument] } : {}) });
     } else if (name === 'panel.data') {
-      const d = app.data[args.applet]?.[args.panel];
+      const d = app.data[args.instrument]?.[args.panel];
       if (!d) await fail('panel.not_found');
       else if (args.known && args.known === d.version) await ok({ ...d, unchanged: true, data: null });
       else await ok(d);
@@ -158,12 +158,12 @@ export async function mockApp(page: Page, app: MockApp, assets?: string): Promis
   });
 }
 
-export async function openSpec(page: Page, applet: string): Promise<void> {
-  await page.goto(`${ORIGIN}/v0/spec?token=${TOKEN}&applet=${applet}`);
+export async function openSpec(page: Page, instrument: string): Promise<void> {
+  await page.goto(`${ORIGIN}/v0/spec?token=${TOKEN}&instrument=${instrument}`);
 }
 
 export interface PageState {
-  status: string; state: string | null; applet: string; title: string; layoutLocked: boolean;
+  status: string; state: string | null; instrument: string; title: string; layoutLocked: boolean;
   panels: { id: string; title: string; primitive: string; drawn: boolean; state: string | null; info: string;
             closable: boolean; closeButton: Json | null; rect: Json }[];
   controls?: { id: string; kind: string; title: string; value: unknown; text: string; enabled: boolean; why: string;

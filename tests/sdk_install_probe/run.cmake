@@ -6,7 +6,7 @@
 #      with only -DCMAKE_PREFIX_PATH=<WORK_DIR>/prefix;
 #   3. run the probe's doctest binary, check that hello_world's library and stamped
 #      manifest exist, and check that neither build refers to the source tree;
-#   4. build a copy of no_embed/, an applet source that includes caliper/embed.h
+#   4. build a copy of no_embed/, an instrument source that includes caliper/embed.h
 #      against every SDK target, and check that it fails because the header is
 #      not found.
 #
@@ -89,7 +89,7 @@ function(check_no_source_refs name)
         # The package names the core build's libtorch on purpose.
         string(REGEX REPLACE "\nCALIPER_TORCH_DIR:[^\n]*" "" text "${text}")
         foreach(root "${CALIPER_SOURCE_DIR}" "${src_real}")
-            foreach(sub sdk src include examples third_party applets cmake)
+            foreach(sub sdk src include examples third_party instruments cmake)
                 string(FIND "${text}" "${root}/${sub}/" at)
                 if(NOT at EQUAL -1)
                     message(FATAL_ERROR "${name}: ${file} refers to the source tree (${root}/${sub}/)")
@@ -105,9 +105,9 @@ run("Running the probe" "${WORK_DIR}/probe-build/probe${EXE_SUFFIX}")
 
 build_copy(hello_world examples/hello_world)
 check_no_source_refs(hello_world)
-set(applets "${WORK_DIR}/hello_world-build/applets")
-set(library "${applets}/${LIB_PREFIX}hello_world${LIB_SUFFIX}")
-set(manifest "${applets}/hello_world.caliper.toml")
+set(instruments "${WORK_DIR}/hello_world-build/instruments")
+set(library "${instruments}/${LIB_PREFIX}hello_world${LIB_SUFFIX}")
+set(manifest "${instruments}/hello_world.caliper.toml")
 foreach(path "${library}" "${manifest}")
     if(NOT EXISTS "${path}")
         message(FATAL_ERROR "hello_world: ${path} was not built")
@@ -121,7 +121,7 @@ foreach(line "[build]" "sdk = \"${EXPECT_SDK_VERSION}\"" "ui_stack = \"${EXPECT_
     endif()
 endforeach()
 
-# An applet cannot include caliper/embed.h: the copy of no_embed/ configures,
+# An instrument cannot include caliper/embed.h: the copy of no_embed/ configures,
 # and its build fails on that include.
 file(COPY "${CALIPER_SOURCE_DIR}/tests/sdk_install_probe/no_embed/" DESTINATION "${WORK_DIR}/no_embed")
 run("Configuring no_embed" "${CMAKE_COMMAND}" -S "${WORK_DIR}/no_embed"
@@ -129,11 +129,11 @@ run("Configuring no_embed" "${CMAKE_COMMAND}" -S "${WORK_DIR}/no_embed"
 execute_process(COMMAND "${CMAKE_COMMAND}" --build "${WORK_DIR}/no_embed-build" --target no_embed
     RESULT_VARIABLE rc OUTPUT_VARIABLE out ERROR_VARIABLE out)
 if(rc EQUAL 0)
-    message(FATAL_ERROR "no_embed: an applet source including caliper/embed.h compiled against the SDK targets")
+    message(FATAL_ERROR "no_embed: an instrument source including caliper/embed.h compiled against the SDK targets")
 endif()
 string(FIND "${out}" "caliper/embed.h" at)
 if(at EQUAL -1 OR NOT out MATCHES "file not found|No such file or directory|Cannot open include file")
     message(FATAL_ERROR "no_embed: the build failed for another reason than a missing caliper/embed.h:\n${out}")
 endif()
 
-message(STATUS "sdk install proof: OK (${library}); caliper/embed.h is out of an applet's reach")
+message(STATUS "sdk install proof: OK (${library}); caliper/embed.h is out of an instrument's reach")

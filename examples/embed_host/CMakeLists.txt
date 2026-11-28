@@ -1,8 +1,8 @@
 # examples/embed_host — an embedder of the core on a bare native window
 # (AppKit on macOS, Win32 on Windows), with an offscreen mode that opens no
 # window (CALIPER_EMBED_OFFSCREEN=1, embed_host.h). It links caliper::embed and
-# nothing of the caliper executable; it is not an applet and needs no ImGui,
-# torch or renderer type of its own.
+# nothing of the caliper executable; it is not an instrument and needs no
+# ImGui, torch or renderer type of its own.
 #
 # On its own it builds against an installed caliper-embed package:
 #   cmake -S . -B build -DCMAKE_PREFIX_PATH=<embed prefix>
@@ -18,7 +18,7 @@ if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
     if(APPLE)
         enable_language(OBJCXX)
     endif()
-    find_package(caliper-embed 1.4 CONFIG REQUIRED)
+    find_package(caliper-embed 2.0 CONFIG REQUIRED)
 endif()
 
 if(APPLE)
@@ -47,8 +47,8 @@ set_target_properties(embed_host PROPERTIES
     CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
 
 # In the core build, the same libtorch rpath the caliper exe uses, for the
-# torch applets the host loads. A standalone build and a torch-free core build
-# load no torch applet and carry no libtorch rpath.
+# torch instruments the host loads. A standalone build and a torch-free core
+# build load no torch instrument and carry no libtorch rpath.
 if(NOT CALIPER_WITH_TORCH)
     # no libtorch rpath
 elseif(APPLE)
