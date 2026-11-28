@@ -381,7 +381,7 @@ test('docs embed replays the recorded MNIST run via static files and WASM on Web
     type ViewState = { view: string; kind: string; info: string; window?: unknown; drawer: string; renderer: string; wasmStats: { updates: number; frames: number; gfxErrors?: string } };
     const views = firstState.views as ViewState[];
     if (hasMnist) {
-      expect(views.map((v) => v.view)).toEqual(['loss', 'accuracy', 'conv1.filters', 'conv1.act', 'embedding', 'fc1.weight.hist']);
+      expect(views.map((v) => v.view)).toEqual(['loss', 'lr', 'accuracy', 'conv1.filters', 'conv1.act', 'embedding', 'fc1.weight.hist']);
     }
     for (const v of views) {
       expect(v.drawer, v.view).toBe('wasm');
@@ -484,7 +484,9 @@ test('docs embed replays the recorded MNIST run via static files and WASM on Web
     await expect.poll(async () => viewFacts(await page.evaluate(() =>
       (document.querySelector('caliper-replay') as HTMLElement & { debugState(): Record<string, unknown> }).debugState())),
     { timeout: 15_000 }).toEqual(viewFacts(firstState));
-    if (hasMnist) expect(lossInfo(resetState)).toMatch(/^1 steps /);
+    // The load state, which Reset returned to above, holds one loss value. resetState itself can
+    // carry a header line from before the reset, as the views report their lines after drawing.
+    if (hasMnist) expect(lossInfo(firstState)).toMatch(/^1 steps /);
 
     const shotReset = await page.locator('caliper-replay').screenshot();
     saveShot(info, 'replay-mnist-reset', shotReset);
