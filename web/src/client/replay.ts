@@ -177,6 +177,22 @@ export function parseRecording(input: Uint8Array | ArrayBuffer, fallbackScript =
     list.sort((a, b) => a.step - b.step);
   }
 
+  // A points view fits its camera once, to the first bounding box it gets (stats[2..7]). A replay
+  // knows the whole run, so each points snapshot carries the bounding box of all of them: the
+  // fit at the first step then frames every later step, and the axes box stays still.
+  for (const list of snapshots.values()) {
+    if (!list.length || list[0].msg.kind !== KIND_IDS.points || list.some((s) => s.msg.stats.length < 8)) continue;
+    const box = [Infinity, -Infinity, Infinity, -Infinity, Infinity, -Infinity];
+    for (const { msg } of list) {
+      for (let a = 0; a < 6; a += 2) {
+        box[a] = Math.min(box[a], msg.stats[2 + a]);
+        box[a + 1] = Math.max(box[a + 1], msg.stats[3 + a]);
+      }
+    }
+    if (!box.every(Number.isFinite)) continue;
+    for (const s of list) s.msg = { ...s.msg, stats: [s.msg.stats[0], s.msg.stats[1], ...box, ...s.msg.stats.slice(8)] };
+  }
+
   // The timeline is every recorded step of any view. At a step where a view has no data,
   // the view holds its latest value at or before that step.
   const stepSet = new Set<number>();

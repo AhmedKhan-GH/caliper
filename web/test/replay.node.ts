@@ -130,6 +130,24 @@ test('the timeline is the union of snapshot and series steps, and views hold the
   src.close();
 });
 
+test('every points snapshot carries the bounding box of the whole run', () => {
+  const pts = (step: number, half: number): Message => ({
+    type: 'snapshot', sub: 3, view: 'embedding', seq: step + 1, stamp_ns: step, kind: KIND_IDS.points,
+    data_view: {}, data: new Float32Array([-half, -half, -half, half, half, half]), shape: [2, 3],
+    aux: new Float32Array([0, 1]), colormap: 0, flags: 0, vmin: 0, vmax: 9,
+    stats: [0, 9, -half, half, -2 * half, 2 * half, -half, half], axes: [], points_dims: 3, label_count: 10,
+    stamp: new BigInt64Array([BigInt(step), BigInt(step)]),
+  });
+  const rec = parseRecording(concatFrames([
+    { type: 'views', views: [{ id: 3, name: 'embedding', kind: KIND_IDS.points, sources: [] }] },
+    pts(0, 0.1),
+    pts(10, 3),
+  ]));
+  for (const s of rec.snapshots.get('embedding')!) {
+    assert.deepEqual(s.msg.stats, [0, 9, -3, 3, -6, 6, -3, 3]);
+  }
+});
+
 test('play advances one step per animation frame and stops at the last step', async () => {
   const frames: (() => void)[] = [];
   const g = globalThis as unknown as Record<string, unknown>;
