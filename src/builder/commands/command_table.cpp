@@ -1228,12 +1228,15 @@ const Row kRows[] = {
     // instrument
     {"instrument.save", true, true, true,
      "Saves the open spec as an instrument of the workspace: the folder instruments/<id>/ with a manifest "
-     "<id>.caliper.toml and the spec <id>.spec.toml. The id is the spec's instrument id unless one is given. Saving over "
-     "an existing instrument needs overwrite set to true. It writes files, so an agent's call needs the person's "
-     "approval, and it cannot be undone.",
+     "<id>.caliper.toml and the spec <id>.spec.toml. The id is the spec's instrument id unless one is given. The "
+     "manifest id, which app.launch takes, is manifest_id when given; otherwise an overwrite keeps the saved one and a "
+     "new instrument gets local.<id>, with each _ replaced by -. Saving over an existing instrument needs overwrite set "
+     "to true. It writes files, so an agent's call needs the person's approval, and it cannot be undone.",
      R"json({"type": "object", "additionalProperties": false, "required": [],
       "properties": {
         "id": {"$use": "id", "description": "The instrument's id; the spec's own instrument id when absent."},
+        "manifest_id": {"type": "string", "pattern": "^[a-z0-9-]+([.][a-z0-9-]+)*$", "minLength": 1, "maxLength": 128,
+                        "description": "The manifest id to write, lowercase reverse-DNS such as ai.caliperapp.circuit-trace; when absent, the saved manifest's id for an overwrite and local.<id> otherwise."},
         "overwrite": {"type": "boolean", "default": false, "description": "Whether to replace a saved instrument of the same id; false when absent."}}})json",
      R"json({"type": "object", "additionalProperties": false, "required": ["id", "manifest", "spec"],
       "properties": {

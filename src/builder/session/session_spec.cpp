@@ -260,7 +260,18 @@ CommandOutput Session::Impl::instrument_save(const CommandContext& ctx) {
     const bool exists = instrument_saved(id);
     if (exists && !overwrite)
         return fail("instrument.exists", "An instrument " + id + " is saved already; set overwrite to replace it.", "args.id");
-    const std::string manifest_id = manifest_id_for(id);
+    // The manifest id is the one the caller names (the schema holds it to the
+    // manifest's grammar). Without one, an overwrite keeps the saved manifest's
+    // id and version, and a new instrument is local.<id>.
+    const bool named = a.contains("manifest_id");
+    std::string manifest_id = str_arg(a, "manifest_id");
+    std::string version = "0.1.0";
+    if (exists) {
+        ManifestInfo old = read_manifest(manifest.u8string());
+        if (!old.error && !old.version.empty()) version = old.version;
+        if (!named && !old.error) manifest_id = old.id;
+    }
+    if (manifest_id.empty()) manifest_id = manifest_id_for(id);
     std::error_code ec;
     for (fs::directory_iterator it(ws() / "instruments", ec), end; !ec && it != end; it.increment(ec)) {
         const std::string other = it->path().filename().u8string();
@@ -270,13 +281,9 @@ CommandOutput Session::Impl::instrument_save(const CommandContext& ctx) {
         if (!fs::is_regular_file(m, mec)) continue;
         if (read_manifest(m.u8string()).id == manifest_id)
             return fail("instrument.exists",
-                        "The instrument " + other + " already has the manifest id " + manifest_id + "; choose another id.",
-                        "args.id");
-    }
-    std::string version = "0.1.0";
-    if (exists) {
-        ManifestInfo old = read_manifest(manifest.u8string());
-        if (!old.error && !old.version.empty()) version = old.version;
+                        "The instrument " + other + " already has the manifest id " + manifest_id + "; choose another " +
+                            (named ? "manifest id." : "id."),
+                        named ? "args.manifest_id" : "args.id");
     }
     spec::Spec saved = doc->spec;
     saved.instrument.id = id;

@@ -7714,6 +7714,13 @@
             "pattern": "^[a-z][a-z0-9_-]{0,63}$",
             "type": "string"
           },
+          "manifest_id": {
+            "description": "The manifest id to write, lowercase reverse-DNS such as ai.caliperapp.circuit-trace; when absent, the saved manifest's id for an overwrite and local.<id> otherwise.",
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[a-z0-9-]+([.][a-z0-9-]+)*$",
+            "type": "string"
+          },
           "overwrite": {
             "default": false,
             "description": "Whether to replace a saved instrument of the same id; false when absent.",
@@ -7756,7 +7763,7 @@
         ],
         "type": "object"
       },
-      "summary": "Saves the open spec as an instrument of the workspace: the folder instruments/<id>/ with a manifest <id>.caliper.toml and the spec <id>.spec.toml. The id is the spec's instrument id unless one is given. Saving over an existing instrument needs overwrite set to true. It writes files, so an agent's call needs the person's approval, and it cannot be undone."
+      "summary": "Saves the open spec as an instrument of the workspace: the folder instruments/<id>/ with a manifest <id>.caliper.toml and the spec <id>.spec.toml. The id is the spec's instrument id unless one is given. The manifest id, which app.launch takes, is manifest_id when given; otherwise an overwrite keeps the saved one and a new instrument gets local.<id>, with each _ replaced by -. Saving over an existing instrument needs overwrite set to true. It writes files, so an agent's call needs the person's approval, and it cannot be undone."
     },
     {
       "agents": true,
