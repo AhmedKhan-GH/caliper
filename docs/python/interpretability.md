@@ -45,13 +45,13 @@ Producers observe either the complete previous tensor group or the complete new 
 
 `caliper.interp.load_backend(model_ref, dictionary_ref=None, *, sae_id=None, device=None, dtype=None)` loads a staged `Backend`.
 Pass a Hugging Face model name or local snapshot path as `model_ref`.
-When `dictionary_ref` names a transcoder hub alias (`"gemma"` or `"llama"`), a `TranscoderSet`, or a local transcoder directory, `load_backend` builds a staged `TransformerLensReplacementModel`.
+When `dictionary_ref` names a transcoder hub alias, a `TranscoderSet`, or a local transcoder directory, `load_backend` builds a staged `TransformerLensReplacementModel`.
 When `dictionary_ref` names a `sae-lens` release (with `sae_id`) or a local SAE directory, `load_backend` builds a `HookedTransformer` and stages the `SAE` on CPU before moving it to the target device.
 
 ```python
 from caliper.interp import Tracer, load_backend
 
-backend = load_backend("google/gemma-2-2b", "gemma")
+backend = load_backend("/path/to/model", "/path/to/transcoders")
 tracer = Tracer(backend.model, backend.tokenizer, backend.dictionary, backend=backend)
 graph = tracer.trace("He saw a carrot and had to grab it, his hunger was like a starving")
 ```
@@ -82,7 +82,7 @@ That scan zeros BOS positions.
 
 Path resolution checks only local paths for sibling folders.
 The sibling check runs only when `<dictionary>` exists on disk.
-As a result, hub aliases such as `"gemma"` do not match an unrelated `index` folder in the current directory.
+As a result, non-path hub aliases do not match an unrelated `index` folder in the current directory.
 An explicit index path always takes priority over nested and sibling folders.
 
 Pass either the dictionary folder or the index folder to `FeatureIndex`:
@@ -90,7 +90,7 @@ Pass either the dictionary folder or the index folder to `FeatureIndex`:
 ```python
 from caliper.interp import FeatureIndex, load_backend
 
-backend = load_backend("google/gemma-2-2b", "/path/to/dictionary")
+backend = load_backend("/path/to/model", "/path/to/dictionary")
 index_dir = FeatureIndex.resolve("/path/to/dictionary")
 if index_dir is not None:
     index = FeatureIndex(
@@ -104,7 +104,7 @@ if index_dir is not None:
 Run `tools/interp/build_index.py` to build a new index inside `<dictionary>/index` from a JSONL corpus:
 
 ```sh
-python -m tools.interp.build_index --model google/gemma-2-2b --dictionary "$SCOPE_DIR" --text-jsonl "$CORPUS_JSONL"
+python -m tools.interp.build_index --model /path/to/model --dictionary "$DICT_DIR" --text-jsonl "$CORPUS_JSONL"
 ```
 
 ### Index Layout
@@ -112,7 +112,7 @@ python -m tools.interp.build_index --model google/gemma-2-2b --dictionary "$SCOP
 Each index folder holds `index.json` and four binary files.
 `FeatureIndex` maps the binary files in read-only mode and checks the layer and latent counts against `dictionary.metadata`.
 In `index.json`, the latent count uses either `"latents"` or `"features"`.
-When `"latents"` is absent, `FeatureIndex` reads `"features"` to support 2-million-token Gemma indexes.
+When `"latents"` is absent, `FeatureIndex` reads `"features"` to support legacy feature indexes.
 If both keys appear with different values, `FeatureIndex` raises `ValueError`.
 
 | File | Format | Contents |

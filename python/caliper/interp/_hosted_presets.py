@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 import json
+import os
 from pathlib import Path
 import time
 
@@ -13,10 +14,13 @@ from ._memory import CleanStop, autorelease_scope
 
 
 class _HostedPresetsMixin:
-    """Preset actions loaded from the published Dallas circuit manifest."""
+    """Preset actions loaded from an external circuit intervention manifest."""
 
     def _dallas_manifest_path(self) -> Path | None:
-        manifest = Path(__file__).resolve().parents[3] / "demos" / "circuit_trace" / "published_dallas_v1.json"
+        raw = os.environ.get("CALIPER_PRESET_MANIFEST", "").strip()
+        if not raw:
+            return None
+        manifest = Path(raw).expanduser()
         return manifest if manifest.is_file() else None
 
     def _register_dallas_actions(self, caliper) -> None:

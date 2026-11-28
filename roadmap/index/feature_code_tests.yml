@@ -639,7 +639,6 @@ INT-42:
   tests:
   - tests/interp/test_hosted.py
   - src/host/runner/tests/test_inference_entry.py
-  - tests/demos/test_circuit_trace.py
 PLT-01:
   code:
   - src/host/renderer/metal_renderer.mm
