@@ -195,7 +195,8 @@ test('reset pauses, returns to the first step and re-sends every view with a new
   assert.equal(src.stepIndex, 0);
   assert.equal(lastSeries().total, 1);
   assert.equal(lastSeries().values[0], 2);
-  assert.ok(Math.abs(lastSnap().data[0] - 0) < 1e-6);
+  // The recording's first cell is step * 0.01 in a Float32Array, exactly 0 at step 0.
+  assert.equal(lastSnap().data[0], 0);
   const cursor = lastSeries().cursor!;
 
   // At the first step already, a reset still re-sends the views with a newer cursor.
@@ -229,7 +230,8 @@ test('ReplaySource seeks snapshots and series cleanly for both StreamClient and 
   const subWeights = src.subscribe('weights');
   await new Promise((r) => queueMicrotask(() => r(null)));
   assert.equal(receivedSeries.at(-1)?.total, 26);
-  assert.ok(Math.abs((receivedSnaps.at(-1)?.data[0] ?? 0) - 0.25) < 1e-5);
+  // The recording's first cell is step * 0.01 stored as float32, the same value at step 25.
+  assert.equal(receivedSnaps.at(-1)?.data[0], Math.fround(25 * 0.01));
 
   // WASM frame peer handshake and seeking backwards
   const peerFrames: Message[] = [];
@@ -253,7 +255,7 @@ test('ReplaySource seeks snapshots and series cleanly for both StreamClient and 
   src.seekIndex(0);
   assert.equal(src.currentStep, 0);
   assert.equal(receivedSeries.at(-1)?.total, 1);
-  assert.ok(Math.abs((receivedSnaps.at(-1)?.data[0] ?? 99) - 0.0) < 1e-5);
+  assert.equal(receivedSnaps.at(-1)?.data[0], 0);
   const peerSeries0 = peerFrames.find((m): m is SeriesMsg => m.type === 'series');
   const peerSnap0 = peerFrames.find((m): m is SnapshotMsg => m.type === 'snapshot');
   assert.equal(peerSeries0?.total, 1);

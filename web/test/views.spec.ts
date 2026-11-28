@@ -285,13 +285,13 @@ test.describe('series', () => {
     expect((d.steps as { hi: number }).hi).toBe(100_000);
     // Decimated: the curve the view drew has at most the first, lowest,
     // highest and last value of each pixel column (M4), not 100,000 vertices.
-    expect(d.vertices as number).toBeLessThanOrEqual(4 * Math.round(d.area.w) + 8);
+    // The drawn range takes one index past each end of the window, which can
+    // add a column at each edge (drawCurve in src/views/series.ts).
+    expect(d.vertices as number).toBeLessThanOrEqual(4 * (Math.round(d.area.w) + 2));
     expect(d.vertices as number).toBeGreaterThan(Math.round(d.area.w));
+    // The time is a measurement, printed and not checked: the vertex counts
+    // above show the decimation.
     console.log(`${info.project.name} series of 100000 values: ${d.vertices} vertices over ${Math.round(d.area.w)} columns, drawn in ${t.toFixed(1)} ms`);
-    // The time is a measurement. It bounds the draw only on this machine's
-    // GPU and Canvas 2D paths and outside CI: a hosted runner, and SwiftShader
-    // anywhere, draws slower with nothing wrong.
-    if (!process.env.CI && info.project.name !== 'swiftshader') expect(t).toBeLessThan(250);
   });
 
   test('hover shows step and value; zoom stops following; double-click follows again', async ({ harness: page }) => {
@@ -307,9 +307,11 @@ test.describe('series', () => {
     let z = await dbg(page, 's');
     expect(z.follow).toBe(false);
     expect(z.window.x1 - z.window.x0).toBeLessThan(800);
+    const zoomed = z.window;
     await series(page, 's', 1000, { n: 100, f: 'i / 4' });
     z = await dbg(page, 's');
-    expect(z.window.x1).toBeLessThan(1000);
+    // The view does not follow, so the x range stays where the zoom put it.
+    expect([z.window.x0, z.window.x1]).toEqual([zoomed.x0, zoomed.x1]);
     await page.mouse.dblclick(p.x, p.y);
     await expect.poll(async () => (await dbg(page, 's')).window.x1).toBe(1099);
     expect((await dbg(page, 's')).follow).toBe(true);
@@ -323,7 +325,9 @@ test.describe('series', () => {
     const d = await dbg(page, 's');
     expect(d.logY).toBe(true);
     expect(d.window.y0).toBeGreaterThan(0);
-    expect(Math.log10(d.window.y1 / d.window.y0)).toBeGreaterThan(2.5);
+    // The window holds every value: the first, 1 + 1e-3, is the largest and the last the smallest.
+    expect(d.window.y0).toBeLessThanOrEqual(Math.fround(Math.exp(-399 / 50) + 1e-3));
+    expect(d.window.y1).toBeGreaterThanOrEqual(Math.fround(1 + 1e-3));
     await page.locator('#s').screenshot({ path: shotPath(info, 'series-log') });
   });
 

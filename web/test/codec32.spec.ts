@@ -78,7 +78,8 @@ function catchError(fn: () => unknown): unknown {
 }
 
 test('the 3.2 golden frames are there', () => {
-  expect(names.length).toBeGreaterThanOrEqual(66);
+  // The fixture is fixed: tests/fixtures/wire_v3/v3_2 holds 202 frames.
+  expect(names.length).toBe(202);
   expect(names).toContain('scene_update_mesh');
   expect(names).toContain('scene_transforms_stamps');
   expect(typeName(0x70)).toBe('scene_update');
@@ -202,12 +203,14 @@ test('some 3.2 frames re-encode byte for byte', () => {
     if (msg.type === 'unknown') continue;
     if (Array.from(encode(msg, f.minor)).join() === Array.from(buf).join()) byteEqual++;
   }
-  expect(byteEqual).toBeGreaterThanOrEqual(20);
+  // Exact for the fixture: of the 201 frames that encode, the 38 whose metadata has a float that Python wrote as 2.0 differ.
+  expect(byteEqual).toBe(163);
 });
 
 test('refuses every invalid 3.2 frame as expect.json says', () => {
   const expected: Record<string, { reason?: string; close_code?: number; error?: string }> = JSON.parse(fs.readFileSync(path.join(dir, 'invalid', 'expect.json'), 'utf8'));
-  expect(Object.keys(expected).length).toBeGreaterThanOrEqual(96);
+  // The fixture's v3_2/invalid/expect.json names 253 invalid frames.
+  expect(Object.keys(expected).length).toBe(253);
   for (const [file, want] of Object.entries(expected)) {
     const buf = read('invalid', file);
     if (want.error === undefined) {
@@ -770,7 +773,8 @@ test('3.0 and 3.1 encodings are unchanged', () => {
     ...fs.readdirSync(root).filter((f) => f.endsWith('.bin')).map((f) => path.join(root, f)),
     ...fs.readdirSync(path.join(root, 'v3_1')).filter((f) => f.endsWith('.bin')).map((f) => path.join(root, 'v3_1', f)),
   ].filter((f) => !['ping_future.bin', 'unknown_type.bin'].includes(path.basename(f)));
-  expect(files.length).toBeGreaterThan(30);
+  // The fixture's 22 frames of 3.0 and 17 of 3.1, less the two above.
+  expect(files.length).toBe(37);
   let exact = 0;
   for (const file of files) {
     const buf = new Uint8Array(fs.readFileSync(file));
@@ -787,7 +791,8 @@ test('3.0 and 3.1 encodings are unchanged', () => {
       exact++;
     }
   }
-  expect(exact).toBeGreaterThan(20);
+  // Exact for the fixture: all but event, snapshot, snapshot_points and subscribe, whose metadata has a float that Python wrote as 2.0.
+  expect(exact).toBe(33);
 });
 
 test('stamp text', () => {

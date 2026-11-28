@@ -49,9 +49,10 @@ test.describe('linked selection', () => {
       // over which its windows are laid out, and publishes where it drew.
       await drawn(page);
       await expect.poll(async () => (await state(page, 'p')).window?.x1 ?? null).not.toBeNull();
+      // The view name of each element that dispatches caliper-selection.
       const events = await page.evaluateHandle(() => {
-        const r: unknown[] = [];
-        document.addEventListener('caliper-selection', (e) => r.push((e as CustomEvent).detail));
+        const r: string[] = [];
+        document.addEventListener('caliper-selection', (e) => r.push((e.target as HTMLElement).getAttribute('view') ?? ''));
         return r;
       });
       // A rectangle around the right-hand points (rows 3 and 9 of the space "test").
@@ -68,7 +69,10 @@ test.describe('linked selection', () => {
       // The details of the items under the view the selection was made in.
       await roundTrip.poll(async () => (await state(page, 'p')).details).toBe('itemlabelscore330.005910.044');
       expect((await state(page, 'h')).details).toBeNull();
-      expect((await events.evaluate((r) => r.length))).toBeGreaterThanOrEqual(2);
+      // Each SELECTION comes as an event from p, where the selection was made, and from h, the other
+      // view that maps the space "test". The drag can send more than one select, thus the test
+      // compares the views, not a count of events.
+      expect(await events.evaluate((r) => [...new Set(r)].sort())).toEqual(['h', 'p']);
       await drawn(page, 'caliper-view[view="p"], caliper-view[view="h"]');
       await page.locator('caliper-view[view="p"]').screenshot({ path: shotPath(info, 'linked-points') });
       await page.locator('caliper-view[view="h"]').screenshot({ path: shotPath(info, 'linked-heatmap') });

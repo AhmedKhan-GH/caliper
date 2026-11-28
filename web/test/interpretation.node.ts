@@ -46,7 +46,8 @@ test('Shared Control Fixture Bytes', () => {
   for (const name of names)
     assert.throws(() => decode(readFileSync(join(fixtures, 'v3_2/invalid', name))),
       (error: unknown) => error instanceof MessageError && error.code === invalid[name].error, name);
-  assert.ok(valid >= 18);
+  // The fixture is fixed: v3_1 holds 13 such frames and v3_2 holds 8.
+  assert.equal(valid, 21);
   assert.equal(names.length, 11);
 });
 

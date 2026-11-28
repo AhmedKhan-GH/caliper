@@ -751,17 +751,32 @@ test('data view changes and resizes do not grow what the module holds', async ({
       creates: [a, e].map((s) => Number(/creates=(\d+)/.exec(String(s.viewInfo))?.[1] ?? 0)),
     };
   };
+  // After a warm-up, the heap is sampled after 150 more changes and after 300 more: a window
+  // and one twice as long.
   await churn(20);
+  const start = await held();
+  await churn(150);
   const before = await held();
   await churn(300);
   const after = await held();
+  const grew = [before.heap - start.heap, after.heap - before.heap];
   console.log(`${info.project.name} after 300 data view changes and resizes: heap ${before.heap} -> ${after.heap} bytes, textures ${before.textures} -> ${after.textures}, buffers ${before.allocations} -> ${after.allocations}, released views waiting ${after.retired}, textures made ${before.creates} -> ${after.creates}`);
-  expect(after.creates[0] - before.creates[0]).toBeGreaterThan(200);
+  console.log(`${info.project.name} heap growth over 150 changes ${grew[0]} bytes, over the next 300 changes ${grew[1]} bytes`);
+  // Each change waits until the heatmap's header shows the new shape, which the header takes
+  // from the module's texture (facts() in web/wasm/src/main.cpp): one texture at least per change.
+  expect(after.creates[0] - before.creates[0]).toBeGreaterThanOrEqual(300);
   expect(after.creates[1] - before.creates[1]).toBeGreaterThan(200);
   expect(after.textures).toBe(before.textures);
   expect(after.allocations).toBeLessThanOrEqual(before.allocations + 4);
   expect(after.retired).toBe(0);
-  expect(after.heap - before.heap).toBeLessThan(256 * 1024);
+  // A leak of r bytes a change grows the long window by 150 r more than the short one, and
+  // settling or a plateau grows them alike. A sample can hold one snapshot more of each view
+  // than another: the 32 x 32 floats of the heatmap and the 4,000 points of the embedding with
+  // their labels, mock_server.py's default (4 bytes each). Six runs on 2026-11-28 (Apple
+  // silicon, M5 Max, webgpu project) grew the heap 3,856 to 4,536 bytes over the 150 changes and
+  // -704 to 784 bytes over the 300 changes.
+  const inFlight = 32 * 32 * 4 + 4000 * (3 + 1) * 4;
+  expect(grew[1] - grew[0]).toBeLessThanOrEqual(inFlight);
 });
 
 test('a compatibility scene shows its entity error in the HTML status and tooltip', async ({ page }, info) => {

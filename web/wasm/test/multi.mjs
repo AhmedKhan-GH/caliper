@@ -85,15 +85,21 @@ try {
     const d = Number(opt.destroy);
     const counts = async () => page.evaluate(() => globalThis.caliperMulti.handles.map((h) => h.stats.frames));
     const c0 = await counts();
-    await page.evaluate((i) => globalThis.caliperMulti.handles[i].destroy(), d);
+    // destroy() cancels the module's main loop and ends its pending readbacks before it returns
+    // (caliper_views_destroy), so the frame count read right after it is the last that mount publishes.
+    const atDestroy = await page.evaluate((i) => {
+      const h = globalThis.caliperMulti.handles[i];
+      h.destroy();
+      return h.stats.frames;
+    }, d);
     // The others draw 15 frames more; the destroyed one must not.
     await framesPass(page, d, 15);
     const c1 = await counts();
     report.afterDestroy = {
       canvases: await page.evaluate(() => globalThis.caliperMulti.handles.filter((h) => h.canvas.isConnected).length),
-      framesBefore: c0, framesAfter: c1,
+      framesBefore: c0, framesAtDestroy: atDestroy, framesAfter: c1,
       othersDrawing: c1.every((n, i) => i === d || n > c0[i]),
-      destroyedStopped: c1[d] === c0[d] || c1[d] - c0[d] <= 1,
+      destroyedStopped: c1[d] === atDestroy,
     };
   }
   await page.screenshot({ path: opt.out, fullPage: true });

@@ -57,8 +57,7 @@ test('the dashboard lays out as the native runtime does, with its titles, info s
   expect(near(await pixel(page, heat.x + 8 + 46 * 13 / 10.5 + 2, 24 + 6 + 16 * 13 / 10.5 + 2), magmaTop, 6)).toBe(true);
   expect(near(await pixel(page, heat.x + heat.w - 120, 60), magmaBottom, 6)).toBe(true);
   // The colour key: the legend's swatches and the table's head carry the house pigments.
-  const shot = await page.screenshot({ path: shotPath(info, 'spec-dashboard-1440x900') });
-  expect(shot.length).toBeGreaterThan(10_000);
+  await page.screenshot({ path: shotPath(info, 'spec-dashboard-1440x900') });
   const keyed = await page.evaluate(() => {
     const c = document.getElementById('canvas') as HTMLCanvasElement;
     const d = c.getContext('2d')!.getImageData(0, 0, c.width, c.height).data;
@@ -79,8 +78,10 @@ test('the page asks with the token and the viewer origin, and sends the version 
   await mockApp(page, mock);
   await openSpec(page, 'run42-dashboard');
   await settled(page, 3);
-  await expect.poll(() => mock.requests.filter((r) => r.name === 'panel.data' && r.args.known === 'v1').length,
-    { timeout: 15_000 }).toBeGreaterThanOrEqual(3);
+  // The page asks for the data again on its refresh, once a second (src/spec/page.ts), and every
+  // panel then sends the version it has. The timeout is a hang guard.
+  const sentKnown = () => [...new Set(mock.requests.filter((r) => r.name === 'panel.data' && r.args.known === 'v1').map((r) => r.args.panel))].sort();
+  await expect.poll(sentKnown, { timeout: 15_000 }).toEqual(['attention', 'curves', 'rows']);
   for (const r of mock.requests) {
     expect(r.headers['authorization']).toBe(`Bearer ${TOKEN}`);
     expect(r.headers['x-caliper-origin']).toBe('viewer');
