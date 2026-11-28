@@ -3,12 +3,12 @@
 //
 //   caliper_dashboard_parity_app <fixture> <pieces> <out> [--size WxH]
 //
-// The fixture is a recording of a short seeded run of the Attention Arc Tower
-// (tests/draw_parity/dashboard/): the saved spec (spec.toml, spec.json) and the panel.data
+// The fixture is a recording of a short seeded MNIST run (examples/mnist/train.py --seed 1) in
+// tests/draw_parity/dashboard/: the saved spec (spec.toml, spec.json) and the panel.data
 // answer of every leaf of its layout (panels/<id>.json), as the app gave them to a viewer:
 // the series as their lines, the scene panels' instances of pieces with the newest version of
 // each published resource, and the control's state. <pieces> holds the workspace pieces that
-// the spec pins (tests/acceptance/arc_tower). The tool draws the spec with the app's spec runtime into an
+// the spec pins (tests/draw_parity/pieces). The tool draws the spec with the app's spec runtime into an
 // offscreen canvas on Metal, from that data only: the series through a panel source that gives
 // the recorded lines as the window sources' tensors, the programs through the app's draw host
 // with the recorded resources in a step history. No script runs and nothing trains.
@@ -251,6 +251,9 @@ int main(int argc, char** argv) {
                 v.stride = r.value("stride", 0u);
                 v.width = r.value("width", 0u);
                 v.height = r.value("height", 0u);
+                v.format = r.value("format", std::string());
+                if (r.contains("elements") && r["elements"].is_number_unsigned())
+                    v.elements = r["elements"].get<std::uint32_t>();
                 v.bytes = std::make_shared<const std::vector<std::uint8_t>>(unbase64(r.value("base64", "")));
                 if (v.bytes->size() != std::size_t(v.count) * v.stride) {
                     std::fprintf(stderr, "%s/%s: %zu bytes, not count * stride\n", p.value("id", "").c_str(),

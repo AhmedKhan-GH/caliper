@@ -1,7 +1,7 @@
 // The pixel comparison between the app and the browser module (design/programmable-graphics.md,
 // Pixel Comparison). The app's side (tests/draw_parity/draw_parity_app.mm, ctest
 // caliper_draw_parity_app) wrote a fixture of wire frames, two instances of pieces
-// (attention_field and attention_arcs) as PROGRAM sets and one recorded version of each resource
+// (attention_field and ring_arcs) as PROGRAM sets and one recorded version of each resource
 // as RESOURCE, and drew it with the app's draw runtime on its Metal device. Here the WebAssembly
 // views draw the same frames with the same runtime on WebGPU in headless Chromium, at 512 by 512
 // with the same fixed camera, and the test compares the color and the ID targets:

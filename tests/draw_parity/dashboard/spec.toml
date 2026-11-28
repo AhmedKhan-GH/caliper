@@ -1,8 +1,8 @@
 caliper_spec = 1
 
 [applet]
-id = "arc_tower"
-title = "Attention Arc Tower"
+id = "mnist_parity"
+title = "MNIST Probe Dashboard"
 
 [[source]]
 id = "loss"
@@ -17,144 +17,84 @@ from = "loss"
   steps = 4096
 
 [[source]]
-id = "icl"
-catalog = "live:token_loss.act"
+id = "acc"
+catalog = "live:accuracy"
 history = 4096
-  [[source.transform]]
-  op = "slice"
-  axis = 0
-  index = 0
-  [[source.transform]]
-  op = "slice"
-  axis = 0
-  start = 16
-  stop = 27
-  [[source.transform]]
-  op = "reduce"
-  axis = 0
-  fn = "mean"
 
 [[source]]
-id = "icl_window"
-from = "icl"
+id = "acc_window"
+from = "acc"
   [[source.transform]]
   op = "window"
   steps = 4096
 
 [[source]]
-id = "l1_h0_raw"
-catalog = "live:induction_l1_h0"
+id = "digit_0_raw"
+catalog = "live:probe.digit_0"
 history = 4096
 
 [[source]]
-id = "l1_h0"
-from = "l1_h0_raw"
+id = "digit_0"
+from = "digit_0_raw"
   [[source.transform]]
   op = "window"
   steps = 4096
 
 [[source]]
-id = "l1_h1_raw"
-catalog = "live:induction_l1_h1"
+id = "digit_1_raw"
+catalog = "live:probe.digit_1"
 history = 4096
 
 [[source]]
-id = "l1_h1"
-from = "l1_h1_raw"
+id = "digit_1"
+from = "digit_1_raw"
   [[source.transform]]
   op = "window"
   steps = 4096
 
 [[source]]
-id = "l1_h2_raw"
-catalog = "live:induction_l1_h2"
+id = "digit_2_raw"
+catalog = "live:probe.digit_2"
 history = 4096
 
 [[source]]
-id = "l1_h2"
-from = "l1_h2_raw"
+id = "digit_2"
+from = "digit_2_raw"
   [[source.transform]]
   op = "window"
   steps = 4096
 
 [[source]]
-id = "l1_h3_raw"
-catalog = "live:induction_l1_h3"
+id = "digit_3_raw"
+catalog = "live:probe.digit_3"
 history = 4096
 
 [[source]]
-id = "l1_h3"
-from = "l1_h3_raw"
-  [[source.transform]]
-  op = "window"
-  steps = 4096
-
-[[source]]
-id = "l0_h0_raw"
-catalog = "live:induction_l0_h0"
-history = 4096
-
-[[source]]
-id = "l0_h0"
-from = "l0_h0_raw"
-  [[source.transform]]
-  op = "window"
-  steps = 4096
-
-[[source]]
-id = "l0_h1_raw"
-catalog = "live:induction_l0_h1"
-history = 4096
-
-[[source]]
-id = "l0_h1"
-from = "l0_h1_raw"
-  [[source.transform]]
-  op = "window"
-  steps = 4096
-
-[[source]]
-id = "l0_h2_raw"
-catalog = "live:induction_l0_h2"
-history = 4096
-
-[[source]]
-id = "l0_h2"
-from = "l0_h2_raw"
-  [[source.transform]]
-  op = "window"
-  steps = 4096
-
-[[source]]
-id = "l0_h3_raw"
-catalog = "live:induction_l0_h3"
-history = 4096
-
-[[source]]
-id = "l0_h3"
-from = "l0_h3_raw"
+id = "digit_3"
+from = "digit_3_raw"
   [[source.transform]]
   op = "window"
   steps = 4096
 
 [[state]]
-id = "head"
-title = "Head"
+id = "digit"
+title = "Digit"
 type = "integer"
 default = 0
 min = 0.0
-max = 3.0
+max = 9.0
 
 [[panel]]
-id = "tower"
+id = "digits"
 primitive = "scene"
-title = "Attention Arc Tower"
-options = { axes = false, select = { field = "head", state = "head" }, up = "+y" }
+title = "Digit Accuracy Ring"
+options = { axes = false, select = { field = "digit", state = "digit" }, up = "+y" }
 
 [[panel]]
-id = "pattern"
+id = "samples"
 primitive = "scene"
-title = "Attention Grid"
+title = "Probe Digits"
+options = { axes = false }
 
 [[panel]]
 id = "loss_curve"
@@ -164,42 +104,42 @@ bind = { x = "loss_window.step", y = "loss_window.value" }
 options = { x_label = "Step", y_label = "Loss" }
 
 [[panel]]
-id = "icl_curve"
+id = "acc_curve"
 primitive = "series"
-title = "In-Context Loss"
-bind = { x = "icl_window.step", y = "icl_window.value" }
-options = { x_label = "Step", y_label = "Loss" }
+title = "Accuracy"
+bind = { x = "acc_window.step", y = "acc_window.value" }
+options = { x_label = "Step", y_label = "Accuracy" }
 
 [[panel]]
-id = "head_scores"
+id = "class_scores"
 primitive = "series"
-title = "Induction Score of Each Head"
-bind = { x = "l1_h0.step", y = ["l1_h0.value", "l1_h1.value", "l1_h2.value", "l1_h3.value", "l0_h0.value", "l0_h1.value", "l0_h2.value", "l0_h3.value"] }
-options = { legend = true, x_label = "Step", y_label = "Induction Score" }
+title = "Probe Accuracy by Digit"
+bind = { x = "digit_0.step", y = ["digit_0.value", "digit_1.value", "digit_2.value", "digit_3.value"] }
+options = { legend = true, x_label = "Step", y_label = "Accuracy" }
 
 [[control]]
 id = "ablate"
 kind = "toggle"
-title = "Ablate Head 0 of Layer 1"
-bind = "intervene:blocks.1.attn#0"
+title = "Ablate Filter conv1#3"
+bind = "intervene:conv1#3"
 options = { value = false }
 
 [[program]]
-id = "tower_arcs"
-title = "Tower Arcs"
-piece = { from = "workspace", hash = "sha256:1e756ab85923595b6d1e61cdbf0828a4d6a27683b4bb5536e88386479daa7ad0", name = "attention_arcs", version = 1 }
-panel = "tower"
-bind = { attn0 = "live:blocks.0.attn.weights.act", attn1 = "live:blocks.1.attn.weights.act" }
-params = { threshold = 0.05 }
+id = "digit_bars"
+title = "Digit Accuracy Ring"
+piece = { from = "workspace", hash = "sha256:638d0d276a7a3b9f2fdf9a4d13de87f6f61494c87df37f1c9c1c69b4caf5cb70", name = "digit_ring", version = 1 }
+panel = "digits"
+bind = { logits = "live:probe.logits", targets = "live:probe.labels" }
+params = { scale = 1.0 }
 
 [[program]]
-id = "head_pattern"
-title = "Attention Grid"
-piece = { from = "workspace", hash = "sha256:5921f3d466542b0aa7b841050d7c908ec7fcad3cf6379f4ce304aeb205256e22", name = "attention_grid", version = 1 }
-panel = "pattern"
-bind = { attn0 = "live:blocks.0.attn.weights.act", attn1 = "live:blocks.1.attn.weights.act" }
-params = { gain = 2.0, head = { state = "head" }, layer = { default = 1, field = "layer", selection = "tower" } }
+id = "probe_grid"
+title = "Probe Digits"
+piece = { from = "library", hash = "sha256:783c057468ae40ddbe38aa00f8d560b655670e6dcd6ed1183ebafc5e783cdba4", name = "image_grid", version = 1 }
+panel = "samples"
+bind = { images = "live:probe.images", logits = "live:probe.logits", targets = "live:probe.labels" }
+params = { cols = 4.0, only_errors = { default = 0, field = "has_errors", selection = "digits" }, page = { state = "digit" }, rows = 4.0, scale = 1.0 }
 
 [layout]
 split = "vertical"
-children = [{ split = "horizontal", ratio = 0.5, children = [{ split = "vertical", ratio = 0.45, children = ["tower", { split = "vertical", ratio = 0.62, children = ["head_scores", { tabs = ["icl_curve", "loss_curve"] }] }] }, "pattern"] }, "ablate"]
+children = [{ split = "horizontal", ratio = 0.5, children = [{ split = "vertical", ratio = 0.45, children = ["digits", { split = "vertical", ratio = 0.55, children = ["class_scores", { tabs = ["loss_curve", "acc_curve"] }] }] }, "samples"] }, "ablate"]

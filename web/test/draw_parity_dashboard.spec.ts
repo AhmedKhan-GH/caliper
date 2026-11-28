@@ -1,7 +1,7 @@
 // The pixel comparison of a whole dashboard between the app and the browser's spec page: the
-// Attention Arc Tower as a short seeded run left it, recorded once into tests/draw_parity/dashboard
+// MNIST probe dashboard as a short seeded run left it, recorded once into tests/draw_parity/dashboard
 // (the saved spec and the panel.data answer of every leaf, as the app gave them to a viewer). The
-// app's side, tests/draw_parity/dashboard_parity_app.cpp (ctest caliper_dashboard_parity_app),
+// app's side, tests/draw_parity/dashboard_parity_app.cpp (ctest caliper_draw_parity_dashboard_app),
 // draws the recording with the app's spec runtime on Metal at 1280 by 750; here the spec page draws
 // the same answers, served by the mock of the app, in a window of 1280 by 800, whose area under the
 // page's bar is 1280 by 750. Nothing trains: both sides draw the recorded lines and the recorded
@@ -271,7 +271,7 @@ function compare(app: Uint8Array, web: Uint8Array, mask: Uint8Array, region: Uin
   return c;
 }
 
-test('the Arc Tower dashboard draws in the browser as in the app, on the same recorded data', async ({ page }, info) => {
+test('the MNIST dashboard draws in the browser as in the app, on the same recorded data', async ({ page }, info) => {
   test.setTimeout(240_000);
   const { app, spec, step } = recording();
   const nPrograms = (spec.program ?? []).length;

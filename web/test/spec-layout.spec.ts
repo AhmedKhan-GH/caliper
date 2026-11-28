@@ -329,16 +329,16 @@ test('a leaf minimum is in characters and lines of the text scale', () => {
   expect(b.h).toBeGreaterThan(1.9 * a.h);
 });
 
-test('the Arc Tower fills the window over its row of controls', () => {
-  // The layout that the acceptance driver builds (tests/programmable_graphics/driver.py, step 6), in canonical JSON.
+test('the MNIST dashboard fills the window over its row of controls', () => {
+  // The layout that the MNIST dashboard tests build, in canonical JSON.
   const s: Spec = {
-    caliper_spec: 1, applet: { id: 'arc_tower', title: 'Attention Arc Tower' },
-    panel: ['tower', 'pattern', 'head_scores', 'icl_curve', 'loss_curve'].map((id) => ({ id, primitive: 'series' as const })),
-    control: [{ id: 'ablate', kind: 'toggle', bind: 'intervene:blocks.1.attn#0' }],
+    caliper_spec: 1, applet: { id: 'mnist_dashboard', title: 'MNIST Probe Dashboard' },
+    panel: ['digits', 'samples', 'class_scores', 'acc_curve', 'loss_curve'].map((id) => ({ id, primitive: 'series' as const })),
+    control: [{ id: 'ablate', kind: 'toggle', bind: 'intervene:conv1#3' }],
     layout: { split: 'vertical', children: [
       { split: 'horizontal', ratio: 0.5, children: [
-        { split: 'vertical', ratio: 0.45, children: ['tower', { split: 'vertical', ratio: 0.62, children: ['head_scores',
-          { tabs: ['icl_curve', 'loss_curve'] }] }] }, 'pattern'] }, 'ablate'] },
+        { split: 'vertical', ratio: 0.45, children: ['digits', { split: 'vertical', ratio: 0.62, children: ['class_scores',
+          { tabs: ['acc_curve', 'loss_curve'] }] }] }, 'samples'] }, 'ablate'] },
   };
   const m = metricsForTextScale(1);
   const l = lay(s, 1280, 750);
@@ -346,8 +346,8 @@ test('the Arc Tower fills the window over its row of controls', () => {
   const ablate = l.panels.find((p) => p.id === 'ablate')!;
   expect(ablate.control).toBe(true);
   same(ablate.rect, 0, 750 - m.controlRowH, 1280, m.controlRowH);
-  // The panels fill everything above the row: the grid reaches the rule over the control.
-  const pattern = rectOf(l, 'pattern')!;
-  expect(pattern.y).toBe(0);
-  expect(pattern.y + pattern.h + m.gap).toBe(ablate.rect.y);
+  // The panels fill everything above the row: the right panel reaches the rule over the control.
+  const samples = rectOf(l, 'samples')!;
+  expect(samples.y).toBe(0);
+  expect(samples.y + samples.h + m.gap).toBe(ablate.rect.y);
 });
