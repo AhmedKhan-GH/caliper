@@ -26,10 +26,10 @@ async function openRecorded(page: Page, change?: (spec: Json) => void): Promise<
   const data: Record<string, Json> = {};
   for (const f of fs.readdirSync(path.join(FIXTURE, 'panels')))
     if (f.endsWith('.json')) data[f.slice(0, -5)] = JSON.parse(fs.readFileSync(path.join(FIXTURE, 'panels', f), 'utf8'));
-  const app: MockApp = { specs: { [spec.applet.id]: spec }, data: { [spec.applet.id]: data }, requests: [] };
+  const app: MockApp = { specs: { [spec.instrument.id]: spec }, data: { [spec.instrument.id]: data }, requests: [] };
   await mockApp(page, app, WASM);
   await page.setViewportSize({ width: 1280, height: 800 });
-  await openSpec(page, spec.applet.id);
+  await openSpec(page, spec.instrument.id);
   await page.waitForFunction(() => {
     const s = (window as any).caliperSpec?.debugState();
     const mounts = s ? Object.values(s.programs) as any[] : [];
@@ -224,7 +224,7 @@ test('a panel view_camera starts the scene camera with its angles, target and di
 
 test('removing the last program hides its canvas and clears its resources', async ({ page }) => {
   const { spec, app } = await openRecorded(page);
-  const panels = app.data[spec.applet.id];
+  const panels = app.data[spec.instrument.id];
   const original = panels.digits;
   panels.digits = { ...original, version: 'empty-programs', data: { ...original.data, programs: [] } };
   await page.waitForFunction(() => {
@@ -247,7 +247,7 @@ test('a resource replacement at the same step changes the dashboard pixels', asy
   const { spec, app } = await openRecorded(page);
   const before = await pixels(page, 'samples');
   try {
-    const changed = structuredClone(app.data[spec.applet.id].samples);
+    const changed = structuredClone(app.data[spec.instrument.id].samples);
     const resource = changed.data.programs[0].resources.find((r: Json) => r.resource === 'atlas');
     const bytes = Buffer.from(resource.base64, 'base64');
     for (let offset = 0; offset < bytes.length; offset += 4) {
@@ -258,7 +258,7 @@ test('a resource replacement at the same step changes the dashboard pixels', asy
     resource.base64 = bytes.toString('base64');
     resource.version = 'replacement-at-current-step';
     changed.version = 'replacement-panel';
-    app.data[spec.applet.id].samples = changed;
+    app.data[spec.instrument.id].samples = changed;
     await expect.poll(async () => {
       const after = await pixels(page, 'samples');
       try {

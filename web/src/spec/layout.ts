@@ -58,7 +58,7 @@ const childrenOf = (n: LayoutNode): LayoutNode[] => (isSplit(n) ? n.children ?? 
 
 /**
  * The spec's layout, or its default (spec_edit.cpp, effective_layout): one
- * panel fills the applet, several stack vertically, and the controls stand in
+ * panel fills the instrument, several stack vertically, and the controls stand in
  * one row under them in their order.
  */
 export function effectiveLayout(spec: Spec): LayoutNode | null {

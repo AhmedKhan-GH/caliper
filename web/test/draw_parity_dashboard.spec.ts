@@ -99,7 +99,7 @@ function encodePng(width: number, height: number, rgba: Uint8Array): Buffer {
 interface TextBox { s: string; x: number; y: number; w: number; h: number }
 interface Composite { rgba: string; texts: TextBox[]; state: Json; programs: Json; frame: number; labels: Record<string, TextBox[]>; scenes: Record<string, number[]> }
 
-/** The recording as the mock app's applets and answers. */
+/** The recording as the mock app's instruments and answers. */
 function recording(): { app: MockApp; spec: Json; step: number } {
   const spec = JSON.parse(fs.readFileSync(path.join(FIXTURE, 'spec.json'), 'utf8')) as Json;
   const data: Record<string, Json> = {};
@@ -110,7 +110,7 @@ function recording(): { app: MockApp; spec: Json; step: number } {
     for (const p of a.data?.programs ?? []) for (const r of p.resources ?? []) step = Math.max(step, r.step);
     data[f.slice(0, -5)] = a;
   }
-  return { app: { specs: { [spec.applet.id]: spec }, data: { [spec.applet.id]: data }, requests: [] }, spec, step };
+  return { app: { specs: { [spec.instrument.id]: spec }, data: { [spec.instrument.id]: data }, requests: [] }, spec, step };
 }
 
 /** The page's picture at the first frame at which every program draws `step`, with the text it drew. */
@@ -345,7 +345,7 @@ test('the MNIST dashboard draws in the browser as in the app, on the same record
   page.on('pageerror', (e) => consoleLines.push(`[pageerror] ${e.message}`));
   await mockApp(page, app, WASM);
   await page.setViewportSize({ width: W, height: 800 });
-  await openSpec(page, spec.applet.id);
+  await openSpec(page, spec.instrument.id);
   const shot = await composite(page, step, nPrograms, consoleLines);
   const web = new Uint8Array(Buffer.from(shot.rgba, 'base64'));
   expect(web.length).toBe(W * H * 4);

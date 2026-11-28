@@ -66,8 +66,8 @@ test('preparePanel preserves and maps all 16 spec colormaps on heatmaps', () => 
       options: { colormap: name, range: [0, 1] },
     };
     const spec: Spec = {
-      caliper_spec: 1,
-      applet: { id: 'cmap-test' },
+      caliper_spec: 2,
+      instrument: { id: 'cmap-test' },
       source: [{ id: 't', catalog: 'tensor:t' }],
       panel: [panel],
     };

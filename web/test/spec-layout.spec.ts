@@ -259,8 +259,8 @@ test('a scene panel goes by its scene when it has no title', () => {
   expect(panelTitle(s, p)).toBe('model');
 });
 
-const SHARES = `caliper_spec = 1
-[applet]
+const SHARES = `caliper_spec = 2
+[instrument]
 id = "shares"
 [[source]]
 id = "w"
@@ -332,7 +332,7 @@ test('a leaf minimum is in characters and lines of the text scale', () => {
 test('the MNIST dashboard fills the window over its row of controls', () => {
   // The layout that the MNIST dashboard tests build, in canonical JSON.
   const s: Spec = {
-    caliper_spec: 1, applet: { id: 'mnist_dashboard', title: 'MNIST Probe Dashboard' },
+    caliper_spec: 2, instrument: { id: 'mnist_dashboard', title: 'MNIST Probe Dashboard' },
     panel: ['digits', 'samples', 'class_scores', 'acc_curve', 'loss_curve'].map((id) => ({ id, primitive: 'series' as const })),
     control: [{ id: 'ablate', kind: 'toggle', bind: 'intervene:conv1#3' }],
     layout: { split: 'vertical', children: [
