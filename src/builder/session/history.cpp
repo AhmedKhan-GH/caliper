@@ -512,6 +512,8 @@ void StepHistory::configure(const spec::Spec& spec) {
     std::optional<double> speed;
     for (const spec::Control& c : spec.controls)
         if (c.kind == spec::ControlKind::transport) speed = c.options.speed.value_or(10.0);
+    // Steps a second, 0.1 to 1,000 (design/instrument-interface.md, the transport's `speed`); not the
+    // playback factor of a wire CURSOR, which is 1/16 to 64.
     if (speed && speed != impl_->spec_speed) impl_->cursor.speed = std::clamp(*speed, 0.1, 1000.0);
     impl_->spec_speed = speed;
     // A spec whose sources and resources keep nothing any more starts live.
@@ -713,6 +715,7 @@ CursorState StepHistory::cursor() const {
 CursorState StepHistory::set_cursor(const CursorState& wanted) {
     std::lock_guard<std::mutex> lock(impl_->mutex);
     CursorState& c = impl_->cursor;
+    // Steps a second, 0.1 to 1,000, as at open (design/instrument-interface.md, the transport's `speed`).
     c.speed = std::clamp(std::isfinite(wanted.speed) ? wanted.speed : c.speed, 0.1, 1000.0);
     impl_->play = 0;
     if (wanted.live) {

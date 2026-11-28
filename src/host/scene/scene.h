@@ -46,7 +46,7 @@ Vec3 axis_vector(Axis a);
 const char* axis_name(Axis a);                         // "+x", "-x", "+y", "-y", "+z", "-z"
 bool parse_axis(std::string_view text, Axis* out);
 
-// ---- Limits (design/scenes.md, "Limits") ------------------------------------------------------
+// ---- Limits (docs/reference/wire-protocol-3-2.md, "Limits") ------------------------------------
 
 inline constexpr uint32_t kMaxEntities = 1024;          // the root included
 inline constexpr uint32_t kMaxBatches = 2048;
@@ -54,7 +54,7 @@ inline constexpr uint64_t kMaxItems = 4194304;          // points, line vertices
 inline constexpr uint64_t kMaxShapes = 1048576;         // boxes, arrows, line strips
 inline constexpr uint32_t kMaxLabelsPerBatch = 4096;
 inline constexpr uint32_t kMaxLabelBytes = 63;
-inline constexpr uint32_t kMaxLabelsDrawn = 512;
+inline constexpr uint32_t kMaxLabelsDrawn = 512;        // the nearest 512 (docs/instruments/scene-rendering.md)
 inline constexpr uint32_t kMaxClasses = 4096;
 inline constexpr uint32_t kMaxClassId = 65535;
 inline constexpr uint32_t kClassTableSide = 256;        // 256 x 256 texels: ids 0 to 65,535

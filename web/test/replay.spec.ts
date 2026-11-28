@@ -258,7 +258,7 @@ async function waitReplayLive(page: Page, minFrames = 32, timeout = 90_000): Pro
     const el = document.querySelector('caliper-replay') as (HTMLElement & { debugState(): Record<string, unknown> }) | null;
     if (!el) return false;
     const s = el.debugState();
-    if (s.mode !== 'live') return false;
+    if (s.mode !== 'live' || s.readyMs == null) return false;
     const views = s.views as { drawer?: string; renderer?: string; wasmReady?: boolean; wasmStats?: { frames?: number; updates?: number; error?: string } }[];
     return views.length > 0 && views.every((v) =>
       v.drawer === 'wasm' && v.renderer === 'wasm' && v.wasmReady === true &&
@@ -387,6 +387,9 @@ test('docs embed replays the recorded MNIST run via static files and WASM on Web
 
     // WebGPU (metal) and SwiftShader: real WASM views draw every recorded view with no server and no WebSocket.
     const firstState = await waitReplayLive(page);
+    // A measurement for READY_DEADLINE_MS in docs-embed.ts: the time from live mode until the 200 ms
+    // health poll saw every plate ready.
+    console.log(`${info.project.name} docs embed ready after ${Number(firstState.readyMs).toFixed(0)} ms`);
     const steps = firstState.steps as number[];
     expect(steps.length).toBeGreaterThan(1);
     // The timeline holds every recorded step of any view, not only the snapshot steps.
