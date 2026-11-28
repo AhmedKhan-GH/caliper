@@ -3,15 +3,18 @@
 #                          provider preset: an interface, an in-memory store for
 #                          tests and the macOS Keychain store (compiled on macOS,
 #                          never called by a test); other systems get a stub
-#   caliper_agent/         the Python sidecar caliper-agent (its own pyproject.toml)
+#   caliper_agent/         the Python sidecar caliper-agent (caliper[agent] in root pyproject.toml)
 #
 # The sidecar's pytest suite runs as the ctest builder_agent_py when
 # CALIPER_BUILDER_TEST_PYTHON names a Python interpreter that has the sidecar's
 # dependencies and its test extras (pydantic-ai-slim, anthropic, openai, pytest,
 # agent-client-protocol; the loaders module's tests of the same variable also
-# need numpy and pyarrow), for example the .venv of this folder:
+# need numpy and pyarrow), for example a local venv installed with the agent
+# and test packages from the root pyproject.toml:
 #   uv venv --python 3.12 src/builder/agent/.venv
-#   uv pip install --python src/builder/agent/.venv/bin/python -e "src/builder/agent[test]" numpy pyarrow
+#   uv pip install --python src/builder/agent/.venv/bin/python \
+#     "pydantic-ai-slim[anthropic]>=2.68,<3" "anthropic>=2.8,<3" "openai>=3.51,<4" \
+#     "pytest>=8" "agent-client-protocol>=1.0,<2" numpy pyarrow
 #   cmake ... -DCALIPER_BUILDER_TEST_PYTHON=src/builder/agent/.venv/bin/python
 # Without it the test reports that it was skipped.
 set(_agent_sources key_store.cpp)
@@ -96,7 +99,7 @@ if(BUILD_TESTS)
                     --basetemp=${CMAKE_CURRENT_BINARY_DIR}/pytest-tmp
                     ${CMAKE_CURRENT_SOURCE_DIR}/tests
             WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR})
-        set(_agent_py_env "PYTHONDONTWRITEBYTECODE=1" "CALIPER_AGENT_OFFLINE=1")
+        set(_agent_py_env "PYTHONDONTWRITEBYTECODE=1" "CALIPER_AGENT_OFFLINE=1" "PYTHONPATH=${CMAKE_CURRENT_SOURCE_DIR}")
         if(TARGET caliper-agent-conformance)
             # tests/test_conformance.py runs the suite in its default modes.
             list(APPEND _agent_py_env "CALIPER_AGENT_CONFORMANCE=$<TARGET_FILE:caliper-agent-conformance>")

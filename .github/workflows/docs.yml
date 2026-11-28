@@ -8,7 +8,7 @@ on:
     # and the command table, piece definitions, and root docs checked here.
     paths: ['docs/**', 'design/**', 'docs-theme/**', 'mkdocs.yml',
             'sdk/include/**', 'include/caliper/**', 'python/caliper/**', 'examples/**', 'roadmap/**',
-            'candidates/**', 'requirements-docs.txt', 'CONTRIBUTING.md', 'README.md',
+            'candidates/**', 'pyproject.toml', 'CONTRIBUTING.md', 'README.md',
             'src/builder/commands/command_table.json',
             'src/builder/include/caliper_builder/spec/piece.h',
             'src/builder/include/caliper_builder/programs/pieces.h',
@@ -37,10 +37,17 @@ jobs:
       - uses: actions/setup-python@v7
         with:
           python-version: '3.12'
-      # The versions are pinned in requirements-docs.txt, which a local build reads too. The design
-      # build also depends on MkDocs accepting design/mkdocs.yml inside its own docs folder when the
-      # file is named by a relative path, as here.
-      - run: pip install -r requirements-docs.txt
+      # The versions are pinned in [project.optional-dependencies].docs in pyproject.toml, which a
+      # local build reads too. The design build also depends on MkDocs accepting design/mkdocs.yml
+      # inside its own docs folder when the file is named by a relative path, as here.
+      - name: Install documentation dependencies
+        run: |
+          python - <<'PY'
+          import subprocess, sys, tomllib
+          with open("pyproject.toml", "rb") as f:
+              deps = tomllib.load(f)["project"]["optional-dependencies"]["docs"]
+          subprocess.check_call([sys.executable, "-m", "pip", "install", *deps])
+          PY
       # Validates the roadmap registry, its coverage ledger and the candidates against their schemas
       # and rules.
       - run: sternbild-docs check-roadmap

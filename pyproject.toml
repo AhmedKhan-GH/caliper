@@ -15,11 +15,33 @@ classifiers = [
 
 [project.optional-dependencies]
 torch = ["torch"]
+agent = [
+    "pydantic-ai-slim[anthropic]>=2.68,<3",
+    "anthropic>=2.8,<3",
+    "openai>=3.51,<4",
+]
+docs = [
+    "mkdocs==1.6.1",
+    "mkdocs-material==9.8.1",
+    "mkdocs-awesome-nav==3.3.0",
+    "pymdown-extensions==13.1",
+    "mkdocstrings==1.0.8",
+    "mkdocstrings-python==2.0.10",
+    "griffelib==2.4.1",
+    "mkdocs-autorefs==1.4.5",
+    "ruff==0.17.3",
+    "sternbild-docs @ git+https://github.com/AhmedKhan-GH/organization@docs-v1.0.1#subdirectory=packages/sternbild-docs",
+]
 test = [
-    "pytest",
+    "pytest>=8",
     "jsonschema",
     "anywidget",
     "pyyaml",
+    "pyarrow",
+    "pydantic-ai-slim[anthropic]>=2.68,<3",
+    "anthropic>=2.8,<3",
+    "openai>=3.51,<4",
+    "agent-client-protocol>=1.0,<2",
     "torch>=2.15.0",
     "safetensors",
     "psutil",
@@ -43,6 +65,9 @@ interp = [
     "circuit-tracer @ git+https://github.com/decoderesearch/circuit-tracer.git@82996f144b3371ae858ea5713590d004c218f0c2",
 ]
 
+[project.scripts]
+caliper-agent = "caliper_agent.cli:main"
+
 [tool.scikit-build]
 minimum-version = "0.10"
 # Incremental rebuilds: the root CMake builds DuckDB from source, so keep one
@@ -54,11 +79,18 @@ cmake.build-type = "Release"
 # component (the root's SDK install rules stay out of the wheel).
 build.targets = ["_native", "_live", "_netio", "_producer", "caliper_viewer"]
 install.components = ["python"]
-wheel.packages = ["python/caliper"]
+wheel.packages = ["python/caliper", "src/builder/agent/caliper_agent"]
 # The browser's WebAssembly views (python/caliper/_web/caliper-views*) are git-ignored
 # build outputs; naming them includes them in the sdist and the wheel whenever they are
 # there (python/check_web_views.cmake warns, or fails in CI, when a wheel lacks them).
-sdist.include = ["python", "pyproject.toml", "python/caliper/_web/caliper-views*"]
+sdist.include = [
+    "python",
+    "pyproject.toml",
+    "python/caliper/_web/caliper-views*",
+    "src/builder/agent/caliper_agent",
+    "src/builder/commands/command_table.json",
+    "src/builder/commands/widget_scopes.json",
+]
 sdist.exclude = ["build", "dist", ".venv", "cmake-build-*", "site", "dump"]
 
 [tool.scikit-build.cmake.define]

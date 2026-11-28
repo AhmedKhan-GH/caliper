@@ -22,8 +22,9 @@ The suites in `python/tests/` and the builder suites (`builder_session` and `bui
 ```sh
 uv venv --python 3.12 .venv
 uv pip install --python .venv/bin/python \
-  -e "src/builder/agent[test]" \
-  torch numpy pyarrow pyyaml anywidget Pillow websockets nanobind pytest jsonschema
+  "pydantic-ai-slim[anthropic]>=2.68,<3" "anthropic>=2.8,<3" "openai>=3.51,<4" \
+  "agent-client-protocol>=1.0,<2" \
+  torch numpy pyarrow pyyaml anywidget Pillow websockets nanobind "pytest>=8" jsonschema
 .venv/bin/python scripts/build_netio.py
 ```
 
@@ -50,11 +51,13 @@ PYTHONPATH=python CALIPER_TEST_CALIPER_EXE="$PWD/cmake-build-release/caliper" \
 
 The shaders of the graphics layer are written once in WGSL under `src/host/gfx/shaders/`, and their MSL and SPIR-V are generated and committed. After changing one, run `python3 tools/shaders/generate.py` (it needs a Rust toolchain) and commit the generated files with it; [Shader Authoring](docs/applets/shader-authoring.md) describes the generator and its checks.
 
-To check the documentation, build it the way the Docs workflow does, from the repository root and with the versions of `requirements-docs.txt`. The first command builds the docs site. Its API reference comes from the code: mkdocstrings renders the Python calls from the docstrings of Caliper LIB, and the hook `docs-theme/hooks/c_reference.py` renders the C tables from the `/** */` comments of the headers. `python3 scripts/check_api_reference.py` fails when a public symbol has no docstring or comment, or no page. The second command checks the design pages, which are built apart from the docs site and are not published.
+To check the documentation, build it from the repository root with the pinned `docs` extra in `pyproject.toml` (`[project.optional-dependencies].docs`). Install those packages directly into a virtual environment instead of `pip install ".[docs]"` so `scikit-build-core` does not compile the C++ extension. The first `mkdocs` command builds the docs site. Its API reference comes from the code: mkdocstrings renders the Python calls from the docstrings of Caliper LIB, and the hook `docs-theme/hooks/c_reference.py` renders the C tables from the `/** */` comments of the headers. `python3 scripts/check_api_reference.py` fails when a public symbol has no docstring or comment, or no page. The second `mkdocs` command checks the design pages, which are built apart from the docs site and are not published.
 
 ```sh
-uv run --no-project --with-requirements requirements-docs.txt mkdocs build --strict
-uv run --no-project --with-requirements requirements-docs.txt mkdocs build --strict -f design/mkdocs.yml
+uv venv --python 3.12 .docs-venv
+python3 -c 'import subprocess, tomllib; deps = tomllib.load(open("pyproject.toml", "rb"))["project"]["optional-dependencies"]["docs"]; subprocess.check_call(["uv", "pip", "install", "--python", ".docs-venv/bin/python", *deps])'
+.docs-venv/bin/mkdocs build --strict
+.docs-venv/bin/mkdocs build --strict -f design/mkdocs.yml
 ```
 
 ## Submodules
@@ -65,7 +68,7 @@ Caliper keeps third-party code as git submodules in `third_party/`. Run `./init-
 
 - One logical change per commit. Code, its tests and its documentation go in the same commit.
 - Every pull request updates the documentation that its change affects, or states in the pull request description why no documentation page changes.
-- When a change updates `roadmap/*.yml`, `roadmap/index/feature_code_tests.yml`, `src/builder/commands/command_table.json`, `src/builder/include/caliper_builder/spec/piece.h`, `src/builder/include/caliper_builder/programs/pieces.h`, `src/builder/programs/piece_checks.cpp`, or `src/builder/spec/schema/caliper-spec-v1.schema.json`, regenerate the matching reference page (`scripts/generate_feature_index.py --write`, `scripts/generate_mcp_reference.py --write`, or `scripts/generate_piece_reference.py --write`) in the same pull request.
+- When a change updates `src/builder/commands/command_table.json`, `src/builder/include/caliper_builder/spec/piece.h`, `src/builder/include/caliper_builder/programs/pieces.h`, `src/builder/programs/piece_checks.cpp`, or `src/builder/spec/schema/caliper-spec-v1.schema.json`, regenerate the matching reference page (`scripts/generate_mcp_reference.py --write` or `scripts/generate_piece_reference.py --write`) in the same pull request.
 - The subject line says what changed, in plain words. Start it with the area when that helps, as in `Site: ...`, `CI: ...` or `Docs: ...`.
 - The body says why, and anything a reviewer cannot see in the diff.
 
@@ -80,7 +83,7 @@ Caliper keeps third-party code as git submodules in `third_party/`. Run `./init-
 | `tests/` | the test suites, including the pixel-exact `tests/gfx` suite |
 | `docs/` | the documentation, published as the docs site (`mkdocs.yml`) |
 | `design/` | proposals for work that is not built yet, with the roadmap; built on its own (`design/mkdocs.yml`) and not published |
-| `docs-theme/` | the docs site's C reference hook, API reference templates and docstring extension; the theme and roadmap come from the `sternbild-docs` package (`requirements-docs.txt`) |
+| `docs-theme/` | the docs site's C reference hook, API reference templates and docstring extension; the theme and roadmap come from the `sternbild-docs` package (pinned under `docs` in `pyproject.toml`) |
 | `site/` | the landing page, published with the docs |
 | `.github/workflows/` | the Build and Deploy Pages workflows |
 

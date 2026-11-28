@@ -919,7 +919,7 @@ void AgentSettings::run_probe(std::vector<std::string> extra, bool list_only) {
     if (busy()) return;
     const AgentChoice c = choice();
     if (!c.preset) return;
-    if (options_.python.empty() || options_.source.empty()) {
+    if (options_.python.empty()) {
         answer_ = {};
         answer_.failure = "No caliper-agent";
         return;
@@ -927,14 +927,18 @@ void AgentSettings::run_probe(std::vector<std::string> extra, bool list_only) {
     if (c.preset->api != "claude" && !agent_base_url_valid(c.base_url)) return;
     acp::SpawnOptions spawn;
     namespace fs = std::filesystem;
-    const fs::path source(options_.source);
     spawn.argv = {options_.python, "-P", "-m", "caliper_agent", "probe", "--preset", c.preset->id};
     if (c.base_url_editable) spawn.argv.insert(spawn.argv.end(), {"--base-url", c.base_url});
     const std::string model = model_for_cache(c);
     spawn.argv.insert(spawn.argv.end(), {"--model", model.empty() ? std::string("any") : model});
     if (!options_.cache_dir.empty()) spawn.argv.insert(spawn.argv.end(), {"--cache-dir", options_.cache_dir});
     for (auto& a : extra) spawn.argv.push_back(std::move(a));
-    spawn.env = {{"PYTHONPATH", (source / "agent").string()}, {"PYTHONDONTWRITEBYTECODE", "1"}};
+    if (!options_.source.empty()) {
+        const fs::path source(options_.source);
+        spawn.env = {{"PYTHONPATH", (source / "agent").string()}, {"PYTHONDONTWRITEBYTECODE", "1"}};
+    } else {
+        spawn.env = {{"PYTHONDONTWRITEBYTECODE", "1"}};
+    }
     for (const auto& v : options_.probe_env) spawn.env.push_back(v);
     spawn.env_remove = options_.probe_env_remove;
     // The child's environment is the sidecar's: the provider's key, placed by

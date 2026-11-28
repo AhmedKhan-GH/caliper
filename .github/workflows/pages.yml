@@ -6,7 +6,7 @@ on:
     # The docs, the design pages, their theme, and the sources the docs embed as snippets.
     paths: ['site/**', 'docs/**', 'design/**', 'docs-theme/**', 'mkdocs.yml',
             'sdk/include/**', 'include/caliper/**', 'python/caliper/**', 'examples/**', 'roadmap/**',
-            'candidates/**', 'requirements-docs.txt', '.github/workflows/pages.yml']
+            'candidates/**', 'pyproject.toml', '.github/workflows/pages.yml']
   workflow_dispatch:
 permissions:
   contents: read
@@ -31,8 +31,16 @@ jobs:
       # awesome-nav builds the navigation from the docs/ folders and their .nav.yml files.
       # mkdocstrings and its Python handler render the Python API reference from the docstrings.
       # The sternbild-docs package supplies the theme, the roadmap pages and the docs checks.
-      # Pinned in requirements-docs.txt, as in the Docs workflow, which checks the same builds on pull requests.
-      - run: pip install -r requirements-docs.txt
+      # Pinned in [project.optional-dependencies].docs in pyproject.toml, as in the Docs workflow,
+      # which checks the same builds on pull requests.
+      - name: Install documentation dependencies
+        run: |
+          python - <<'PY'
+          import subprocess, sys, tomllib
+          with open("pyproject.toml", "rb") as f:
+              deps = tomllib.load(f)["project"]["optional-dependencies"]["docs"]
+          subprocess.check_call([sys.executable, "-m", "pip", "install", *deps])
+          PY
       - run: sternbild-docs check-headings && sternbild-docs check-roadmap
       - run: mkdocs build --strict
       # The design pages are checked, not published: they build into

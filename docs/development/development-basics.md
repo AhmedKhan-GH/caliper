@@ -210,10 +210,10 @@ Some environment variables exist only for tests, and the user page Folders and E
 
 ## Docs Preview
 
-The docs site renders the Python API reference from the docstrings of Caliper LIB. To see the docs while you change them, serve the site from the repository root with the versions of `requirements-docs.txt`:
+The docs site renders the Python API reference from the docstrings of Caliper LIB. To see the docs while you change them, serve the site from the repository root with the pinned `docs` extra in `pyproject.toml` (see `CONTRIBUTING.md` for creating `.docs-venv`):
 
 ```sh
-uv run --no-project --with-requirements requirements-docs.txt mkdocs serve -a 127.0.0.1:8000
+.docs-venv/bin/mkdocs serve -a 127.0.0.1:8000
 ```
 
 The server builds the site again when a page, a docstring under `python/caliper/` or a C header changes. `CONTRIBUTING.md` gives the strict build that the Docs workflow runs.

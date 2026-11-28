@@ -65,7 +65,6 @@ ROOT_FILES = frozenset(
         "CMakeLists.txt",
         "CMakePresets.json",
         "pyproject.toml",
-        "requirements-docs.txt",
         "mkdocs.yml",
         "README.md",
         "CONTRIBUTING.md",
