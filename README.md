@@ -72,7 +72,7 @@ The `release-notorch` preset builds the host without LibTorch in `cmake-build-no
 - **Git** (for submodule management)
 - **CMake 3.25 or later** and **Ninja** (the presets use the Ninja generator; configuring without a preset needs CMake 3.20)
 - **A C++20 compiler** for the host and the instruments
-- **Rust (`cargo`) and Python 3** (optional). The configure presets set `CALIPER_WGSL_FROM_SOURCE=ON` to build the runtime WGSL compiler. Pass `-DCALIPER_WGSL_FROM_SOURCE=OFF` to build without Rust.
+- **Rust (`cargo`) and Python 3**. The configure presets set `CALIPER_WGSL_FROM_SOURCE=ON` to build the runtime WGSL compiler. Pass `-DCALIPER_WGSL_FROM_SOURCE=OFF` to build the CMake targets without Rust. The Python package build always needs Rust, because `caliper._producer` links the compiler.
 
 ### Windows
 - **Visual Studio 2022** (MSVC v143)

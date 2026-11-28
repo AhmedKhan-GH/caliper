@@ -107,9 +107,16 @@ CALIPER_WITH_SLANG = "OFF"
 # scikit-build-core also takes the wheel's platform tag from this define, so
 # the tag is macosx_14_0_arm64 on any build machine (it is ignored elsewhere).
 CMAKE_OSX_DEPLOYMENT_TARGET = "14.0"
-# The builder (src/builder) is not part of Caliper LIB; OFF keeps its targets,
-# its nlohmann/json download and DuckDB's json extension out of the wheel.
-CALIPER_WITH_BUILDER = "OFF"
+# caliper._producer runs the derive halves of programs and pieces only with the sandbox
+# (caliper_builder_programs, which comes with the builder) and the runtime WGSL compiler, as
+# the developer build has them; python/CMakeLists.txt refuses a package build without them.
+# As in the developer build, libcaliper then also links the draw layer of programs, and
+# DuckDB links its json extension. The builder's other targets are not built
+# (build.targets) or installed (install.components).
+CALIPER_WITH_BUILDER = "ON"
+# The runtime WGSL compiler (tools/shaders/caliper-wgsl), built from source with cargo and
+# linked statically into caliper._producer, thus the build needs Rust (cmake/CaliperWgsl.cmake).
+CALIPER_WGSL_FROM_SOURCE = "ON"
 
 [tool.pytest.ini_options]
 testpaths = ["python/tests", "tests/interp"]

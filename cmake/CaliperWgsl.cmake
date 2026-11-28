@@ -20,10 +20,10 @@
 # explicit request fails the configure with the reason when it cannot give the library.
 #
 # The Python wheel configures this same tree (pyproject.toml), thus it gets the target in the
-# same way: a define in [tool.scikit-build.cmake.define], such as CALIPER_WGSL_DOWNLOAD = "ON"
-# once the archives are pinned, or SKBUILD_CMAKE_DEFINE=CALIPER_WGSL_LIBRARY=<file> for one
-# build. The library is static, thus the native module that uses it (the producer runtime)
-# links caliper::wgsl under if(TARGET caliper::wgsl) and the wheel carries no extra file.
+# same way: a define in [tool.scikit-build.cmake.define], CALIPER_WGSL_FROM_SOURCE = "ON" until
+# the archives are pinned, or SKBUILD_CMAKE_DEFINE=CALIPER_WGSL_LIBRARY=<file> for one build.
+# The library is static, thus the native module that uses it (the producer runtime) links
+# caliper::wgsl and the wheel carries no extra file.
 
 set(CALIPER_WGSL_LIBRARY "" CACHE FILEPATH "Prebuilt caliper_wgsl static library (empty: none)")
 option(CALIPER_WGSL_DOWNLOAD "Download the pinned prebuilt caliper_wgsl library for this platform" OFF)
@@ -94,19 +94,24 @@ elseif(CALIPER_WGSL_FROM_SOURCE)
     if(MSVC AND CMAKE_LINKER AND EXISTS "${CMAKE_LINKER}")
         set(_wgsl_linker_args --linker "${CMAKE_LINKER}")
     endif()
+    # A build with tests gets the test hooks (caliper_wgsl_test_panic). A build without tests,
+    # such as the Python wheel, gets the library that a release archive holds, without them.
+    set(_wgsl_test_hooks "")
+    if(BUILD_TESTS)
+        set(_wgsl_test_hooks --test-hooks)
+    endif()
     add_custom_command(
         OUTPUT "${_wgsl_lib}"
         COMMAND "${Python3_EXECUTABLE}" "${_wgsl_crate}/build_library.py"
-                --out "${_wgsl_dir}/source" --test-hooks --cargo "${CALIPER_CARGO}" ${_wgsl_linker_args}
+                --out "${_wgsl_dir}/source" ${_wgsl_test_hooks} --cargo "${CALIPER_CARGO}" ${_wgsl_linker_args}
         DEPENDS "${_wgsl_crate}/Cargo.toml" "${_wgsl_crate}/Cargo.lock" "${_wgsl_crate}/src/lib.rs"
                 "${_wgsl_crate}/build_library.py"
         COMMENT "Building caliper_wgsl (Naga ${CALIPER_WGSL_NAGA_VERSION}) with cargo"
         USES_TERMINAL VERBATIM)
     add_custom_target(caliper_wgsl_build DEPENDS "${_wgsl_lib}")
     set(_wgsl_build_target caliper_wgsl_build)
-    # This build is a developer and test build, thus it has the test hooks (caliper_wgsl_test_panic).
     # The shipped archives come from build_library.py without --test-hooks and have none.
-    set(CALIPER_WGSL_HAS_TEST_HOOKS ON)
+    set(CALIPER_WGSL_HAS_TEST_HOOKS ${BUILD_TESTS})
 else()
     set(_wgsl_archive "caliper_wgsl-${CALIPER_WGSL_PREBUILT_VERSION}-${_wgsl_platform}.tar.gz")
     set(_wgsl_hash "${CALIPER_WGSL_SHA256_${_wgsl_platform}}")

@@ -70,6 +70,13 @@ install(TARGETS _live LIBRARY DESTINATION caliper COMPONENT python)
 # compiler and the sandbox in the script's process. It links no libcaliper, and the facade
 # caliper._programs loads it on the first program only. Metal only for now.
 if(APPLE AND TARGET caliper_producer)
+    # A package build ships the module with the WGSL compiler and the sandbox, which every derive
+    # half needs; without them each program is refused with program.compiler_unavailable.
+    if(SKBUILD AND NOT (TARGET caliper::wgsl AND TARGET caliper_builder_programs))
+        message(FATAL_ERROR "The package build of caliper._producer needs the runtime WGSL compiler "
+            "(caliper::wgsl) and the sandbox (caliper_builder_programs). pyproject.toml gives them with "
+            "CALIPER_WGSL_FROM_SOURCE=ON, which needs Rust, and CALIPER_WITH_BUILDER=ON.")
+    endif()
     nanobind_add_module(_producer NB_STATIC src/_producer.mm)
     target_include_directories(_producer PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
     target_compile_options(_producer PRIVATE $<$<COMPILE_LANGUAGE:OBJCXX>:-fobjc-arc>)
