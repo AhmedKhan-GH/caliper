@@ -4,7 +4,7 @@
 // (caliper-views-loader.js, caliper-views.js, caliper-views.wasm) from paths
 // relative to the page, with no install and no server. When WebGPU or the
 // WebAssembly module is unavailable, renders the static fallback screenshot
-// and one line of text, never a blank box.
+// under a notice that says why, never a blank box.
 
 import { ReplaySource, resolvePageUrl } from './client/replay.js';
 import { CaliperView, define as defineView } from './element.js';
@@ -14,8 +14,17 @@ import { hasAdapter, preloadWasm, wasmKinds } from './wasm.js';
 
 defineView();
 
-const DEFAULT_FALLBACK_TEXT =
-  'This page shows a static capture of the recorded run because this browser has no WebGPU support.';
+const SCREENSHOT_TEXT = 'The image below is a static screenshot of the replay.';
+
+/** The first sentence of the fallback notice: why the live replay does not show. */
+function fallbackCause(reason: string): string {
+  if (reason === 'insecure-context') {
+    return 'WebGPU is not available because this page is not served over HTTPS or from localhost.';
+  }
+  if (reason === 'no-webgpu') return 'This browser does not support WebGPU.';
+  if (reason === 'no-adapter' || reason.startsWith('wasm-')) return 'WebGPU did not start in this browser.';
+  return 'The recorded run did not load.';
+}
 
 const STYLE = `
 :host { display: block; color: ${C.parchment}; font: 13px/1.45 ${FONT_TEXT}; -webkit-font-smoothing: antialiased; }
@@ -39,7 +48,8 @@ const STYLE = `
 .loading { padding: 36px 20px; text-align: center; color: ${C.faint}; font: 13px ${FONT_TEXT}; }
 .fallback { padding: 12px; background: ${C.ground}; }
 .fallback-img { display: block; width: 100%; height: auto; border: 1px solid ${C.ruleFaint}; border-radius: 6px; background: ${C.plate}; }
-.fallback-note { margin: 10px 2px 2px; color: ${C.secondary}; font: 13px/1.45 ${FONT_TEXT}; }
+.fallback-note { margin: 0 0 12px; padding: 12px 16px; color: ${C.parchment}; font: 16px/1.5 ${FONT_TEXT};
+  background: ${C.plate}; border: 1px solid ${C.rule}; border-left: 3px solid ${C.bronze}; border-radius: 6px; }
 [hidden] { display: none !important; }
 `;
 
@@ -210,9 +220,13 @@ export class CaliperReplay extends HTMLElement {
     p.loading.textContent = 'WebGPU replay load in progress.';
 
     p.fallbackImg.decoding = 'async';
-    p.fallbackImg.addEventListener('error', () => { p.fallbackImg.hidden = true; });
+    p.fallbackImg.addEventListener('error', () => {
+      p.fallbackImg.hidden = true;
+      if (this.mode === 'fallback') this.writeNotice();
+    });
+    p.fallbackNote.setAttribute('role', 'note');
     p.fallback.hidden = true;
-    p.fallback.append(p.fallbackImg, p.fallbackNote);
+    p.fallback.append(p.fallbackNote, p.fallbackImg);
 
     p.shell.append(p.bar, p.loading, p.grid, p.fallback);
     this.root.append(style, p.shell);
@@ -274,8 +288,16 @@ export class CaliperReplay extends HTMLElement {
       p.fallbackImg.removeAttribute('src');
       p.fallbackImg.hidden = true;
     }
-    p.fallbackNote.textContent = this.getAttribute('fallback-text')?.trim() || DEFAULT_FALLBACK_TEXT;
+    this.writeNotice();
     p.fallback.hidden = false;
+  }
+
+  /** The notice above the screenshot: the page's fallback-text, or the cause and what the image is. */
+  private writeNotice(): void {
+    const p = this.parts;
+    const custom = this.getAttribute('fallback-text')?.trim();
+    p.fallbackNote.textContent = custom
+      || (p.fallbackImg.hidden ? fallbackCause(this.reason) : `${fallbackCause(this.reason)} ${SCREENSHOT_TEXT}`);
   }
 
   private syncTimeline(): void {
@@ -311,7 +333,9 @@ export class CaliperReplay extends HTMLElement {
     const adapterOk = await hasAdapter();
     if (gen !== this.generation) return;
     if (!adapterOk) {
-      this.showFallback('no-webgpu');
+      // WebGPU exists only in secure contexts, so check the context before navigator.gpu.
+      const gpu = (navigator as Navigator & { gpu?: unknown }).gpu;
+      this.showFallback(!window.isSecureContext ? 'insecure-context' : gpu ? 'no-adapter' : 'no-webgpu');
       return;
     }
 

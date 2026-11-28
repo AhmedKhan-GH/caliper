@@ -331,10 +331,15 @@ test('docs embed replays the recorded MNIST run via static files and WASM on Web
         const el = document.querySelector('caliper-replay') as (HTMLElement & { debugState(): Record<string, unknown> }) | null;
         return el?.debugState().mode === 'fallback';
       }, null, { timeout: 15_000 });
+      await page.waitForFunction(() => {
+        const el = document.querySelector('caliper-replay')!;
+        return (el.shadowRoot!.querySelector('.fallback-img') as HTMLImageElement).complete;
+      }, null, { timeout: 15_000 });
       const state = await page.evaluate(() => {
         const el = document.querySelector('caliper-replay') as HTMLElement & { debugState(): Record<string, unknown> };
         const img = el.shadowRoot!.querySelector('.fallback-img') as HTMLImageElement;
         const note = el.shadowRoot!.querySelector('.fallback-note') as HTMLElement;
+        const cs = getComputedStyle(note);
         return {
           debug: el.debugState(),
           imgComplete: img.complete,
@@ -342,16 +347,34 @@ test('docs embed replays the recorded MNIST run via static files and WASM on Web
           naturalHeight: img.naturalHeight,
           imgBox: img.getBoundingClientRect().toJSON(),
           noteBox: note.getBoundingClientRect().toJSON(),
+          noteFontPx: parseFloat(cs.fontSize),
+          noteBorderLeftPx: parseFloat(cs.borderLeftWidth),
+          noteRole: note.getAttribute('role'),
+          barHidden: (el.shadowRoot!.querySelector('.bar') as HTMLElement).hidden,
         };
       });
       expect(state.debug.fallbackShown).toBe(true);
       expect(state.debug.fallbackImgVisible).toBe(true);
-      expect(state.debug.fallbackText).toMatch(/WebGPU/);
+      // The canvas2d project turns WebGPU off: Chromium keeps navigator.gpu and gives no adapter.
+      expect(state.debug.reason).toBe('no-adapter');
+      expect(state.debug.fallbackText).toBe(
+        'WebGPU did not start in this browser. The image below is a static screenshot of the replay.');
       expect(state.imgComplete).toBe(true);
       expect(state.naturalWidth).toBeGreaterThan(0);
       expect(state.naturalHeight).toBeGreaterThan(0);
       expect((state.imgBox as { height: number }).height).toBeGreaterThan(100);
-      expect((state.noteBox as { height: number }).height).toBeGreaterThan(10);
+      // The notice sits above the image, as wide as it, in body-size text with an accent border.
+      const noteBox = state.noteBox as { top: number; bottom: number; left: number; width: number };
+      const imgBox = state.imgBox as { top: number; left: number; width: number };
+      expect(noteBox.bottom).toBeLessThanOrEqual(imgBox.top);
+      expect(noteBox.left).toBe(imgBox.left);
+      expect(noteBox.width).toBe(imgBox.width);
+      expect(state.noteFontPx).toBeGreaterThanOrEqual(16);
+      expect(state.noteBorderLeftPx).toBeGreaterThan(1);
+      expect(state.noteRole).toBe('note');
+      // No Play, Reset or range bar over a screenshot.
+      expect(state.barHidden).toBe(true);
+      expect(state.debug.scrubberVisible).toBe(false);
       expect(site.requests.some((r) => r.includes('caliper-views.wasm'))).toBe(false);
       expect(wsUrls).toEqual([]);
       expect(errors).toEqual([]);
@@ -501,8 +524,9 @@ test('docs embed falls back to the static screenshot and text when WebAssembly v
   const fallbackBytes = makeFallbackPng();
   const html = `<!doctype html><html><body style="margin:0;background:#12110f">
 <script type="module" src="./caliper-replay.js"></script>
-<caliper-replay src="./rec.calrec" wasm-base="./missing-wasm/" fallback="./fallback.png"
+<caliper-replay id="custom" src="./rec.calrec" wasm-base="./missing-wasm/" fallback="./fallback.png"
   fallback-text="Static fallback capture for browsers without WebAssembly views."></caliper-replay>
+<caliper-replay id="plain" src="./rec.calrec" wasm-base="./missing-wasm/" fallback="./fallback.png"></caliper-replay>
 </body></html>`;
   const site = await startStaticSite({
     '/index.html': { type: 'text/html; charset=utf-8', body: html },
@@ -514,18 +538,62 @@ test('docs embed falls back to the static screenshot and text when WebAssembly v
     const errors: string[] = [];
     page.on('pageerror', (e) => errors.push(e.message));
     await page.goto(`${site.origin}/index.html`);
-    await page.waitForFunction(() => {
-      const el = document.querySelector('caliper-replay') as (HTMLElement & { debugState(): Record<string, unknown> }) | null;
-      return el?.debugState().mode === 'fallback';
-    }, null, { timeout: 15_000 });
-    const dbg = await page.evaluate(() => (document.querySelector('caliper-replay') as HTMLElement & { debugState(): Record<string, unknown> }).debugState());
-    expect(dbg.fallbackShown).toBe(true);
-    expect(dbg.fallbackImgVisible).toBe(true);
-    expect(dbg.fallbackText).toBe('Static fallback capture for browsers without WebAssembly views.');
+    await page.waitForFunction(() => [...document.querySelectorAll('caliper-replay')].every((el) =>
+      (el as HTMLElement & { debugState(): Record<string, unknown> }).debugState().mode === 'fallback'),
+    null, { timeout: 15_000 });
+    const debugOf = (id: string) => page.evaluate((i) =>
+      (document.getElementById(i) as HTMLElement & { debugState(): Record<string, unknown> }).debugState(), id);
+    const custom = await debugOf('custom');
+    expect(custom.fallbackShown).toBe(true);
+    expect(custom.fallbackImgVisible).toBe(true);
+    // A page's fallback-text replaces the notice.
+    expect(custom.fallbackText).toBe('Static fallback capture for browsers without WebAssembly views.');
+    // Without it, the notice gives the cause: no adapter on canvas2d, and a WebAssembly load
+    // failure elsewhere. Both count as WebGPU not starting.
+    const plain = await debugOf('plain');
+    expect(plain.scrubberVisible).toBe(false);
+    expect(plain.fallbackText).toBe('WebGPU did not start in this browser. The image below is a static screenshot of the replay.');
     expect(errors).toEqual([]);
-    const shot = await page.locator('caliper-replay').screenshot();
+    const shot = await page.locator('#custom').screenshot();
     saveShot(info, 'replay-missing-wasm-fallback', shot);
     expect(distinctColors(shot)).toBeGreaterThan(3);
+  } finally {
+    site.close();
+  }
+});
+
+test('docs embed notice says when the browser has no WebGPU or the page is not a secure context', async ({ page }, info) => {
+  test.skip(info.project.name !== 'canvas2d', 'the notice cases need no GPU, so canvas2d covers them');
+  // The page script removes navigator.gpu, or marks the page as not a secure context, as the query asks.
+  await page.addInitScript(() => {
+    if (location.search.includes('no-gpu')) Object.defineProperty(Navigator.prototype, 'gpu', { get: () => undefined });
+    if (location.search.includes('insecure')) Object.defineProperty(window, 'isSecureContext', { get: () => false });
+  });
+  const html = `<!doctype html><html><body style="margin:0;background:#12110f">
+<script type="module" src="./caliper-replay.js"></script>
+<caliper-replay src="./rec.calrec" wasm-base="./wasm/" fallback="./fallback.png"></caliper-replay>
+</body></html>`;
+  const site = await startStaticSite({
+    '/index.html': { type: 'text/html; charset=utf-8', body: html },
+    '/caliper-replay.js': { type: 'text/javascript; charset=utf-8', body: fs.readFileSync(EMBED_BUNDLE) },
+    '/rec.calrec': { type: 'application/octet-stream', body: syntheticRecording([0, 10]) },
+    '/fallback.png': { type: 'image/png', body: makeFallbackPng() },
+  });
+  try {
+    const errors: string[] = [];
+    page.on('pageerror', (e) => errors.push(e.message));
+    for (const [query, reason, text] of [
+      ['no-gpu', 'no-webgpu', 'This browser does not support WebGPU.'],
+      ['insecure', 'insecure-context', 'WebGPU is not available because this page is not served over HTTPS or from localhost.'],
+    ]) {
+      await page.goto(`${site.origin}/index.html?${query}`);
+      await page.waitForFunction(() => (document.querySelector('caliper-replay') as (HTMLElement & { debugState(): Record<string, unknown> }) | null)
+        ?.debugState().mode === 'fallback', null, { timeout: 15_000 });
+      const dbg = await page.evaluate(() => (document.querySelector('caliper-replay') as HTMLElement & { debugState(): Record<string, unknown> }).debugState());
+      expect(dbg.reason).toBe(reason);
+      expect(dbg.fallbackText).toBe(`${text} The image below is a static screenshot of the replay.`);
+    }
+    expect(errors).toEqual([]);
   } finally {
     site.close();
   }
